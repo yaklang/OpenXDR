@@ -1,15 +1,43 @@
 package sigma
 
-import "testing"
+import (
+	"sort"
+	"testing"
+)
+
+// selNames 取 selection 名并排序，与编译期建表顺序一致。
+func selNames(sel map[string]bool) []string {
+	names := make([]string, 0, len(sel))
+	for name := range sel {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
 
 // eval 把条件表达式按给定的 selection 命中表求值。
+// selection 的真假直接预置进 memo，不经过实际字段匹配。
 func eval(t *testing.T, cond string, sel map[string]bool) bool {
 	t.Helper()
-	n, err := parseCondition(cond)
+	names := selNames(sel)
+	n, err := parseCondition(cond, names)
 	if err != nil {
 		t.Fatalf("parseCondition(%q) err = %v", cond, err)
 	}
-	return n.eval(sel)
+	c := &evalCtx{sels: make([]selection, len(names)), memo: make([]int8, len(names))}
+	for i, name := range names {
+		if sel[name] {
+			c.memo[i] = 1
+		} else {
+			c.memo[i] = 2
+		}
+	}
+	return n.eval(c)
+}
+
+// parseCond 用固定的 selection 名集合解析条件，供只关心解析结果的用例使用。
+func parseCond(cond string) (node, error) {
+	return parseCondition(cond, []string{"a", "b", "c", "selection", "selection_a", "selection_b", "filter", "filter_a"})
 }
 
 func TestParseConditionIdent(t *testing.T) {
@@ -64,8 +92,8 @@ func TestParseConditionsErrors(t *testing.T) {
 		"not",   // not 后无内容
 	}
 	for _, cond := range bad {
-		if _, err := parseCondition(cond); err == nil {
-			t.Errorf("parseCondition(%q) 应报错", cond)
+		if _, err := parseCond(cond); err == nil {
+			t.Errorf("parseCond(%q) 应报错", cond)
 		}
 	}
 }
@@ -118,13 +146,14 @@ func TestQuantifierNotConsumed(t *testing.T) {
 	// "0 of them" 的量词非法，应解析成 ident("0") of ...；但这在语法上仍会报错（多余 token），
 	// 关键在于它不该被当成合法量词成功解析。
 	for _, cond := range []string{"0 of them", "-1 of them", "1.5 of them", "of them"} {
-		if _, err := parseCondition(cond); err == nil {
-			t.Errorf("parseCondition(%q) 应报错", cond)
+		if _, err := parseCond(cond); err == nil {
+			t.Errorf("parseCond(%q) 应报错", cond)
 		}
 	}
 }
 
-// matches 的前缀通配逻辑：them 全匹配、尾随 * 按前缀、其余精确匹配。
+// 前缀通配逻辑：them 全匹配、尾随 * 按前缀、其余精确匹配。
+// 展开在编译期完成，这里直接验 parser.expand 的结果。
 func TestQuantifierMatches(t *testing.T) {
 	cases := []struct {
 		pattern string
@@ -141,23 +170,24 @@ func TestQuantifierMatches(t *testing.T) {
 		{"selection_a*", "selection_alpha", true}, // 前缀带下划线
 	}
 	for _, c := range cases {
-		n := quantNode{pattern: c.pattern}
-		if got := n.matches(c.name); got != c.want {
-			t.Errorf("matches(pattern=%q, name=%q) = %v, want %v", c.pattern, c.name, got, c.want)
+		p := &parser{names: []string{c.name}}
+		got := len(p.expand(c.pattern)) == 1
+		if got != c.want {
+			t.Errorf("expand(pattern=%q, name=%q) = %v, want %v", c.pattern, c.name, got, c.want)
 		}
 	}
 }
 
 // 解析出的 AST 类型应是 quantNode，保证 parseQuantifier 真的被走到。
 func TestQuantifierParsedAsNode(t *testing.T) {
-	n, err := parseCondition("1 of them")
+	n, err := parseCond("1 of them")
 	if err != nil {
 		t.Fatalf("parseCondition err = %v", err)
 	}
 	if _, ok := n.(quantNode); !ok {
 		t.Fatalf("期望 quantNode，得到 %T", n)
 	}
-	n2, err := parseCondition("all of selection_*")
+	n2, err := parseCond("all of selection_*")
 	if err != nil {
 		t.Fatalf("parseCondition err = %v", err)
 	}
@@ -168,8 +198,8 @@ func TestQuantifierParsedAsNode(t *testing.T) {
 
 func TestParseConditionNormalizesWhitespace(t *testing.T) {
 	for _, cond := range []string{"(a or b) and c", " ( a or b ) and c ", "a\nand\nb"} {
-		if _, err := parseCondition(cond); err != nil {
-			t.Errorf("parseCondition(%q) err = %v", cond, err)
+		if _, err := parseCond(cond); err != nil {
+			t.Errorf("parseCond(%q) err = %v", cond, err)
 		}
 	}
 }

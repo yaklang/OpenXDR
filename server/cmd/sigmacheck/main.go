@@ -3,13 +3,48 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
 	"strconv"
+	"time"
 
 	"openxdr/server/internal/sigma"
 )
+
+// 一条典型的进程创建事件，用于测量单事件过全量规则的成本
+const sampleEvent = `{
+  "activity_id": 1,
+  "process": {
+    "pid": 4242,
+    "name": "curl",
+    "file": {"path": "/usr/bin/curl"},
+    "cmd_line": "curl -s https://example.com/payload.sh",
+    "parent_process": {"pid": 4200, "cmd_line": "/bin/bash"}
+  }
+}`
+
+func benchmark(engine *sigma.Engine, rounds int) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(sampleEvent), &raw); err != nil {
+		panic(err)
+	}
+	// 预热，避免首轮的正则惰性初始化混进计时
+	engine.Evaluate(1007, "linux", raw)
+
+	start := time.Now()
+	hits := 0
+	for range rounds {
+		hits += len(engine.Evaluate(1007, "linux", raw))
+	}
+	elapsed := time.Since(start)
+
+	perEvent := elapsed / time.Duration(rounds)
+	fmt.Printf("吞吐测量：%d 次匹配耗时 %v，单事件 %v，约 %.0f 事件/秒（命中 %d 次）\n\n",
+		rounds, elapsed.Round(time.Millisecond), perEvent.Round(time.Microsecond),
+		float64(rounds)/elapsed.Seconds(), hits/rounds)
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -23,12 +58,13 @@ func main() {
 		}
 	}
 
-	_, report := sigma.LoadDirReport(os.Args[1])
+	engine, report := sigma.LoadDirReport(os.Args[1])
 	rate := 0.0
 	if report.Total > 0 {
 		rate = float64(report.Loaded) / float64(report.Total) * 100
 	}
 	fmt.Printf("规则总数 %d，成功加载 %d，兼容率 %.1f%%\n\n", report.Total, report.Loaded, rate)
+	benchmark(engine, 2000)
 
 	type row struct {
 		reason string

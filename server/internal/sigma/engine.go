@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -118,8 +119,9 @@ type Rule struct {
 	Severity int16
 	ClassUID int    // 0 = 不限
 	Product  string // logsource product，空表示不限操作系统
-	sels     map[string]selection
-	cond     node
+	// selection 按下标存放，condition 里的引用编译期就解析成下标
+	sels []selection
+	cond node
 }
 
 // 能对得上采集端的 logsource product。其余（zeek、aws、m365……）
@@ -132,14 +134,14 @@ var knownProducts = map[string]bool{
 // 或关键字列表（不限字段，在整条事件里搜，任一命中即可）。
 type selection struct {
 	branches [][]fieldTest
-	keywords []*regexp.Regexp
+	keywords []matcher
 }
 
-func (s selection) matches(raw map[string]any) bool {
+func (s selection) matches(c *evalCtx) bool {
 	if len(s.keywords) > 0 {
-		flat := flatten(raw)
+		flat := c.flattened()
 		for _, kw := range s.keywords {
-			if kw.MatchString(flat) {
+			if kw.match(flat, flat) {
 				return true
 			}
 		}
@@ -148,7 +150,7 @@ func (s selection) matches(raw map[string]any) bool {
 	for _, branch := range s.branches {
 		ok := true
 		for _, t := range branch {
-			if !t.matches(raw) {
+			if !t.matches(c.raw) {
 				ok = false
 				break
 			}
@@ -187,10 +189,44 @@ func flatten(v any) string {
 	return sb.String()
 }
 
+// matchKind 字面量匹配方式。Sigma 里绝大多数模式不含通配符，
+// 走 strings 比编译正则快一个数量级，只有真需要时才回落到 regexp。
+type matchKind uint8
+
+const (
+	matchExact matchKind = iota
+	matchContains
+	matchPrefix
+	matchSuffix
+	matchRegex
+)
+
+type matcher struct {
+	kind    matchKind
+	literal string // 已转小写，与同样转小写的取值比对
+	re      *regexp.Regexp
+}
+
+// match 接收原值与其小写形式，小写只在 fieldTest 里算一次。
+func (m matcher) match(value, lower string) bool {
+	switch m.kind {
+	case matchExact:
+		return lower == m.literal
+	case matchContains:
+		return strings.Contains(lower, m.literal)
+	case matchPrefix:
+		return strings.HasPrefix(lower, m.literal)
+	case matchSuffix:
+		return strings.HasSuffix(lower, m.literal)
+	default:
+		return m.re.MatchString(value)
+	}
+}
+
 // fieldTest：值列表是 OR（带 |all 修饰符时为 AND），expectNull 表示字段必须缺失。
 type fieldTest struct {
 	path       []string
-	patterns   []*regexp.Regexp
+	patterns   []matcher
 	expectNull bool
 	matchAll   bool
 }
@@ -203,8 +239,9 @@ func (t fieldTest) matches(raw map[string]any) bool {
 	if !ok {
 		return false
 	}
+	lower := strings.ToLower(value)
 	for _, p := range t.patterns {
-		if p.MatchString(value) {
+		if p.match(value, lower) {
 			if !t.matchAll {
 				return true
 			}
@@ -239,6 +276,24 @@ func resolve(raw map[string]any, path []string) (string, bool) {
 type Engine struct {
 	rules []*Rule
 	byID  map[string]*Rule
+	// 按 OCSF class 分桶：一条网络事件没必要去碰一千多条进程规则
+	byClass  map[int][]*Rule
+	anyClass []*Rule // 未限定 class 的规则，对所有事件都要过
+	maxSels  int     // 单条规则的最多 selection 数，决定 memo 缓冲大小
+}
+
+func (e *Engine) index() {
+	e.byClass = map[int][]*Rule{}
+	for _, r := range e.rules {
+		if r.ClassUID == 0 {
+			e.anyClass = append(e.anyClass, r)
+		} else {
+			e.byClass[r.ClassUID] = append(e.byClass[r.ClassUID], r)
+		}
+		if n := len(r.sels); n > e.maxSels {
+			e.maxSels = n
+		}
+	}
 }
 
 // Report 加载结果统计。失败原因按类别聚合，用于衡量规则库兼容率。
@@ -287,6 +342,7 @@ func LoadDirReport(dir string) (*Engine, Report) {
 	if err != nil {
 		slog.Warn("Sigma 规则目录不可读", "dir", dir, "err", err)
 	}
+	e.index()
 	return e, report
 }
 
@@ -314,24 +370,25 @@ func classify(err error) string {
 
 // Evaluate 匹配一条事件。os 是事件所属资产的操作系统（未知时传空串），
 // 用于把 Windows 规则挡在 Linux 事件之外——反之亦然。
+// 可并发调用：除按事件分配的 memo 外不持有可变状态。
 func (e *Engine) Evaluate(classUID int, os string, raw map[string]any) []*Rule {
+	ctx := evalCtx{raw: raw, memo: make([]int8, e.maxSels)}
 	var hits []*Rule
-	for _, r := range e.rules {
-		if r.ClassUID != 0 && r.ClassUID != classUID {
-			continue
-		}
-		// 资产 OS 未知时不做限制，宁可多看一眼也别漏；已知就必须对得上
-		if r.Product != "" && os != "" && r.Product != os {
-			continue
-		}
-		sel := make(map[string]bool, len(r.sels))
-		for name, s := range r.sels {
-			sel[name] = s.matches(raw)
-		}
-		if r.cond.eval(sel) {
-			hits = append(hits, r)
+	match := func(rules []*Rule) {
+		for _, r := range rules {
+			// 资产 OS 未知时不做限制，宁可多看一眼也别漏；已知就必须对得上
+			if r.Product != "" && os != "" && r.Product != os {
+				continue
+			}
+			ctx.sels = r.sels
+			clear(ctx.memo[:len(r.sels)])
+			if r.cond.eval(&ctx) {
+				hits = append(hits, r)
+			}
 		}
 	}
+	match(e.byClass[classUID])
+	match(e.anyClass)
 	return hits
 }
 
@@ -364,21 +421,29 @@ func compileFile(path string) (*Rule, error) {
 	if aggregateCond.MatchString(condText) {
 		return nil, fmt.Errorf("暂不支持统计型条件: %q", condText)
 	}
-	cond, err := parseCondition(condText)
-	if err != nil {
-		return nil, err
-	}
 
-	sels := map[string]selection{}
-	for name, value := range detection {
-		if name == "condition" {
-			continue
+	// 先建 selection 表，condition 才能把名字解析成下标。
+	// 名字排序是为了让下标稳定，便于排查。
+	names := make([]string, 0, len(detection))
+	for name := range detection {
+		if name != "condition" {
+			names = append(names, name)
 		}
-		sel, err := compileSelection(value)
+	}
+	sort.Strings(names)
+
+	sels := make([]selection, len(names))
+	for i, name := range names {
+		sel, err := compileSelection(detection[name])
 		if err != nil {
 			return nil, fmt.Errorf("selection %s: %w", name, err)
 		}
-		sels[name] = sel
+		sels[i] = sel
+	}
+
+	cond, err := parseCondition(condText, names)
+	if err != nil {
+		return nil, err
 	}
 
 	rule := &Rule{Severity: 3, sels: sels, cond: cond}
@@ -446,7 +511,7 @@ func compileSelection(value any) (selection, error) {
 				continue
 			}
 			// 标量元素即关键字，不限字段全文匹配
-			kw, err := buildRegex(fmt.Sprint(item), map[string]bool{"contains": true})
+			kw, err := buildMatcher(fmt.Sprint(item), map[string]bool{"contains": true})
 			if err != nil {
 				return selection{}, err
 			}
@@ -455,11 +520,11 @@ func compileSelection(value any) (selection, error) {
 		return sel, nil
 
 	case string:
-		kw, err := buildRegex(v, map[string]bool{"contains": true})
+		kw, err := buildMatcher(v, map[string]bool{"contains": true})
 		if err != nil {
 			return selection{}, err
 		}
-		return selection{keywords: []*regexp.Regexp{kw}}, nil
+		return selection{keywords: []matcher{kw}}, nil
 
 	default:
 		return selection{}, fmt.Errorf("暂不支持的 selection 类型 %T", value)
@@ -505,7 +570,7 @@ func compileFieldTest(key string, value any) (fieldTest, error) {
 		values = []any{value}
 	}
 	for _, v := range values {
-		p, err := buildRegex(fmt.Sprint(v), mods)
+		p, err := buildMatcher(fmt.Sprint(v), mods)
 		if err != nil {
 			return fieldTest{}, err
 		}
@@ -521,11 +586,27 @@ var knownModifiers = map[string]bool{
 	"contains": true, "startswith": true, "endswith": true, "re": true, "all": true,
 }
 
-func buildRegex(value string, mods map[string]bool) (*regexp.Regexp, error) {
+func buildMatcher(value string, mods map[string]bool) (matcher, error) {
 	if mods["re"] {
-		return regexp.Compile("(?i)" + value)
+		re, err := regexp.Compile("(?i)" + value)
+		return matcher{kind: matchRegex, re: re}, err
 	}
-	// Sigma 通配符 * ? -> 正则；修饰符决定锚点；大小写不敏感是 Sigma 默认语义
+
+	// 无通配符时不用正则。大小写不敏感是 Sigma 默认语义，字面量提前转小写
+	if !strings.ContainsAny(value, "*?") {
+		kind := matchExact
+		switch {
+		case mods["contains"]:
+			kind = matchContains
+		case mods["startswith"]:
+			kind = matchPrefix
+		case mods["endswith"]:
+			kind = matchSuffix
+		}
+		return matcher{kind: kind, literal: strings.ToLower(value)}, nil
+	}
+
+	// Sigma 通配符 * ? -> 正则；修饰符决定锚点
 	escaped := regexp.QuoteMeta(value)
 	escaped = strings.ReplaceAll(escaped, `\*`, `.*`)
 	escaped = strings.ReplaceAll(escaped, `\?`, `.`)
@@ -538,5 +619,6 @@ func buildRegex(value string, mods map[string]bool) (*regexp.Regexp, error) {
 	default:
 		escaped = "^" + escaped + "$"
 	}
-	return regexp.Compile("(?i)" + escaped)
+	re, err := regexp.Compile("(?i)" + escaped)
+	return matcher{kind: matchRegex, re: re}, err
 }

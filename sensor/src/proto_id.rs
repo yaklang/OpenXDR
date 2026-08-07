@@ -239,3 +239,216 @@ fn join_u16(values: &[u16]) -> String {
         .collect::<Vec<_>>()
         .join("-")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::{FlowKey, Metadata};
+    use std::net::{IpAddr, Ipv4Addr};
+
+    fn default_flow() -> Flow {
+        Flow {
+            key: FlowKey {
+                a_ip: IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
+                b_ip: IpAddr::V4(Ipv4Addr::new(2, 0, 0, 2)),
+                a_port: 0,
+                b_port: 0,
+                proto: 6,
+            },
+            start_ns: 0,
+            last_ns: 0,
+            a_to_b_packets: 0,
+            a_to_b_bytes: 0,
+            b_to_a_packets: 0,
+            b_to_a_bytes: 0,
+            tcp_flags: 0,
+            meta: Metadata::default(),
+            probed: false,
+            client_is_a: true,
+        }
+    }
+
+    fn pkt<'a>(sport: u16, dport: u16, payload: &'a [u8]) -> Packet<'a> {
+        Packet {
+            src: IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
+            dst: IpAddr::V4(Ipv4Addr::new(2, 0, 0, 2)),
+            proto: 6,
+            sport,
+            dport,
+            tcp_flags: 0,
+            payload,
+            frame_len: 100,
+        }
+    }
+
+    fn dns_query(name: &str) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend_from_slice(&[0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]);
+        for label in name.split('.') {
+            p.push(label.len() as u8);
+            p.extend_from_slice(label.as_bytes());
+        }
+        p.push(0); // root
+        p.extend_from_slice(&[0, 1, 0, 1]); // type A, class IN
+        p
+    }
+
+    #[test]
+    fn dns_question_parsing() {
+        let payload = dns_query("www.example.com");
+        assert_eq!(parse_dns_question(&payload).as_deref(), Some("www.example.com"));
+    }
+    #[test]
+    fn dns_single_label() {
+        assert_eq!(parse_dns_question(&dns_query("localhost")).as_deref(), Some("localhost"));
+    }
+
+    #[test]
+    fn dns_zero_qdcount_none() {
+        let mut p = dns_query("example.com");
+        p[5] = 0; // qdcount 高字节已是 0，改低字节
+        assert_eq!(parse_dns_question(&p), None);
+    }
+
+    #[test]
+    fn dns_compression_pointer_none() {
+        // 构造 label 长度字节为 0xc0（指针标记）→ 应视为畸形
+        let mut p = Vec::new();
+        p.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+        p.push(0xc0);
+        p.push(0x0c);
+        p.push(0);
+        assert_eq!(parse_dns_question(&p), None);
+    }
+
+    #[test]
+    fn probe_sets_dns_and_probed() {
+        let mut flow = default_flow();
+        let payload = dns_query("pwn.example");
+        let mut pkt = pkt(54321, DNS_PORT, &payload);
+        probe(&mut flow, &pkt);
+        assert_eq!(flow.meta.dns_query.as_deref(), Some("pwn.example"));
+        assert!(flow.probed, "命中后应置 probed 防止重复解析");
+        assert!(flow.meta.tls_sni.is_none());
+
+        // probed 后不再重复解析
+        pkt.dport = 9999; // 即使换端口也不再探测
+        probe(&mut flow, &pkt);
+        assert_eq!(flow.meta.dns_query.as_deref(), Some("pwn.example"));
+    }
+
+    /// 构造带 SNI 的 ClientHello（含一个 GREASE 密码套件和一个 GREASE 扩展）。
+    /// 返回 (payload, 期望 SNI)。
+    fn client_hello(sni: &str, grease: bool) -> Vec<u8> {
+        let mut hs = Vec::new();
+        hs.push(0x01); // handshake type ClientHello
+        hs.extend_from_slice(&[0, 0, 0]); // length 占位
+        hs.extend_from_slice(&[0x03, 0x03]); // version TLS1.2
+        hs.extend_from_slice(&[0xAA; 32]); // random
+        hs.push(0); // session_id len == 0
+
+        let mut ciphers = vec![0x13, 0x01];
+        if grease {
+            ciphers.push(0x0a); ciphers.push(0x0a);
+        }
+        hs.extend_from_slice(&(ciphers.len() as u16).to_be_bytes());
+        hs.extend_from_slice(&ciphers);
+
+        hs.push(0); // compression len
+
+        // extensions: SNI + 可选 GREASE
+        let mut exts = Vec::new();
+        // SNI：server_name_list = [list_len(2)][type(1)][name_len(2)][name]
+        let name = sni.as_bytes();
+        let mut ext_body = Vec::new();
+        ext_body.extend_from_slice(&((3 + name.len()) as u16).to_be_bytes()); // list_len
+        ext_body.push(0x00); // name_type = host_name
+        ext_body.extend_from_slice(&(name.len() as u16).to_be_bytes());
+        ext_body.extend_from_slice(name);
+        exts.extend_from_slice(&0x0000u16.to_be_bytes());
+        exts.extend_from_slice(&(ext_body.len() as u16).to_be_bytes());
+        exts.extend_from_slice(&ext_body);
+        // GREASE 扩展
+        if grease {
+            exts.extend_from_slice(&0x0a0au16.to_be_bytes());
+            exts.extend_from_slice(&0u16.to_be_bytes());
+        }
+
+        hs.extend_from_slice(&(exts.len() as u16).to_be_bytes());
+        hs.extend_from_slice(&exts);
+
+        // record header
+        let mut record = Vec::new();
+        record.push(0x16);
+        record.extend_from_slice(&[0x03, 0x01]);
+        record.extend_from_slice(&(hs.len() as u16).to_be_bytes());
+        record.extend_from_slice(&hs);
+        record
+    }
+
+    #[test]
+    fn tls_sni_and_ja3() {
+        let payload = client_hello("evil.example.com", false);
+        let hello = parse_client_hello(&payload).expect("应解析出 ClientHello");
+        assert_eq!(hello.sni.as_deref(), Some("evil.example.com"));
+        // MD5 16 字节 → 32 位 hex
+        assert_eq!(hello.ja3.len(), 32);
+        assert!(hello.ja3.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn tls_grease_removed_stable_ja3() {
+        let a = parse_client_hello(&client_hello("x.example", false)).unwrap();
+        let b = parse_client_hello(&client_hello("x.example", true)).unwrap();
+        // GREASE 被剔除 → 指纹一致
+        assert_eq!(a.ja3, b.ja3, "GREASE 值应被剔除，JA3 不受其影响");
+    }
+
+    #[test]
+    fn tls_parse_rejects_non_clienthello() {
+        assert!(parse_client_hello(b"").is_none());
+        assert!(parse_client_hello(&[0x17, 0x03, 0x01, 0x00]).is_none()); // 0x17 应用数据
+    }
+
+    #[test]
+    fn probe_detects_tls() {
+        let payload = client_hello("c2.example", false);
+        let mut flow = default_flow();
+        probe(&mut flow, &pkt(52000, 443, &payload));
+        assert_eq!(flow.meta.tls_sni.as_deref(), Some("c2.example"));
+        assert!(!flow.meta.ja3.as_deref().unwrap_or("").is_empty());
+        assert!(flow.probed);
+    }
+
+    #[test]
+    fn http_request_parsing() {
+        let req = b"GET /admin/login HTTP/1.1\r\nHost: target.example\r\nUser-Agent: curl/8.0\r\n\r\n";
+        let h = parse_http_request(req).expect("应解析出 HTTP 请求");
+        assert_eq!(h.uri, "/admin/login");
+        assert_eq!(h.host.as_deref(), Some("target.example"));
+        assert_eq!(h.user_agent.as_deref(), Some("curl/8.0"));
+    }
+
+    #[test]
+    fn http_rejects_non_http() {
+        assert!(parse_http_request(b"\x16GARBAGE").is_none());
+        assert!(parse_http_request(b"GET / HTTP/2.0\r\n").is_none()); // HTTP/2 不在此范围
+        assert!(parse_http_request(b"BOGUS / HTTP/1.1\r\n").is_none()); // 非法方法
+    }
+
+    #[test]
+    fn http_case_insensitive_headers() {
+        let req = b"POST /api HTTP/1.1\r\nhOsT: a.example\r\n";
+        let h = parse_http_request(req).unwrap();
+        assert_eq!(h.host.as_deref(), Some("a.example"));
+    }
+
+    #[test]
+    fn grease_constant() {
+        assert!(is_grease(0x0a0a));
+        assert!(is_grease(0x1a1a));
+        assert!(!is_grease(0x0a0b));
+        assert!(!is_grease(0x1301));
+        assert!(!is_grease(0x0a00));
+    }
+}

@@ -107,3 +107,56 @@ fn process_event(
         dropped_events: 0, // 由 EventSink 在发送时填当前累计值
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn process_event_links_lineage() {
+        let mut reg = ProcessRegistry::default();
+        let parent = process_event(
+            "agent-1", &mut reg, 100, "parent.exe",
+            Some("/x/parent.exe"), Some("parent cmd"), None, "u".to_string(),
+        );
+        let child = process_event(
+            "agent-1", &mut reg, 200, "child.exe",
+            None, Some("child cmd"), Some(100), "u".to_string(),
+        );
+        assert_eq!(parent.process_guid, child.parent_process_guid, "子进程应连到父进程 GUID");
+        assert_eq!(child.class_uid, 1007);
+        assert!(!parent.process_guid.is_empty());
+        assert!(!child.process_guid.is_empty());
+    }
+
+    #[test]
+    fn process_event_parent_unknown() {
+        let mut reg = ProcessRegistry::default();
+        let evt = process_event(
+            "agent-1", &mut reg, 1, "x", None, Some("c"), Some(999), "u".to_string(),
+        );
+        assert!(evt.parent_process_guid.is_empty(), "父未登记时 parent GUID 应为空");
+        let v: Value = serde_json::from_str(&evt.raw_json).unwrap();
+        assert_eq!(v["process"]["pid"], 1);
+        assert_eq!(v["process"]["name"], "x");
+        assert_eq!(v["process"]["cmd_line"], "c");
+        assert!(v["process"]["parent_process"]["uid"].is_null(), "父未知时 uid 应为 null");
+    }
+
+    #[test]
+    fn process_event_raw_fields() {
+        let mut reg = ProcessRegistry::default();
+        let evt = process_event(
+            "agent-x", &mut reg, 42, "bash", Some("/bin/bash"), Some("-c whoami"), None, "root".to_string(),
+        );
+        let v: Value = serde_json::from_str(&evt.raw_json).unwrap();
+        assert_eq!(v["activity_id"], 1);
+        assert_eq!(v["process"]["uid"], evt.process_guid);
+        assert_eq!(v["process"]["file"]["path"], "/bin/bash");
+        assert_eq!(v["process"]["pid"], 42);
+        assert_eq!(evt.agent_id, "agent-x");
+        assert_eq!(evt.username, "root");
+        assert!(evt.ts_unix_ns > 0);
+    }
+}

@@ -98,3 +98,81 @@ pub async fn run(
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::{FlowKey, Metadata};
+    use std::net::{IpAddr, Ipv4Addr};
+
+    fn flow(client_is_a: bool) -> Flow {
+        Flow {
+            key: FlowKey {
+                a_ip: IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
+                b_ip: IpAddr::V4(Ipv4Addr::new(2, 0, 0, 2)),
+                a_port: 1000,
+                b_port: 80,
+                proto: 6,
+            },
+            start_ns: 100,
+            last_ns: 200,
+            a_to_b_packets: 3,
+            a_to_b_bytes: 300,
+            b_to_a_packets: 5,
+            b_to_a_bytes: 500,
+            tcp_flags: 0,
+            meta: Metadata {
+                dns_query: Some("example.com".to_string()),
+                tls_sni: None,
+                ja3: None,
+                http_host: Some("h.example".to_string()),
+                http_uri: Some("/x".to_string()),
+                http_user_agent: Some("ua".to_string()),
+            },
+            probed: true,
+            client_is_a,
+        }
+    }
+
+    /// client 是 a 侧：src 直接取 a，流量方向照抄。
+    #[test]
+    fn to_record_client_is_a() {
+        let r = to_record(&flow(true));
+        assert_eq!(r.src_ip, "1.0.0.1");
+        assert_eq!(r.dst_ip, "2.0.0.2");
+        assert_eq!(r.src_port, 1000);
+        assert_eq!(r.dst_port, 80);
+        assert_eq!(r.src_packets, 3);
+        assert_eq!(r.src_bytes, 300);
+        assert_eq!(r.dst_packets, 5);
+        assert_eq!(r.dst_bytes, 500);
+    }
+
+    /// client 是 b 侧：src 必须摆正为 b，否则 dst_endpoint 就写反了。
+    #[test]
+    fn to_record_server_is_a_reverses_direction() {
+        let r = to_record(&flow(false));
+        assert_eq!(r.src_ip, "2.0.0.2", "client 是 b 时 src 应为 b");
+        assert_eq!(r.dst_ip, "1.0.0.1");
+        assert_eq!(r.src_port, 80);
+        assert_eq!(r.dst_port, 1000);
+        assert_eq!(r.src_packets, 5, "src 侧应为 b→a 流量");
+        assert_eq!(r.src_bytes, 500);
+        assert_eq!(r.dst_packets, 3);
+    }
+
+    /// 时间戳与元数据忠实直通。
+    #[test]
+    fn to_record_metadata() {
+        let r = to_record(&flow(true));
+        assert_eq!(r.start_unix_ns, 100);
+        assert_eq!(r.end_unix_ns, 200);
+        assert_eq!(r.protocol, 6);
+        assert_eq!(r.dns_query, "example.com");
+        assert_eq!(r.http_host, "h.example");
+        assert_eq!(r.http_uri, "/x");
+        assert_eq!(r.http_user_agent, "ua");
+        assert_eq!(r.tls_sni, "");
+        assert_eq!(r.ja3, "");
+    }
+}

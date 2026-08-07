@@ -4,75 +4,77 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
 
-// --- buildRegex 修饰符 ---
+// matchOf 用原值与其小写形式调用 matcher，与运行期路径一致。
+func matchOf(m matcher, v string) bool { return m.match(v, strings.ToLower(v)) }
+
+// --- buildMatcher 修饰符 ---
 
 func TestBuildRegexModifiers(t *testing.T) {
 	// 默认全词锚定、大小写不敏感
-	re, err := buildRegex("cmd.exe", map[string]bool{})
+	re, err := buildMatcher("cmd.exe", map[string]bool{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !re.MatchString("cmd.exe") {
+	if !matchOf(re, "cmd.exe") {
 		t.Error("全词锚定应命中完全相等的值")
 	}
-	if re.MatchString("C:\\Windows\\cmd.exe") {
+	if matchOf(re, "C:\\Windows\\cmd.exe") {
 		t.Error("全词锚定不应命中带路径前缀的值")
 	}
 
-	contains, _ := buildRegex("powershell", map[string]bool{"contains": true})
-	if !contains.MatchString("C:\\Windows\\System32\\powershell.exe") {
+	contains, _ := buildMatcher("powershell", map[string]bool{"contains": true})
+	if !matchOf(contains, "C:\\Windows\\System32\\powershell.exe") {
 		t.Error("contains 应命中子串")
 	}
 
-	start, _ := buildRegex("C:\\", map[string]bool{"startswith": true})
-	if !start.MatchString("C:\\Windows\\cmd.exe") {
+	start, _ := buildMatcher("C:\\", map[string]bool{"startswith": true})
+	if !matchOf(start, "C:\\Windows\\cmd.exe") {
 		t.Error("startswith 应命中前缀")
 	}
-	if start.MatchString("D:\\cmd.exe") {
+	if matchOf(start, "D:\\cmd.exe") {
 		t.Error("startswith 不应命中不匹配前缀")
 	}
 
-	end, _ := buildRegex(".exe", map[string]bool{"endswith": true})
-	if !end.MatchString("cmd.exe") {
+	end, _ := buildMatcher(".exe", map[string]bool{"endswith": true})
+	if !matchOf(end, "cmd.exe") {
 		t.Error("endswith 应命中后缀")
 	}
-	if end.MatchString("cmd.exe;ls") {
+	if matchOf(end, "cmd.exe;ls") {
 		t.Error("endswith 不应命中不匹配后缀")
 	}
 }
 
 func TestBuildRegexWildcards(t *testing.T) {
-	re, err := buildRegex("*.exe", map[string]bool{})
+	re, err := buildMatcher("*.exe", map[string]bool{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !re.MatchString("cmd.exe") || !re.MatchString("powershell.EXE") {
+	if !matchOf(re, "cmd.exe") || !matchOf(re, "powershell.EXE") {
 		t.Error("通配符 * 应命中任意前缀")
 	}
 
-	q, _ := buildRegex("bas?.exe", map[string]bool{})
-	if !q.MatchString("bash.exe") {
+	q, _ := buildMatcher("bas?.exe", map[string]bool{})
+	if !matchOf(q, "bash.exe") {
 		t.Error("通配符 ? 应命中单字符")
 	}
-	if q.MatchString("bashex.exe") {
+	if matchOf(q, "bashex.exe") {
 		t.Error("通配符 ? 不应命多字符")
 	}
 }
 
 func TestBuildRegexRawMode(t *testing.T) {
-	re, err := buildRegex(`^[\w]+\.\d+$`, map[string]bool{"re": true})
+	re, err := buildMatcher(`^[\w]+\.\d+$`, map[string]bool{"re": true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !re.MatchString("abc.123") || re.MatchString("abc.x") {
+	if !matchOf(re, "abc.123") || matchOf(re, "abc.x") {
 		t.Error("re 修饰符应原样按正则匹配")
 	}
-	if _, err := buildRegex(`(unclosed`, map[string]bool{"re": true}); err == nil {
+	if _, err := buildMatcher(`(unclosed`, map[string]bool{"re": true}); err == nil {
 		t.Error("非法正则应报错")
 	}
 }
@@ -108,15 +110,15 @@ func TestFieldTestMatches(t *testing.T) {
 		},
 	}
 	// 字段路径按 fieldMap 映射：commandline -> process.cmd_line
-	pwsh, _ := buildRegex("powershell", map[string]bool{"contains": true})
-	t1 := fieldTest{path: []string{"process", "cmd_line"}, patterns: []*regexp.Regexp{pwsh}}
+	pwsh, _ := buildMatcher("powershell", map[string]bool{"contains": true})
+	t1 := fieldTest{path: []string{"process", "cmd_line"}, patterns: []matcher{pwsh}}
 	if !t1.matches(raw) {
 		t.Error("contains 单值应命中")
 	}
 
 	// 多值 OR
-	prog, _ := buildRegex("bash", map[string]bool{"contains": true})
-	t2 := fieldTest{path: []string{"process", "cmd_line"}, patterns: []*regexp.Regexp{pwsh, prog}}
+	prog, _ := buildMatcher("bash", map[string]bool{"contains": true})
+	t2 := fieldTest{path: []string{"process", "cmd_line"}, patterns: []matcher{pwsh, prog}}
 	if !t2.matches(raw) {
 		t.Error("多值 OR 有一个命中即可")
 	}
@@ -125,12 +127,12 @@ func TestFieldTestMatches(t *testing.T) {
 	}
 
 	// matchAll：多值全部命中
-	enc, _ := buildRegex("enc", map[string]bool{"contains": true})
-	t3 := fieldTest{path: []string{"process", "cmd_line"}, patterns: []*regexp.Regexp{pwsh, enc}, matchAll: true}
+	enc, _ := buildMatcher("enc", map[string]bool{"contains": true})
+	t3 := fieldTest{path: []string{"process", "cmd_line"}, patterns: []matcher{pwsh, enc}, matchAll: true}
 	if !t3.matches(raw) {
 		t.Error("matchAll 全部命中应为 true")
 	}
-	t4 := fieldTest{path: []string{"process", "cmd_line"}, patterns: []*regexp.Regexp{pwsh, prog}, matchAll: true}
+	t4 := fieldTest{path: []string{"process", "cmd_line"}, patterns: []matcher{pwsh, prog}, matchAll: true}
 	if t4.matches(raw) {
 		t.Error("matchAll 有未命中应为 false")
 	}
@@ -164,11 +166,11 @@ func TestSelectionBranchOR(t *testing.T) {
 	// 值列表（map 里是并列项）→ OR；含 contains 关键字其中一项命中即可
 	sel := selectionFrom(`{"commandline|contains": ["powershell", "bash"]}`)
 	raw := map[string]any{"process": map[string]any{"cmd_line": "run powershell -c x"}}
-	if !sel.matches(raw) {
+	if !sel.matches(&evalCtx{raw: raw}) {
 		t.Error("任一 OR 分支命中应为 true")
 	}
 	raw2 := map[string]any{"process": map[string]any{"cmd_line": "run python"}}
-	if sel.matches(raw2) {
+	if sel.matches(&evalCtx{raw: raw2}) {
 		t.Error("两个分支都没命中应为 false")
 	}
 }
@@ -186,10 +188,10 @@ func TestSelectionKeyword(t *testing.T) {
 		"process": map[string]any{"cmd_line": "run legitim.exe"},
 		"query":   map[string]any{"hostname": "mimikatz-dns.example.com"},
 	}
-	if !s.matches(raw) {
+	if !s.matches(&evalCtx{raw: raw}) {
 		t.Error("关键字命中任意字段应为 true")
 	}
-	if s.matches(map[string]any{"process": map[string]any{"cmd_line": "nothing here"}}) {
+	if s.matches(&evalCtx{raw: map[string]any{"process": map[string]any{"cmd_line": "nothing here"}}}) {
 		t.Error("关键字都没命中应为 false")
 	}
 

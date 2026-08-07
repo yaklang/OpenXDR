@@ -129,3 +129,169 @@ fn decode_l4(
         frame_len,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn eth(ethertype: u16, payload: &[u8]) -> Vec<u8> {
+        let mut f = vec![0u8; 12]; // dst+src mac
+        f.extend_from_slice(&ethertype.to_be_bytes());
+        f.extend_from_slice(payload);
+        f
+    }
+
+    /// 构造 IPv4 + TCP 帧。flags 完整 16 位（高 3 位为 DF/MF/取值见上，低 13 位是分片偏移）。
+    fn ipv4_tcp(sport: u16, dport: u16, tcp_flags: u8, frag_field: u16, payload: &[u8]) -> Vec<u8> {
+        let ihl = 20;
+        let total = (ihl + 20 + payload.len()) as u16;
+        let mut ip = Vec::new();
+        ip.push(0x45); // IPv4, IHL=5
+        ip.push(0); // DSCP/ECN
+        ip.extend_from_slice(&total.to_be_bytes());
+        ip.extend_from_slice(&[0, 0]); // ident
+        ip.extend_from_slice(&frag_field.to_be_bytes());
+        ip.push(64); // TTL
+        ip.push(IPPROTO_TCP);
+        ip.extend_from_slice(&[0, 0]); // checksum 占位
+        ip.extend_from_slice(&[1, 2, 3, 4]); // src
+        ip.extend_from_slice(&[5, 6, 7, 8]); // dst
+        ip.extend_from_slice(&sport.to_be_bytes());
+        ip.extend_from_slice(&dport.to_be_bytes());
+        ip.extend_from_slice(&[0, 0, 0, 0]); // seq
+        ip.extend_from_slice(&[0, 0, 0, 0]); // ack
+        ip.push(5 << 4); // data offset 5
+        ip.push(tcp_flags);
+        ip.extend_from_slice(&[0, 0, 0, 0, 0, 0]); // window+checksum+urg
+        ip.extend_from_slice(payload);
+        eth(0x0800, &ip)
+    }
+
+    fn ipv4_udp(sport: u16, dport: u16, payload: &[u8]) -> Vec<u8> {
+        let total = (20 + 8 + payload.len()) as u16;
+        let mut ip = Vec::new();
+        ip.push(0x45);
+        ip.push(0);
+        ip.extend_from_slice(&total.to_be_bytes());
+        ip.extend_from_slice(&[0, 0, 0, 0]);
+        ip.push(64);
+        ip.push(IPPROTO_UDP);
+        ip.extend_from_slice(&[0, 0]);
+        ip.extend_from_slice(&[1, 2, 3, 4]);
+        ip.extend_from_slice(&[5, 6, 7, 8]);
+        ip.extend_from_slice(&sport.to_be_bytes());
+        ip.extend_from_slice(&dport.to_be_bytes());
+        ip.extend_from_slice(&(8 + payload.len() as u16).to_be_bytes());
+        ip.extend_from_slice(&[0, 0]); // checksum
+        ip.extend_from_slice(payload);
+        eth(0x0800, &ip)
+    }
+
+    fn ipv6_tcp(sport: u16, dport: u16, payload: &[u8]) -> Vec<u8> {
+        let mut ip = Vec::new();
+        ip.extend_from_slice(&[0x60, 0, 0, 0]); // v6 + flow
+        ip.extend_from_slice(&((20 + payload.len()) as u16).to_be_bytes());
+        ip.push(IPPROTO_TCP);
+        ip.push(64); // hop limit
+        ip.extend_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01]);
+        ip.extend_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02]);
+        ip.extend_from_slice(&sport.to_be_bytes());
+        ip.extend_from_slice(&dport.to_be_bytes());
+        ip.extend_from_slice(&[0, 0, 0, 0]);
+        ip.extend_from_slice(&[0, 0, 0, 0]);
+        ip.push(5 << 4);
+        ip.push(0);
+        ip.extend_from_slice(&[0, 0, 0, 0, 0, 0]); // window+checksum+urg
+        ip.extend_from_slice(payload);
+        eth(0x86dd, &ip)
+    }
+
+    #[test]
+    fn decode_ipv4_tcp() {
+        let frame = ipv4_tcp(12345, 443, TCP_SYN, 0, b"hello");
+        let pkt = decode(&frame).unwrap();
+        assert_eq!(pkt.src, IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)));
+        assert_eq!(pkt.dst, IpAddr::V4(Ipv4Addr::new(5, 6, 7, 8)));
+        assert_eq!(pkt.proto, IPPROTO_TCP);
+        assert_eq!(pkt.sport, 12345);
+        assert_eq!(pkt.dport, 443);
+        assert_eq!(pkt.tcp_flags, TCP_SYN);
+        assert_eq!(pkt.payload, b"hello");
+        assert_eq!(pkt.frame_len, frame.len());
+    }
+
+    #[test]
+    fn decode_ipv4_udp() {
+        let frame = ipv4_udp(53, 5353, &[1, 2, 3]);
+        let pkt = decode(&frame).unwrap();
+        assert_eq!(pkt.proto, IPPROTO_UDP);
+        assert_eq!(pkt.sport, 53);
+        assert_eq!(pkt.dport, 5353);
+        assert_eq!(pkt.payload, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn decode_ipv6_tcp() {
+        let frame = ipv6_tcp(40000, 80, b"GET /");
+        let pkt = decode(&frame).unwrap();
+        assert_eq!(pkt.proto, IPPROTO_TCP);
+        assert_eq!(pkt.sport, 40000);
+        assert_eq!(pkt.dport, 80);
+        assert_eq!(pkt.payload, b"GET /");
+        assert_eq!(
+            pkt.src,
+            IpAddr::V6("2001:db8::1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn decode_vlan_and_qinq() {
+        // 单层 VLAN：0x8100 + 4 字节 tag
+        let inner = {
+            let mut frame = ipv4_tcp(1000, 443, 0, 0, b"x");
+            frame.drain(0..14); // 剥掉已有以太头，只留 IP
+            frame
+        };
+        let mut vlan = vec![0u8; 12];
+        vlan.extend_from_slice(&0x8100u16.to_be_bytes()); // TPID
+        vlan.extend_from_slice(&[0, 1]); // TCI
+        vlan.extend_from_slice(&0x0800u16.to_be_bytes()); // inner ethertype
+        vlan.extend_from_slice(&inner);
+        let pkt = decode(&vlan).expect("单层 VLAN 应能解出");
+        assert_eq!(pkt.sport, 1000);
+
+        // QinQ：0x88a8 外层 + 0x8100 内层
+        let mut qinq = vec![0u8; 12];
+        qinq.extend_from_slice(&0x88a8u16.to_be_bytes());
+        qinq.extend_from_slice(&[0, 1]);
+        qinq.extend_from_slice(&0x8100u16.to_be_bytes());
+        qinq.extend_from_slice(&[0, 2]);
+        qinq.extend_from_slice(&0x0800u16.to_be_bytes());
+        qinq.extend_from_slice(&inner);
+        let pkt = decode(&qinq).expect("QinQ 应能解出");
+        assert_eq!(pkt.sport, 1000);
+    }
+
+    #[test]
+    fn decode_fragment_discarded() {
+        // 分片偏移非 0：非首片丢
+        let frame = ipv4_tcp(1000, 443, 0, 0x0040, b"x"); // offset 8 字
+        assert!(decode(&frame).is_none());
+    }
+
+    #[test]
+    fn decode_non_ip_discarded() {
+        // ARP (0x0806)
+        let mut frame = vec![0u8; 12];
+        frame.extend_from_slice(&0x0806u16.to_be_bytes());
+        frame.extend_from_slice(&[0, 0]);
+        assert!(decode(&frame).is_none());
+    }
+
+    #[test]
+    fn decode_truncated_gives_none() {
+        assert!(decode(b"").is_none());
+        assert!(decode(&[0u8; 13]).is_none()); // 不足 14 字节以太头
+        assert!(decode(&[0u8; 20]).is_none()); // 以太头够但 IP/TCP 不够
+    }
+}

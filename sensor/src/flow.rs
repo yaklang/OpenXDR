@@ -187,3 +187,170 @@ impl FlowTable {
         out.extend(self.flows.drain().map(|(_, f)| f));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::decode::IPPROTO_UDP;
+    use std::net::Ipv4Addr;
+
+    fn v4(a: u8, b: u8, c: u8, d: u8) -> IpAddr {
+        IpAddr::V4(Ipv4Addr::new(a, b, c, d))
+    }
+
+    fn pkt(src: IpAddr, dst: IpAddr, sport: u16, dport: u16, flags: u8, frame_len: usize) -> Packet<'static> {
+        Packet {
+            src,
+            dst,
+            proto: IPPROTO_TCP,
+            sport,
+            dport,
+            tcp_flags: flags,
+            payload: b"",
+            frame_len,
+        }
+    }
+
+    #[test]
+    fn flow_key_bidirectional_normalization() {
+        let a = pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1234, 80, 0, 100);
+        let b = pkt(v4(2, 0, 0, 2), v4(1, 0, 0, 1), 80, 1234, 0, 100);
+
+        let (ka, fa) = FlowKey::from_packet(&a);
+        let (kb, fb) = FlowKey::from_packet(&b);
+
+        assert!(ka == kb, "正反方向应归并到同一条流");
+        assert_ne!(fa, fb, "方向标志应相反");
+        // 规范化后源侧应是较小端点
+        assert_eq!(ka.a_ip, v4(1, 0, 0, 1));
+        assert_eq!(ka.a_port, 1234);
+    }
+
+    #[test]
+    fn update_counts_per_direction() {
+        let mut ft = FlowTable::new(&Config::default());
+        let now = 1000;
+
+        let a = pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1111, 80, TCP_SYN, 100);
+        let (_, forward) = ft.update(&a, now).unwrap();
+        assert!(forward, "小端→大端的包应为 forward");
+        let reverse = pkt(v4(2, 0, 0, 2), v4(1, 0, 0, 1), 80, 1111, TCP_ACK, 64);
+        ft.update(&reverse, now + 1);
+
+        assert_eq!(ft.flows.values().next().unwrap().a_to_b_packets, 1);
+        assert_eq!(ft.flows.values().next().unwrap().b_to_a_packets, 1);
+        assert_eq!(ft.flows.values().next().unwrap().a_to_b_bytes, 100);
+        assert_eq!(ft.flows.values().next().unwrap().b_to_a_bytes, 64);
+    }
+
+    #[test]
+    fn client_direction_detection() {
+        // 纯 SYN 发送方为客户端
+        let f = pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1000, 443, TCP_SYN, 60);
+        let mut ft = FlowTable::new(&Config::default());
+        let _ = ft.update(&f, 0);
+        assert_eq!(ft.flows.values().next().unwrap().client_is_a, true);
+
+        // SYN+ACK 发送方为服务端：服务端地址更小（是规范化后的 a 侧）→ a 是服务端
+        let mut ft2 = FlowTable::new(&Config::default());
+        let sa = pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 443, 1000, TCP_SYN | TCP_ACK, 60);
+        let _ = ft2.update(&sa, 0);
+        assert_eq!(ft2.flows.values().next().unwrap().client_is_a, false);
+
+        // UDP：首包发送方即客户端
+        let mut ft3 = FlowTable::new(&Config::default());
+        let udp = Packet {
+            proto: IPPROTO_UDP,
+            ..pkt(v4(3, 0, 0, 3), v4(4, 0, 0, 4), 5000, 53, 0, 60)
+        };
+        let _ = ft3.update(&udp, 0);
+        assert_eq!(ft3.flows.values().next().unwrap().client_is_a, true);
+    }
+
+    #[test]
+    fn flow_table_full_drops() {
+        let cfg = Config { max_flows: 2, ..Config::default() };
+        let mut ft = FlowTable::new(&cfg);
+        let now = 0;
+        assert!(ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, 0, 60), now).is_some());
+        assert!(ft.update(&pkt(v4(3, 0, 0, 3), v4(4, 0, 0, 4), 1, 80, 0, 60), now).is_some());
+        // 已满，第三条被丢
+        assert!(ft.update(&pkt(v4(5, 0, 0, 5), v4(6, 0, 0, 6), 1, 80, 0, 60), now).is_none());
+        // 已有 key 仍能更新（不新增）
+        assert!(ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, 0, 0), now).is_some());
+        assert_eq!(ft.len(), 2);
+    }
+
+    /// 空闲超时导出。sweep_interval=0 保证每次 expire 都做全量扫描。
+    #[test]
+    fn expire_idle_timeout() {
+        let cfg = Config {
+            idle_timeout_secs: 1,
+            max_lifetime_secs: 3600,
+            max_flows: 100,
+            sweep_interval_secs: 0,
+        };
+        let mut ft = FlowTable::new(&cfg);
+        let _ = ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, 0, 60), 0);
+        let mut out = Vec::new();
+        // 1 秒后仍未超时（>= 判定）
+        ft.expire(999_999_999, &mut out);
+        assert_eq!(out.len(), 0, "未到超时不应导出");
+        ft.expire(1_000_000_000, &mut out); // 恰好 1s
+        assert_eq!(out.len(), 1, "空闲超时应导出");
+    }
+
+    /// FIN/RST 立即结束，跨小间隔也能被收走。
+    #[test]
+    fn expire_fin_immediate() {
+        let cfg = Config { sweep_interval_secs: 0, ..Config::default() };
+        let mut ft = FlowTable::new(&cfg);
+        let _ = ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, TCP_FIN, 60), 0);
+        let mut out = Vec::new();
+        ft.expire(1, &mut out);
+        assert_eq!(out.len(), 1, "收到 FIN 的流应立即导出");
+    }
+
+    /// 重组流量按最大生存期强制切分。
+    #[test]
+    fn expire_max_lifetime() {
+        let cfg = Config {
+            idle_timeout_secs: 3600,
+            max_lifetime_secs: 1,
+            max_flows: 100,
+            sweep_interval_secs: 0,
+        };
+        let mut ft = FlowTable::new(&cfg);
+        let _ = ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, 0, 60), 0);
+        let mut out = Vec::new();
+        ft.expire(1_999_999_999, &mut out);
+        assert_eq!(out.len(), 1, "超过最大生存期应被切分导出");
+    }
+
+    /// 未到扫描间隔时，即使有已结束的流也不做全量扫描（当前实现）。
+    #[test]
+    fn expire_skips_when_not_sweep_interval() {
+        let cfg = Config {
+            sweep_interval_secs: 10,
+            idle_timeout_secs: 1,
+            ..Config::default()
+        };
+        let mut ft = FlowTable::new(&cfg);
+        let _ = ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, TCP_FIN, 60), 0);
+        let mut out = Vec::new();
+        ft.expire(1, &mut out); // 未到 10s 扫描间隔
+        assert_eq!(out.len(), 0, "未到扫描间隔不导出（含已结束流）");
+        assert_eq!(ft.len(), 1);
+    }
+
+    #[test]
+    fn drain_all_empties_table() {
+        let mut ft = FlowTable::new(&Config::default());
+        let _ = ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, 0, 60), 0);
+        let _ = ft.update(&pkt(v4(3, 0, 0, 3), v4(4, 0, 0, 4), 1, 80, 0, 60), 0);
+        let mut out = Vec::new();
+        ft.drain_all(&mut out);
+        assert_eq!(out.len(), 2);
+        assert_eq!(ft.len(), 0);
+    }
+}
