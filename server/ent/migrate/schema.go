@@ -194,6 +194,7 @@ var (
 		{Name: "graph", Type: field.TypeJSON},
 		{Name: "ai_verdict", Type: field.TypeJSON, Nullable: true},
 		{Name: "title", Type: field.TypeString, Nullable: true},
+		{Name: "notified_at", Type: field.TypeTime, Nullable: true},
 	}
 	// IncidentsTable holds the schema information for the "incidents" table.
 	IncidentsTable = &schema.Table{

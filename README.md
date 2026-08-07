@@ -62,6 +62,15 @@ docker compose up -d
 登录后可在界面里建号，角色三档：admin（用户管理）/ analyst（研判与处置）/ viewer（只读）。
 所有登录与处置操作都有审计日志，admin 可在界面查看。
 
+启用告警通知，把研判后的事件推到 IM 群（benign 判定不推，AI 说是噪声的不打扰人）：
+
+```bash
+WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=... \
+WEBHOOK_FORMAT=dingtalk \
+WEBHOOK_LINK_BASE=http://<控制台地址>:5173 \
+docker compose up -d   # 格式支持 generic / dingtalk / feishu / wecom
+```
+
 启用 AI 研判（不配置则只做规则告警和关联，不调用模型）：
 
 ```bash

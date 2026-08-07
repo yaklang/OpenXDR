@@ -25,6 +25,8 @@ const (
 	FieldAiVerdict = "ai_verdict"
 	// FieldTitle holds the string denoting the title field in the database.
 	FieldTitle = "title"
+	// FieldNotifiedAt holds the string denoting the notified_at field in the database.
+	FieldNotifiedAt = "notified_at"
 	// EdgeAlerts holds the string denoting the alerts edge name in mutations.
 	EdgeAlerts = "alerts"
 	// Table holds the table name of the incident in the database.
@@ -46,6 +48,7 @@ var Columns = []string{
 	FieldGraph,
 	FieldAiVerdict,
 	FieldTitle,
+	FieldNotifiedAt,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -88,6 +91,11 @@ func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 // ByTitle orders the results by the title field.
 func ByTitle(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTitle, opts...).ToFunc()
+}
+
+// ByNotifiedAt orders the results by the notified_at field.
+func ByNotifiedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldNotifiedAt, opts...).ToFunc()
 }
 
 // ByAlertsCount orders the results by alerts count.

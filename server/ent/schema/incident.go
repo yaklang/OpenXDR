@@ -24,6 +24,8 @@ func (Incident) Fields() []ent.Field {
 		field.JSON("graph", json.RawMessage{}),
 		field.JSON("ai_verdict", json.RawMessage{}).Optional(),
 		field.String("title").Optional().Nillable(),
+		// webhook 投递标记：非空表示已推送（或按策略静默跳过），空则待投递
+		field.Time("notified_at").Optional().Nillable(),
 	}
 }
 

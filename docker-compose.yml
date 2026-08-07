@@ -28,6 +28,11 @@ services:
       AI_API_KEY: ${AI_API_KEY:-}
       # 首次启动的 admin 密码；不设则随机生成并打印在 server 日志里
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # 告警通知：留空不推送。格式 generic / dingtalk / feishu / wecom
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+      WEBHOOK_FORMAT: ${WEBHOOK_FORMAT:-generic}
+      # 消息里控制台链接的前缀，如 http://xdr.internal:5173
+      WEBHOOK_LINK_BASE: ${WEBHOOK_LINK_BASE:-}
     volumes:
       - ./rules:/rules:ro
     ports:

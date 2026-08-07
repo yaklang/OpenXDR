@@ -110,6 +110,26 @@ func (_u *IncidentUpdate) ClearTitle() *IncidentUpdate {
 	return _u
 }
 
+// SetNotifiedAt sets the "notified_at" field.
+func (_u *IncidentUpdate) SetNotifiedAt(v time.Time) *IncidentUpdate {
+	_u.mutation.SetNotifiedAt(v)
+	return _u
+}
+
+// SetNillableNotifiedAt sets the "notified_at" field if the given value is not nil.
+func (_u *IncidentUpdate) SetNillableNotifiedAt(v *time.Time) *IncidentUpdate {
+	if v != nil {
+		_u.SetNotifiedAt(*v)
+	}
+	return _u
+}
+
+// ClearNotifiedAt clears the value of the "notified_at" field.
+func (_u *IncidentUpdate) ClearNotifiedAt() *IncidentUpdate {
+	_u.mutation.ClearNotifiedAt()
+	return _u
+}
+
 // AddAlertIDs adds the "alerts" edge to the Alert entity by IDs.
 func (_u *IncidentUpdate) AddAlertIDs(ids ...uuid.UUID) *IncidentUpdate {
 	_u.mutation.AddAlertIDs(ids...)
@@ -217,6 +237,12 @@ func (_u *IncidentUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.TitleCleared() {
 		_spec.ClearField(incident.FieldTitle, field.TypeString)
+	}
+	if value, ok := _u.mutation.NotifiedAt(); ok {
+		_spec.SetField(incident.FieldNotifiedAt, field.TypeTime, value)
+	}
+	if _u.mutation.NotifiedAtCleared() {
+		_spec.ClearField(incident.FieldNotifiedAt, field.TypeTime)
 	}
 	if _u.mutation.AlertsCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -361,6 +387,26 @@ func (_u *IncidentUpdateOne) ClearTitle() *IncidentUpdateOne {
 	return _u
 }
 
+// SetNotifiedAt sets the "notified_at" field.
+func (_u *IncidentUpdateOne) SetNotifiedAt(v time.Time) *IncidentUpdateOne {
+	_u.mutation.SetNotifiedAt(v)
+	return _u
+}
+
+// SetNillableNotifiedAt sets the "notified_at" field if the given value is not nil.
+func (_u *IncidentUpdateOne) SetNillableNotifiedAt(v *time.Time) *IncidentUpdateOne {
+	if v != nil {
+		_u.SetNotifiedAt(*v)
+	}
+	return _u
+}
+
+// ClearNotifiedAt clears the value of the "notified_at" field.
+func (_u *IncidentUpdateOne) ClearNotifiedAt() *IncidentUpdateOne {
+	_u.mutation.ClearNotifiedAt()
+	return _u
+}
+
 // AddAlertIDs adds the "alerts" edge to the Alert entity by IDs.
 func (_u *IncidentUpdateOne) AddAlertIDs(ids ...uuid.UUID) *IncidentUpdateOne {
 	_u.mutation.AddAlertIDs(ids...)
@@ -498,6 +544,12 @@ func (_u *IncidentUpdateOne) sqlSave(ctx context.Context) (_node *Incident, err 
 	}
 	if _u.mutation.TitleCleared() {
 		_spec.ClearField(incident.FieldTitle, field.TypeString)
+	}
+	if value, ok := _u.mutation.NotifiedAt(); ok {
+		_spec.SetField(incident.FieldNotifiedAt, field.TypeTime, value)
+	}
+	if _u.mutation.NotifiedAtCleared() {
+		_spec.ClearField(incident.FieldNotifiedAt, field.TypeTime)
 	}
 	if _u.mutation.AlertsCleared() {
 		edge := &sqlgraph.EdgeSpec{

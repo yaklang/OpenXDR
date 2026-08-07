@@ -22,6 +22,7 @@ import (
 	"openxdr/server/internal/correlate"
 	"openxdr/server/internal/grpcsvc"
 	"openxdr/server/internal/janitor"
+	"openxdr/server/internal/notify"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
@@ -74,6 +75,15 @@ func main() {
 			time.Duration(getenvInt("AI_TIMEOUT_SECONDS", 120))*time.Second,
 		),
 		Interval: time.Duration(getenvInt("AI_INTERVAL_SECONDS", 30)) * time.Second,
+	}).Run(ctx)
+
+	go (&notify.Notifier{
+		DB:         client,
+		URL:        os.Getenv("WEBHOOK_URL"),
+		Format:     getenv("WEBHOOK_FORMAT", "generic"),
+		Interval:   time.Duration(getenvInt("WEBHOOK_INTERVAL_SECONDS", 30)) * time.Second,
+		WaitTriage: os.Getenv("AI_MODEL") != "",
+		LinkBase:   os.Getenv("WEBHOOK_LINK_BASE"),
 	}).Run(ctx)
 
 	dedupWindow := time.Duration(getenvInt("ALERT_DEDUP_WINDOW_MINUTES", 5)) * time.Minute

@@ -4647,6 +4647,7 @@ type IncidentMutation struct {
 	ai_verdict       *json.RawMessage
 	appendai_verdict json.RawMessage
 	title            *string
+	notified_at      *time.Time
 	clearedFields    map[string]struct{}
 	alerts           map[uuid.UUID]struct{}
 	removedalerts    map[uuid.UUID]struct{}
@@ -4997,6 +4998,55 @@ func (m *IncidentMutation) ResetTitle() {
 	delete(m.clearedFields, incident.FieldTitle)
 }
 
+// SetNotifiedAt sets the "notified_at" field.
+func (m *IncidentMutation) SetNotifiedAt(t time.Time) {
+	m.notified_at = &t
+}
+
+// NotifiedAt returns the value of the "notified_at" field in the mutation.
+func (m *IncidentMutation) NotifiedAt() (r time.Time, exists bool) {
+	v := m.notified_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNotifiedAt returns the old "notified_at" field's value of the Incident entity.
+// If the Incident object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *IncidentMutation) OldNotifiedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNotifiedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNotifiedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNotifiedAt: %w", err)
+	}
+	return oldValue.NotifiedAt, nil
+}
+
+// ClearNotifiedAt clears the value of the "notified_at" field.
+func (m *IncidentMutation) ClearNotifiedAt() {
+	m.notified_at = nil
+	m.clearedFields[incident.FieldNotifiedAt] = struct{}{}
+}
+
+// NotifiedAtCleared returns if the "notified_at" field was cleared in this mutation.
+func (m *IncidentMutation) NotifiedAtCleared() bool {
+	_, ok := m.clearedFields[incident.FieldNotifiedAt]
+	return ok
+}
+
+// ResetNotifiedAt resets all changes to the "notified_at" field.
+func (m *IncidentMutation) ResetNotifiedAt() {
+	m.notified_at = nil
+	delete(m.clearedFields, incident.FieldNotifiedAt)
+}
+
 // AddAlertIDs adds the "alerts" edge to the Alert entity by ids.
 func (m *IncidentMutation) AddAlertIDs(ids ...uuid.UUID) {
 	if m.alerts == nil {
@@ -5085,7 +5135,7 @@ func (m *IncidentMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *IncidentMutation) Fields() []string {
-	fields := make([]string, 0, 5)
+	fields := make([]string, 0, 6)
 	if m.created_at != nil {
 		fields = append(fields, incident.FieldCreatedAt)
 	}
@@ -5100,6 +5150,9 @@ func (m *IncidentMutation) Fields() []string {
 	}
 	if m.title != nil {
 		fields = append(fields, incident.FieldTitle)
+	}
+	if m.notified_at != nil {
+		fields = append(fields, incident.FieldNotifiedAt)
 	}
 	return fields
 }
@@ -5119,6 +5172,8 @@ func (m *IncidentMutation) Field(name string) (ent.Value, bool) {
 		return m.AiVerdict()
 	case incident.FieldTitle:
 		return m.Title()
+	case incident.FieldNotifiedAt:
+		return m.NotifiedAt()
 	}
 	return nil, false
 }
@@ -5138,6 +5193,8 @@ func (m *IncidentMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldAiVerdict(ctx)
 	case incident.FieldTitle:
 		return m.OldTitle(ctx)
+	case incident.FieldNotifiedAt:
+		return m.OldNotifiedAt(ctx)
 	}
 	return nil, fmt.Errorf("unknown Incident field %s", name)
 }
@@ -5182,6 +5239,13 @@ func (m *IncidentMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetTitle(v)
 		return nil
+	case incident.FieldNotifiedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNotifiedAt(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Incident field %s", name)
 }
@@ -5218,6 +5282,9 @@ func (m *IncidentMutation) ClearedFields() []string {
 	if m.FieldCleared(incident.FieldTitle) {
 		fields = append(fields, incident.FieldTitle)
 	}
+	if m.FieldCleared(incident.FieldNotifiedAt) {
+		fields = append(fields, incident.FieldNotifiedAt)
+	}
 	return fields
 }
 
@@ -5237,6 +5304,9 @@ func (m *IncidentMutation) ClearField(name string) error {
 		return nil
 	case incident.FieldTitle:
 		m.ClearTitle()
+		return nil
+	case incident.FieldNotifiedAt:
+		m.ClearNotifiedAt()
 		return nil
 	}
 	return fmt.Errorf("unknown Incident nullable field %s", name)
@@ -5260,6 +5330,9 @@ func (m *IncidentMutation) ResetField(name string) error {
 		return nil
 	case incident.FieldTitle:
 		m.ResetTitle()
+		return nil
+	case incident.FieldNotifiedAt:
+		m.ResetNotifiedAt()
 		return nil
 	}
 	return fmt.Errorf("unknown Incident field %s", name)

@@ -77,6 +77,20 @@ func (_c *IncidentCreate) SetNillableTitle(v *string) *IncidentCreate {
 	return _c
 }
 
+// SetNotifiedAt sets the "notified_at" field.
+func (_c *IncidentCreate) SetNotifiedAt(v time.Time) *IncidentCreate {
+	_c.mutation.SetNotifiedAt(v)
+	return _c
+}
+
+// SetNillableNotifiedAt sets the "notified_at" field if the given value is not nil.
+func (_c *IncidentCreate) SetNillableNotifiedAt(v *time.Time) *IncidentCreate {
+	if v != nil {
+		_c.SetNotifiedAt(*v)
+	}
+	return _c
+}
+
 // SetID sets the "id" field.
 func (_c *IncidentCreate) SetID(v uuid.UUID) *IncidentCreate {
 	_c.mutation.SetID(v)
@@ -220,6 +234,10 @@ func (_c *IncidentCreate) createSpec() (*Incident, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Title(); ok {
 		_spec.SetField(incident.FieldTitle, field.TypeString, value)
 		_node.Title = &value
+	}
+	if value, ok := _c.mutation.NotifiedAt(); ok {
+		_spec.SetField(incident.FieldNotifiedAt, field.TypeTime, value)
+		_node.NotifiedAt = &value
 	}
 	if nodes := _c.mutation.AlertsIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{

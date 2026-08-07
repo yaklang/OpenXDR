@@ -28,7 +28,10 @@ export default function App() {
   // undefined = 会话状态未知（首屏探测中），null = 未登录
   const [me, setMe] = useState<Me | null | undefined>(undefined)
   const [incidents, setIncidents] = useState<IncidentSummary[]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // webhook 通知里的链接带 ?incident=<id>，进来直接定位到事件
+  const [selectedId, setSelectedId] = useState<string | null>(
+    () => new URLSearchParams(location.search).get('incident'),
+  )
   const [detail, setDetail] = useState<IncidentDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   // 标记误报后弹出抑制对话框，把分析师的判断反馈回检测链路
