@@ -58,7 +58,8 @@ async function get<T>(url: string): Promise<T> {
   return r.json()
 }
 
-export const fetchIncidents = () => get<IncidentSummary[]>('/api/incidents')
+export const fetchIncidents = (status?: string) =>
+  get<IncidentSummary[]>(status ? `/api/incidents?status=${status}` : '/api/incidents')
 
 export const fetchIncident = (id: string) => get<IncidentDetail>(`/api/incidents/${id}`)
 
@@ -115,6 +116,18 @@ export interface Suppression {
   matchedCount: number
   lastMatchedAt: string | null
 }
+
+export interface Asset {
+  id: string
+  hostname: string
+  os: string | null
+  ipAddrs: string[] | null
+  agentId: string | null
+  firstSeen: string
+  lastSeen: string
+}
+
+export const fetchAssets = () => get<Asset[]>('/api/assets')
 
 export const fetchSuppressions = () => get<Suppression[]>('/api/suppressions')
 

@@ -96,10 +96,43 @@ body {
 .status-closed { color: var(--muted); }
 .status-false_positive { color: var(--green); border-color: var(--green); }
 
-.dot { width: 8px; height: 8px; border-radius: 50%; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
 .dot-malicious { background: var(--red); }
 .dot-suspicious { background: var(--amber); }
 .dot-benign { background: var(--green); }
+.dot-stale { background: var(--border); }
+
+.filter-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.filter-tab {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.filter-tab:hover { color: var(--fg); }
+.filter-tab.active { background: var(--bg-soft); color: var(--accent); }
+
+.alert-row { cursor: pointer; }
+.alert-row:hover td { background: var(--bg-soft); }
+
+.event-json {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-radius: 6px;
+  font-size: 12px;
+  overflow-x: auto;
+}
 
 .card {
   background: var(--bg-soft);

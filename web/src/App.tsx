@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import {
   fetchIncident, fetchIncidents, setIncidentStatus,
   type IncidentDetail, type IncidentSummary,
 } from './api'
+import { AssetList } from './AssetList'
 import { IncidentGraphView } from './IncidentGraphView'
 import { ResponsePanel } from './ResponsePanel'
 import { SuppressDialog } from './SuppressDialog'
@@ -28,15 +29,18 @@ export default function App() {
   // 标记误报后弹出抑制对话框，把分析师的判断反馈回检测链路
   const [suppressing, setSuppressing] = useState(false)
   const [showSuppressions, setShowSuppressions] = useState(false)
+  const [showAssets, setShowAssets] = useState(false)
+  const [statusFilter, setStatusFilter] = useState('')
+  const [expandedAlert, setExpandedAlert] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     try {
-      setIncidents(await fetchIncidents())
+      setIncidents(await fetchIncidents(statusFilter || undefined))
       setError(null)
     } catch (e) {
       setError(`无法连接 server：${e}`)
     }
-  }, [])
+  }, [statusFilter])
 
   useEffect(() => {
     refresh()
@@ -45,6 +49,7 @@ export default function App() {
   }, [refresh])
 
   useEffect(() => {
+    setExpandedAlert(null)
     if (!selectedId) { setDetail(null); return }
     let stale = false
     fetchIncident(selectedId).then(d => { if (!stale) setDetail(d) }).catch(() => {})
@@ -66,9 +71,21 @@ export default function App() {
           <h1>OpenXDR</h1>
           <div className="header-actions">
             <span className="muted">{incidents.length} 个事件</span>
+            <button className="link" onClick={() => setShowAssets(true)}>资产</button>
             <button className="link" onClick={() => setShowSuppressions(true)}>抑制清单</button>
           </div>
         </header>
+        <div className="filter-tabs">
+          {[['', '全部'], ...Object.entries(STATUS_LABEL)].map(([value, label]) => (
+            <button
+              key={value}
+              className={`filter-tab ${value === statusFilter ? 'active' : ''}`}
+              onClick={() => setStatusFilter(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         {error && <div className="error">{error}</div>}
         {incidents.map(inc => (
           <button
@@ -119,13 +136,27 @@ export default function App() {
               </thead>
               <tbody>
                 {detail.alerts.map(a => (
-                  <tr key={a.id}>
-                    <td>{fmt(a.ts)}</td>
-                    <td>{a.lastTs ? fmt(a.lastTs) : '-'}</td>
-                    <td title={a.ruleId}>{a.ruleTitle ?? a.ruleId}</td>
-                    <td><span className={`sev sev-${a.severity}`}>{SEVERITY_LABEL[a.severity] ?? a.severity}</span></td>
-                    <td>{a.count}</td>
-                  </tr>
+                  <Fragment key={a.id}>
+                    <tr
+                      className="alert-row"
+                      onClick={() => setExpandedAlert(expandedAlert === a.id ? null : a.id)}
+                    >
+                      <td>{fmt(a.ts)}</td>
+                      <td>{a.lastTs ? fmt(a.lastTs) : '-'}</td>
+                      <td title={a.ruleId}>{a.ruleTitle ?? a.ruleId}</td>
+                      <td><span className={`sev sev-${a.severity}`}>{SEVERITY_LABEL[a.severity] ?? a.severity}</span></td>
+                      <td>{a.count}</td>
+                    </tr>
+                    {expandedAlert === a.id && (
+                      <tr>
+                        <td colSpan={5}>
+                          <pre className="event-json">
+                            {a.event ? JSON.stringify(a.event, null, 2) : '无原始事件'}
+                          </pre>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -141,6 +172,7 @@ export default function App() {
         />
       )}
       {showSuppressions && <SuppressionList onClose={() => setShowSuppressions(false)} />}
+      {showAssets && <AssetList onClose={() => setShowAssets(false)} />}
     </div>
   )
 }
