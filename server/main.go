@@ -67,7 +67,15 @@ func main() {
 		slog.Error("gRPC 监听失败", "err", err)
 		os.Exit(1)
 	}
-	grpcServer := grpc.NewServer()
+	tlsOpts, mtls, err := grpcsvc.ServerOptions()
+	if err != nil {
+		slog.Error("TLS 配置无效", "err", err)
+		os.Exit(1)
+	}
+	if !mtls {
+		slog.Warn("gRPC 未启用 mTLS，采集端通信为明文，仅适合本机调试")
+	}
+	grpcServer := grpc.NewServer(tlsOpts...)
 	dedupWindow := time.Duration(getenvInt("ALERT_DEDUP_WINDOW_MINUTES", 5)) * time.Minute
 	pb.RegisterAgentServiceServer(grpcServer, &grpcsvc.Server{
 		DB:          client,

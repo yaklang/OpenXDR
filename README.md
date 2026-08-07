@@ -78,6 +78,23 @@ sudo env SENSOR_IFACE=eth0 OPENXDR_SERVER=http://<server>:8081 ./target/release/
 > agent 的 eBPF 字节码在构建时编译，需要 `rustup toolchain install nightly --component rust-src`
 > 和 `cargo +nightly install bpf-linker`。
 
+## 启用 mTLS
+
+采集端与 server 之间默认是明文，仅适合本机调试。生产部署必须开双向认证：
+
+```bash
+./scripts/gen-certs.sh certs <server 的域名或 IP>
+
+# server
+TLS_CA_FILE=certs/ca.crt TLS_CERT_FILE=certs/server.crt TLS_KEY_FILE=certs/server.key ...
+
+# agent / sensor（注意地址是 https）
+OPENXDR_SERVER=https://<server>:8081 \
+OPENXDR_CA=certs/ca.crt OPENXDR_CERT=certs/client.crt OPENXDR_KEY=certs/client.key ...
+```
+
+三个变量必须同时配置，只配一部分会直接报错而不是悄悄降级成明文。
+
 ## 配置
 
 server 全部通过环境变量配置，均有默认值：

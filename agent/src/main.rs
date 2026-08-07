@@ -7,6 +7,7 @@ pub mod pb {
 }
 
 mod collector;
+mod tls;
 
 use pb::agent_service_client::AgentServiceClient;
 
@@ -24,7 +25,7 @@ async fn main() {
 }
 
 async fn run(server: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = AgentServiceClient::connect(server.to_string()).await?;
+    let mut client = AgentServiceClient::new(tls::connect(server).await?);
 
     let resp = client
         .register(pb::RegisterRequest {

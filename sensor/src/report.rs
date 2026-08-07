@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::flow::Flow;
+use crate::tls;
 use crate::pb::{self, sensor_service_client::SensorServiceClient};
 
 /// 攒批阈值：达到条数或到时间就发一批
@@ -57,7 +58,7 @@ pub async fn run(
     let sensor_id = gethostname::gethostname().to_string_lossy().into_owned();
 
     loop {
-        match SensorServiceClient::connect(server.clone()).await {
+        match tls::connect(&server).await.map(SensorServiceClient::new) {
             Ok(mut client) => {
                 // 攒批流：满 BATCH_SIZE 条或超过 BATCH_INTERVAL 就出一批
                 let (rx, sensor_id, dropped) =
