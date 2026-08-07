@@ -10,9 +10,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"openxdr/server/ent"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/testdb"
-	"openxdr/server/ent"
 )
 
 // 同资产、时间窗内的两条告警 → 归入同一个 incident，图上挂出 asset+process 节点。
@@ -87,7 +87,8 @@ func TestCorrelateBatchGroupsByAsset(t *testing.T) {
 	}
 }
 
-// 不同资产、超出时间窗的告警各成 incident，不互相污染。
+// 批次内 byAsset 缓存：同批同资产直接命中内存 incident，不复查时间窗（见 batch 注释，
+// 这是防风暴的刻意取舍）。因此这里应是：asset A 两条合并 + asset B 独立 = 2 个 incident。
 func TestCorrelateBatchSeparates(t *testing.T) {
 	ctx, client := testdb.New(t)
 	now := time.Now()
@@ -95,24 +96,25 @@ func TestCorrelateBatchSeparates(t *testing.T) {
 	assetA, _ := client.Asset.Create().SetHostname("host-a").Save(ctx)
 	assetB, _ := client.Asset.Create().SetHostname("host-b").Save(ctx)
 
-	mk := func(ts time.Time, ruleID string, aid *uuid.UUID, pg uuid.UUID) {
+	mk := func(ts time.Time, ruleID string, aid *uuid.UUID, pg uuid.UUID) *ent.Alert {
 		evt, err := client.Event.Create().
 			SetTs(ts).SetClassUID(1007).SetSource("agent").
 			SetProcessGUID(pg).SetRaw(json.RawMessage(`{}`)).Save(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := client.Alert.Create().
+		al, err := client.Alert.Create().
 			SetTs(ts).SetRuleID(ruleID).SetSeverity(3).
-			SetEventID(evt.ID).SetNillableAssetID(aid).Save(ctx); err != nil {
+			SetEventID(evt.ID).SetNillableAssetID(aid).Save(ctx)
+		if err != nil {
 			t.Fatal(err)
 		}
+		return al
 	}
 
-	p1, p2 := uuid.New(), uuid.New()
-	mk(now, "r-a", &assetA.ID, p1)          // asset A
-	mk(now, "r-b", &assetB.ID, p2)          // asset B → 不同
-	mk(now.Add(time.Hour), "r-a2", &assetA.ID, uuid.New()) // asset A 但超出窗口
+	a1 := mk(now, "r-a", &assetA.ID, uuid.New())
+	a3 := mk(now.Add(time.Hour), "r-a2", &assetA.ID, uuid.New()) // 同资产、超窗 → 批内仍合并
+	b1 := mk(now, "r-b", &assetB.ID, uuid.New())                 // 不同资产 → 独立
 
 	eng := &Engine{
 		DB:            client,
@@ -128,8 +130,25 @@ func TestCorrelateBatchSeparates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// asset A 两条（一条超出窗口 → 不同 incident）+ asset B 一条 = 3
-	if len(incs) != 3 {
-		t.Fatalf("期望 3 个独立 incident，实际 %d", len(incs))
+	if len(incs) != 2 {
+		t.Fatalf("期待 2 个 incident（asset A 合并 + asset B），实际 %d", len(incs))
+	}
+
+	// asset A 的两条归同一个 incident；asset B 独立
+	getInc := func(id uuid.UUID) *uuid.UUID {
+		al, err := client.Alert.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return al.IncidentID
+	}
+	ia := getInc(a1.ID)
+	ia3 := getInc(a3.ID)
+	ib := getInc(b1.ID)
+	if ia == nil || *ia != *ia3 {
+		t.Errorf("asset A 两条告警应归同一 incident，ia=%v ia3=%v", ia, ia3)
+	}
+	if ib == nil || *ib == *ia {
+		t.Errorf("asset B 应独立于 asset A，ib=%v ia=%v", ib, ia)
 	}
 }
