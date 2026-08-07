@@ -15,7 +15,8 @@ mod registry;
 
 pub use registry::ProcessRegistry;
 
-#[cfg(target_os = "linux")]
+// eBPF 采集是可选特性；未启用时 Linux 也走轮询，构建不需要 nightly
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
 mod linux;
 
 #[cfg(target_os = "windows")]
@@ -28,13 +29,13 @@ pub fn spawn(agent_id: String) -> mpsc::Receiver<AgentEvent> {
         dropped: Arc::new(AtomicU64::new(0)),
     };
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", feature = "ebpf"))]
     tokio::spawn(linux::run(agent_id, sink));
 
     #[cfg(target_os = "windows")]
     tokio::spawn(windows::run(agent_id, sink));
 
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(all(target_os = "linux", feature = "ebpf"), target_os = "windows")))]
     tokio::spawn(poll::run(agent_id, sink));
 
     rx

@@ -19,7 +19,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use capture::Capture;
 use capture::afpacket::{AfPacket, RingConfig};
+#[cfg(feature = "xdp")]
 use capture::afxdp::AfXdp;
+#[cfg(feature = "xdp")]
 use capture::xdp_loader::XdpProgram;
 use flow::FlowTable;
 
@@ -47,29 +49,24 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("sensor 启动: iface={iface} workers={workers} backend={backend} server={server}");
 
     // AF_XDP 要先挂 XDP 程序，socket 才收得到包；程序句柄要活到进程退出
+    #[cfg(feature = "xdp")]
     let mut xdp = if backend == "afxdp" {
         Some(XdpProgram::attach(&iface).map_err(|e| anyhow::anyhow!("加载 XDP 程序失败: {e}"))?)
     } else {
         None
     };
+    #[cfg(not(feature = "xdp"))]
+    if backend == "afxdp" {
+        anyhow::bail!("本次构建未启用 xdp 特性，请用 --features xdp 重新编译，或改用 afpacket 后端");
+    }
 
     let mut handles = Vec::with_capacity(workers as usize);
     for id in 0..workers {
-        // 一个 AF_XDP socket 对应一个网卡队列，worker 号即队列号
-        let cap: Box<dyn Capture + Send> = match &mut xdp {
-            Some(program) => {
-                let cfg = capture::afxdp::Config {
-                    queue_id: id as u32,
-                    ..Default::default()
-                };
-                let socket = AfXdp::open(&iface, &cfg)?;
-                program
-                    .register(id as u32, &socket)
-                    .map_err(|e| anyhow::anyhow!("注册 AF_XDP socket 失败: {e}"))?;
-                Box::new(socket)
-            }
-            None => Box::new(AfPacket::open(&iface, &RingConfig::default(), fanout_group)?),
-        };
+        #[cfg(feature = "xdp")]
+        let cap = open_capture(&iface, id, fanout_group, xdp.as_mut())?;
+        #[cfg(not(feature = "xdp"))]
+        let cap: Box<dyn Capture + Send> =
+            Box::new(AfPacket::open(&iface, &RingConfig::default(), fanout_group)?);
 
         let (running, tx, dropped) = (running.clone(), tx.clone(), dropped.clone());
         handles.push(std::thread::spawn(move || {
@@ -91,6 +88,33 @@ async fn main() -> anyhow::Result<()> {
         let _ = h.join();
     }
     Ok(())
+}
+
+/// 按后端开一个抓包句柄。afxdp 下 worker 号即网卡队列号，
+/// socket 必须登记进 XSKMAP，XDP 程序才知道往哪儿 redirect。
+#[cfg(feature = "xdp")]
+fn open_capture(
+    iface: &str,
+    id: u16,
+    fanout_group: u16,
+    xdp: Option<&mut XdpProgram>,
+) -> anyhow::Result<Box<dyn Capture + Send>> {
+    let Some(program) = xdp else {
+        return Ok(Box::new(AfPacket::open(
+            iface,
+            &RingConfig::default(),
+            fanout_group,
+        )?));
+    };
+    let cfg = capture::afxdp::Config {
+        queue_id: id as u32,
+        ..Default::default()
+    };
+    let socket = AfXdp::open(iface, &cfg)?;
+    program
+        .register(id as u32, &socket)
+        .map_err(|e| anyhow::anyhow!("注册 AF_XDP socket 失败: {e}"))?;
+    Ok(Box::new(socket))
 }
 
 fn worker(

@@ -80,13 +80,23 @@ sudo env SENSOR_IFACE=eth0 OPENXDR_SERVER=http://<server>:8081 ./target/release/
 | 后端 | 说明 |
 |---|---|
 | `afpacket`（默认） | AF_PACKET v3 零拷贝环 + FANOUT 按流哈希。任何 Linux 都能跑，不挑驱动，收发双向都能看到 |
-| `afxdp` | 绕过协议栈，吞吐更高。需要驱动支持，进程会在网卡上挂载 XDP 程序；**只能看到入向流量**，镜像口场景够用 |
+| `afxdp` | 绕过协议栈，吞吐更高。需 `--features xdp` 构建、驱动支持，进程会在网卡上挂载 XDP 程序；**只能看到入向流量**，镜像口场景够用 |
 
 `SENSOR_WORKERS` 决定并行度。afpacket 下多个 worker 共享 FANOUT 组；afxdp 下
 worker 号即网卡队列号，数量不应超过网卡实际队列数。
 
-> agent 的 eBPF 字节码和 sensor 的 XDP 程序在构建时编译，需要
-> `rustup toolchain install nightly --component rust-src` 和 `cargo +nightly install bpf-linker`。
+采集端默认构建**不依赖任何外部二进制**——protoc 随 crate 分发，`cargo build` 直接可用。
+内核级采集是可选特性，开启后才需要 nightly 工具链：
+
+```bash
+rustup toolchain install nightly --component rust-src
+cargo +nightly install bpf-linker
+
+cargo build --release --features ebpf   # agent：Linux eBPF 采集
+cargo build --release --features xdp    # sensor：AF_XDP 后端
+```
+
+不开这两个特性时，agent 走轮询采集、sensor 走 AF_PACKET，功能完整只是精度和吞吐低一些。
 
 ## 导入社区规则
 
@@ -113,7 +123,7 @@ cd server && go run ./cmd/sigmacheck ../sigma/rules
 采集端与 server 之间默认是明文，仅适合本机调试。生产部署必须开双向认证：
 
 ```bash
-./scripts/gen-certs.sh certs <server 的域名或 IP>
+cd server && go run ./cmd/gencerts ../certs <server 的域名或 IP>
 
 # server
 TLS_CA_FILE=certs/ca.crt TLS_CERT_FILE=certs/server.crt TLS_KEY_FILE=certs/server.key ...

@@ -7,6 +7,12 @@ edition = "2024"
 members = ["ebpf"]
 default-members = ["."]
 
+[features]
+# eBPF 采集需要 nightly 工具链与 bpf-linker，按需开启；
+# 关闭时 Linux 侧走轮询采集，构建不依赖任何外部二进制
+default = []
+ebpf = ["dep:aya", "dep:bytes", "dep:aya-build"]
+
 [dependencies]
 gethostname = "1.1.0"
 if-addrs = "0.15.0"
@@ -20,12 +26,13 @@ tonic-prost = "0.14.6"
 uuid = { version = "1.24.0", features = ["v4"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-aya = { version = "0.13", features = ["async_tokio"] }
-bytes = "1"
+aya = { version = "0.13", features = ["async_tokio"], optional = true }
+bytes = { version = "1", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 ferrisetw = "1"
 
 [build-dependencies]
 tonic-prost-build = "0.14.6"
-aya-build = "0.1"
+aya-build = { version = "0.1", optional = true }
+protoc-bin-vendored = "3.2.0"

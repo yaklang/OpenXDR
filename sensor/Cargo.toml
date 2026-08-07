@@ -7,11 +7,17 @@ edition = "2024"
 members = ["ebpf"]
 default-members = ["."]
 
+[features]
+# AF_XDP 后端需要 nightly 工具链与 bpf-linker 编译 XDP 程序，按需开启；
+# 关闭时只有 AF_PACKET 后端，构建不依赖任何外部二进制
+default = []
+xdp = ["dep:aya", "dep:aya-build"]
+
 [dependencies]
 anyhow = "1.0.104"
 async-channel = "2.5.0"
 async-stream = "0.3.6"
-aya = "0.14.0"
+aya = { version = "0.14.0", optional = true }
 gethostname = "1.1.0"
 libc = "0.2.189"
 md-5 = "0.11.0"
@@ -22,5 +28,6 @@ tonic = { version = "0.14.6", features = ["tls-ring"] }
 tonic-prost = "0.14.6"
 
 [build-dependencies]
-aya-build = "0.2.0"
+aya-build = { version = "0.2.0", optional = true }
+protoc-bin-vendored = "3.2.0"
 tonic-prost-build = "0.14.6"

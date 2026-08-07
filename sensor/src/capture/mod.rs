@@ -4,7 +4,11 @@
 //! afxdp：绕过协议栈，吞吐更高，但需要驱动支持并加载 XDP 程序。
 
 pub mod afpacket;
+
+// AF_XDP 后端是可选特性：它依赖 XDP 重定向程序，而编译 XDP 需要 nightly
+#[cfg(feature = "xdp")]
 pub mod afxdp;
+#[cfg(feature = "xdp")]
 pub mod xdp_loader;
 
 /// 抓包后端：向 worker 交付原始帧。
