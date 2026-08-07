@@ -46,6 +46,10 @@ impl FlowKey {
 pub struct Metadata {
     pub dns_query: Option<String>,
     pub tls_sni: Option<String>,
+    pub ja3: Option<String>,
+    pub http_host: Option<String>,
+    pub http_uri: Option<String>,
+    pub http_user_agent: Option<String>,
 }
 
 pub struct Flow {

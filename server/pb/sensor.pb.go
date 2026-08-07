@@ -101,6 +101,10 @@ type FlowRecord struct {
 	TcpFlags      uint32                 `protobuf:"varint,12,opt,name=tcp_flags,json=tcpFlags,proto3" json:"tcp_flags,omitempty"` // 会话期间出现过的 TCP 标志位并集
 	DnsQuery      string                 `protobuf:"bytes,13,opt,name=dns_query,json=dnsQuery,proto3" json:"dns_query,omitempty"`  // 无则空
 	TlsSni        string                 `protobuf:"bytes,14,opt,name=tls_sni,json=tlsSni,proto3" json:"tls_sni,omitempty"`        // 无则空
+	Ja3           string                 `protobuf:"bytes,15,opt,name=ja3,proto3" json:"ja3,omitempty"`                            // TLS 客户端指纹，无则空
+	HttpHost      string                 `protobuf:"bytes,16,opt,name=http_host,json=httpHost,proto3" json:"http_host,omitempty"`
+	HttpUri       string                 `protobuf:"bytes,17,opt,name=http_uri,json=httpUri,proto3" json:"http_uri,omitempty"`
+	HttpUserAgent string                 `protobuf:"bytes,18,opt,name=http_user_agent,json=httpUserAgent,proto3" json:"http_user_agent,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -233,6 +237,34 @@ func (x *FlowRecord) GetTlsSni() string {
 	return ""
 }
 
+func (x *FlowRecord) GetJa3() string {
+	if x != nil {
+		return x.Ja3
+	}
+	return ""
+}
+
+func (x *FlowRecord) GetHttpHost() string {
+	if x != nil {
+		return x.HttpHost
+	}
+	return ""
+}
+
+func (x *FlowRecord) GetHttpUri() string {
+	if x != nil {
+		return x.HttpUri
+	}
+	return ""
+}
+
+func (x *FlowRecord) GetHttpUserAgent() string {
+	if x != nil {
+		return x.HttpUserAgent
+	}
+	return ""
+}
+
 type FlowAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Received      uint64                 `protobuf:"varint,1,opt,name=received,proto3" json:"received,omitempty"`
@@ -285,7 +317,7 @@ const file_sensor_proto_rawDesc = "" +
 	"\tFlowBatch\x12\x1b\n" +
 	"\tsensor_id\x18\x01 \x01(\tR\bsensorId\x123\n" +
 	"\x05flows\x18\x02 \x03(\v2\x1d.openxdr.sensor.v1.FlowRecordR\x05flows\x12'\n" +
-	"\x0fdropped_packets\x18\x03 \x01(\x04R\x0edroppedPackets\"\x9f\x03\n" +
+	"\x0fdropped_packets\x18\x03 \x01(\x04R\x0edroppedPackets\"\x91\x04\n" +
 	"\n" +
 	"FlowRecord\x12\"\n" +
 	"\rstart_unix_ns\x18\x01 \x01(\x03R\vstartUnixNs\x12\x1e\n" +
@@ -304,7 +336,11 @@ const file_sensor_proto_rawDesc = "" +
 	"\tdst_bytes\x18\v \x01(\x04R\bdstBytes\x12\x1b\n" +
 	"\ttcp_flags\x18\f \x01(\rR\btcpFlags\x12\x1b\n" +
 	"\tdns_query\x18\r \x01(\tR\bdnsQuery\x12\x17\n" +
-	"\atls_sni\x18\x0e \x01(\tR\x06tlsSni\"%\n" +
+	"\atls_sni\x18\x0e \x01(\tR\x06tlsSni\x12\x10\n" +
+	"\x03ja3\x18\x0f \x01(\tR\x03ja3\x12\x1b\n" +
+	"\thttp_host\x18\x10 \x01(\tR\bhttpHost\x12\x19\n" +
+	"\bhttp_uri\x18\x11 \x01(\tR\ahttpUri\x12&\n" +
+	"\x0fhttp_user_agent\x18\x12 \x01(\tR\rhttpUserAgent\"%\n" +
 	"\aFlowAck\x12\x1a\n" +
 	"\breceived\x18\x01 \x01(\x04R\breceived2Z\n" +
 	"\rSensorService\x12I\n" +

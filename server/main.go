@@ -19,6 +19,7 @@ import (
 	"openxdr/server/internal/api"
 	"openxdr/server/internal/correlate"
 	"openxdr/server/internal/grpcsvc"
+	"openxdr/server/internal/janitor"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/triage"
 	"openxdr/server/pb"
@@ -48,6 +49,12 @@ func main() {
 		Window:        time.Duration(getenvInt("CORRELATE_WINDOW_MINUTES", 30)) * time.Minute,
 		Interval:      time.Duration(getenvInt("CORRELATE_INTERVAL_SECONDS", 10)) * time.Second,
 		MaxGraphNodes: getenvInt("CORRELATE_MAX_GRAPH_NODES", 500),
+	}).Run(ctx)
+
+	go (&janitor.Janitor{
+		DB:        client,
+		Retention: time.Duration(getenvInt("RETENTION_DAYS", 30)) * 24 * time.Hour,
+		Interval:  time.Duration(getenvInt("RETENTION_INTERVAL_MINUTES", 60)) * time.Minute,
 	}).Run(ctx)
 
 	go (&triage.Engine{

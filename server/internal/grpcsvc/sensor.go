@@ -178,8 +178,22 @@ func flowRaw(f *pb.FlowRecord) json.RawMessage {
 	if f.DnsQuery != "" {
 		body["query"] = map[string]any{"hostname": f.DnsQuery}
 	}
-	if f.TlsSni != "" {
-		body["tls"] = map[string]any{"sni": f.TlsSni}
+	if f.TlsSni != "" || f.Ja3 != "" {
+		tls := map[string]any{}
+		if f.TlsSni != "" {
+			tls["sni"] = f.TlsSni
+		}
+		if f.Ja3 != "" {
+			tls["ja3_hash"] = f.Ja3
+		}
+		body["tls"] = tls
+	}
+	if f.HttpHost != "" || f.HttpUri != "" {
+		body["http_request"] = map[string]any{
+			"hostname":   f.HttpHost,
+			"url":        map[string]any{"path": f.HttpUri},
+			"user_agent": f.HttpUserAgent,
+		}
 	}
 	data, _ := json.Marshal(body)
 	return data

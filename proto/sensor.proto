@@ -33,6 +33,10 @@ message FlowRecord {
   uint32 tcp_flags = 12;  // 会话期间出现过的 TCP 标志位并集
   string dns_query = 13;  // 无则空
   string tls_sni = 14;    // 无则空
+  string ja3 = 15;        // TLS 客户端指纹，无则空
+  string http_host = 16;
+  string http_uri = 17;
+  string http_user_agent = 18;
 }
 
 message FlowAck {

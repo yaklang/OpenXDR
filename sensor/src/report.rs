@@ -43,6 +43,10 @@ pub fn to_record(flow: &Flow) -> pb::FlowRecord {
         tcp_flags: flow.tcp_flags as u32,
         dns_query: flow.meta.dns_query.clone().unwrap_or_default(),
         tls_sni: flow.meta.tls_sni.clone().unwrap_or_default(),
+        ja3: flow.meta.ja3.clone().unwrap_or_default(),
+        http_host: flow.meta.http_host.clone().unwrap_or_default(),
+        http_uri: flow.meta.http_uri.clone().unwrap_or_default(),
+        http_user_agent: flow.meta.http_user_agent.clone().unwrap_or_default(),
     }
 }
 
