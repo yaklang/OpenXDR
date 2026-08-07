@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# 同一分支的新推送取消旧运行，别让排队堆积
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Server (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: server/go.sum
+      - name: 格式检查
+        working-directory: server
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: 构建
+        working-directory: server
+        run: go build ./...
+      - name: 静态检查
+        working-directory: server
+        run: go vet ./...
+      - name: 测试
+        working-directory: server
+        run: go test ./...
+      - name: 自带规则必须全部可加载
+        working-directory: server
+        run: go run ./cmd/sigmacheck --strict ../rules
+
+  web:
+    name: Web (React)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - working-directory: web
+        run: npm ci
+      - working-directory: web
+        run: npm run build
+
+  # 默认构建不需要 nightly 和 bpf-linker，这一项守住"开箱即用"
+  collectors:
+    name: ${{ matrix.crate }} (默认特性)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [agent, sensor]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.crate }}
+      - name: 格式检查
+        working-directory: ${{ matrix.crate }}
+        run: cargo fmt --check
+      - name: 构建
+        working-directory: ${{ matrix.crate }}
+        run: cargo build --locked
+      - name: 静态检查
+        working-directory: ${{ matrix.crate }}
+        run: cargo clippy --all-targets -- -D warnings
+      - name: 测试
+        working-directory: ${{ matrix.crate }}
+        run: cargo test
+
+  # 内核采集是可选特性，单独一项：它需要 nightly 工具链和 bpf-linker
+  kernel-collectors:
+    name: ${{ matrix.crate }} (${{ matrix.feature }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: agent
+            feature: ebpf
+          - crate: sensor
+            feature: xdp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: 安装 nightly 与 rust-src
+        run: rustup toolchain install nightly --component rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.crate }}
+          key: ${{ matrix.feature }}
+      - name: 安装 bpf-linker
+        run: cargo install bpf-linker --locked
+      - name: 构建
+        working-directory: ${{ matrix.crate }}
+        run: cargo build --features ${{ matrix.feature }}
+
+  # 采集端要能交叉编译到 Windows：ETW 代码平时在 Linux CI 上编不到
+  windows-target:
+    name: Agent (Windows 目标)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent
+          key: windows
+      - working-directory: agent
+        run: cargo check --target x86_64-pc-windows-gnu
+
+  images:
+    name: 容器镜像
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建 server 镜像
+        run: docker build -f server/Dockerfile -t openxdr-server:ci .
+      - name: 构建 web 镜像
+        run: docker build -t openxdr-web:ci ./web

@@ -193,8 +193,12 @@ mod tests {
         ip.extend_from_slice(&((20 + payload.len()) as u16).to_be_bytes());
         ip.push(IPPROTO_TCP);
         ip.push(64); // hop limit
-        ip.extend_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01]);
-        ip.extend_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02]);
+        ip.extend_from_slice(&[
+            0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01,
+        ]);
+        ip.extend_from_slice(&[
+            0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02,
+        ]);
         ip.extend_from_slice(&sport.to_be_bytes());
         ip.extend_from_slice(&dport.to_be_bytes());
         ip.extend_from_slice(&[0, 0, 0, 0]);
@@ -238,10 +242,7 @@ mod tests {
         assert_eq!(pkt.sport, 40000);
         assert_eq!(pkt.dport, 80);
         assert_eq!(pkt.payload, b"GET /");
-        assert_eq!(
-            pkt.src,
-            IpAddr::V6("2001:db8::1".parse().unwrap())
-        );
+        assert_eq!(pkt.src, IpAddr::V6("2001:db8::1".parse().unwrap()));
     }
 
     #[test]

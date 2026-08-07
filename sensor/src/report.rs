@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::flow::Flow;
-use crate::tls;
 use crate::pb::{self, sensor_service_client::SensorServiceClient};
+use crate::tls;
 
 /// 攒批阈值：达到条数或到时间就发一批
 const BATCH_SIZE: usize = 256;
@@ -18,14 +18,34 @@ pub type DroppedCounter = Arc<AtomicU64>;
 /// 检测规则写 dst_endpoint.port 才有意义。
 pub fn to_record(flow: &Flow) -> pb::FlowRecord {
     let (src_ip, src_port, dst_ip, dst_port) = if flow.client_is_a {
-        (flow.key.a_ip, flow.key.a_port, flow.key.b_ip, flow.key.b_port)
+        (
+            flow.key.a_ip,
+            flow.key.a_port,
+            flow.key.b_ip,
+            flow.key.b_port,
+        )
     } else {
-        (flow.key.b_ip, flow.key.b_port, flow.key.a_ip, flow.key.a_port)
+        (
+            flow.key.b_ip,
+            flow.key.b_port,
+            flow.key.a_ip,
+            flow.key.a_port,
+        )
     };
     let (src_packets, src_bytes, dst_packets, dst_bytes) = if flow.client_is_a {
-        (flow.a_to_b_packets, flow.a_to_b_bytes, flow.b_to_a_packets, flow.b_to_a_bytes)
+        (
+            flow.a_to_b_packets,
+            flow.a_to_b_bytes,
+            flow.b_to_a_packets,
+            flow.b_to_a_bytes,
+        )
     } else {
-        (flow.b_to_a_packets, flow.b_to_a_bytes, flow.a_to_b_packets, flow.a_to_b_bytes)
+        (
+            flow.b_to_a_packets,
+            flow.b_to_a_bytes,
+            flow.a_to_b_packets,
+            flow.a_to_b_bytes,
+        )
     };
 
     pb::FlowRecord {
@@ -65,8 +85,7 @@ pub async fn run(
         match tls::connect(&server).await.map(SensorServiceClient::new) {
             Ok(mut client) => {
                 // 攒批流：满 BATCH_SIZE 条或超过 BATCH_INTERVAL 就出一批
-                let (rx, sensor_id, dropped) =
-                    (rx.clone(), sensor_id.clone(), dropped.clone());
+                let (rx, sensor_id, dropped) = (rx.clone(), sensor_id.clone(), dropped.clone());
                 let outbound = async_stream::stream! {
                     let mut buf = Vec::with_capacity(BATCH_SIZE);
                     loop {

@@ -57,7 +57,9 @@ async fn main() -> anyhow::Result<()> {
     };
     #[cfg(not(feature = "xdp"))]
     if backend == "afxdp" {
-        anyhow::bail!("本次构建未启用 xdp 特性，请用 --features xdp 重新编译，或改用 afpacket 后端");
+        anyhow::bail!(
+            "本次构建未启用 xdp 特性，请用 --features xdp 重新编译，或改用 afpacket 后端"
+        );
     }
 
     let mut handles = Vec::with_capacity(workers as usize);
@@ -65,8 +67,11 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(feature = "xdp")]
         let cap = open_capture(&iface, id, fanout_group, xdp.as_mut())?;
         #[cfg(not(feature = "xdp"))]
-        let cap: Box<dyn Capture + Send> =
-            Box::new(AfPacket::open(&iface, &RingConfig::default(), fanout_group)?);
+        let cap: Box<dyn Capture + Send> = Box::new(AfPacket::open(
+            &iface,
+            &RingConfig::default(),
+            fanout_group,
+        )?);
 
         let (running, tx, dropped) = (running.clone(), tx.clone(), dropped.clone());
         handles.push(std::thread::spawn(move || {
@@ -136,7 +141,9 @@ fn worker(
         cap.poll_batch(&mut |frame, ts_ns| {
             packets += 1;
             last_ts_ns = ts_ns;
-            let Some(pkt) = decode::decode(frame) else { return };
+            let Some(pkt) = decode::decode(frame) else {
+                return;
+            };
             if let Some((flow, _forward)) = table.update(&pkt, ts_ns) {
                 proto_id::probe(flow, &pkt);
             }

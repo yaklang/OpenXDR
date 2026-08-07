@@ -117,10 +117,6 @@ impl Ring {
         unsafe { std::ptr::read_volatile(self.producer) }
     }
 
-    fn consumer_value(&self) -> u32 {
-        unsafe { std::ptr::read_volatile(self.consumer) }
-    }
-
     fn needs_wakeup(&self) -> bool {
         unsafe { std::ptr::read_volatile(self.flags) & XDP_RING_NEED_WAKEUP != 0 }
     }
@@ -147,7 +143,10 @@ unsafe impl Send for AfXdp {}
 
 impl AfXdp {
     pub fn open(iface: &str, cfg: &Config) -> io::Result<Self> {
-        assert!(cfg.frame_count.is_power_of_two(), "frame_count 必须是 2 的幂");
+        assert!(
+            cfg.frame_count.is_power_of_two(),
+            "frame_count 必须是 2 的幂"
+        );
 
         let fd = unsafe { libc::socket(AF_XDP, libc::SOCK_RAW | libc::SOCK_CLOEXEC, 0) };
         if fd < 0 {
@@ -255,10 +254,7 @@ impl AfXdp {
             }
         }
         unsafe {
-            std::ptr::write_volatile(
-                self.fill.producer,
-                producer.wrapping_add(self.frame_count),
-            )
+            std::ptr::write_volatile(self.fill.producer, producer.wrapping_add(self.frame_count))
         };
     }
 
@@ -330,8 +326,9 @@ impl Capture for AfXdp {
         while consumer != producer {
             let slot = (consumer & self.rx.mask) as usize;
             let desc = unsafe { &*(self.rx.desc as *const XdpDesc).add(slot) };
-            let frame =
-                unsafe { std::slice::from_raw_parts(self.umem.add(desc.addr as usize), desc.len as usize) };
+            let frame = unsafe {
+                std::slice::from_raw_parts(self.umem.add(desc.addr as usize), desc.len as usize)
+            };
             f(frame, now_ns);
             used.push(desc.addr);
             consumer = consumer.wrapping_add(1);

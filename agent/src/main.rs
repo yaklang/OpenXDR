@@ -13,8 +13,7 @@ use pb::agent_service_client::AgentServiceClient;
 
 #[tokio::main]
 async fn main() {
-    let server =
-        std::env::var("OPENXDR_SERVER").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
+    let server = std::env::var("OPENXDR_SERVER").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
 
     loop {
         if let Err(e) = run(&server).await {

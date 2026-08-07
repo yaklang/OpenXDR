@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-use crate::decode::{Packet, IPPROTO_TCP, TCP_ACK, TCP_FIN, TCP_RST, TCP_SYN};
+use crate::decode::{IPPROTO_TCP, Packet, TCP_ACK, TCP_FIN, TCP_RST, TCP_SYN};
 
 /// 规范化五元组：小端在前，双向流量归并到同一条流。
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -198,7 +198,14 @@ mod tests {
         IpAddr::V4(Ipv4Addr::new(a, b, c, d))
     }
 
-    fn pkt(src: IpAddr, dst: IpAddr, sport: u16, dport: u16, flags: u8, frame_len: usize) -> Packet<'static> {
+    fn pkt(
+        src: IpAddr,
+        dst: IpAddr,
+        sport: u16,
+        dport: u16,
+        flags: u8,
+        frame_len: usize,
+    ) -> Packet<'static> {
         Packet {
             src,
             dst,
@@ -249,13 +256,20 @@ mod tests {
         let f = pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1000, 443, TCP_SYN, 60);
         let mut ft = FlowTable::new(&Config::default());
         let _ = ft.update(&f, 0);
-        assert_eq!(ft.flows.values().next().unwrap().client_is_a, true);
+        assert!(ft.flows.values().next().unwrap().client_is_a);
 
         // SYN+ACK 发送方为服务端：服务端地址更小（是规范化后的 a 侧）→ a 是服务端
         let mut ft2 = FlowTable::new(&Config::default());
-        let sa = pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 443, 1000, TCP_SYN | TCP_ACK, 60);
+        let sa = pkt(
+            v4(1, 0, 0, 1),
+            v4(2, 0, 0, 2),
+            443,
+            1000,
+            TCP_SYN | TCP_ACK,
+            60,
+        );
         let _ = ft2.update(&sa, 0);
-        assert_eq!(ft2.flows.values().next().unwrap().client_is_a, false);
+        assert!(!ft2.flows.values().next().unwrap().client_is_a);
 
         // UDP：首包发送方即客户端
         let mut ft3 = FlowTable::new(&Config::default());
@@ -264,20 +278,35 @@ mod tests {
             ..pkt(v4(3, 0, 0, 3), v4(4, 0, 0, 4), 5000, 53, 0, 60)
         };
         let _ = ft3.update(&udp, 0);
-        assert_eq!(ft3.flows.values().next().unwrap().client_is_a, true);
+        assert!(ft3.flows.values().next().unwrap().client_is_a);
     }
 
     #[test]
     fn flow_table_full_drops() {
-        let cfg = Config { max_flows: 2, ..Config::default() };
+        let cfg = Config {
+            max_flows: 2,
+            ..Config::default()
+        };
         let mut ft = FlowTable::new(&cfg);
         let now = 0;
-        assert!(ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, 0, 60), now).is_some());
-        assert!(ft.update(&pkt(v4(3, 0, 0, 3), v4(4, 0, 0, 4), 1, 80, 0, 60), now).is_some());
+        assert!(
+            ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, 0, 60), now)
+                .is_some()
+        );
+        assert!(
+            ft.update(&pkt(v4(3, 0, 0, 3), v4(4, 0, 0, 4), 1, 80, 0, 60), now)
+                .is_some()
+        );
         // 已满，第三条被丢
-        assert!(ft.update(&pkt(v4(5, 0, 0, 5), v4(6, 0, 0, 6), 1, 80, 0, 60), now).is_none());
+        assert!(
+            ft.update(&pkt(v4(5, 0, 0, 5), v4(6, 0, 0, 6), 1, 80, 0, 60), now)
+                .is_none()
+        );
         // 已有 key 仍能更新（不新增）
-        assert!(ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, 0, 0), now).is_some());
+        assert!(
+            ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, 0, 0), now)
+                .is_some()
+        );
         assert_eq!(ft.len(), 2);
     }
 
@@ -303,7 +332,10 @@ mod tests {
     /// FIN/RST 立即结束，跨小间隔也能被收走。
     #[test]
     fn expire_fin_immediate() {
-        let cfg = Config { sweep_interval_secs: 0, ..Config::default() };
+        let cfg = Config {
+            sweep_interval_secs: 0,
+            ..Config::default()
+        };
         let mut ft = FlowTable::new(&cfg);
         let _ = ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, TCP_FIN, 60), 0);
         let mut out = Vec::new();

@@ -64,18 +64,34 @@ impl EventSink {
     }
 }
 
+/// 一个进程的采集结果。用具名字段而非位置参数：
+/// exe 与 cmd_line 同为 Option<&str> 且相邻，位置传参很容易传反。
+#[derive(Default)]
+pub struct ProcessInfo<'a> {
+    pub pid: u32,
+    pub name: &'a str,
+    pub exe: Option<&'a str>,
+    pub cmd_line: Option<&'a str>,
+    pub ppid: Option<u32>,
+    pub username: String,
+}
+
 /// 采集器共用：组装一条进程活动事件（OCSF 1007），并在注册表里建立血缘。
 fn process_event(
     agent_id: &str,
     registry: &mut ProcessRegistry,
-    pid: u32,
-    name: &str,
-    exe: Option<&str>,
-    cmd_line: Option<&str>,
-    ppid: Option<u32>,
-    username: String,
+    info: ProcessInfo<'_>,
 ) -> AgentEvent {
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    let ProcessInfo {
+        pid,
+        name,
+        exe,
+        cmd_line,
+        ppid,
+        username,
+    } = info;
 
     let (guid, parent_guid) = registry.register(pid, ppid);
     let raw = serde_json::json!({
@@ -118,14 +134,33 @@ mod tests {
     fn process_event_links_lineage() {
         let mut reg = ProcessRegistry::default();
         let parent = process_event(
-            "agent-1", &mut reg, 100, "parent.exe",
-            Some("/x/parent.exe"), Some("parent cmd"), None, "u".to_string(),
+            "agent-1",
+            &mut reg,
+            ProcessInfo {
+                pid: 100,
+                name: "parent.exe",
+                exe: Some("/x/parent.exe"),
+                cmd_line: Some("parent cmd"),
+                ppid: None,
+                username: "u".to_string(),
+            },
         );
         let child = process_event(
-            "agent-1", &mut reg, 200, "child.exe",
-            None, Some("child cmd"), Some(100), "u".to_string(),
+            "agent-1",
+            &mut reg,
+            ProcessInfo {
+                pid: 200,
+                name: "child.exe",
+                exe: None,
+                cmd_line: Some("child cmd"),
+                ppid: Some(100),
+                username: "u".to_string(),
+            },
         );
-        assert_eq!(parent.process_guid, child.parent_process_guid, "子进程应连到父进程 GUID");
+        assert_eq!(
+            parent.process_guid, child.parent_process_guid,
+            "子进程应连到父进程 GUID"
+        );
         assert_eq!(child.class_uid, 1007);
         assert!(!parent.process_guid.is_empty());
         assert!(!child.process_guid.is_empty());
@@ -135,21 +170,45 @@ mod tests {
     fn process_event_parent_unknown() {
         let mut reg = ProcessRegistry::default();
         let evt = process_event(
-            "agent-1", &mut reg, 1, "x", None, Some("c"), Some(999), "u".to_string(),
+            "agent-1",
+            &mut reg,
+            ProcessInfo {
+                pid: 1,
+                name: "x",
+                exe: None,
+                cmd_line: Some("c"),
+                ppid: Some(999),
+                username: "u".to_string(),
+            },
         );
-        assert!(evt.parent_process_guid.is_empty(), "父未登记时 parent GUID 应为空");
+        assert!(
+            evt.parent_process_guid.is_empty(),
+            "父未登记时 parent GUID 应为空"
+        );
         let v: Value = serde_json::from_str(&evt.raw_json).unwrap();
         assert_eq!(v["process"]["pid"], 1);
         assert_eq!(v["process"]["name"], "x");
         assert_eq!(v["process"]["cmd_line"], "c");
-        assert!(v["process"]["parent_process"]["uid"].is_null(), "父未知时 uid 应为 null");
+        assert!(
+            v["process"]["parent_process"]["uid"].is_null(),
+            "父未知时 uid 应为 null"
+        );
     }
 
     #[test]
     fn process_event_raw_fields() {
         let mut reg = ProcessRegistry::default();
         let evt = process_event(
-            "agent-x", &mut reg, 42, "bash", Some("/bin/bash"), Some("-c whoami"), None, "root".to_string(),
+            "agent-x",
+            &mut reg,
+            ProcessInfo {
+                pid: 42,
+                name: "bash",
+                exe: Some("/bin/bash"),
+                cmd_line: Some("-c whoami"),
+                ppid: None,
+                username: "root".to_string(),
+            },
         );
         let v: Value = serde_json::from_str(&evt.raw_json).unwrap();
         assert_eq!(v["activity_id"], 1);

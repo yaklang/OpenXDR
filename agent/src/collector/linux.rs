@@ -1,7 +1,7 @@
 //! Linux eBPF 采集：tracepoint sched_process_exec。
 //! 捕获所有 execve（含短命进程），需要 root/CAP_BPF；失败回落轮询。
 
-use super::{poll, process_event, EventSink, ProcessRegistry};
+use super::{EventSink, ProcessInfo, ProcessRegistry, poll, process_event};
 use crate::pb::AgentEvent;
 
 // 与 ebpf/src/main.rs 中的定义保持一致
@@ -40,8 +40,10 @@ async fn run_ebpf(
     program.load()?;
     program.attach("sched", "sched_process_exec")?;
 
-    let mut events: AsyncPerfEventArray<_> =
-        bpf.take_map("EVENTS").ok_or("EVENTS map 缺失")?.try_into()?;
+    let mut events: AsyncPerfEventArray<_> = bpf
+        .take_map("EVENTS")
+        .ok_or("EVENTS map 缺失")?
+        .try_into()?;
 
     // exec 事件按 CPU 分发到多个任务，进程血缘是全局的，注册表要共享。
     // exec 频率远低于包速率，这把锁的争用可以忽略。
@@ -120,12 +122,14 @@ fn to_agent_event(agent_id: &str, registry: &mut ProcessRegistry, ev: &ExecEvent
     process_event(
         agent_id,
         registry,
-        ev.pid,
-        &name,
-        Some(exe.as_ref()),
-        cmd_line.as_deref(),
-        ppid,
-        String::new(),
+        ProcessInfo {
+            pid: ev.pid,
+            name: &name,
+            exe: Some(exe.as_ref()),
+            cmd_line: cmd_line.as_deref(),
+            ppid,
+            username: String::new(),
+        },
     )
 }
 

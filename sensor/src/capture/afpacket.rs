@@ -149,8 +149,7 @@ impl AfPacket {
 
         if fanout_group != 0 {
             let group = fanout_group as libc::c_uint;
-            let with_defrag =
-                group | ((PACKET_FANOUT_HASH | PACKET_FANOUT_FLAG_DEFRAG) << 16);
+            let with_defrag = group | ((PACKET_FANOUT_HASH | PACKET_FANOUT_FLAG_DEFRAG) << 16);
             // 老内核不支持 DEFRAG 标志，退回普通哈希分发（分片会丢，但不影响主流量）
             if setsockopt(fd, PACKET_FANOUT, &with_defrag).is_err() {
                 eprintln!("内核不支持 AF_PACKET 分片重组，IP 分片将被跳过");
@@ -233,7 +232,8 @@ impl Capture for AfPacket {
                 )
             };
             // 零拷贝：帧数据直接借用 mmap 区域
-            let frame = unsafe { std::slice::from_raw_parts(block_base.add(offset + mac), snaplen) };
+            let frame =
+                unsafe { std::slice::from_raw_parts(block_base.add(offset + mac), snaplen) };
             f(frame, sec * 1_000_000_000 + nsec);
 
             if next == 0 {

@@ -16,7 +16,10 @@ pub async fn connect(server: &str) -> Result<Channel, Box<dyn std::error::Error>
         (Some(ca), Some(cert), Some(key)) => {
             let tls = ClientTlsConfig::new()
                 .ca_certificate(tonic::transport::Certificate::from_pem(std::fs::read(ca)?))
-                .identity(Identity::from_pem(std::fs::read(cert)?, std::fs::read(key)?));
+                .identity(Identity::from_pem(
+                    std::fs::read(cert)?,
+                    std::fs::read(key)?,
+                ));
             endpoint.tls_config(tls)?
         }
         _ => return Err("OPENXDR_CA / OPENXDR_CERT / OPENXDR_KEY 必须同时配置".into()),

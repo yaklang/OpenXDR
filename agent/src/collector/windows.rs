@@ -1,12 +1,12 @@
 //! Windows ETW 采集：Microsoft-Windows-Kernel-Process provider，进程启动事件。
 //! 需要管理员权限；失败回落轮询。
 
+use super::{EventSink, ProcessInfo, ProcessRegistry, poll, process_event};
+use ferrisetw::EventRecord;
 use ferrisetw::parser::Parser;
 use ferrisetw::provider::Provider;
 use ferrisetw::schema_locator::SchemaLocator;
 use ferrisetw::trace::UserTrace;
-use ferrisetw::EventRecord;
-use super::{poll, process_event, EventSink, ProcessRegistry};
 
 const KERNEL_PROCESS_GUID: &str = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716";
 const EVENT_PROCESS_START: u16 = 1;
@@ -35,12 +35,14 @@ pub async fn run(agent_id: String, tx: EventSink) {
             cb_tx.send(process_event(
                 &cb_agent_id,
                 &mut reg,
-                pid,
-                &name,
-                Some(&image),
-                None, // Kernel-Process provider 不带命令行
-                ppid,
-                String::new(),
+                ProcessInfo {
+                    pid,
+                    name: &name,
+                    exe: Some(&image),
+                    cmd_line: None, // Kernel-Process provider 不带命令行
+                    ppid,
+                    username: String::new(),
+                },
             ));
         })
         .build();

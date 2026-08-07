@@ -4,8 +4,8 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use super::{EventSink, ProcessInfo, ProcessRegistry, process_event};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-use super::{process_event, EventSink, ProcessRegistry};
 
 const INTERVAL: Duration = Duration::from_secs(1);
 
@@ -32,7 +32,9 @@ pub async fn run(agent_id: String, tx: EventSink) {
 
         let current: HashSet<sysinfo::Pid> = sys.processes().keys().copied().collect();
         for pid in current.difference(&known) {
-            let Some(proc) = sys.processes().get(pid) else { continue };
+            let Some(proc) = sys.processes().get(pid) else {
+                continue;
+            };
 
             let cmd_line = proc
                 .cmd()
@@ -40,15 +42,18 @@ pub async fn run(agent_id: String, tx: EventSink) {
                 .map(|s| s.to_string_lossy())
                 .collect::<Vec<_>>()
                 .join(" ");
+            let exe = proc.exe().map(|p| p.to_string_lossy().into_owned());
             let event = process_event(
                 &agent_id,
                 &mut registry,
-                pid.as_u32(),
-                &proc.name().to_string_lossy(),
-                proc.exe().map(|p| p.to_string_lossy().into_owned()).as_deref(),
-                Some(&cmd_line),
-                proc.parent().map(|p| p.as_u32()),
-                proc.user_id().map(|u| u.to_string()).unwrap_or_default(),
+                ProcessInfo {
+                    pid: pid.as_u32(),
+                    name: &proc.name().to_string_lossy(),
+                    exe: exe.as_deref(),
+                    cmd_line: Some(&cmd_line),
+                    ppid: proc.parent().map(|p| p.as_u32()),
+                    username: proc.user_id().map(|u| u.to_string()).unwrap_or_default(),
+                },
             );
 
             if !tx.send(event) {

@@ -47,18 +47,28 @@ func benchmark(engine *sigma.Engine, rounds int) {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "用法: sigmacheck <规则目录> [样例条数]")
+	args := os.Args[1:]
+	// --strict：有任何规则加载失败就非零退出，用于 CI 守住自带规则
+	strict := false
+	for i, a := range args {
+		if a == "--strict" {
+			strict = true
+			args = append(args[:i:i], args[i+1:]...)
+			break
+		}
+	}
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "用法: sigmacheck [--strict] <规则目录> [样例条数]")
 		os.Exit(2)
 	}
 	samples := 3
-	if len(os.Args) > 2 {
-		if n, err := strconv.Atoi(os.Args[2]); err == nil {
+	if len(args) > 1 {
+		if n, err := strconv.Atoi(args[1]); err == nil {
 			samples = n
 		}
 	}
 
-	engine, report := sigma.LoadDirReport(os.Args[1])
+	engine, report := sigma.LoadDirReport(args[0])
 	rate := 0.0
 	if report.Total > 0 {
 		rate = float64(report.Loaded) / float64(report.Total) * 100
@@ -107,5 +117,10 @@ func main() {
 			}
 			fmt.Printf("          %s\n", f)
 		}
+	}
+
+	if strict && report.Loaded != report.Total {
+		fmt.Fprintf(os.Stderr, "\nstrict: %d 条规则未能加载\n", report.Total-report.Loaded)
+		os.Exit(1)
 	}
 }

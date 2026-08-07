@@ -114,18 +114,10 @@ fn parse_client_hello(payload: &[u8]) -> Option<ClientHello> {
         }
         match ext_type {
             0x0000 => sni = parse_sni(body),
-            0x000a => {
-                // supported_groups: list_len(2) + u16 列表
-                if body.len() >= 2 {
-                    curves = u16_list(&body[2..]);
-                }
-            }
-            0x000b => {
-                // ec_point_formats: len(1) + u8 列表
-                if body.len() >= 1 {
-                    point_formats = body[1..].to_vec();
-                }
-            }
+            // supported_groups: list_len(2) + u16 列表
+            0x000a if body.len() >= 2 => curves = u16_list(&body[2..]),
+            // ec_point_formats: len(1) + u8 列表
+            0x000b if !body.is_empty() => point_formats = body[1..].to_vec(),
             _ => {}
         }
         pos += ext_len;
@@ -296,11 +288,17 @@ mod tests {
     #[test]
     fn dns_question_parsing() {
         let payload = dns_query("www.example.com");
-        assert_eq!(parse_dns_question(&payload).as_deref(), Some("www.example.com"));
+        assert_eq!(
+            parse_dns_question(&payload).as_deref(),
+            Some("www.example.com")
+        );
     }
     #[test]
     fn dns_single_label() {
-        assert_eq!(parse_dns_question(&dns_query("localhost")).as_deref(), Some("localhost"));
+        assert_eq!(
+            parse_dns_question(&dns_query("localhost")).as_deref(),
+            Some("localhost")
+        );
     }
 
     #[test]
@@ -349,7 +347,8 @@ mod tests {
 
         let mut ciphers = vec![0x13, 0x01];
         if grease {
-            ciphers.push(0x0a); ciphers.push(0x0a);
+            ciphers.push(0x0a);
+            ciphers.push(0x0a);
         }
         hs.extend_from_slice(&(ciphers.len() as u16).to_be_bytes());
         hs.extend_from_slice(&ciphers);
@@ -422,7 +421,8 @@ mod tests {
 
     #[test]
     fn http_request_parsing() {
-        let req = b"GET /admin/login HTTP/1.1\r\nHost: target.example\r\nUser-Agent: curl/8.0\r\n\r\n";
+        let req =
+            b"GET /admin/login HTTP/1.1\r\nHost: target.example\r\nUser-Agent: curl/8.0\r\n\r\n";
         let h = parse_http_request(req).expect("应解析出 HTTP 请求");
         assert_eq!(h.uri, "/admin/login");
         assert_eq!(h.host.as_deref(), Some("target.example"));

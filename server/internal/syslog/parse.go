@@ -59,7 +59,7 @@ func Parse(line string, now time.Time) Message {
 // RFC5424: VERSION SP TIMESTAMP SP HOSTNAME SP APP-NAME SP PROCID SP MSGID SP [SD] SP MSG
 func parse5424(m *Message, rest string) {
 	fields := strings.SplitN(rest, " ", 6)
-    // 少于 6 段说明报文被截断，能取多少算多少
+	// 少于 6 段说明报文被截断，能取多少算多少
 	get := func(i int) string {
 		if i >= len(fields) || fields[i] == "-" {
 			return ""
