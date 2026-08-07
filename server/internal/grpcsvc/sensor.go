@@ -28,13 +28,17 @@ const protoTCP = 6
 // SensorServer 流量探针接入：会话记录归一化成 OCSF 事件入库并过规则。
 type SensorServer struct {
 	pb.UnimplementedSensorServiceServer
-	DB    *ent.Client
-	Rules *sigma.Engine
+	DB          *ent.Client
+	Rules       *sigma.Engine
+	DedupWindow time.Duration
 }
 
 func (s *SensorServer) ReportFlows(stream pb.SensorService_ReportFlowsServer) error {
 	ctx := stream.Context()
 	var received uint64
+
+	// 一台探针覆盖多个资产，指纹要带 asset。去重状态跨批保留，直到连接结束
+	dedup := newDeduper(s.DedupWindow)
 
 	for {
 		batch, err := stream.Recv()
@@ -47,14 +51,14 @@ func (s *SensorServer) ReportFlows(stream pb.SensorService_ReportFlowsServer) er
 		if batch.DroppedPackets > 0 {
 			slog.Warn("探针丢包", "sensor", batch.SensorId, "dropped", batch.DroppedPackets)
 		}
-		if err := s.ingest(ctx, batch); err != nil {
+		if err := s.ingest(ctx, batch, dedup); err != nil {
 			return err
 		}
 		received += uint64(len(batch.Flows))
 	}
 }
 
-func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch) error {
+func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, dedup *alertDeduper) error {
 	// 网络事件按源 IP 归属资产，让 NTA 数据和 EDR 数据落到同一实体上。
 	// 资产数量是主机量级，每批建一次索引即可。
 	assetByIP, err := s.assetIPIndex(ctx)
@@ -88,13 +92,23 @@ func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch) error {
 		eventCreates = append(eventCreates, ec)
 
 		for _, rule := range s.Rules.Evaluate(classUID, rawMap) {
+			fingerprint := rule.ID + "|" + f.SrcIp
+			if assetID != nil {
+				fingerprint = rule.ID + "|" + assetID.String()
+			}
+			if dedup.hit(fingerprint, ts) {
+				continue
+			}
+			alertID := uuid.Must(uuid.NewV7())
 			alertCreates = append(alertCreates, s.DB.Alert.Create().
+				SetID(alertID).
 				SetTs(ts).
 				SetRuleID(rule.ID).
 				SetSeverity(rule.Severity).
 				SetEventID(eventID).
 				SetNillableAssetID(assetID).
 				SetLastTs(ts))
+			dedup.track(fingerprint, alertID, ts)
 		}
 	}
 
@@ -108,7 +122,7 @@ func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch) error {
 			return err
 		}
 	}
-	return nil
+	return dedup.flush(ctx, s.DB)
 }
 
 func (s *SensorServer) assetIPIndex(ctx context.Context) (map[string]*uuid.UUID, error) {

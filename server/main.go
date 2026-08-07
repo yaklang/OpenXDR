@@ -75,8 +75,9 @@ func main() {
 		DedupWindow: dedupWindow,
 	})
 	pb.RegisterSensorServiceServer(grpcServer, &grpcsvc.SensorServer{
-		DB:    client,
-		Rules: rules,
+		DB:          client,
+		Rules:       rules,
+		DedupWindow: dedupWindow,
 	})
 	go func() {
 		slog.Info("gRPC 启动", "addr", grpcAddr)

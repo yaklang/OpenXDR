@@ -86,15 +86,8 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 	var eventCreates []*ent.EventCreate
 	var alertCreates []*ent.AlertCreate
 
-	// 风暴防线第一层：一条流对应一台主机，告警指纹 (rule_id, asset_id) 在流内就是 rule_id。
-	// 窗口内同指纹只留一行，计数器累加。
-	type dedupState struct {
-		alertID uuid.UUID
-		firstTs time.Time
-		lastTs  time.Time
-		pending int
-	}
-	dedup := map[string]*dedupState{}
+	// 一条流对应一台主机，告警指纹 (rule_id, asset_id) 在流内就是 rule_id
+	dedup := newDeduper(s.DedupWindow)
 
 	flush := func() error {
 		if len(eventCreates) > 0 {
@@ -109,19 +102,7 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 			}
 			alertCreates = nil
 		}
-		for _, d := range dedup {
-			if d.pending == 0 {
-				continue
-			}
-			if err := s.DB.Alert.UpdateOneID(d.alertID).
-				AddCount(d.pending).
-				SetLastTs(d.lastTs).
-				Exec(ctx); err != nil {
-				return err
-			}
-			d.pending = 0
-		}
-		return nil
+		return dedup.flush(ctx, s.DB)
 	}
 
 	for {
@@ -185,11 +166,7 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 		eventCreates = append(eventCreates, ec)
 
 		for _, rule := range s.Rules.Evaluate(int(ev.ClassUid), rawMap) {
-			if d, ok := dedup[rule.ID]; ok && ts.Sub(d.firstTs) < s.DedupWindow {
-				d.pending++
-				if ts.After(d.lastTs) {
-					d.lastTs = ts
-				}
+			if dedup.hit(rule.ID, ts) {
 				continue
 			}
 			alertID := uuid.Must(uuid.NewV7())
@@ -201,7 +178,7 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 				SetEventID(eventID).
 				SetNillableAssetID(assetID).
 				SetLastTs(ts))
-			dedup[rule.ID] = &dedupState{alertID: alertID, firstTs: ts, lastTs: ts}
+			dedup.track(rule.ID, alertID, ts)
 		}
 
 		// 长连接流，攒批落库

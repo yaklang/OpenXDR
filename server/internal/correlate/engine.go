@@ -59,13 +59,18 @@ func (e *Engine) batch(ctx context.Context) error {
 	reopen := map[uuid.UUID]bool{}
 
 	for _, al := range pending {
-		var inc *ent.Incident
+		// 匹配不到资产的告警（例如探针看到的外部 IP）统一归到 uuid.Nil 这个桶，
+		// 否则每条都自成一个 incident，等于自己制造事件风暴
+		bucket := uuid.Nil
 		if al.AssetID != nil {
-			if cached, ok := byAsset[*al.AssetID]; ok {
-				inc = cached
-			} else if found, err := e.findOpen(ctx, *al.AssetID, al.Ts.Add(-e.Window)); err == nil {
-				inc = found
-			}
+			bucket = *al.AssetID
+		}
+
+		var inc *ent.Incident
+		if cached, ok := byAsset[bucket]; ok {
+			inc = cached
+		} else if found, err := e.findOpen(ctx, al.AssetID, al.Ts.Add(-e.Window)); err == nil {
+			inc = found
 		}
 		if inc == nil {
 			hostname := "unknown"
@@ -81,9 +86,7 @@ func (e *Engine) batch(ctx context.Context) error {
 				return err
 			}
 		}
-		if al.AssetID != nil {
-			byAsset[*al.AssetID] = inc
-		}
+		byAsset[bucket] = inc
 		// 已研判的 incident 收到新证据：重开，研判引擎会带新证据重新定性
 		if inc.Status == "triaged" {
 			reopen[inc.ID] = true
@@ -117,10 +120,16 @@ func (e *Engine) batch(ctx context.Context) error {
 	return nil
 }
 
-func (e *Engine) findOpen(ctx context.Context, assetID uuid.UUID, since time.Time) (*ent.Incident, error) {
+// findOpen 找同一归属桶在时间窗内最近的 open/triaged incident。
+// assetID 为 nil 时找的是同样没有资产归属的告警所在的 incident。
+func (e *Engine) findOpen(ctx context.Context, assetID *uuid.UUID, since time.Time) (*ent.Incident, error) {
+	scope := alert.AssetIDIsNil()
+	if assetID != nil {
+		scope = alert.AssetIDEQ(*assetID)
+	}
 	al, err := e.DB.Alert.Query().
 		Where(
-			alert.AssetIDEQ(assetID),
+			scope,
 			alert.TsGTE(since),
 			alert.IncidentIDNotNil(),
 			alert.HasIncidentWith(incident.StatusIn("open", "triaged")),
@@ -155,15 +164,12 @@ func (e *Engine) attach(g *Graph, al *ent.Alert) {
 	g.ensureNode(alertNode, "alert", e.ruleTitle(al.RuleID))
 
 	if evt := al.Edges.Event; evt != nil {
-		procNode := "event:" + evt.ID.String()
-		if evt.ProcessGUID != nil {
-			procNode = "process:" + evt.ProcessGUID.String()
-		}
-		g.ensureNode(procNode, "process", processLabel(evt))
+		id, typ, label := eventNode(evt)
+		g.ensureNode(id, typ, label)
 		if assetNode != "" {
-			g.ensureEdge(assetNode, procNode, "hosts")
+			g.ensureEdge(assetNode, id, "hosts")
 		}
-		g.ensureEdge(procNode, alertNode, "triggered")
+		g.ensureEdge(id, alertNode, "triggered")
 	} else if assetNode != "" {
 		g.ensureEdge(assetNode, alertNode, "triggered")
 	}
@@ -174,6 +180,59 @@ func (e *Engine) ruleTitle(ruleID string) string {
 		return title
 	}
 	return ruleID
+}
+
+// OCSF class：网络活动 / DNS 活动，其余按端点事件处理
+const (
+	classNetworkActivity = 4001
+	classDNSActivity     = 4003
+)
+
+// eventNode 事件在图上的节点：端点事件画成进程，网络事件画成连接。
+// 同一进程/连接的多条告警共用一个节点，靠 id 去重。
+func eventNode(evt *ent.Event) (id, typ, label string) {
+	if evt.ClassUID == classNetworkActivity || evt.ClassUID == classDNSActivity {
+		id = "event:" + evt.ID.String()
+		if evt.ConnTuple != nil {
+			id = "conn:" + *evt.ConnTuple
+		}
+		return id, "connection", connLabel(evt)
+	}
+
+	id = "event:" + evt.ID.String()
+	if evt.ProcessGUID != nil {
+		id = "process:" + evt.ProcessGUID.String()
+	}
+	return id, "process", processLabel(evt)
+}
+
+func connLabel(evt *ent.Event) string {
+	var raw struct {
+		Query struct {
+			Hostname string `json:"hostname"`
+		} `json:"query"`
+		TLS struct {
+			SNI string `json:"sni"`
+		} `json:"tls"`
+		DstEndpoint struct {
+			IP   string `json:"ip"`
+			Port int    `json:"port"`
+		} `json:"dst_endpoint"`
+	}
+	if json.Unmarshal(evt.Raw, &raw) != nil {
+		return "connection"
+	}
+	// 域名比 IP 有信息量，优先展示
+	switch {
+	case raw.Query.Hostname != "":
+		return "DNS " + raw.Query.Hostname
+	case raw.TLS.SNI != "":
+		return raw.TLS.SNI
+	case raw.DstEndpoint.IP != "":
+		return fmt.Sprintf("%s:%d", raw.DstEndpoint.IP, raw.DstEndpoint.Port)
+	default:
+		return "connection"
+	}
 }
 
 func processLabel(evt *ent.Event) string {
