@@ -98,6 +98,24 @@ cargo build --release --features xdp    # sensor：AF_XDP 后端
 
 不开这两个特性时，agent 走轮询采集、sensor 走 AF_PACKET，功能完整只是精度和吞吐低一些。
 
+## 日志接入
+
+server 内置 syslog 接收（同端口 UDP + TCP，RFC3164 与 RFC5424 都支持），
+配置 `SYSLOG_ADDR` 启用：
+
+```bash
+SYSLOG_ADDR=:514 docker compose up -d
+
+# 被监控主机把日志转发过来
+echo '*.* @<server>:514' >> /etc/rsyslog.conf && systemctl restart rsyslog
+```
+
+日志按主机名归属资产，主机名对不上时退回源 IP 匹配，两者都对不上则归入
+统一的未归属 incident。同一主机反复报同一条日志只留一行告警并计数。
+
+规则里用 `logsource.category: application` 匹配这类事件，字段路径见
+`rules/lnx_ssh_auth_failure.yml`。
+
 ## 导入社区规则
 
 规则引擎兼容 Sigma，可直接挂载 [SigmaHQ](https://github.com/SigmaHQ/sigma) 规则库：
@@ -149,6 +167,7 @@ server 全部通过环境变量配置，均有默认值：
 | `CORRELATE_MAX_GRAPH_NODES` | `500` | 单个事件图节点上限 |
 | `AI_MODEL` | 空（不启用） | 研判模型名 |
 | `AI_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点 |
+| `SYSLOG_ADDR` | 空（不启用） | syslog 监听地址，如 `:514`。UDP 与 TCP 同时监听 |
 | `RETENTION_DAYS` | `30` | 原始事件保留天数，0 表示不清理。被告警引用的证据事件不受影响 |
 
 ## 技术栈

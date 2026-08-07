@@ -21,6 +21,7 @@ import (
 	"openxdr/server/internal/grpcsvc"
 	"openxdr/server/internal/janitor"
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/syslog"
 	"openxdr/server/internal/triage"
 	"openxdr/server/pb"
 )
@@ -68,6 +69,15 @@ func main() {
 		Interval: time.Duration(getenvInt("AI_INTERVAL_SECONDS", 30)) * time.Second,
 	}).Run(ctx)
 
+	dedupWindow := time.Duration(getenvInt("ALERT_DEDUP_WINDOW_MINUTES", 5)) * time.Minute
+
+	go (&syslog.Server{
+		DB:          client,
+		Rules:       rules,
+		Addr:        os.Getenv("SYSLOG_ADDR"),
+		DedupWindow: dedupWindow,
+	}).Run(ctx)
+
 	grpcAddr := getenv("GRPC_ADDR", ":8081")
 	lis, err := net.Listen("tcp", grpcAddr)
 	if err != nil {
@@ -83,7 +93,6 @@ func main() {
 		slog.Warn("gRPC 未启用 mTLS，采集端通信为明文，仅适合本机调试")
 	}
 	grpcServer := grpc.NewServer(tlsOpts...)
-	dedupWindow := time.Duration(getenvInt("ALERT_DEDUP_WINDOW_MINUTES", 5)) * time.Minute
 	pb.RegisterAgentServiceServer(grpcServer, &grpcsvc.Server{
 		DB:          client,
 		Rules:       rules,

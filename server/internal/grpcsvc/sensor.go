@@ -14,6 +14,7 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
+	"openxdr/server/internal/dedup"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/pb"
 )
@@ -39,7 +40,7 @@ func (s *SensorServer) ReportFlows(stream pb.SensorService_ReportFlowsServer) er
 	var received uint64
 
 	// 一台探针覆盖多个资产，指纹要带 asset。去重状态跨批保留，直到连接结束
-	dedup := newDeduper(s.DedupWindow)
+	deduper := dedup.New(s.DedupWindow)
 
 	for {
 		batch, err := stream.Recv()
@@ -52,14 +53,14 @@ func (s *SensorServer) ReportFlows(stream pb.SensorService_ReportFlowsServer) er
 		if batch.DroppedPackets > 0 {
 			slog.Warn("探针丢包", "sensor", batch.SensorId, "dropped", batch.DroppedPackets)
 		}
-		if err := s.ingest(ctx, batch, dedup); err != nil {
+		if err := s.ingest(ctx, batch, deduper); err != nil {
 			return err
 		}
 		received += uint64(len(batch.Flows))
 	}
 }
 
-func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, dedup *alertDeduper) error {
+func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, deduper *dedup.Deduper) error {
 	// 网络事件按源 IP 归属资产，让 NTA 数据和 EDR 数据落到同一实体上。
 	// 资产数量是主机量级，每批建一次索引即可。
 	assetByIP, osByIP, err := s.assetIPIndex(ctx)
@@ -97,7 +98,7 @@ func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, dedup *a
 			if assetID != nil {
 				fingerprint = rule.ID + "|" + assetID.String()
 			}
-			if dedup.hit(fingerprint, ts) {
+			if deduper.Hit(fingerprint, ts) {
 				continue
 			}
 			alertID := uuid.Must(uuid.NewV7())
@@ -109,7 +110,7 @@ func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, dedup *a
 				SetEventID(eventID).
 				SetNillableAssetID(assetID).
 				SetLastTs(ts))
-			dedup.track(fingerprint, alertID, ts)
+			deduper.Track(fingerprint, alertID, ts)
 		}
 	}
 
@@ -123,7 +124,7 @@ func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, dedup *a
 			return err
 		}
 	}
-	return dedup.flush(ctx, s.DB)
+	return deduper.Flush(ctx, s.DB)
 }
 
 // assetIPIndex 建立 IP -> 资产 的索引，同时带出操作系统，

@@ -91,13 +91,18 @@ var categoryMap = map[string]int{
 	"dns":                4003,
 	"proxy":              4002,
 	"webserver":          4002,
+	// 应用日志（syslog 接入）。OCSF 未定义通用日志类别，用私有段编号，
+	// 与 internal/syslog.ClassApplicationActivity 保持一致
+	"application": 100001,
+	"antivirus":   100001,
 }
 
 // 当前采集端真正会产生的 OCSF class，用于区分"规则能加载"与"规则能命中"
 var ingestedClasses = map[int]string{
-	1007: "进程活动（agent）",
-	4001: "网络活动（sensor）",
-	4003: "DNS 活动（sensor）",
+	1007:   "进程活动（agent）",
+	4001:   "网络活动（sensor）",
+	4003:   "DNS 活动（sensor）",
+	100001: "应用日志（syslog）",
 }
 
 // IngestedClass 报告某个 class 是否有对应的采集来源。

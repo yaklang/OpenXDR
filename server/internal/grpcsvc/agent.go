@@ -14,6 +14,7 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
+	"openxdr/server/internal/dedup"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/pb"
 )
@@ -91,7 +92,7 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 	var alertCreates []*ent.AlertCreate
 
 	// 一条流对应一台主机，告警指纹 (rule_id, asset_id) 在流内就是 rule_id
-	dedup := newDeduper(s.DedupWindow)
+	deduper := dedup.New(s.DedupWindow)
 
 	flush := func() error {
 		if len(eventCreates) > 0 {
@@ -106,7 +107,7 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 			}
 			alertCreates = nil
 		}
-		return dedup.flush(ctx, s.DB)
+		return deduper.Flush(ctx, s.DB)
 	}
 
 	for {
@@ -183,7 +184,7 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 		eventCreates = append(eventCreates, ec)
 
 		for _, rule := range s.Rules.Evaluate(int(ev.ClassUid), assetOS, rawMap) {
-			if dedup.hit(rule.ID, ts) {
+			if deduper.Hit(rule.ID, ts) {
 				continue
 			}
 			alertID := uuid.Must(uuid.NewV7())
@@ -195,7 +196,7 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 				SetEventID(eventID).
 				SetNillableAssetID(assetID).
 				SetLastTs(ts))
-			dedup.track(rule.ID, alertID, ts)
+			deduper.Track(rule.ID, alertID, ts)
 		}
 
 		// 长连接流，攒批落库
