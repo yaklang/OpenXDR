@@ -2,6 +2,7 @@ package sigma
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -25,6 +26,44 @@ func (n andNode) eval(sel map[string]bool) bool { return n.left.eval(sel) && n.r
 type orNode struct{ left, right node }
 
 func (n orNode) eval(sel map[string]bool) bool { return n.left.eval(sel) || n.right.eval(sel) }
+
+// quantNode 聚合条件：`1 of them`、`all of selection_*`、`any of filter_*`。
+// pattern 为 "them" 时作用于全部 selection，否则按通配符前缀匹配 selection 名。
+type quantNode struct {
+	all     bool // all of ...
+	min     int  // x of ...（any 等价于 1）
+	pattern string
+}
+
+func (n quantNode) eval(sel map[string]bool) bool {
+	matched, total := 0, 0
+	for name, ok := range sel {
+		if !n.matches(name) {
+			continue
+		}
+		total++
+		if ok {
+			matched++
+		}
+	}
+	if total == 0 {
+		return false
+	}
+	if n.all {
+		return matched == total
+	}
+	return matched >= n.min
+}
+
+func (n quantNode) matches(name string) bool {
+	if n.pattern == "them" {
+		return true
+	}
+	if prefix, ok := strings.CutSuffix(n.pattern, "*"); ok {
+		return strings.HasPrefix(name, prefix)
+	}
+	return name == n.pattern
+}
 
 type parser struct {
 	tokens []string
@@ -100,10 +139,37 @@ func (p *parser) parseUnary() (node, error) {
 		p.pos++
 		return n, nil
 	default:
+		if n, ok := p.parseQuantifier(); ok {
+			return n, nil
+		}
 		n := identNode(p.tokens[p.pos])
 		p.pos++
 		return n, nil
 	}
+}
+
+// parseQuantifier 识别 `<all|any|数字> of <them|pattern>`，不是这个形式则原样退回。
+func (p *parser) parseQuantifier() (node, bool) {
+	if p.pos+2 >= len(p.tokens) || p.tokens[p.pos+1] != "of" {
+		return nil, false
+	}
+	head, pattern := p.tokens[p.pos], p.tokens[p.pos+2]
+
+	var n quantNode
+	switch head {
+	case "all":
+		n = quantNode{all: true, pattern: pattern}
+	case "any":
+		n = quantNode{min: 1, pattern: pattern}
+	default:
+		count, err := strconv.Atoi(head)
+		if err != nil || count < 1 {
+			return nil, false
+		}
+		n = quantNode{min: count, pattern: pattern}
+	}
+	p.pos += 3
+	return n, true
 }
 
 func (p *parser) peek() string {

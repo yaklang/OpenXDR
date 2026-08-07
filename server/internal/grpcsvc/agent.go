@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,6 +85,7 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 
 	var received uint64
 	var assetID *uuid.UUID
+	var assetOS string
 	var lastDropped uint64
 	var eventCreates []*ent.EventCreate
 	var alertCreates []*ent.AlertCreate
@@ -143,6 +145,9 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 			if agentGUID, err := uuid.Parse(ev.AgentId); err == nil {
 				if a, err := s.DB.Asset.Query().Where(asset.AgentIDEQ(agentGUID)).First(ctx); err == nil {
 					assetID = &a.ID
+					if a.Os != nil {
+						assetOS = strings.ToLower(*a.Os)
+					}
 				}
 			}
 		}
@@ -177,7 +182,7 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 		}
 		eventCreates = append(eventCreates, ec)
 
-		for _, rule := range s.Rules.Evaluate(int(ev.ClassUid), rawMap) {
+		for _, rule := range s.Rules.Evaluate(int(ev.ClassUid), assetOS, rawMap) {
 			if dedup.hit(rule.ID, ts) {
 				continue
 			}

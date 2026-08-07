@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,7 +62,7 @@ func (s *SensorServer) ReportFlows(stream pb.SensorService_ReportFlowsServer) er
 func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, dedup *alertDeduper) error {
 	// 网络事件按源 IP 归属资产，让 NTA 数据和 EDR 数据落到同一实体上。
 	// 资产数量是主机量级，每批建一次索引即可。
-	assetByIP, err := s.assetIPIndex(ctx)
+	assetByIP, osByIP, err := s.assetIPIndex(ctx)
 	if err != nil {
 		return err
 	}
@@ -91,7 +92,7 @@ func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, dedup *a
 			SetRaw(raw)
 		eventCreates = append(eventCreates, ec)
 
-		for _, rule := range s.Rules.Evaluate(classUID, rawMap) {
+		for _, rule := range s.Rules.Evaluate(classUID, osByIP[f.SrcIp], rawMap) {
 			fingerprint := rule.ID + "|" + f.SrcIp
 			if assetID != nil {
 				fingerprint = rule.ID + "|" + assetID.String()
@@ -125,19 +126,25 @@ func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, dedup *a
 	return dedup.flush(ctx, s.DB)
 }
 
-func (s *SensorServer) assetIPIndex(ctx context.Context) (map[string]*uuid.UUID, error) {
+// assetIPIndex 建立 IP -> 资产 的索引，同时带出操作系统，
+// 规则的 logsource product 要靠它过滤。
+func (s *SensorServer) assetIPIndex(ctx context.Context) (map[string]*uuid.UUID, map[string]string, error) {
 	assets, err := s.DB.Asset.Query().Where(asset.IPAddrsNotNil()).All(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	index := make(map[string]*uuid.UUID, len(assets))
+	osIndex := make(map[string]string, len(assets))
 	for _, a := range assets {
 		id := a.ID
 		for _, ip := range a.IPAddrs {
 			index[ip] = &id
+			if a.Os != nil {
+				osIndex[ip] = strings.ToLower(*a.Os)
+			}
 		}
 	}
-	return index, nil
+	return index, osIndex, nil
 }
 
 func connTuple(f *pb.FlowRecord) string {

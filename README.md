@@ -88,6 +88,26 @@ worker 号即网卡队列号，数量不应超过网卡实际队列数。
 > agent 的 eBPF 字节码和 sensor 的 XDP 程序在构建时编译，需要
 > `rustup toolchain install nightly --component rust-src` 和 `cargo +nightly install bpf-linker`。
 
+## 导入社区规则
+
+规则引擎兼容 Sigma，可直接挂载 [SigmaHQ](https://github.com/SigmaHQ/sigma) 规则库：
+
+```bash
+git clone --depth 1 https://github.com/SigmaHQ/sigma.git
+RULES_PATH=sigma/rules docker compose up -d
+
+# 导入前先看兼容情况
+cd server && go run ./cmd/sigmacheck ../sigma/rules
+```
+
+对 SigmaHQ 3141 条规则的实测：**加载 2149 条（68.4%）**，其中 1393 条有现成数据源可命中，
+其余等待对应遥测接入（文件、模块加载、HTTP）。未加载的主要是我们不采集的数据源
+（注册表、PowerShell 脚本块、云平台审计日志）。
+
+引擎对拿不准的规则一律拒绝加载而不是降级处理——用了未实现修饰符（如 `|cidr`）的规则
+如果被当成普通字符串匹配，`condition: not selection` 这类规则会对每个事件误报。
+同理，Windows 规则不会在 Linux 资产的事件上求值。
+
 ## 启用 mTLS
 
 采集端与 server 之间默认是明文，仅适合本机调试。生产部署必须开双向认证：
