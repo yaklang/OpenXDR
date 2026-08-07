@@ -75,8 +75,18 @@ cd sensor && cargo build --release
 sudo env SENSOR_IFACE=eth0 OPENXDR_SERVER=http://<server>:8081 ./target/release/openxdr-sensor
 ```
 
-> agent 的 eBPF 字节码在构建时编译，需要 `rustup toolchain install nightly --component rust-src`
-> 和 `cargo +nightly install bpf-linker`。
+探针有两个抓包后端，用 `SENSOR_BACKEND` 切换：
+
+| 后端 | 说明 |
+|---|---|
+| `afpacket`（默认） | AF_PACKET v3 零拷贝环 + FANOUT 按流哈希。任何 Linux 都能跑，不挑驱动，收发双向都能看到 |
+| `afxdp` | 绕过协议栈，吞吐更高。需要驱动支持，进程会在网卡上挂载 XDP 程序；**只能看到入向流量**，镜像口场景够用 |
+
+`SENSOR_WORKERS` 决定并行度。afpacket 下多个 worker 共享 FANOUT 组；afxdp 下
+worker 号即网卡队列号，数量不应超过网卡实际队列数。
+
+> agent 的 eBPF 字节码和 sensor 的 XDP 程序在构建时编译，需要
+> `rustup toolchain install nightly --component rust-src` 和 `cargo +nightly install bpf-linker`。
 
 ## 启用 mTLS
 
@@ -109,11 +119,12 @@ server 全部通过环境变量配置，均有默认值：
 | `CORRELATE_MAX_GRAPH_NODES` | `500` | 单个事件图节点上限 |
 | `AI_MODEL` | 空（不启用） | 研判模型名 |
 | `AI_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点 |
+| `RETENTION_DAYS` | `30` | 原始事件保留天数，0 表示不清理。被告警引用的证据事件不受影响 |
 
 ## 技术栈
 
 - **Agent**: Rust（eBPF / ETW）
-- **Sensor**: Rust（AF_PACKET v3，二期可选 AF_XDP）
+- **Sensor**: Rust（AF_PACKET v3 / AF_XDP 双后端）
 - **Server**: Go + Ent
 - **Web**: React + TypeScript (Vite)
 - **存储**: PostgreSQL（大规模部署建议启用 TimescaleDB 扩展）

@@ -3,10 +3,15 @@ name = "openxdr-sensor"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = ["ebpf"]
+default-members = ["."]
+
 [dependencies]
 anyhow = "1.0.104"
 async-channel = "2.5.0"
 async-stream = "0.3.6"
+aya = "0.14.0"
 gethostname = "1.1.0"
 libc = "0.2.189"
 md-5 = "0.11.0"
@@ -17,4 +22,5 @@ tonic = { version = "0.14.6", features = ["tls-ring"] }
 tonic-prost = "0.14.6"
 
 [build-dependencies]
+aya-build = "0.2.0"
 tonic-prost-build = "0.14.6"

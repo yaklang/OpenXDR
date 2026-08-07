@@ -1,0 +1,12 @@
+[package]
+name = "openxdr-sensor-ebpf"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aya-ebpf = "0.1"
+
+# bin 名不能与包名相同：aya-build 用包名当构建目录、bin 名当产物名
+[[bin]]
+name = "openxdr-xdp"
+path = "src/main.rs"

@@ -19,6 +19,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use capture::Capture;
 use capture::afpacket::{AfPacket, RingConfig};
+use capture::afxdp::AfXdp;
+use capture::xdp_loader::XdpProgram;
 use flow::FlowTable;
 
 /// 上报队列容量：server 断线时的缓冲，满了丢弃并计数——探针绝不因为上报慢而丢包
@@ -41,14 +43,37 @@ async fn main() -> anyhow::Result<()> {
     let dropped: report::DroppedCounter = Arc::new(AtomicU64::new(0));
     let (tx, rx) = async_channel::bounded(REPORT_QUEUE);
 
-    eprintln!("sensor 启动: iface={iface} workers={workers} server={server}");
+    let backend = std::env::var("SENSOR_BACKEND").unwrap_or_else(|_| "afpacket".into());
+    eprintln!("sensor 启动: iface={iface} workers={workers} backend={backend} server={server}");
+
+    // AF_XDP 要先挂 XDP 程序，socket 才收得到包；程序句柄要活到进程退出
+    let mut xdp = if backend == "afxdp" {
+        Some(XdpProgram::attach(&iface).map_err(|e| anyhow::anyhow!("加载 XDP 程序失败: {e}"))?)
+    } else {
+        None
+    };
 
     let mut handles = Vec::with_capacity(workers as usize);
     for id in 0..workers {
-        let (iface, running, tx, dropped) =
-            (iface.clone(), running.clone(), tx.clone(), dropped.clone());
+        // 一个 AF_XDP socket 对应一个网卡队列，worker 号即队列号
+        let cap: Box<dyn Capture + Send> = match &mut xdp {
+            Some(program) => {
+                let cfg = capture::afxdp::Config {
+                    queue_id: id as u32,
+                    ..Default::default()
+                };
+                let socket = AfXdp::open(&iface, &cfg)?;
+                program
+                    .register(id as u32, &socket)
+                    .map_err(|e| anyhow::anyhow!("注册 AF_XDP socket 失败: {e}"))?;
+                Box::new(socket)
+            }
+            None => Box::new(AfPacket::open(&iface, &RingConfig::default(), fanout_group)?),
+        };
+
+        let (running, tx, dropped) = (running.clone(), tx.clone(), dropped.clone());
         handles.push(std::thread::spawn(move || {
-            if let Err(e) = worker(id, &iface, fanout_group, running, tx, dropped) {
+            if let Err(e) = worker(id, cap, running, tx, dropped) {
                 eprintln!("worker {id} 退出: {e}");
             }
         }));
@@ -70,13 +95,11 @@ async fn main() -> anyhow::Result<()> {
 
 fn worker(
     id: u16,
-    iface: &str,
-    fanout_group: u16,
+    mut cap: Box<dyn Capture + Send>,
     running: Arc<AtomicBool>,
     tx: async_channel::Sender<pb::FlowRecord>,
     dropped: report::DroppedCounter,
 ) -> anyhow::Result<()> {
-    let mut cap = AfPacket::open(iface, &RingConfig::default(), fanout_group)?;
     let mut table = FlowTable::new(&flow::Config::default());
     let mut expired = Vec::new();
     let mut last_ts_ns = 0u64;
