@@ -5,6 +5,7 @@ package ent
 import (
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/asset"
+	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/schema"
@@ -41,6 +42,28 @@ func init() {
 	assetDescID := assetFields[0].Descriptor()
 	// asset.DefaultID holds the default value on creation for the id field.
 	asset.DefaultID = assetDescID.Default.(func() uuid.UUID)
+	commandFields := schema.Command{}.Fields()
+	_ = commandFields
+	// commandDescCreatedAt is the schema descriptor for created_at field.
+	commandDescCreatedAt := commandFields[1].Descriptor()
+	// command.DefaultCreatedAt holds the default value on creation for the created_at field.
+	command.DefaultCreatedAt = commandDescCreatedAt.Default.(func() time.Time)
+	// commandDescStatus is the schema descriptor for status field.
+	commandDescStatus := commandFields[3].Descriptor()
+	// command.DefaultStatus holds the default value on creation for the status field.
+	command.DefaultStatus = commandDescStatus.Default.(string)
+	// commandDescDryRun is the schema descriptor for dry_run field.
+	commandDescDryRun := commandFields[4].Descriptor()
+	// command.DefaultDryRun holds the default value on creation for the dry_run field.
+	command.DefaultDryRun = commandDescDryRun.Default.(bool)
+	// commandDescIssuedBy is the schema descriptor for issued_by field.
+	commandDescIssuedBy := commandFields[8].Descriptor()
+	// command.DefaultIssuedBy holds the default value on creation for the issued_by field.
+	command.DefaultIssuedBy = commandDescIssuedBy.Default.(string)
+	// commandDescID is the schema descriptor for id field.
+	commandDescID := commandFields[0].Descriptor()
+	// command.DefaultID holds the default value on creation for the id field.
+	command.DefaultID = commandDescID.Default.(func() uuid.UUID)
 	eventFields := schema.Event{}.Fields()
 	_ = eventFields
 	// eventDescID is the schema descriptor for id field.

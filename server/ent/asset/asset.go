@@ -31,6 +31,8 @@ const (
 	EdgeEvents = "events"
 	// EdgeAlerts holds the string denoting the alerts edge name in mutations.
 	EdgeAlerts = "alerts"
+	// EdgeCommands holds the string denoting the commands edge name in mutations.
+	EdgeCommands = "commands"
 	// Table holds the table name of the asset in the database.
 	Table = "assets"
 	// EventsTable is the table that holds the events relation/edge.
@@ -47,6 +49,13 @@ const (
 	AlertsInverseTable = "alerts"
 	// AlertsColumn is the table column denoting the alerts relation/edge.
 	AlertsColumn = "asset_id"
+	// CommandsTable is the table that holds the commands relation/edge.
+	CommandsTable = "commands"
+	// CommandsInverseTable is the table name for the Command entity.
+	// It exists in this package in order to avoid circular dependency with the "command" package.
+	CommandsInverseTable = "commands"
+	// CommandsColumn is the table column denoting the commands relation/edge.
+	CommandsColumn = "asset_id"
 )
 
 // Columns holds all SQL columns for asset fields.
@@ -139,6 +148,20 @@ func ByAlerts(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newAlertsStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
+
+// ByCommandsCount orders the results by commands count.
+func ByCommandsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newCommandsStep(), opts...)
+	}
+}
+
+// ByCommands orders the results by commands terms.
+func ByCommands(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newCommandsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newEventsStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -151,5 +174,12 @@ func newAlertsStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(AlertsInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, AlertsTable, AlertsColumn),
+	)
+}
+func newCommandsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(CommandsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, CommandsTable, CommandsColumn),
 	)
 }

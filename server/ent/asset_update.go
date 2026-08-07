@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/asset"
+	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/predicate"
 	"time"
@@ -162,6 +163,21 @@ func (_u *AssetUpdate) AddAlerts(v ...*Alert) *AssetUpdate {
 	return _u.AddAlertIDs(ids...)
 }
 
+// AddCommandIDs adds the "commands" edge to the Command entity by IDs.
+func (_u *AssetUpdate) AddCommandIDs(ids ...uuid.UUID) *AssetUpdate {
+	_u.mutation.AddCommandIDs(ids...)
+	return _u
+}
+
+// AddCommands adds the "commands" edges to the Command entity.
+func (_u *AssetUpdate) AddCommands(v ...*Command) *AssetUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddCommandIDs(ids...)
+}
+
 // Mutation returns the AssetMutation object of the builder.
 func (_u *AssetUpdate) Mutation() *AssetMutation {
 	return _u.mutation
@@ -207,6 +223,27 @@ func (_u *AssetUpdate) RemoveAlerts(v ...*Alert) *AssetUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAlertIDs(ids...)
+}
+
+// ClearCommands clears all "commands" edges to the Command entity.
+func (_u *AssetUpdate) ClearCommands() *AssetUpdate {
+	_u.mutation.ClearCommands()
+	return _u
+}
+
+// RemoveCommandIDs removes the "commands" edge to Command entities by IDs.
+func (_u *AssetUpdate) RemoveCommandIDs(ids ...uuid.UUID) *AssetUpdate {
+	_u.mutation.RemoveCommandIDs(ids...)
+	return _u
+}
+
+// RemoveCommands removes "commands" edges to Command entities.
+func (_u *AssetUpdate) RemoveCommands(v ...*Command) *AssetUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveCommandIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -367,6 +404,51 @@ func (_u *AssetUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.CommandsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   asset.CommandsTable,
+			Columns: []string{asset.CommandsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(command.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedCommandsIDs(); len(nodes) > 0 && !_u.mutation.CommandsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   asset.CommandsTable,
+			Columns: []string{asset.CommandsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(command.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.CommandsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   asset.CommandsTable,
+			Columns: []string{asset.CommandsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(command.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{asset.Label}
@@ -517,6 +599,21 @@ func (_u *AssetUpdateOne) AddAlerts(v ...*Alert) *AssetUpdateOne {
 	return _u.AddAlertIDs(ids...)
 }
 
+// AddCommandIDs adds the "commands" edge to the Command entity by IDs.
+func (_u *AssetUpdateOne) AddCommandIDs(ids ...uuid.UUID) *AssetUpdateOne {
+	_u.mutation.AddCommandIDs(ids...)
+	return _u
+}
+
+// AddCommands adds the "commands" edges to the Command entity.
+func (_u *AssetUpdateOne) AddCommands(v ...*Command) *AssetUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddCommandIDs(ids...)
+}
+
 // Mutation returns the AssetMutation object of the builder.
 func (_u *AssetUpdateOne) Mutation() *AssetMutation {
 	return _u.mutation
@@ -562,6 +659,27 @@ func (_u *AssetUpdateOne) RemoveAlerts(v ...*Alert) *AssetUpdateOne {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAlertIDs(ids...)
+}
+
+// ClearCommands clears all "commands" edges to the Command entity.
+func (_u *AssetUpdateOne) ClearCommands() *AssetUpdateOne {
+	_u.mutation.ClearCommands()
+	return _u
+}
+
+// RemoveCommandIDs removes the "commands" edge to Command entities by IDs.
+func (_u *AssetUpdateOne) RemoveCommandIDs(ids ...uuid.UUID) *AssetUpdateOne {
+	_u.mutation.RemoveCommandIDs(ids...)
+	return _u
+}
+
+// RemoveCommands removes "commands" edges to Command entities.
+func (_u *AssetUpdateOne) RemoveCommands(v ...*Command) *AssetUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveCommandIDs(ids...)
 }
 
 // Where appends a list predicates to the AssetUpdate builder.
@@ -745,6 +863,51 @@ func (_u *AssetUpdateOne) sqlSave(ctx context.Context) (_node *Asset, err error)
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(alert.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.CommandsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   asset.CommandsTable,
+			Columns: []string{asset.CommandsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(command.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedCommandsIDs(); len(nodes) > 0 && !_u.mutation.CommandsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   asset.CommandsTable,
+			Columns: []string{asset.CommandsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(command.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.CommandsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   asset.CommandsTable,
+			Columns: []string{asset.CommandsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(command.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {

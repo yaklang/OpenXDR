@@ -11,6 +11,42 @@ service AgentService {
   rpc Register(RegisterRequest) returns (RegisterResponse);
   // 客户端流式上报事件，一条长连接批量推
   rpc ReportEvents(stream AgentEvent) returns (ReportAck);
+  // 双向流：agent 保持连接等待指令，执行完把结果回传。
+  // agent 主动连出，不需要在被监控主机上开监听端口。
+  rpc Commands(stream CommandResult) returns (stream Command);
+}
+
+message Command {
+  string id = 1;          // UUID，结果按此关联
+  CommandKind kind = 2;
+  // 只做不改：dry_run 时执行器只报告"将会做什么"，不产生任何实际影响
+  bool dry_run = 3;
+  // KILL_PROCESS 用：优先按 GUID 校验，pid 会被系统复用
+  string process_guid = 4;
+  uint32 pid = 5;
+  // ISOLATE_HOST 用：隔离期间必须放行的地址，否则 agent 失联后无法解除隔离
+  repeated string allow_endpoints = 6;
+}
+
+enum CommandKind {
+  COMMAND_KIND_UNSPECIFIED = 0;
+  KILL_PROCESS = 1;
+  ISOLATE_HOST = 2;
+  UNISOLATE_HOST = 3;
+}
+
+message CommandResult {
+  string agent_id = 1;    // 首条消息用于认领连接，之后每条结果都带上
+  string command_id = 2;  // 空表示这是认领连接的首条消息
+  Status status = 3;
+  string detail = 4;      // 人可读的执行说明或失败原因
+
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    SUCCEEDED = 1;
+    FAILED = 2;
+    UNSUPPORTED = 3;      // 本平台不支持该动作
+  }
 }
 
 message RegisterRequest {

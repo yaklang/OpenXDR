@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/asset"
+	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/predicate"
@@ -31,6 +32,7 @@ const (
 	// Node types.
 	TypeAlert    = "Alert"
 	TypeAsset    = "Asset"
+	TypeCommand  = "Command"
 	TypeEvent    = "Event"
 	TypeIncident = "Incident"
 )
@@ -1042,26 +1044,29 @@ func (m *AlertMutation) ResetEdge(name string) error {
 // AssetMutation represents an operation that mutates the Asset nodes in the graph.
 type AssetMutation struct {
 	config
-	op             Op
-	typ            string
-	id             *uuid.UUID
-	hostname       *string
-	os             *string
-	ip_addrs       *[]string
-	appendip_addrs []string
-	agent_id       *uuid.UUID
-	first_seen     *time.Time
-	last_seen      *time.Time
-	clearedFields  map[string]struct{}
-	events         map[uuid.UUID]struct{}
-	removedevents  map[uuid.UUID]struct{}
-	clearedevents  bool
-	alerts         map[uuid.UUID]struct{}
-	removedalerts  map[uuid.UUID]struct{}
-	clearedalerts  bool
-	done           bool
-	oldValue       func(context.Context) (*Asset, error)
-	predicates     []predicate.Asset
+	op              Op
+	typ             string
+	id              *uuid.UUID
+	hostname        *string
+	os              *string
+	ip_addrs        *[]string
+	appendip_addrs  []string
+	agent_id        *uuid.UUID
+	first_seen      *time.Time
+	last_seen       *time.Time
+	clearedFields   map[string]struct{}
+	events          map[uuid.UUID]struct{}
+	removedevents   map[uuid.UUID]struct{}
+	clearedevents   bool
+	alerts          map[uuid.UUID]struct{}
+	removedalerts   map[uuid.UUID]struct{}
+	clearedalerts   bool
+	commands        map[uuid.UUID]struct{}
+	removedcommands map[uuid.UUID]struct{}
+	clearedcommands bool
+	done            bool
+	oldValue        func(context.Context) (*Asset, error)
+	predicates      []predicate.Asset
 }
 
 var _ ent.Mutation = (*AssetMutation)(nil)
@@ -1547,6 +1552,60 @@ func (m *AssetMutation) ResetAlerts() {
 	m.removedalerts = nil
 }
 
+// AddCommandIDs adds the "commands" edge to the Command entity by ids.
+func (m *AssetMutation) AddCommandIDs(ids ...uuid.UUID) {
+	if m.commands == nil {
+		m.commands = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		m.commands[ids[i]] = struct{}{}
+	}
+}
+
+// ClearCommands clears the "commands" edge to the Command entity.
+func (m *AssetMutation) ClearCommands() {
+	m.clearedcommands = true
+}
+
+// CommandsCleared reports if the "commands" edge to the Command entity was cleared.
+func (m *AssetMutation) CommandsCleared() bool {
+	return m.clearedcommands
+}
+
+// RemoveCommandIDs removes the "commands" edge to the Command entity by IDs.
+func (m *AssetMutation) RemoveCommandIDs(ids ...uuid.UUID) {
+	if m.removedcommands == nil {
+		m.removedcommands = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		delete(m.commands, ids[i])
+		m.removedcommands[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedCommands returns the removed IDs of the "commands" edge to the Command entity.
+func (m *AssetMutation) RemovedCommandsIDs() (ids []uuid.UUID) {
+	for id := range m.removedcommands {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// CommandsIDs returns the "commands" edge IDs in the mutation.
+func (m *AssetMutation) CommandsIDs() (ids []uuid.UUID) {
+	for id := range m.commands {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetCommands resets all changes to the "commands" edge.
+func (m *AssetMutation) ResetCommands() {
+	m.commands = nil
+	m.clearedcommands = false
+	m.removedcommands = nil
+}
+
 // Where appends a list predicates to the AssetMutation builder.
 func (m *AssetMutation) Where(ps ...predicate.Asset) {
 	m.predicates = append(m.predicates, ps...)
@@ -1786,12 +1845,15 @@ func (m *AssetMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *AssetMutation) AddedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.events != nil {
 		edges = append(edges, asset.EdgeEvents)
 	}
 	if m.alerts != nil {
 		edges = append(edges, asset.EdgeAlerts)
+	}
+	if m.commands != nil {
+		edges = append(edges, asset.EdgeCommands)
 	}
 	return edges
 }
@@ -1812,18 +1874,27 @@ func (m *AssetMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case asset.EdgeCommands:
+		ids := make([]ent.Value, 0, len(m.commands))
+		for id := range m.commands {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *AssetMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.removedevents != nil {
 		edges = append(edges, asset.EdgeEvents)
 	}
 	if m.removedalerts != nil {
 		edges = append(edges, asset.EdgeAlerts)
+	}
+	if m.removedcommands != nil {
+		edges = append(edges, asset.EdgeCommands)
 	}
 	return edges
 }
@@ -1844,18 +1915,27 @@ func (m *AssetMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case asset.EdgeCommands:
+		ids := make([]ent.Value, 0, len(m.removedcommands))
+		for id := range m.removedcommands {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *AssetMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 2)
+	edges := make([]string, 0, 3)
 	if m.clearedevents {
 		edges = append(edges, asset.EdgeEvents)
 	}
 	if m.clearedalerts {
 		edges = append(edges, asset.EdgeAlerts)
+	}
+	if m.clearedcommands {
+		edges = append(edges, asset.EdgeCommands)
 	}
 	return edges
 }
@@ -1868,6 +1948,8 @@ func (m *AssetMutation) EdgeCleared(name string) bool {
 		return m.clearedevents
 	case asset.EdgeAlerts:
 		return m.clearedalerts
+	case asset.EdgeCommands:
+		return m.clearedcommands
 	}
 	return false
 }
@@ -1890,8 +1972,962 @@ func (m *AssetMutation) ResetEdge(name string) error {
 	case asset.EdgeAlerts:
 		m.ResetAlerts()
 		return nil
+	case asset.EdgeCommands:
+		m.ResetCommands()
+		return nil
 	}
 	return fmt.Errorf("unknown Asset edge %s", name)
+}
+
+// CommandMutation represents an operation that mutates the Command nodes in the graph.
+type CommandMutation struct {
+	config
+	op            Op
+	typ           string
+	id            *uuid.UUID
+	created_at    *time.Time
+	kind          *string
+	status        *string
+	dry_run       *bool
+	incident_id   *uuid.UUID
+	process_guid  *uuid.UUID
+	issued_by     *string
+	detail        *string
+	completed_at  *time.Time
+	clearedFields map[string]struct{}
+	asset         *uuid.UUID
+	clearedasset  bool
+	done          bool
+	oldValue      func(context.Context) (*Command, error)
+	predicates    []predicate.Command
+}
+
+var _ ent.Mutation = (*CommandMutation)(nil)
+
+// commandOption allows management of the mutation configuration using functional options.
+type commandOption func(*CommandMutation)
+
+// newCommandMutation creates new mutation for the Command entity.
+func newCommandMutation(c config, op Op, opts ...commandOption) *CommandMutation {
+	m := &CommandMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeCommand,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withCommandID sets the ID field of the mutation.
+func withCommandID(id uuid.UUID) commandOption {
+	return func(m *CommandMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *Command
+		)
+		m.oldValue = func(ctx context.Context) (*Command, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().Command.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withCommand sets the old Command of the mutation.
+func withCommand(node *Command) commandOption {
+	return func(m *CommandMutation) {
+		m.oldValue = func(context.Context) (*Command, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m CommandMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m CommandMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of Command entities.
+func (m *CommandMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *CommandMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *CommandMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().Command.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *CommandMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *CommandMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the Command entity.
+// If the Command object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CommandMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *CommandMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetKind sets the "kind" field.
+func (m *CommandMutation) SetKind(s string) {
+	m.kind = &s
+}
+
+// Kind returns the value of the "kind" field in the mutation.
+func (m *CommandMutation) Kind() (r string, exists bool) {
+	v := m.kind
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKind returns the old "kind" field's value of the Command entity.
+// If the Command object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CommandMutation) OldKind(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKind is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKind requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKind: %w", err)
+	}
+	return oldValue.Kind, nil
+}
+
+// ResetKind resets all changes to the "kind" field.
+func (m *CommandMutation) ResetKind() {
+	m.kind = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *CommandMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *CommandMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the Command entity.
+// If the Command object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CommandMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *CommandMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetDryRun sets the "dry_run" field.
+func (m *CommandMutation) SetDryRun(b bool) {
+	m.dry_run = &b
+}
+
+// DryRun returns the value of the "dry_run" field in the mutation.
+func (m *CommandMutation) DryRun() (r bool, exists bool) {
+	v := m.dry_run
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDryRun returns the old "dry_run" field's value of the Command entity.
+// If the Command object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CommandMutation) OldDryRun(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDryRun is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDryRun requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDryRun: %w", err)
+	}
+	return oldValue.DryRun, nil
+}
+
+// ResetDryRun resets all changes to the "dry_run" field.
+func (m *CommandMutation) ResetDryRun() {
+	m.dry_run = nil
+}
+
+// SetAssetID sets the "asset_id" field.
+func (m *CommandMutation) SetAssetID(u uuid.UUID) {
+	m.asset = &u
+}
+
+// AssetID returns the value of the "asset_id" field in the mutation.
+func (m *CommandMutation) AssetID() (r uuid.UUID, exists bool) {
+	v := m.asset
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAssetID returns the old "asset_id" field's value of the Command entity.
+// If the Command object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CommandMutation) OldAssetID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAssetID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAssetID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAssetID: %w", err)
+	}
+	return oldValue.AssetID, nil
+}
+
+// ResetAssetID resets all changes to the "asset_id" field.
+func (m *CommandMutation) ResetAssetID() {
+	m.asset = nil
+}
+
+// SetIncidentID sets the "incident_id" field.
+func (m *CommandMutation) SetIncidentID(u uuid.UUID) {
+	m.incident_id = &u
+}
+
+// IncidentID returns the value of the "incident_id" field in the mutation.
+func (m *CommandMutation) IncidentID() (r uuid.UUID, exists bool) {
+	v := m.incident_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIncidentID returns the old "incident_id" field's value of the Command entity.
+// If the Command object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CommandMutation) OldIncidentID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIncidentID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIncidentID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIncidentID: %w", err)
+	}
+	return oldValue.IncidentID, nil
+}
+
+// ClearIncidentID clears the value of the "incident_id" field.
+func (m *CommandMutation) ClearIncidentID() {
+	m.incident_id = nil
+	m.clearedFields[command.FieldIncidentID] = struct{}{}
+}
+
+// IncidentIDCleared returns if the "incident_id" field was cleared in this mutation.
+func (m *CommandMutation) IncidentIDCleared() bool {
+	_, ok := m.clearedFields[command.FieldIncidentID]
+	return ok
+}
+
+// ResetIncidentID resets all changes to the "incident_id" field.
+func (m *CommandMutation) ResetIncidentID() {
+	m.incident_id = nil
+	delete(m.clearedFields, command.FieldIncidentID)
+}
+
+// SetProcessGUID sets the "process_guid" field.
+func (m *CommandMutation) SetProcessGUID(u uuid.UUID) {
+	m.process_guid = &u
+}
+
+// ProcessGUID returns the value of the "process_guid" field in the mutation.
+func (m *CommandMutation) ProcessGUID() (r uuid.UUID, exists bool) {
+	v := m.process_guid
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProcessGUID returns the old "process_guid" field's value of the Command entity.
+// If the Command object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CommandMutation) OldProcessGUID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProcessGUID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProcessGUID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProcessGUID: %w", err)
+	}
+	return oldValue.ProcessGUID, nil
+}
+
+// ClearProcessGUID clears the value of the "process_guid" field.
+func (m *CommandMutation) ClearProcessGUID() {
+	m.process_guid = nil
+	m.clearedFields[command.FieldProcessGUID] = struct{}{}
+}
+
+// ProcessGUIDCleared returns if the "process_guid" field was cleared in this mutation.
+func (m *CommandMutation) ProcessGUIDCleared() bool {
+	_, ok := m.clearedFields[command.FieldProcessGUID]
+	return ok
+}
+
+// ResetProcessGUID resets all changes to the "process_guid" field.
+func (m *CommandMutation) ResetProcessGUID() {
+	m.process_guid = nil
+	delete(m.clearedFields, command.FieldProcessGUID)
+}
+
+// SetIssuedBy sets the "issued_by" field.
+func (m *CommandMutation) SetIssuedBy(s string) {
+	m.issued_by = &s
+}
+
+// IssuedBy returns the value of the "issued_by" field in the mutation.
+func (m *CommandMutation) IssuedBy() (r string, exists bool) {
+	v := m.issued_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIssuedBy returns the old "issued_by" field's value of the Command entity.
+// If the Command object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CommandMutation) OldIssuedBy(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIssuedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIssuedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIssuedBy: %w", err)
+	}
+	return oldValue.IssuedBy, nil
+}
+
+// ResetIssuedBy resets all changes to the "issued_by" field.
+func (m *CommandMutation) ResetIssuedBy() {
+	m.issued_by = nil
+}
+
+// SetDetail sets the "detail" field.
+func (m *CommandMutation) SetDetail(s string) {
+	m.detail = &s
+}
+
+// Detail returns the value of the "detail" field in the mutation.
+func (m *CommandMutation) Detail() (r string, exists bool) {
+	v := m.detail
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDetail returns the old "detail" field's value of the Command entity.
+// If the Command object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CommandMutation) OldDetail(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDetail is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDetail requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDetail: %w", err)
+	}
+	return oldValue.Detail, nil
+}
+
+// ClearDetail clears the value of the "detail" field.
+func (m *CommandMutation) ClearDetail() {
+	m.detail = nil
+	m.clearedFields[command.FieldDetail] = struct{}{}
+}
+
+// DetailCleared returns if the "detail" field was cleared in this mutation.
+func (m *CommandMutation) DetailCleared() bool {
+	_, ok := m.clearedFields[command.FieldDetail]
+	return ok
+}
+
+// ResetDetail resets all changes to the "detail" field.
+func (m *CommandMutation) ResetDetail() {
+	m.detail = nil
+	delete(m.clearedFields, command.FieldDetail)
+}
+
+// SetCompletedAt sets the "completed_at" field.
+func (m *CommandMutation) SetCompletedAt(t time.Time) {
+	m.completed_at = &t
+}
+
+// CompletedAt returns the value of the "completed_at" field in the mutation.
+func (m *CommandMutation) CompletedAt() (r time.Time, exists bool) {
+	v := m.completed_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCompletedAt returns the old "completed_at" field's value of the Command entity.
+// If the Command object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CommandMutation) OldCompletedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCompletedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCompletedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCompletedAt: %w", err)
+	}
+	return oldValue.CompletedAt, nil
+}
+
+// ClearCompletedAt clears the value of the "completed_at" field.
+func (m *CommandMutation) ClearCompletedAt() {
+	m.completed_at = nil
+	m.clearedFields[command.FieldCompletedAt] = struct{}{}
+}
+
+// CompletedAtCleared returns if the "completed_at" field was cleared in this mutation.
+func (m *CommandMutation) CompletedAtCleared() bool {
+	_, ok := m.clearedFields[command.FieldCompletedAt]
+	return ok
+}
+
+// ResetCompletedAt resets all changes to the "completed_at" field.
+func (m *CommandMutation) ResetCompletedAt() {
+	m.completed_at = nil
+	delete(m.clearedFields, command.FieldCompletedAt)
+}
+
+// ClearAsset clears the "asset" edge to the Asset entity.
+func (m *CommandMutation) ClearAsset() {
+	m.clearedasset = true
+	m.clearedFields[command.FieldAssetID] = struct{}{}
+}
+
+// AssetCleared reports if the "asset" edge to the Asset entity was cleared.
+func (m *CommandMutation) AssetCleared() bool {
+	return m.clearedasset
+}
+
+// AssetIDs returns the "asset" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// AssetID instead. It exists only for internal usage by the builders.
+func (m *CommandMutation) AssetIDs() (ids []uuid.UUID) {
+	if id := m.asset; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetAsset resets all changes to the "asset" edge.
+func (m *CommandMutation) ResetAsset() {
+	m.asset = nil
+	m.clearedasset = false
+}
+
+// Where appends a list predicates to the CommandMutation builder.
+func (m *CommandMutation) Where(ps ...predicate.Command) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the CommandMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *CommandMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.Command, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *CommandMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *CommandMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (Command).
+func (m *CommandMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *CommandMutation) Fields() []string {
+	fields := make([]string, 0, 10)
+	if m.created_at != nil {
+		fields = append(fields, command.FieldCreatedAt)
+	}
+	if m.kind != nil {
+		fields = append(fields, command.FieldKind)
+	}
+	if m.status != nil {
+		fields = append(fields, command.FieldStatus)
+	}
+	if m.dry_run != nil {
+		fields = append(fields, command.FieldDryRun)
+	}
+	if m.asset != nil {
+		fields = append(fields, command.FieldAssetID)
+	}
+	if m.incident_id != nil {
+		fields = append(fields, command.FieldIncidentID)
+	}
+	if m.process_guid != nil {
+		fields = append(fields, command.FieldProcessGUID)
+	}
+	if m.issued_by != nil {
+		fields = append(fields, command.FieldIssuedBy)
+	}
+	if m.detail != nil {
+		fields = append(fields, command.FieldDetail)
+	}
+	if m.completed_at != nil {
+		fields = append(fields, command.FieldCompletedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *CommandMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case command.FieldCreatedAt:
+		return m.CreatedAt()
+	case command.FieldKind:
+		return m.Kind()
+	case command.FieldStatus:
+		return m.Status()
+	case command.FieldDryRun:
+		return m.DryRun()
+	case command.FieldAssetID:
+		return m.AssetID()
+	case command.FieldIncidentID:
+		return m.IncidentID()
+	case command.FieldProcessGUID:
+		return m.ProcessGUID()
+	case command.FieldIssuedBy:
+		return m.IssuedBy()
+	case command.FieldDetail:
+		return m.Detail()
+	case command.FieldCompletedAt:
+		return m.CompletedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *CommandMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case command.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case command.FieldKind:
+		return m.OldKind(ctx)
+	case command.FieldStatus:
+		return m.OldStatus(ctx)
+	case command.FieldDryRun:
+		return m.OldDryRun(ctx)
+	case command.FieldAssetID:
+		return m.OldAssetID(ctx)
+	case command.FieldIncidentID:
+		return m.OldIncidentID(ctx)
+	case command.FieldProcessGUID:
+		return m.OldProcessGUID(ctx)
+	case command.FieldIssuedBy:
+		return m.OldIssuedBy(ctx)
+	case command.FieldDetail:
+		return m.OldDetail(ctx)
+	case command.FieldCompletedAt:
+		return m.OldCompletedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown Command field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *CommandMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case command.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case command.FieldKind:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKind(v)
+		return nil
+	case command.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case command.FieldDryRun:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDryRun(v)
+		return nil
+	case command.FieldAssetID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAssetID(v)
+		return nil
+	case command.FieldIncidentID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIncidentID(v)
+		return nil
+	case command.FieldProcessGUID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProcessGUID(v)
+		return nil
+	case command.FieldIssuedBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIssuedBy(v)
+		return nil
+	case command.FieldDetail:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDetail(v)
+		return nil
+	case command.FieldCompletedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCompletedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown Command field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *CommandMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *CommandMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *CommandMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown Command numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *CommandMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(command.FieldIncidentID) {
+		fields = append(fields, command.FieldIncidentID)
+	}
+	if m.FieldCleared(command.FieldProcessGUID) {
+		fields = append(fields, command.FieldProcessGUID)
+	}
+	if m.FieldCleared(command.FieldDetail) {
+		fields = append(fields, command.FieldDetail)
+	}
+	if m.FieldCleared(command.FieldCompletedAt) {
+		fields = append(fields, command.FieldCompletedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *CommandMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *CommandMutation) ClearField(name string) error {
+	switch name {
+	case command.FieldIncidentID:
+		m.ClearIncidentID()
+		return nil
+	case command.FieldProcessGUID:
+		m.ClearProcessGUID()
+		return nil
+	case command.FieldDetail:
+		m.ClearDetail()
+		return nil
+	case command.FieldCompletedAt:
+		m.ClearCompletedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown Command nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *CommandMutation) ResetField(name string) error {
+	switch name {
+	case command.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case command.FieldKind:
+		m.ResetKind()
+		return nil
+	case command.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case command.FieldDryRun:
+		m.ResetDryRun()
+		return nil
+	case command.FieldAssetID:
+		m.ResetAssetID()
+		return nil
+	case command.FieldIncidentID:
+		m.ResetIncidentID()
+		return nil
+	case command.FieldProcessGUID:
+		m.ResetProcessGUID()
+		return nil
+	case command.FieldIssuedBy:
+		m.ResetIssuedBy()
+		return nil
+	case command.FieldDetail:
+		m.ResetDetail()
+		return nil
+	case command.FieldCompletedAt:
+		m.ResetCompletedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown Command field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *CommandMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.asset != nil {
+		edges = append(edges, command.EdgeAsset)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *CommandMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case command.EdgeAsset:
+		if id := m.asset; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *CommandMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *CommandMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *CommandMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.clearedasset {
+		edges = append(edges, command.EdgeAsset)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *CommandMutation) EdgeCleared(name string) bool {
+	switch name {
+	case command.EdgeAsset:
+		return m.clearedasset
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *CommandMutation) ClearEdge(name string) error {
+	switch name {
+	case command.EdgeAsset:
+		m.ClearAsset()
+		return nil
+	}
+	return fmt.Errorf("unknown Command unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *CommandMutation) ResetEdge(name string) error {
+	switch name {
+	case command.EdgeAsset:
+		m.ResetAsset()
+		return nil
+	}
+	return fmt.Errorf("unknown Command edge %s", name)
 }
 
 // EventMutation represents an operation that mutates the Event nodes in the graph.

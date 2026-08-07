@@ -9,6 +9,7 @@ import (
 	"math"
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/asset"
+	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/predicate"
 
@@ -22,12 +23,13 @@ import (
 // AssetQuery is the builder for querying Asset entities.
 type AssetQuery struct {
 	config
-	ctx        *QueryContext
-	order      []asset.OrderOption
-	inters     []Interceptor
-	predicates []predicate.Asset
-	withEvents *EventQuery
-	withAlerts *AlertQuery
+	ctx          *QueryContext
+	order        []asset.OrderOption
+	inters       []Interceptor
+	predicates   []predicate.Asset
+	withEvents   *EventQuery
+	withAlerts   *AlertQuery
+	withCommands *CommandQuery
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -101,6 +103,28 @@ func (_q *AssetQuery) QueryAlerts() *AlertQuery {
 			sqlgraph.From(asset.Table, asset.FieldID, selector),
 			sqlgraph.To(alert.Table, alert.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, asset.AlertsTable, asset.AlertsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryCommands chains the current query on the "commands" edge.
+func (_q *AssetQuery) QueryCommands() *CommandQuery {
+	query := (&CommandClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(asset.Table, asset.FieldID, selector),
+			sqlgraph.To(command.Table, command.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, asset.CommandsTable, asset.CommandsColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -295,13 +319,14 @@ func (_q *AssetQuery) Clone() *AssetQuery {
 		return nil
 	}
 	return &AssetQuery{
-		config:     _q.config,
-		ctx:        _q.ctx.Clone(),
-		order:      append([]asset.OrderOption{}, _q.order...),
-		inters:     append([]Interceptor{}, _q.inters...),
-		predicates: append([]predicate.Asset{}, _q.predicates...),
-		withEvents: _q.withEvents.Clone(),
-		withAlerts: _q.withAlerts.Clone(),
+		config:       _q.config,
+		ctx:          _q.ctx.Clone(),
+		order:        append([]asset.OrderOption{}, _q.order...),
+		inters:       append([]Interceptor{}, _q.inters...),
+		predicates:   append([]predicate.Asset{}, _q.predicates...),
+		withEvents:   _q.withEvents.Clone(),
+		withAlerts:   _q.withAlerts.Clone(),
+		withCommands: _q.withCommands.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -327,6 +352,17 @@ func (_q *AssetQuery) WithAlerts(opts ...func(*AlertQuery)) *AssetQuery {
 		opt(query)
 	}
 	_q.withAlerts = query
+	return _q
+}
+
+// WithCommands tells the query-builder to eager-load the nodes that are connected to
+// the "commands" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *AssetQuery) WithCommands(opts ...func(*CommandQuery)) *AssetQuery {
+	query := (&CommandClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withCommands = query
 	return _q
 }
 
@@ -408,9 +444,10 @@ func (_q *AssetQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Asset,
 	var (
 		nodes       = []*Asset{}
 		_spec       = _q.querySpec()
-		loadedTypes = [2]bool{
+		loadedTypes = [3]bool{
 			_q.withEvents != nil,
 			_q.withAlerts != nil,
+			_q.withCommands != nil,
 		}
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
@@ -442,6 +479,13 @@ func (_q *AssetQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Asset,
 		if err := _q.loadAlerts(ctx, query, nodes,
 			func(n *Asset) { n.Edges.Alerts = []*Alert{} },
 			func(n *Asset, e *Alert) { n.Edges.Alerts = append(n.Edges.Alerts, e) }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withCommands; query != nil {
+		if err := _q.loadCommands(ctx, query, nodes,
+			func(n *Asset) { n.Edges.Commands = []*Command{} },
+			func(n *Asset, e *Command) { n.Edges.Commands = append(n.Edges.Commands, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -509,6 +553,36 @@ func (_q *AssetQuery) loadAlerts(ctx context.Context, query *AlertQuery, nodes [
 		node, ok := nodeids[*fk]
 		if !ok {
 			return fmt.Errorf(`unexpected referenced foreign-key "asset_id" returned %v for node %v`, *fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *AssetQuery) loadCommands(ctx context.Context, query *CommandQuery, nodes []*Asset, init func(*Asset), assign func(*Asset, *Command)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[uuid.UUID]*Asset)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(command.FieldAssetID)
+	}
+	query.Where(predicate.Command(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(asset.CommandsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.AssetID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "asset_id" returned %v for node %v`, fk, n.ID)
 		}
 		assign(node, n)
 	}

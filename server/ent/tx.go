@@ -16,6 +16,8 @@ type Tx struct {
 	Alert *AlertClient
 	// Asset is the client for interacting with the Asset builders.
 	Asset *AssetClient
+	// Command is the client for interacting with the Command builders.
+	Command *CommandClient
 	// Event is the client for interacting with the Event builders.
 	Event *EventClient
 	// Incident is the client for interacting with the Incident builders.
@@ -153,6 +155,7 @@ func (tx *Tx) Client() *Client {
 func (tx *Tx) init() {
 	tx.Alert = NewAlertClient(tx.config)
 	tx.Asset = NewAssetClient(tx.config)
+	tx.Command = NewCommandClient(tx.config)
 	tx.Event = NewEventClient(tx.config)
 	tx.Incident = NewIncidentClient(tx.config)
 }

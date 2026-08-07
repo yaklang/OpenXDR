@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"entgo.io/ent/dialect"
@@ -20,6 +21,7 @@ import (
 	"openxdr/server/internal/correlate"
 	"openxdr/server/internal/grpcsvc"
 	"openxdr/server/internal/janitor"
+	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/syslog"
 	"openxdr/server/internal/triage"
@@ -84,6 +86,8 @@ func main() {
 		slog.Error("gRPC 监听失败", "err", err)
 		os.Exit(1)
 	}
+	hub := response.NewHub(client, os.Getenv("RESPONSE_ENABLED") == "true")
+
 	tlsOpts, mtls, err := grpcsvc.ServerOptions()
 	if err != nil {
 		slog.Error("TLS 配置无效", "err", err)
@@ -97,6 +101,7 @@ func main() {
 		DB:          client,
 		Rules:       rules,
 		DedupWindow: dedupWindow,
+		Hub:         hub,
 	})
 	pb.RegisterSensorServiceServer(grpcServer, &grpcsvc.SensorServer{
 		DB:          client,
@@ -113,10 +118,20 @@ func main() {
 
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	slog.Info("HTTP 启动", "addr", httpAddr)
-	if err := http.ListenAndServe(httpAddr, api.Handler(client, rules)); err != nil {
+	if err := http.ListenAndServe(httpAddr, api.Handler(client, rules, hub, isolationAllowlist())); err != nil {
 		slog.Error("HTTP 退出", "err", err)
 		os.Exit(1)
 	}
+}
+
+// isolationAllowlist 隔离主机时必须放行的地址。默认放行 server 的 gRPC 端点，
+// 否则 agent 隔离后收不到解除指令，只能人工上机处理。
+func isolationAllowlist() []string {
+	if v := os.Getenv("ISOLATION_ALLOW"); v != "" {
+		return strings.Split(v, ",")
+	}
+	slog.Warn("未配置 ISOLATION_ALLOW，主机隔离将被 agent 拒绝执行")
+	return nil
 }
 
 func getenv(key, def string) string {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/asset"
+	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"time"
 
@@ -133,6 +134,21 @@ func (_c *AssetCreate) AddAlerts(v ...*Alert) *AssetCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddAlertIDs(ids...)
+}
+
+// AddCommandIDs adds the "commands" edge to the Command entity by IDs.
+func (_c *AssetCreate) AddCommandIDs(ids ...uuid.UUID) *AssetCreate {
+	_c.mutation.AddCommandIDs(ids...)
+	return _c
+}
+
+// AddCommands adds the "commands" edges to the Command entity.
+func (_c *AssetCreate) AddCommands(v ...*Command) *AssetCreate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddCommandIDs(ids...)
 }
 
 // Mutation returns the AssetMutation object of the builder.
@@ -279,6 +295,22 @@ func (_c *AssetCreate) createSpec() (*Asset, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(alert.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.CommandsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   asset.CommandsTable,
+			Columns: []string{asset.CommandsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(command.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {

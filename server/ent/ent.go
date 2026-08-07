@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/asset"
+	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
 	"reflect"
@@ -78,6 +79,7 @@ func checkColumn(t, c string) error {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
 			alert.Table:    alert.ValidColumn,
 			asset.Table:    asset.ValidColumn,
+			command.Table:  command.ValidColumn,
 			event.Table:    event.ValidColumn,
 			incident.Table: incident.ValidColumn,
 		})

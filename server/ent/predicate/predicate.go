@@ -12,6 +12,9 @@ type Alert func(*sql.Selector)
 // Asset is the predicate function for asset builders.
 type Asset func(*sql.Selector)
 
+// Command is the predicate function for command builders.
+type Command func(*sql.Selector)
+
 // Event is the predicate function for event builders.
 type Event func(*sql.Selector)
 

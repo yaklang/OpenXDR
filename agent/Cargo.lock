@@ -871,6 +871,7 @@ dependencies = [
  "ferrisetw",
  "gethostname",
  "if-addrs",
+ "libc",
  "prost",
  "protoc-bin-vendored",
  "serde_json",

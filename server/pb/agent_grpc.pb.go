@@ -24,6 +24,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	AgentService_Register_FullMethodName     = "/openxdr.agent.v1.AgentService/Register"
 	AgentService_ReportEvents_FullMethodName = "/openxdr.agent.v1.AgentService/ReportEvents"
+	AgentService_Commands_FullMethodName     = "/openxdr.agent.v1.AgentService/Commands"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -34,6 +35,9 @@ type AgentServiceClient interface {
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	// 客户端流式上报事件，一条长连接批量推
 	ReportEvents(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[AgentEvent, ReportAck], error)
+	// 双向流：agent 保持连接等待指令，执行完把结果回传。
+	// agent 主动连出，不需要在被监控主机上开监听端口。
+	Commands(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[CommandResult, Command], error)
 }
 
 type agentServiceClient struct {
@@ -67,6 +71,19 @@ func (c *agentServiceClient) ReportEvents(ctx context.Context, opts ...grpc.Call
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_ReportEventsClient = grpc.ClientStreamingClient[AgentEvent, ReportAck]
 
+func (c *agentServiceClient) Commands(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[CommandResult, Command], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[1], AgentService_Commands_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CommandResult, Command]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_CommandsClient = grpc.BidiStreamingClient[CommandResult, Command]
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -75,6 +92,9 @@ type AgentServiceServer interface {
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	// 客户端流式上报事件，一条长连接批量推
 	ReportEvents(grpc.ClientStreamingServer[AgentEvent, ReportAck]) error
+	// 双向流：agent 保持连接等待指令，执行完把结果回传。
+	// agent 主动连出，不需要在被监控主机上开监听端口。
+	Commands(grpc.BidiStreamingServer[CommandResult, Command]) error
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -90,6 +110,9 @@ func (UnimplementedAgentServiceServer) Register(context.Context, *RegisterReques
 }
 func (UnimplementedAgentServiceServer) ReportEvents(grpc.ClientStreamingServer[AgentEvent, ReportAck]) error {
 	return status.Error(codes.Unimplemented, "method ReportEvents not implemented")
+}
+func (UnimplementedAgentServiceServer) Commands(grpc.BidiStreamingServer[CommandResult, Command]) error {
+	return status.Error(codes.Unimplemented, "method Commands not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -137,6 +160,13 @@ func _AgentService_ReportEvents_Handler(srv interface{}, stream grpc.ServerStrea
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_ReportEventsServer = grpc.ClientStreamingServer[AgentEvent, ReportAck]
 
+func _AgentService_Commands_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(AgentServiceServer).Commands(&grpc.GenericServerStream[CommandResult, Command]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_CommandsServer = grpc.BidiStreamingServer[CommandResult, Command]
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -153,6 +183,12 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "ReportEvents",
 			Handler:       _AgentService_ReportEvents_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Commands",
+			Handler:       _AgentService_Commands_Handler,
+			ServerStreams: true,
 			ClientStreams: true,
 		},
 	},

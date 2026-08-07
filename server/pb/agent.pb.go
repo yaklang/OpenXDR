@@ -24,6 +24,265 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type CommandKind int32
+
+const (
+	CommandKind_COMMAND_KIND_UNSPECIFIED CommandKind = 0
+	CommandKind_KILL_PROCESS             CommandKind = 1
+	CommandKind_ISOLATE_HOST             CommandKind = 2
+	CommandKind_UNISOLATE_HOST           CommandKind = 3
+)
+
+// Enum value maps for CommandKind.
+var (
+	CommandKind_name = map[int32]string{
+		0: "COMMAND_KIND_UNSPECIFIED",
+		1: "KILL_PROCESS",
+		2: "ISOLATE_HOST",
+		3: "UNISOLATE_HOST",
+	}
+	CommandKind_value = map[string]int32{
+		"COMMAND_KIND_UNSPECIFIED": 0,
+		"KILL_PROCESS":             1,
+		"ISOLATE_HOST":             2,
+		"UNISOLATE_HOST":           3,
+	}
+)
+
+func (x CommandKind) Enum() *CommandKind {
+	p := new(CommandKind)
+	*p = x
+	return p
+}
+
+func (x CommandKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CommandKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_agent_proto_enumTypes[0].Descriptor()
+}
+
+func (CommandKind) Type() protoreflect.EnumType {
+	return &file_agent_proto_enumTypes[0]
+}
+
+func (x CommandKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CommandKind.Descriptor instead.
+func (CommandKind) EnumDescriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{0}
+}
+
+type CommandResult_Status int32
+
+const (
+	CommandResult_STATUS_UNSPECIFIED CommandResult_Status = 0
+	CommandResult_SUCCEEDED          CommandResult_Status = 1
+	CommandResult_FAILED             CommandResult_Status = 2
+	CommandResult_UNSUPPORTED        CommandResult_Status = 3 // 本平台不支持该动作
+)
+
+// Enum value maps for CommandResult_Status.
+var (
+	CommandResult_Status_name = map[int32]string{
+		0: "STATUS_UNSPECIFIED",
+		1: "SUCCEEDED",
+		2: "FAILED",
+		3: "UNSUPPORTED",
+	}
+	CommandResult_Status_value = map[string]int32{
+		"STATUS_UNSPECIFIED": 0,
+		"SUCCEEDED":          1,
+		"FAILED":             2,
+		"UNSUPPORTED":        3,
+	}
+)
+
+func (x CommandResult_Status) Enum() *CommandResult_Status {
+	p := new(CommandResult_Status)
+	*p = x
+	return p
+}
+
+func (x CommandResult_Status) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CommandResult_Status) Descriptor() protoreflect.EnumDescriptor {
+	return file_agent_proto_enumTypes[1].Descriptor()
+}
+
+func (CommandResult_Status) Type() protoreflect.EnumType {
+	return &file_agent_proto_enumTypes[1]
+}
+
+func (x CommandResult_Status) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CommandResult_Status.Descriptor instead.
+func (CommandResult_Status) EnumDescriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{1, 0}
+}
+
+type Command struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // UUID，结果按此关联
+	Kind  CommandKind            `protobuf:"varint,2,opt,name=kind,proto3,enum=openxdr.agent.v1.CommandKind" json:"kind,omitempty"`
+	// 只做不改：dry_run 时执行器只报告"将会做什么"，不产生任何实际影响
+	DryRun bool `protobuf:"varint,3,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	// KILL_PROCESS 用：优先按 GUID 校验，pid 会被系统复用
+	ProcessGuid string `protobuf:"bytes,4,opt,name=process_guid,json=processGuid,proto3" json:"process_guid,omitempty"`
+	Pid         uint32 `protobuf:"varint,5,opt,name=pid,proto3" json:"pid,omitempty"`
+	// ISOLATE_HOST 用：隔离期间必须放行的地址，否则 agent 失联后无法解除隔离
+	AllowEndpoints []string `protobuf:"bytes,6,rep,name=allow_endpoints,json=allowEndpoints,proto3" json:"allow_endpoints,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *Command) Reset() {
+	*x = Command{}
+	mi := &file_agent_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Command) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Command) ProtoMessage() {}
+
+func (x *Command) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Command.ProtoReflect.Descriptor instead.
+func (*Command) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *Command) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *Command) GetKind() CommandKind {
+	if x != nil {
+		return x.Kind
+	}
+	return CommandKind_COMMAND_KIND_UNSPECIFIED
+}
+
+func (x *Command) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
+func (x *Command) GetProcessGuid() string {
+	if x != nil {
+		return x.ProcessGuid
+	}
+	return ""
+}
+
+func (x *Command) GetPid() uint32 {
+	if x != nil {
+		return x.Pid
+	}
+	return 0
+}
+
+func (x *Command) GetAllowEndpoints() []string {
+	if x != nil {
+		return x.AllowEndpoints
+	}
+	return nil
+}
+
+type CommandResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`       // 首条消息用于认领连接，之后每条结果都带上
+	CommandId     string                 `protobuf:"bytes,2,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"` // 空表示这是认领连接的首条消息
+	Status        CommandResult_Status   `protobuf:"varint,3,opt,name=status,proto3,enum=openxdr.agent.v1.CommandResult_Status" json:"status,omitempty"`
+	Detail        string                 `protobuf:"bytes,4,opt,name=detail,proto3" json:"detail,omitempty"` // 人可读的执行说明或失败原因
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommandResult) Reset() {
+	*x = CommandResult{}
+	mi := &file_agent_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommandResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommandResult) ProtoMessage() {}
+
+func (x *CommandResult) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommandResult.ProtoReflect.Descriptor instead.
+func (*CommandResult) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *CommandResult) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *CommandResult) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *CommandResult) GetStatus() CommandResult_Status {
+	if x != nil {
+		return x.Status
+	}
+	return CommandResult_STATUS_UNSPECIFIED
+}
+
+func (x *CommandResult) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
 type RegisterRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Hostname      string                 `protobuf:"bytes,1,opt,name=hostname,proto3" json:"hostname,omitempty"`
@@ -36,7 +295,7 @@ type RegisterRequest struct {
 
 func (x *RegisterRequest) Reset() {
 	*x = RegisterRequest{}
-	mi := &file_agent_proto_msgTypes[0]
+	mi := &file_agent_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -48,7 +307,7 @@ func (x *RegisterRequest) String() string {
 func (*RegisterRequest) ProtoMessage() {}
 
 func (x *RegisterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[0]
+	mi := &file_agent_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -61,7 +320,7 @@ func (x *RegisterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterRequest.ProtoReflect.Descriptor instead.
 func (*RegisterRequest) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{0}
+	return file_agent_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *RegisterRequest) GetHostname() string {
@@ -101,7 +360,7 @@ type RegisterResponse struct {
 
 func (x *RegisterResponse) Reset() {
 	*x = RegisterResponse{}
-	mi := &file_agent_proto_msgTypes[1]
+	mi := &file_agent_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -113,7 +372,7 @@ func (x *RegisterResponse) String() string {
 func (*RegisterResponse) ProtoMessage() {}
 
 func (x *RegisterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[1]
+	mi := &file_agent_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -126,7 +385,7 @@ func (x *RegisterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterResponse.ProtoReflect.Descriptor instead.
 func (*RegisterResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{1}
+	return file_agent_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *RegisterResponse) GetAgentId() string {
@@ -155,7 +414,7 @@ type AgentEvent struct {
 
 func (x *AgentEvent) Reset() {
 	*x = AgentEvent{}
-	mi := &file_agent_proto_msgTypes[2]
+	mi := &file_agent_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -167,7 +426,7 @@ func (x *AgentEvent) String() string {
 func (*AgentEvent) ProtoMessage() {}
 
 func (x *AgentEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[2]
+	mi := &file_agent_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -180,7 +439,7 @@ func (x *AgentEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentEvent.ProtoReflect.Descriptor instead.
 func (*AgentEvent) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{2}
+	return file_agent_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *AgentEvent) GetAgentId() string {
@@ -255,7 +514,7 @@ type ReportAck struct {
 
 func (x *ReportAck) Reset() {
 	*x = ReportAck{}
-	mi := &file_agent_proto_msgTypes[3]
+	mi := &file_agent_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -267,7 +526,7 @@ func (x *ReportAck) String() string {
 func (*ReportAck) ProtoMessage() {}
 
 func (x *ReportAck) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[3]
+	mi := &file_agent_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -280,7 +539,7 @@ func (x *ReportAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportAck.ProtoReflect.Descriptor instead.
 func (*ReportAck) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{3}
+	return file_agent_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ReportAck) GetReceived() uint64 {
@@ -294,7 +553,26 @@ var File_agent_proto protoreflect.FileDescriptor
 
 const file_agent_proto_rawDesc = "" +
 	"\n" +
-	"\vagent.proto\x12\x10openxdr.agent.v1\"}\n" +
+	"\vagent.proto\x12\x10openxdr.agent.v1\"\xc3\x01\n" +
+	"\aCommand\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x121\n" +
+	"\x04kind\x18\x02 \x01(\x0e2\x1d.openxdr.agent.v1.CommandKindR\x04kind\x12\x17\n" +
+	"\adry_run\x18\x03 \x01(\bR\x06dryRun\x12!\n" +
+	"\fprocess_guid\x18\x04 \x01(\tR\vprocessGuid\x12\x10\n" +
+	"\x03pid\x18\x05 \x01(\rR\x03pid\x12'\n" +
+	"\x0fallow_endpoints\x18\x06 \x03(\tR\x0eallowEndpoints\"\xef\x01\n" +
+	"\rCommandResult\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x02 \x01(\tR\tcommandId\x12>\n" +
+	"\x06status\x18\x03 \x01(\x0e2&.openxdr.agent.v1.CommandResult.StatusR\x06status\x12\x16\n" +
+	"\x06detail\x18\x04 \x01(\tR\x06detail\"L\n" +
+	"\x06Status\x12\x16\n" +
+	"\x12STATUS_UNSPECIFIED\x10\x00\x12\r\n" +
+	"\tSUCCEEDED\x10\x01\x12\n" +
+	"\n" +
+	"\x06FAILED\x10\x02\x12\x0f\n" +
+	"\vUNSUPPORTED\x10\x03\"}\n" +
 	"\x0fRegisterRequest\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x19\n" +
@@ -316,10 +594,16 @@ const file_agent_proto_rawDesc = "" +
 	"\x13parent_process_guid\x18\b \x01(\tR\x11parentProcessGuid\x12%\n" +
 	"\x0edropped_events\x18\t \x01(\x04R\rdroppedEvents\"'\n" +
 	"\tReportAck\x12\x1a\n" +
-	"\breceived\x18\x01 \x01(\x04R\breceived2\xae\x01\n" +
+	"\breceived\x18\x01 \x01(\x04R\breceived*c\n" +
+	"\vCommandKind\x12\x1c\n" +
+	"\x18COMMAND_KIND_UNSPECIFIED\x10\x00\x12\x10\n" +
+	"\fKILL_PROCESS\x10\x01\x12\x10\n" +
+	"\fISOLATE_HOST\x10\x02\x12\x12\n" +
+	"\x0eUNISOLATE_HOST\x10\x032\xfa\x01\n" +
 	"\fAgentService\x12Q\n" +
 	"\bRegister\x12!.openxdr.agent.v1.RegisterRequest\x1a\".openxdr.agent.v1.RegisterResponse\x12K\n" +
-	"\fReportEvents\x12\x1c.openxdr.agent.v1.AgentEvent\x1a\x1b.openxdr.agent.v1.ReportAck(\x01B\x13Z\x11openxdr/server/pbb\x06proto3"
+	"\fReportEvents\x12\x1c.openxdr.agent.v1.AgentEvent\x1a\x1b.openxdr.agent.v1.ReportAck(\x01\x12J\n" +
+	"\bCommands\x12\x1f.openxdr.agent.v1.CommandResult\x1a\x19.openxdr.agent.v1.Command(\x010\x01B\x13Z\x11openxdr/server/pbb\x06proto3"
 
 var (
 	file_agent_proto_rawDescOnce sync.Once
@@ -333,23 +617,32 @@ func file_agent_proto_rawDescGZIP() []byte {
 	return file_agent_proto_rawDescData
 }
 
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_agent_proto_goTypes = []any{
-	(*RegisterRequest)(nil),  // 0: openxdr.agent.v1.RegisterRequest
-	(*RegisterResponse)(nil), // 1: openxdr.agent.v1.RegisterResponse
-	(*AgentEvent)(nil),       // 2: openxdr.agent.v1.AgentEvent
-	(*ReportAck)(nil),        // 3: openxdr.agent.v1.ReportAck
+	(CommandKind)(0),          // 0: openxdr.agent.v1.CommandKind
+	(CommandResult_Status)(0), // 1: openxdr.agent.v1.CommandResult.Status
+	(*Command)(nil),           // 2: openxdr.agent.v1.Command
+	(*CommandResult)(nil),     // 3: openxdr.agent.v1.CommandResult
+	(*RegisterRequest)(nil),   // 4: openxdr.agent.v1.RegisterRequest
+	(*RegisterResponse)(nil),  // 5: openxdr.agent.v1.RegisterResponse
+	(*AgentEvent)(nil),        // 6: openxdr.agent.v1.AgentEvent
+	(*ReportAck)(nil),         // 7: openxdr.agent.v1.ReportAck
 }
 var file_agent_proto_depIdxs = []int32{
-	0, // 0: openxdr.agent.v1.AgentService.Register:input_type -> openxdr.agent.v1.RegisterRequest
-	2, // 1: openxdr.agent.v1.AgentService.ReportEvents:input_type -> openxdr.agent.v1.AgentEvent
-	1, // 2: openxdr.agent.v1.AgentService.Register:output_type -> openxdr.agent.v1.RegisterResponse
-	3, // 3: openxdr.agent.v1.AgentService.ReportEvents:output_type -> openxdr.agent.v1.ReportAck
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0, // 0: openxdr.agent.v1.Command.kind:type_name -> openxdr.agent.v1.CommandKind
+	1, // 1: openxdr.agent.v1.CommandResult.status:type_name -> openxdr.agent.v1.CommandResult.Status
+	4, // 2: openxdr.agent.v1.AgentService.Register:input_type -> openxdr.agent.v1.RegisterRequest
+	6, // 3: openxdr.agent.v1.AgentService.ReportEvents:input_type -> openxdr.agent.v1.AgentEvent
+	3, // 4: openxdr.agent.v1.AgentService.Commands:input_type -> openxdr.agent.v1.CommandResult
+	5, // 5: openxdr.agent.v1.AgentService.Register:output_type -> openxdr.agent.v1.RegisterResponse
+	7, // 6: openxdr.agent.v1.AgentService.ReportEvents:output_type -> openxdr.agent.v1.ReportAck
+	2, // 7: openxdr.agent.v1.AgentService.Commands:output_type -> openxdr.agent.v1.Command
+	5, // [5:8] is the sub-list for method output_type
+	2, // [2:5] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_agent_proto_init() }
@@ -362,13 +655,14 @@ func file_agent_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   4,
+			NumEnums:      2,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_agent_proto_goTypes,
 		DependencyIndexes: file_agent_proto_depIdxs,
+		EnumInfos:         file_agent_proto_enumTypes,
 		MessageInfos:      file_agent_proto_msgTypes,
 	}.Build()
 	File_agent_proto = out.File

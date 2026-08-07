@@ -13,6 +13,7 @@ import (
 	"openxdr/server/ent/alert"
 	entasset "openxdr/server/ent/asset"
 	"openxdr/server/ent/incident"
+	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
 )
 
@@ -41,12 +42,15 @@ type alertRow struct {
 
 type incidentDetail struct {
 	incidentSummary
-	Graph  json.RawMessage `json:"graph"`
-	Alerts []alertRow      `json:"alerts"`
+	Graph json.RawMessage `json:"graph"`
+	// 响应指令要下发到具体主机，取告警里第一个有归属的资产
+	AssetID *uuid.UUID `json:"assetId"`
+	Alerts  []alertRow `json:"alerts"`
 }
 
-func Handler(db *ent.Client, rules *sigma.Engine) http.Handler {
+func Handler(db *ent.Client, rules *sigma.Engine, hub *response.Hub, selfEndpoints []string) http.Handler {
 	mux := http.NewServeMux()
+	mapCommands(mux, db, hub, selfEndpoints)
 
 	mux.HandleFunc("GET /api/incidents", func(w http.ResponseWriter, r *http.Request) {
 		q := db.Incident.Query()
@@ -111,8 +115,12 @@ func Handler(db *ent.Client, rules *sigma.Engine) http.Handler {
 			return
 		}
 
+		var assetID *uuid.UUID
 		rows := make([]alertRow, len(alerts))
 		for i, a := range alerts {
+			if assetID == nil && a.AssetID != nil {
+				assetID = a.AssetID
+			}
 			row := alertRow{
 				ID: a.ID, Ts: a.Ts, LastTs: a.LastTs, Count: a.Count,
 				Severity: a.Severity, RuleID: a.RuleID,
@@ -128,6 +136,7 @@ func Handler(db *ent.Client, rules *sigma.Engine) http.Handler {
 		writeJSON(w, incidentDetail{
 			incidentSummary: summarize(inc, len(alerts)),
 			Graph:           inc.Graph,
+			AssetID:         assetID,
 			Alerts:          rows,
 		})
 	})

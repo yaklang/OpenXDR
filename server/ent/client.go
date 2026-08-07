@@ -13,6 +13,7 @@ import (
 
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/asset"
+	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
 
@@ -32,6 +33,8 @@ type Client struct {
 	Alert *AlertClient
 	// Asset is the client for interacting with the Asset builders.
 	Asset *AssetClient
+	// Command is the client for interacting with the Command builders.
+	Command *CommandClient
 	// Event is the client for interacting with the Event builders.
 	Event *EventClient
 	// Incident is the client for interacting with the Incident builders.
@@ -49,6 +52,7 @@ func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
 	c.Alert = NewAlertClient(c.config)
 	c.Asset = NewAssetClient(c.config)
+	c.Command = NewCommandClient(c.config)
 	c.Event = NewEventClient(c.config)
 	c.Incident = NewIncidentClient(c.config)
 }
@@ -145,6 +149,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		config:   cfg,
 		Alert:    NewAlertClient(cfg),
 		Asset:    NewAssetClient(cfg),
+		Command:  NewCommandClient(cfg),
 		Event:    NewEventClient(cfg),
 		Incident: NewIncidentClient(cfg),
 	}, nil
@@ -168,6 +173,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		config:   cfg,
 		Alert:    NewAlertClient(cfg),
 		Asset:    NewAssetClient(cfg),
+		Command:  NewCommandClient(cfg),
 		Event:    NewEventClient(cfg),
 		Incident: NewIncidentClient(cfg),
 	}, nil
@@ -200,6 +206,7 @@ func (c *Client) Close() error {
 func (c *Client) Use(hooks ...Hook) {
 	c.Alert.Use(hooks...)
 	c.Asset.Use(hooks...)
+	c.Command.Use(hooks...)
 	c.Event.Use(hooks...)
 	c.Incident.Use(hooks...)
 }
@@ -209,6 +216,7 @@ func (c *Client) Use(hooks ...Hook) {
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	c.Alert.Intercept(interceptors...)
 	c.Asset.Intercept(interceptors...)
+	c.Command.Intercept(interceptors...)
 	c.Event.Intercept(interceptors...)
 	c.Incident.Intercept(interceptors...)
 }
@@ -220,6 +228,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Alert.mutate(ctx, m)
 	case *AssetMutation:
 		return c.Asset.mutate(ctx, m)
+	case *CommandMutation:
+		return c.Command.mutate(ctx, m)
 	case *EventMutation:
 		return c.Event.mutate(ctx, m)
 	case *IncidentMutation:
@@ -550,6 +560,22 @@ func (c *AssetClient) QueryAlerts(_m *Asset) *AlertQuery {
 	return query
 }
 
+// QueryCommands queries the commands edge of a Asset.
+func (c *AssetClient) QueryCommands(_m *Asset) *CommandQuery {
+	query := (&CommandClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(asset.Table, asset.FieldID, id),
+			sqlgraph.To(command.Table, command.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, asset.CommandsTable, asset.CommandsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // Hooks returns the client hooks.
 func (c *AssetClient) Hooks() []Hook {
 	return c.hooks.Asset
@@ -572,6 +598,155 @@ func (c *AssetClient) mutate(ctx context.Context, m *AssetMutation) (Value, erro
 		return (&AssetDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown Asset mutation op: %q", m.Op())
+	}
+}
+
+// CommandClient is a client for the Command schema.
+type CommandClient struct {
+	config
+}
+
+// NewCommandClient returns a client for the Command from the given config.
+func NewCommandClient(c config) *CommandClient {
+	return &CommandClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `command.Hooks(f(g(h())))`.
+func (c *CommandClient) Use(hooks ...Hook) {
+	c.hooks.Command = append(c.hooks.Command, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `command.Intercept(f(g(h())))`.
+func (c *CommandClient) Intercept(interceptors ...Interceptor) {
+	c.inters.Command = append(c.inters.Command, interceptors...)
+}
+
+// Create returns a builder for creating a Command entity.
+func (c *CommandClient) Create() *CommandCreate {
+	mutation := newCommandMutation(c.config, OpCreate)
+	return &CommandCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of Command entities.
+func (c *CommandClient) CreateBulk(builders ...*CommandCreate) *CommandCreateBulk {
+	return &CommandCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *CommandClient) MapCreateBulk(slice any, setFunc func(*CommandCreate, int)) *CommandCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &CommandCreateBulk{err: fmt.Errorf("calling to CommandClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*CommandCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &CommandCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for Command.
+func (c *CommandClient) Update() *CommandUpdate {
+	mutation := newCommandMutation(c.config, OpUpdate)
+	return &CommandUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *CommandClient) UpdateOne(_m *Command) *CommandUpdateOne {
+	mutation := newCommandMutation(c.config, OpUpdateOne, withCommand(_m))
+	return &CommandUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *CommandClient) UpdateOneID(id uuid.UUID) *CommandUpdateOne {
+	mutation := newCommandMutation(c.config, OpUpdateOne, withCommandID(id))
+	return &CommandUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for Command.
+func (c *CommandClient) Delete() *CommandDelete {
+	mutation := newCommandMutation(c.config, OpDelete)
+	return &CommandDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *CommandClient) DeleteOne(_m *Command) *CommandDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *CommandClient) DeleteOneID(id uuid.UUID) *CommandDeleteOne {
+	builder := c.Delete().Where(command.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &CommandDeleteOne{builder}
+}
+
+// Query returns a query builder for Command.
+func (c *CommandClient) Query() *CommandQuery {
+	return &CommandQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeCommand},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a Command entity by its id.
+func (c *CommandClient) Get(ctx context.Context, id uuid.UUID) (*Command, error) {
+	return c.Query().Where(command.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *CommandClient) GetX(ctx context.Context, id uuid.UUID) *Command {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryAsset queries the asset edge of a Command.
+func (c *CommandClient) QueryAsset(_m *Command) *AssetQuery {
+	query := (&AssetClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(command.Table, command.FieldID, id),
+			sqlgraph.To(asset.Table, asset.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, command.AssetTable, command.AssetColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *CommandClient) Hooks() []Hook {
+	return c.hooks.Command
+}
+
+// Interceptors returns the client interceptors.
+func (c *CommandClient) Interceptors() []Interceptor {
+	return c.inters.Command
+}
+
+func (c *CommandClient) mutate(ctx context.Context, m *CommandMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&CommandCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&CommandUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&CommandUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&CommandDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown Command mutation op: %q", m.Op())
 	}
 }
 
@@ -892,9 +1067,9 @@ func (c *IncidentClient) mutate(ctx context.Context, m *IncidentMutation) (Value
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		Alert, Asset, Event, Incident []ent.Hook
+		Alert, Asset, Command, Event, Incident []ent.Hook
 	}
 	inters struct {
-		Alert, Asset, Event, Incident []ent.Interceptor
+		Alert, Asset, Command, Event, Incident []ent.Interceptor
 	}
 )

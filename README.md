@@ -116,6 +116,26 @@ echo '*.* @<server>:514' >> /etc/rsyslog.conf && systemctl restart rsyslog
 规则里用 `logsource.category: application` 匹配这类事件，字段路径见
 `rules/lnx_ssh_auth_failure.yml`。
 
+## 响应处置
+
+检测到攻击后可以直接下发处置指令：**结束进程**、**隔离主机**、**解除隔离**。
+指令走 agent 主动连出的双向通道，被监控主机不需要开监听端口。
+
+这是系统里唯一能对主机造成实际影响的功能，三道闸门默认全开：
+
+| 闸门 | 行为 |
+|---|---|
+| 全局开关 | `RESPONSE_ENABLED` 默认 false，不开则一律拒绝下发 |
+| 演练优先 | 不显式传 `dryRun: false` 就只报告"将会做什么"，不产生任何影响 |
+| 隔离自保 | 未配置 `ISOLATION_ALLOW` 时 agent 拒绝隔离——隔离后收不到解除指令只能人工上机 |
+
+```bash
+RESPONSE_ENABLED=true ISOLATION_ALLOW=<server>:8081 docker compose up -d
+```
+
+每条指令连同下发者、演练与否、执行结果一并落库，可在事件详情页查看。
+隔离在 Linux 用 nftables 独立表实现（不触碰主机原有规则），Windows 用防火墙规则。
+
 ## 导入社区规则
 
 规则引擎兼容 Sigma，可直接挂载 [SigmaHQ](https://github.com/SigmaHQ/sigma) 规则库：
@@ -168,6 +188,8 @@ server 全部通过环境变量配置，均有默认值：
 | `AI_MODEL` | 空（不启用） | 研判模型名 |
 | `AI_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点 |
 | `SYSLOG_ADDR` | 空（不启用） | syslog 监听地址，如 `:514`。UDP 与 TCP 同时监听 |
+| `RESPONSE_ENABLED` | `false` | 是否允许下发响应指令 |
+| `ISOLATION_ALLOW` | 空 | 隔离主机时放行的地址，必须包含 server 的 gRPC 端点 |
 | `RETENTION_DAYS` | `30` | 原始事件保留天数，0 表示不清理。被告警引用的证据事件不受影响 |
 
 ## 技术栈

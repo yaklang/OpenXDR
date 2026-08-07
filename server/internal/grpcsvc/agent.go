@@ -15,6 +15,7 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
 	"openxdr/server/internal/dedup"
+	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/pb"
 )
@@ -24,6 +25,7 @@ type Server struct {
 	DB          *ent.Client
 	Rules       *sigma.Engine
 	DedupWindow time.Duration
+	Hub         *response.Hub
 }
 
 func (s *Server) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {

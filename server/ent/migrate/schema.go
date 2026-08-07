@@ -74,6 +74,46 @@ var (
 		Columns:    AssetsColumns,
 		PrimaryKey: []*schema.Column{AssetsColumns[0]},
 	}
+	// CommandsColumns holds the columns for the "commands" table.
+	CommandsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "kind", Type: field.TypeString},
+		{Name: "status", Type: field.TypeString, Default: "pending"},
+		{Name: "dry_run", Type: field.TypeBool, Default: true},
+		{Name: "incident_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "process_guid", Type: field.TypeUUID, Nullable: true},
+		{Name: "issued_by", Type: field.TypeString, Default: "api"},
+		{Name: "detail", Type: field.TypeString, Nullable: true},
+		{Name: "completed_at", Type: field.TypeTime, Nullable: true},
+		{Name: "asset_id", Type: field.TypeUUID},
+	}
+	// CommandsTable holds the schema information for the "commands" table.
+	CommandsTable = &schema.Table{
+		Name:       "commands",
+		Columns:    CommandsColumns,
+		PrimaryKey: []*schema.Column{CommandsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "commands_assets_commands",
+				Columns:    []*schema.Column{CommandsColumns[10]},
+				RefColumns: []*schema.Column{AssetsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "command_asset_id_status",
+				Unique:  false,
+				Columns: []*schema.Column{CommandsColumns[10], CommandsColumns[3]},
+			},
+			{
+				Name:    "command_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{CommandsColumns[1]},
+			},
+		},
+	}
 	// EventsColumns holds the columns for the "events" table.
 	EventsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -142,6 +182,7 @@ var (
 	Tables = []*schema.Table{
 		AlertsTable,
 		AssetsTable,
+		CommandsTable,
 		EventsTable,
 		IncidentsTable,
 	}
@@ -151,5 +192,6 @@ func init() {
 	AlertsTable.ForeignKeys[0].RefTable = AssetsTable
 	AlertsTable.ForeignKeys[1].RefTable = EventsTable
 	AlertsTable.ForeignKeys[2].RefTable = IncidentsTable
+	CommandsTable.ForeignKeys[0].RefTable = AssetsTable
 	EventsTable.ForeignKeys[0].RefTable = AssetsTable
 }

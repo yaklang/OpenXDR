@@ -48,6 +48,7 @@ export interface AlertRow {
 
 export interface IncidentDetail extends Omit<IncidentSummary, 'alertCount'> {
   graph: Graph
+  assetId: string | null
   alerts: AlertRow[]
 }
 
@@ -68,4 +69,36 @@ export async function setIncidentStatus(id: string, status: string): Promise<voi
     body: JSON.stringify({ status }),
   })
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+}
+
+export interface CommandRow {
+  id: string
+  createdAt: string
+  kind: string
+  status: string
+  dryRun: boolean
+  assetId: string
+  incidentId: string | null
+  issuedBy: string
+  detail: string | null
+  completedAt: string | null
+}
+
+export const fetchCommands = (incidentId: string) =>
+  get<CommandRow[]>(`/api/commands?incidentId=${incidentId}`)
+
+export async function issueCommand(body: {
+  kind: string
+  assetId: string
+  incidentId?: string
+  pid?: number
+  dryRun: boolean
+}): Promise<CommandRow> {
+  const r = await fetch('/api/commands', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
 }

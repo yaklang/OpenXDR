@@ -4,6 +4,7 @@ import {
   type IncidentDetail, type IncidentSummary,
 } from './api'
 import { IncidentGraphView } from './IncidentGraphView'
+import { ResponsePanel } from './ResponsePanel'
 import { VerdictCard } from './VerdictCard'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -95,6 +96,9 @@ export default function App() {
             </div>
 
             <VerdictCard verdict={detail.aiVerdict} />
+
+            <h3>响应处置</h3>
+            <ResponsePanel incidentId={detail.id} assetId={detail.assetId} />
 
             <h3>实体关系图</h3>
             <IncidentGraphView graph={detail.graph} />

@@ -43,9 +43,11 @@ type AssetEdges struct {
 	Events []*Event `json:"events,omitempty"`
 	// Alerts holds the value of the alerts edge.
 	Alerts []*Alert `json:"alerts,omitempty"`
+	// Commands holds the value of the commands edge.
+	Commands []*Command `json:"commands,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [2]bool
+	loadedTypes [3]bool
 }
 
 // EventsOrErr returns the Events value or an error if the edge
@@ -64,6 +66,15 @@ func (e AssetEdges) AlertsOrErr() ([]*Alert, error) {
 		return e.Alerts, nil
 	}
 	return nil, &NotLoadedError{edge: "alerts"}
+}
+
+// CommandsOrErr returns the Commands value or an error if the edge
+// was not loaded in eager-loading.
+func (e AssetEdges) CommandsOrErr() ([]*Command, error) {
+	if e.loadedTypes[2] {
+		return e.Commands, nil
+	}
+	return nil, &NotLoadedError{edge: "commands"}
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -163,6 +174,11 @@ func (_m *Asset) QueryEvents() *EventQuery {
 // QueryAlerts queries the "alerts" edge of the Asset entity.
 func (_m *Asset) QueryAlerts() *AlertQuery {
 	return NewAssetClient(_m.config).QueryAlerts(_m)
+}
+
+// QueryCommands queries the "commands" edge of the Asset entity.
+func (_m *Asset) QueryCommands() *CommandQuery {
+	return NewAssetClient(_m.config).QueryCommands(_m)
 }
 
 // Update returns a builder for updating this Asset.

@@ -32,5 +32,6 @@ func (Asset) Edges() []ent.Edge {
 	return []ent.Edge{
 		edge.To("events", Event.Type),
 		edge.To("alerts", Alert.Type),
+		edge.To("commands", Command.Type),
 	}
 }

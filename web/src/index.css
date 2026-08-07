@@ -163,3 +163,31 @@ th { color: var(--muted); font-weight: 500; }
 .error { padding: 12px 16px; color: var(--red); font-size: 13px; }
 
 h3 { font-size: 14px; color: var(--muted); margin: 24px 0 8px; }
+
+.response-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+/* 真实执行必须视觉上足够刺眼，避免误触 */
+.live-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.live-toggle.live-on { color: var(--red); font-weight: 600; }
+
+.small { font-size: 12px; margin: 8px 0 0; }
+
+.cmd-succeeded { color: var(--green); }
+.cmd-failed, .cmd-unsupported { color: var(--red); }
+.cmd-sent, .cmd-pending { color: var(--amber); }
+
+.cmd-detail {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
