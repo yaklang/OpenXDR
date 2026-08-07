@@ -1,5 +1,8 @@
 # 构建上下文是仓库根目录：server 需要 proto/ 生成代码已提交，rules/ 运行时挂载
 FROM golang:1.25-alpine AS build
+# 网络受限时可指向镜像源，例如 --build-arg GOPROXY=https://goproxy.cn,direct
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 COPY server/go.mod server/go.sum ./
 RUN go mod download
