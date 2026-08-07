@@ -14,6 +14,9 @@ const PACKET_RX_RING: libc::c_int = 5;
 const PACKET_VERSION: libc::c_int = 10;
 const PACKET_FANOUT: libc::c_int = 18;
 const PACKET_FANOUT_HASH: libc::c_uint = 0;
+/// 让内核在分发前重组 IP 分片。除了拿到完整数据报，
+/// 还顺带解决了非首片没有端口、哈希后被散到别的 worker 的问题。
+const PACKET_FANOUT_FLAG_DEFRAG: libc::c_uint = 0x8000;
 const TP_STATUS_USER: u32 = 1 << 0;
 
 #[repr(C)]
@@ -145,8 +148,14 @@ impl AfPacket {
         bind_iface(fd, iface)?;
 
         if fanout_group != 0 {
-            let arg = (fanout_group as libc::c_uint) | (PACKET_FANOUT_HASH << 16);
-            setsockopt(fd, PACKET_FANOUT, &arg)?;
+            let group = fanout_group as libc::c_uint;
+            let with_defrag =
+                group | ((PACKET_FANOUT_HASH | PACKET_FANOUT_FLAG_DEFRAG) << 16);
+            // 老内核不支持 DEFRAG 标志，退回普通哈希分发（分片会丢，但不影响主流量）
+            if setsockopt(fd, PACKET_FANOUT, &with_defrag).is_err() {
+                eprintln!("内核不支持 AF_PACKET 分片重组，IP 分片将被跳过");
+                setsockopt(fd, PACKET_FANOUT, &(group | (PACKET_FANOUT_HASH << 16)))?;
+            }
         }
 
         std::mem::forget(guard);
