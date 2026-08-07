@@ -1,0 +1,15 @@
+title: Windows Recon Command Execution
+id: 7b9e2a44-5f10-4c8d-9a3b-8e1f0c6d2a91
+status: experimental
+description: 检测常见的主机侦察程序执行
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith:
+      - '\whoami.exe'
+      - '\systeminfo.exe'
+      - '\quser.exe'
+  condition: selection
+level: medium

@@ -1,0 +1,39 @@
+// OpenXDR agent <-> server 通信契约。
+// agent 专属通道：注册 + 事件流上报。Zeek/Suricata/syslog 走 server 的独立接入端点，不在此列。
+syntax = "proto3";
+
+package openxdr.agent.v1;
+
+option csharp_namespace = "OpenXDR.Server.Grpc";
+
+service AgentService {
+  // agent 启动时注册，server 颁发/找回 agent_id
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  // 客户端流式上报事件，一条长连接批量推
+  rpc ReportEvents(stream AgentEvent) returns (ReportAck);
+}
+
+message RegisterRequest {
+  string hostname = 1;
+  string os = 2;
+  repeated string ip_addrs = 3;
+  string agent_version = 4;
+}
+
+message RegisterResponse {
+  string agent_id = 1; // UUID
+}
+
+message AgentEvent {
+  string agent_id = 1;     // UUID，Register 颁发
+  int64 ts_unix_ns = 2;    // 事件时间，unix 纳秒
+  uint32 class_uid = 3;    // OCSF class（1007=进程活动, 4001=网络活动, ...）
+  string process_guid = 4; // UUID，agent 生成的全局进程标识；无则空
+  string username = 5;
+  string conn_tuple = 6;   // "proto:src:sport>dst:dport"；无则空
+  string raw_json = 7;     // 归一化后的完整 OCSF 事件体（JSON）
+}
+
+message ReportAck {
+  uint64 received = 1;
+}

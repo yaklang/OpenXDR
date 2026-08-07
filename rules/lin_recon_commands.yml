@@ -1,0 +1,15 @@
+title: Linux Recon Command Execution
+id: d2f3f4a1-9c30-4d3e-b1e7-3f6a1c2b4d5e
+status: experimental
+description: 检测常见的主机侦察命令执行
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains:
+      - 'whoami'
+      - 'uname -a'
+      - 'cat /etc/passwd'
+  condition: selection
+level: medium

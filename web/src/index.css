@@ -1,0 +1,165 @@
+:root {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --bg-soft: #161b22;
+  --border: #30363d;
+  --fg: #e6edf3;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --red: #f85149;
+  --amber: #d29922;
+  --green: #3fb950;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+#root { height: 100vh; }
+
+.layout { display: flex; height: 100vh; }
+
+.sidebar {
+  width: 360px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.sidebar header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar h1 { margin: 0; font-size: 18px; letter-spacing: 1px; }
+
+.incident-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.incident-item:hover { background: var(--bg-soft); }
+.incident-item.selected { background: var(--bg-soft); box-shadow: inset 3px 0 0 var(--accent); }
+
+.incident-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 4px;
+}
+
+.incident-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+
+.main { flex: 1; overflow-y: auto; padding: 20px 28px; }
+
+.detail-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.detail-head h2 { margin: 0; font-size: 17px; }
+
+.actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+.actions button {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.actions button:hover { border-color: var(--muted); }
+
+.status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.status-open { color: var(--amber); border-color: var(--amber); }
+.status-triaged { color: var(--accent); border-color: var(--accent); }
+.status-closed { color: var(--muted); }
+.status-false_positive { color: var(--green); border-color: var(--green); }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; }
+.dot-malicious { background: var(--red); }
+.dot-suspicious { background: var(--amber); }
+.dot-benign { background: var(--green); }
+
+.card {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin: 16px 0;
+}
+
+.card h4 { margin: 12px 0 4px; font-size: 13px; color: var(--muted); }
+.card ol, .card ul { margin: 4px 0; padding-left: 22px; }
+.card .summary { margin: 10px 0 0; }
+
+.verdict-head { display: flex; align-items: center; gap: 14px; }
+
+.badge { padding: 3px 12px; border-radius: 12px; font-weight: 600; font-size: 13px; }
+.badge-malicious { background: rgba(248, 81, 73, .15); color: var(--red); }
+.badge-suspicious { background: rgba(210, 153, 34, .15); color: var(--amber); }
+.badge-benign { background: rgba(63, 185, 80, .15); color: var(--green); }
+
+.confidence { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+
+.confidence-bar {
+  display: inline-block;
+  width: 120px;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.confidence-bar span { display: block; height: 100%; background: var(--accent); }
+
+.graph-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+}
+
+.graph-overflow { padding: 8px 16px; color: var(--muted); font-size: 12px; }
+
+table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+
+th, td {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+th { color: var(--muted); font-weight: 500; }
+
+.sev { font-size: 12px; }
+.sev-1, .sev-2 { color: var(--muted); }
+.sev-3 { color: var(--amber); }
+.sev-4, .sev-5 { color: var(--red); }
+
+.muted { color: var(--muted); }
+.empty { padding: 40px; text-align: center; }
+.error { padding: 12px 16px; color: var(--red); font-size: 13px; }
+
+h3 { font-size: 14px; color: var(--muted); margin: 24px 0 8px; }
