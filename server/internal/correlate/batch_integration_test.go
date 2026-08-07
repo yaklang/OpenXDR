@@ -152,3 +152,72 @@ func TestCorrelateBatchSeparates(t *testing.T) {
 		t.Errorf("asset B 应独立于 asset A，ib=%v ia=%v", ib, ia)
 	}
 }
+
+// XDR 核心：父进程血缘跨越时间窗归并攻击链。
+// A 进程早两小时触发告警归入 incident，B 进程（B 的父=A）新告警即使超窗口
+// 也经 findByLineage 归到同一 incident，而不是另起事件风暴。
+func TestCorrelateBatchLineage(t *testing.T) {
+	ctx, client := testdb.New(t)
+	now := time.Now()
+
+	asset, err := client.Asset.Create().SetHostname("host-l").Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guidA, guidB := uuid.New(), uuid.New()
+
+	// A：进程 A，无父进程，2 小时前（超出 30 分钟窗口）
+	evtA, err := client.Event.Create().
+		SetTs(now.Add(-2 * time.Hour)).SetClassUID(1007).SetSource("agent").
+		SetProcessGUID(guidA).SetRaw(json.RawMessage(`{}`)).Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Alert.Create().
+		SetTs(now.Add(-2 * time.Hour)).SetRuleID("r-A").SetSeverity(3).
+		SetEventID(evtA.ID).SetNillableAssetID(&asset.ID).Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// B：进程 B 的父是 A，现在（与 A 差 2 小时，超窗口）
+	evtB, err := client.Event.Create().
+		SetTs(now).SetClassUID(1007).SetSource("agent").
+		SetProcessGUID(guidB).SetParentProcessGUID(guidA).
+		SetRaw(json.RawMessage(`{}`)).Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alertB, err := client.Alert.Create().
+		SetTs(now).SetRuleID("r-B").SetSeverity(3).
+		SetEventID(evtB.ID).SetNillableAssetID(&asset.ID).Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	eng := &Engine{
+		DB:            client,
+		Rules:         &sigma.Engine{},
+		Window:        30 * time.Minute,
+		MaxGraphNodes: 50,
+	}
+	// 首批：A 归入 incident1
+	if err := eng.batch(ctx); err != nil {
+		t.Fatalf("batch1 失败: %v", err)
+	}
+	// 次批：B 经血缘归入同 incident
+	if err := eng.batch(ctx); err != nil {
+		t.Fatalf("batch2 失败: %v", err)
+	}
+
+	incs, err := client.Incident.Query().All(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(incs) != 1 {
+		t.Fatalf("血缘应把攻击链归到 1 个 incident，实际 %d", len(incs))
+	}
+
+	got, _ := client.Alert.Get(ctx, alertB.ID)
+	if got.IncidentID == nil || *got.IncidentID != incs[0].ID {
+		t.Errorf("B 应经血缘归入 incident，得到 %v", got.IncidentID)
+	}
+}

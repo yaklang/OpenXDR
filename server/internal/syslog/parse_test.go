@@ -54,6 +54,15 @@ func TestParseRFC5424StructuredData(t *testing.T) {
 	}
 }
 
+// RFC5424 的 MSGID 占位 "-" 与结构化数据同时出现（"- - [SD] msg"）也须正确剥离。
+func TestParseRFC5424DashMsgIDWithSD(t *testing.T) {
+	line := `<165>1 2003-08-24T05:14:15.000003-07:00 192.0.2.1 myproc - - [exampleSDID@32473 iut="3"] App started`
+	m := Parse(line, time.Now())
+	if m.Content != "App started" {
+		t.Errorf("MSGID 为 '-' 加结构化数据应剥离，得到 %q", m.Content)
+	}
+}
+
 // RFC5424 缺段容错：截断报文能取多少算多少，不 panic。
 func TestParseRFC5424Truncated(t *testing.T) {
 	m := Parse(`<13>1 2004-01-01T00:00:00.000Z host`, time.Now())

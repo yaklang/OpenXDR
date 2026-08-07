@@ -71,14 +71,13 @@ func parse5424(m *Message, rest string) {
 	}
 	m.Hostname, m.AppName, m.ProcID, m.MsgID = get(1), get(2), get(3), get(4)
 
-	// 第 6 段是 STRUCTURED-DATA + MSG。结构化数据本身不解析，只把它从正文里剥掉
-	tail := get(5)
+	// 第 6 段是 STRUCTURED-DATA + MSG。结构化数据本身不解析，只把它从正文里剥掉。
+	// 先处理 MSGID 占位 "-"，再剥离 [SD]：两者可能出现（如 "- - [SD] msg"）。
+	tail := strings.TrimPrefix(get(5), "- ")
 	if strings.HasPrefix(tail, "[") {
 		if end := strings.Index(tail, "] "); end > 0 {
 			tail = tail[end+2:]
 		}
-	} else {
-		tail = strings.TrimPrefix(tail, "- ")
 	}
 	m.Content = tail
 }
