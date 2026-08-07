@@ -43,13 +43,18 @@ export function IncidentGraphView({ graph }: { graph: Graph }) {
           const x2 = to.x
           const y2 = to.y + NODE_H / 2
           const mx = (x1 + x2) / 2
+          // 父子进程在同一列，直连会压在节点上，绕到列右侧再回来
+          const d = e.rel === 'spawned'
+            ? `M ${x1} ${y1} C ${x1 + 40} ${y1}, ${x1 + 40} ${y2}, ${x2 + NODE_W} ${y2}`
+            : `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`
           return (
             <path
               key={i}
-              d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
+              d={d}
               fill="none"
-              stroke="#30363d"
+              stroke={e.rel === 'spawned' ? '#d2a8ff' : '#30363d'}
               strokeWidth={1.5}
+              strokeDasharray={e.rel === 'spawned' ? '4 3' : undefined}
             />
           )
         })}

@@ -157,6 +157,9 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 		if pg, err := uuid.Parse(ev.ProcessGuid); err == nil {
 			ec.SetProcessGUID(pg)
 		}
+		if ppg, err := uuid.Parse(ev.ParentProcessGuid); err == nil {
+			ec.SetParentProcessGUID(ppg)
+		}
 		if ev.Username != "" {
 			ec.SetUsername(ev.Username)
 		}

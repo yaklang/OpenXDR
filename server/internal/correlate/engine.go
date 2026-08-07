@@ -5,6 +5,7 @@ package correlate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -13,9 +14,15 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/alert"
+	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
 	"openxdr/server/internal/sigma"
 )
+
+// 进程血缘上溯的层数上限，防止父子关系成环时打转
+const maxLineageDepth = 16
+
+var errNoLineage = errors.New("无可用的进程血缘")
 
 type Engine struct {
 	DB            *ent.Client
@@ -66,8 +73,12 @@ func (e *Engine) batch(ctx context.Context) error {
 			bucket = *al.AssetID
 		}
 
+		// 进程血缘优先于时间窗：父进程所在的 incident 就是这条告警的归属，
+		// 攻击链因此能跨越时间窗——这是 XDR 区别于孤立告警系统的地方
 		var inc *ent.Incident
-		if cached, ok := byAsset[bucket]; ok {
+		if found, err := e.findByLineage(ctx, al); err == nil {
+			inc = found
+		} else if cached, ok := byAsset[bucket]; ok {
 			inc = cached
 		} else if found, err := e.findOpen(ctx, al.AssetID, al.Ts.Add(-e.Window)); err == nil {
 			inc = found
@@ -97,7 +108,7 @@ func (e *Engine) batch(ctx context.Context) error {
 			g = parseGraph(inc.Graph)
 			graphs[inc.ID] = g
 		}
-		e.attach(g, al)
+		e.attach(ctx, g, al)
 		assign[inc.ID] = append(assign[inc.ID], al.ID)
 	}
 
@@ -118,6 +129,41 @@ func (e *Engine) batch(ctx context.Context) error {
 	}
 	slog.Info("关联完成", "alerts", len(pending), "incidents", len(graphs))
 	return nil
+}
+
+// findByLineage 沿进程血缘上溯，找祖先进程已归属的 incident。
+// 逐级向上查，中间进程没触发过告警也能连上更早的攻击起点。
+func (e *Engine) findByLineage(ctx context.Context, al *ent.Alert) (*ent.Incident, error) {
+	evt := al.Edges.Event
+	if evt == nil || evt.ParentProcessGUID == nil {
+		return nil, errNoLineage
+	}
+
+	guid := *evt.ParentProcessGUID
+	for depth := 0; depth < maxLineageDepth; depth++ {
+		// 该祖先进程自己触发过的告警，其 incident 就是归属
+		ancestor, err := e.DB.Alert.Query().
+			Where(
+				alert.IncidentIDNotNil(),
+				alert.HasEventWith(event.ProcessGUIDEQ(guid)),
+				alert.HasIncidentWith(incident.StatusIn("open", "triaged")),
+			).
+			WithIncident().
+			First(ctx)
+		if err == nil {
+			return ancestor.Edges.Incident, nil
+		}
+
+		// 这一级没告警，继续往上找它的父进程
+		up, err := e.DB.Event.Query().
+			Where(event.ProcessGUIDEQ(guid), event.ParentProcessGUIDNotNil()).
+			First(ctx)
+		if err != nil {
+			return nil, errNoLineage
+		}
+		guid = *up.ParentProcessGUID
+	}
+	return nil, errNoLineage
 }
 
 // findOpen 找同一归属桶在时间窗内最近的 open/triaged incident。
@@ -143,7 +189,7 @@ func (e *Engine) findOpen(ctx context.Context, assetID *uuid.UUID, since time.Ti
 	return al.Edges.Incident, nil
 }
 
-func (e *Engine) attach(g *Graph, al *ent.Alert) {
+func (e *Engine) attach(ctx context.Context, g *Graph, al *ent.Alert) {
 	// 风暴防线：图触顶后只累加溢出计数，不再无限膨胀
 	if len(g.Nodes) >= e.MaxGraphNodes {
 		g.Overflow++
@@ -170,9 +216,28 @@ func (e *Engine) attach(g *Graph, al *ent.Alert) {
 			g.ensureEdge(assetNode, id, "hosts")
 		}
 		g.ensureEdge(id, alertNode, "triggered")
+
+		// 父进程入图，攻击链在图上就是一串 spawned 边
+		if evt.ParentProcessGUID != nil {
+			parent := "process:" + evt.ParentProcessGUID.String()
+			g.ensureNode(parent, "process", e.processName(ctx, *evt.ParentProcessGUID))
+			g.ensureEdge(parent, id, "spawned")
+			if assetNode != "" {
+				g.ensureEdge(assetNode, parent, "hosts")
+			}
+		}
 	} else if assetNode != "" {
 		g.ensureEdge(assetNode, alertNode, "triggered")
 	}
+}
+
+// processName 查进程 GUID 对应的名字，用于给图上的父进程节点打标签。
+func (e *Engine) processName(ctx context.Context, guid uuid.UUID) string {
+	evt, err := e.DB.Event.Query().Where(event.ProcessGUIDEQ(guid)).First(ctx)
+	if err != nil {
+		return "process"
+	}
+	return processLabel(evt)
 }
 
 func (e *Engine) ruleTitle(ruleID string) string {

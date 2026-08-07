@@ -3,7 +3,7 @@
 
 use tokio::sync::mpsc;
 
-use super::{poll, process_event};
+use super::{poll, process_event, ProcessRegistry};
 use crate::pb::AgentEvent;
 
 // 与 ebpf/src/main.rs 中的定义保持一致
@@ -45,10 +45,15 @@ async fn run_ebpf(
     let mut events: AsyncPerfEventArray<_> =
         bpf.take_map("EVENTS").ok_or("EVENTS map 缺失")?.try_into()?;
 
+    // exec 事件按 CPU 分发到多个任务，进程血缘是全局的，注册表要共享。
+    // exec 频率远低于包速率，这把锁的争用可以忽略。
+    let registry = std::sync::Arc::new(std::sync::Mutex::new(seeded_registry()));
+
     for cpu in online_cpus().map_err(|(_, e)| e)? {
         let mut buf = events.open(cpu, None)?;
         let tx = tx.clone();
         let agent_id = agent_id.clone();
+        let registry = registry.clone();
         tokio::spawn(async move {
             let mut bufs = (0..8)
                 .map(|_| bytes::BytesMut::with_capacity(2048))
@@ -62,7 +67,11 @@ async fn run_ebpf(
                         continue;
                     }
                     let ev = unsafe { std::ptr::read_unaligned(b.as_ptr() as *const ExecEvent) };
-                    if tx.send(to_agent_event(&agent_id, &ev)).await.is_err() {
+                    let event = {
+                        let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
+                        to_agent_event(&agent_id, &mut reg, &ev)
+                    };
+                    if tx.send(event).await.is_err() {
                         return;
                     }
                 }
@@ -75,7 +84,21 @@ async fn run_ebpf(
     Ok(())
 }
 
-fn to_agent_event(agent_id: &str, ev: &ExecEvent) -> AgentEvent {
+/// 用 /proc 快照预登记现有进程，之后派生的子进程才能找到父。
+fn seeded_registry() -> ProcessRegistry {
+    let mut registry = ProcessRegistry::default();
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for pid in entries
+            .flatten()
+            .filter_map(|e| e.file_name().to_string_lossy().parse::<u32>().ok())
+        {
+            registry.seed(pid);
+        }
+    }
+    registry
+}
+
+fn to_agent_event(agent_id: &str, registry: &mut ProcessRegistry, ev: &ExecEvent) -> AgentEvent {
     let name = cstr(&ev.comm);
     let exe = cstr(&ev.filename);
     // exec 瞬间从 /proc 补充命令行和父进程；短命进程可能已退场，拿不到就算了
@@ -98,6 +121,7 @@ fn to_agent_event(agent_id: &str, ev: &ExecEvent) -> AgentEvent {
 
     process_event(
         agent_id,
+        registry,
         ev.pid,
         &name,
         Some(exe.as_ref()),

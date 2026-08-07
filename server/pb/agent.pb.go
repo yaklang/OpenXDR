@@ -137,16 +137,18 @@ func (x *RegisterResponse) GetAgentId() string {
 }
 
 type AgentEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`             // UUID，Register 颁发
-	TsUnixNs      int64                  `protobuf:"varint,2,opt,name=ts_unix_ns,json=tsUnixNs,proto3" json:"ts_unix_ns,omitempty"`       // 事件时间，unix 纳秒
-	ClassUid      uint32                 `protobuf:"varint,3,opt,name=class_uid,json=classUid,proto3" json:"class_uid,omitempty"`         // OCSF class（1007=进程活动, 4001=网络活动, ...）
-	ProcessGuid   string                 `protobuf:"bytes,4,opt,name=process_guid,json=processGuid,proto3" json:"process_guid,omitempty"` // UUID，agent 生成的全局进程标识；无则空
-	Username      string                 `protobuf:"bytes,5,opt,name=username,proto3" json:"username,omitempty"`
-	ConnTuple     string                 `protobuf:"bytes,6,opt,name=conn_tuple,json=connTuple,proto3" json:"conn_tuple,omitempty"` // "proto:src:sport>dst:dport"；无则空
-	RawJson       string                 `protobuf:"bytes,7,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`       // 归一化后的完整 OCSF 事件体（JSON）
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	AgentId     string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`             // UUID，Register 颁发
+	TsUnixNs    int64                  `protobuf:"varint,2,opt,name=ts_unix_ns,json=tsUnixNs,proto3" json:"ts_unix_ns,omitempty"`       // 事件时间，unix 纳秒
+	ClassUid    uint32                 `protobuf:"varint,3,opt,name=class_uid,json=classUid,proto3" json:"class_uid,omitempty"`         // OCSF class（1007=进程活动, 4001=网络活动, ...）
+	ProcessGuid string                 `protobuf:"bytes,4,opt,name=process_guid,json=processGuid,proto3" json:"process_guid,omitempty"` // UUID，agent 生成的全局进程标识；无则空
+	Username    string                 `protobuf:"bytes,5,opt,name=username,proto3" json:"username,omitempty"`
+	ConnTuple   string                 `protobuf:"bytes,6,opt,name=conn_tuple,json=connTuple,proto3" json:"conn_tuple,omitempty"` // "proto:src:sport>dst:dport"；无则空
+	RawJson     string                 `protobuf:"bytes,7,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`       // 归一化后的完整 OCSF 事件体（JSON）
+	// 父进程 GUID，进程血缘的唯一来源。空表示父进程未被本 agent 观察到
+	ParentProcessGuid string `protobuf:"bytes,8,opt,name=parent_process_guid,json=parentProcessGuid,proto3" json:"parent_process_guid,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *AgentEvent) Reset() {
@@ -228,6 +230,13 @@ func (x *AgentEvent) GetRawJson() string {
 	return ""
 }
 
+func (x *AgentEvent) GetParentProcessGuid() string {
+	if x != nil {
+		return x.ParentProcessGuid
+	}
+	return ""
+}
+
 type ReportAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Received      uint64                 `protobuf:"varint,1,opt,name=received,proto3" json:"received,omitempty"`
@@ -283,7 +292,7 @@ const file_agent_proto_rawDesc = "" +
 	"\bip_addrs\x18\x03 \x03(\tR\aipAddrs\x12#\n" +
 	"\ragent_version\x18\x04 \x01(\tR\fagentVersion\"-\n" +
 	"\x10RegisterResponse\x12\x19\n" +
-	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\xdb\x01\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\x8b\x02\n" +
 	"\n" +
 	"AgentEvent\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1c\n" +
@@ -294,7 +303,8 @@ const file_agent_proto_rawDesc = "" +
 	"\busername\x18\x05 \x01(\tR\busername\x12\x1d\n" +
 	"\n" +
 	"conn_tuple\x18\x06 \x01(\tR\tconnTuple\x12\x19\n" +
-	"\braw_json\x18\a \x01(\tR\arawJson\"'\n" +
+	"\braw_json\x18\a \x01(\tR\arawJson\x12.\n" +
+	"\x13parent_process_guid\x18\b \x01(\tR\x11parentProcessGuid\"'\n" +
 	"\tReportAck\x12\x1a\n" +
 	"\breceived\x18\x01 \x01(\x04R\breceived2\xae\x01\n" +
 	"\fAgentService\x12Q\n" +

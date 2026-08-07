@@ -7,7 +7,7 @@ use std::time::Duration;
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tokio::sync::mpsc;
 
-use super::process_event;
+use super::{process_event, ProcessRegistry};
 use crate::pb::AgentEvent;
 
 const INTERVAL: Duration = Duration::from_secs(1);
@@ -22,6 +22,12 @@ pub async fn run(agent_id: String, tx: mpsc::Sender<AgentEvent>) {
     let mut sys = System::new();
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
     let mut known: HashSet<sysinfo::Pid> = sys.processes().keys().copied().collect();
+
+    // 已存在的进程先登记，之后它们派生的子进程才能找到父
+    let mut registry = ProcessRegistry::default();
+    for pid in &known {
+        registry.seed(pid.as_u32());
+    }
 
     loop {
         tokio::time::sleep(INTERVAL).await;
@@ -39,6 +45,7 @@ pub async fn run(agent_id: String, tx: mpsc::Sender<AgentEvent>) {
                 .join(" ");
             let event = process_event(
                 &agent_id,
+                &mut registry,
                 pid.as_u32(),
                 &proc.name().to_string_lossy(),
                 proc.exe().map(|p| p.to_string_lossy().into_owned()).as_deref(),

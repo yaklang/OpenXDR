@@ -70,6 +70,20 @@ func (_c *EventCreate) SetNillableProcessGUID(v *uuid.UUID) *EventCreate {
 	return _c
 }
 
+// SetParentProcessGUID sets the "parent_process_guid" field.
+func (_c *EventCreate) SetParentProcessGUID(v uuid.UUID) *EventCreate {
+	_c.mutation.SetParentProcessGUID(v)
+	return _c
+}
+
+// SetNillableParentProcessGUID sets the "parent_process_guid" field if the given value is not nil.
+func (_c *EventCreate) SetNillableParentProcessGUID(v *uuid.UUID) *EventCreate {
+	if v != nil {
+		_c.SetParentProcessGUID(*v)
+	}
+	return _c
+}
+
 // SetUsername sets the "username" field.
 func (_c *EventCreate) SetUsername(v string) *EventCreate {
 	_c.mutation.SetUsername(v)
@@ -243,6 +257,10 @@ func (_c *EventCreate) createSpec() (*Event, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ProcessGUID(); ok {
 		_spec.SetField(event.FieldProcessGUID, field.TypeUUID, value)
 		_node.ProcessGUID = &value
+	}
+	if value, ok := _c.mutation.ParentProcessGUID(); ok {
+		_spec.SetField(event.FieldParentProcessGUID, field.TypeUUID, value)
+		_node.ParentProcessGUID = &value
 	}
 	if value, ok := _c.mutation.Username(); ok {
 		_spec.SetField(event.FieldUsername, field.TypeString, value)

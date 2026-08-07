@@ -32,6 +32,8 @@ message AgentEvent {
   string username = 5;
   string conn_tuple = 6;   // "proto:src:sport>dst:dport"；无则空
   string raw_json = 7;     // 归一化后的完整 OCSF 事件体（JSON）
+  // 父进程 GUID，进程血缘的唯一来源。空表示父进程未被本 agent 观察到
+  string parent_process_guid = 8;
 }
 
 message ReportAck {

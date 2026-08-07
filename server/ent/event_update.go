@@ -122,6 +122,26 @@ func (_u *EventUpdate) ClearProcessGUID() *EventUpdate {
 	return _u
 }
 
+// SetParentProcessGUID sets the "parent_process_guid" field.
+func (_u *EventUpdate) SetParentProcessGUID(v uuid.UUID) *EventUpdate {
+	_u.mutation.SetParentProcessGUID(v)
+	return _u
+}
+
+// SetNillableParentProcessGUID sets the "parent_process_guid" field if the given value is not nil.
+func (_u *EventUpdate) SetNillableParentProcessGUID(v *uuid.UUID) *EventUpdate {
+	if v != nil {
+		_u.SetParentProcessGUID(*v)
+	}
+	return _u
+}
+
+// ClearParentProcessGUID clears the value of the "parent_process_guid" field.
+func (_u *EventUpdate) ClearParentProcessGUID() *EventUpdate {
+	_u.mutation.ClearParentProcessGUID()
+	return _u
+}
+
 // SetUsername sets the "username" field.
 func (_u *EventUpdate) SetUsername(v string) *EventUpdate {
 	_u.mutation.SetUsername(v)
@@ -279,6 +299,12 @@ func (_u *EventUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.ProcessGUIDCleared() {
 		_spec.ClearField(event.FieldProcessGUID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.ParentProcessGUID(); ok {
+		_spec.SetField(event.FieldParentProcessGUID, field.TypeUUID, value)
+	}
+	if _u.mutation.ParentProcessGUIDCleared() {
+		_spec.ClearField(event.FieldParentProcessGUID, field.TypeUUID)
 	}
 	if value, ok := _u.mutation.Username(); ok {
 		_spec.SetField(event.FieldUsername, field.TypeString, value)
@@ -483,6 +509,26 @@ func (_u *EventUpdateOne) ClearProcessGUID() *EventUpdateOne {
 	return _u
 }
 
+// SetParentProcessGUID sets the "parent_process_guid" field.
+func (_u *EventUpdateOne) SetParentProcessGUID(v uuid.UUID) *EventUpdateOne {
+	_u.mutation.SetParentProcessGUID(v)
+	return _u
+}
+
+// SetNillableParentProcessGUID sets the "parent_process_guid" field if the given value is not nil.
+func (_u *EventUpdateOne) SetNillableParentProcessGUID(v *uuid.UUID) *EventUpdateOne {
+	if v != nil {
+		_u.SetParentProcessGUID(*v)
+	}
+	return _u
+}
+
+// ClearParentProcessGUID clears the value of the "parent_process_guid" field.
+func (_u *EventUpdateOne) ClearParentProcessGUID() *EventUpdateOne {
+	_u.mutation.ClearParentProcessGUID()
+	return _u
+}
+
 // SetUsername sets the "username" field.
 func (_u *EventUpdateOne) SetUsername(v string) *EventUpdateOne {
 	_u.mutation.SetUsername(v)
@@ -670,6 +716,12 @@ func (_u *EventUpdateOne) sqlSave(ctx context.Context) (_node *Event, err error)
 	}
 	if _u.mutation.ProcessGUIDCleared() {
 		_spec.ClearField(event.FieldProcessGUID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.ParentProcessGUID(); ok {
+		_spec.SetField(event.FieldParentProcessGUID, field.TypeUUID, value)
+	}
+	if _u.mutation.ParentProcessGUIDCleared() {
+		_spec.ClearField(event.FieldParentProcessGUID, field.TypeUUID)
 	}
 	if value, ok := _u.mutation.Username(); ok {
 		_spec.SetField(event.FieldUsername, field.TypeString, value)

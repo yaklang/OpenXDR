@@ -1897,27 +1897,28 @@ func (m *AssetMutation) ResetEdge(name string) error {
 // EventMutation represents an operation that mutates the Event nodes in the graph.
 type EventMutation struct {
 	config
-	op            Op
-	typ           string
-	id            *uuid.UUID
-	ts            *time.Time
-	class_uid     *int
-	addclass_uid  *int
-	source        *string
-	process_guid  *uuid.UUID
-	username      *string
-	conn_tuple    *string
-	raw           *json.RawMessage
-	appendraw     json.RawMessage
-	clearedFields map[string]struct{}
-	asset         *uuid.UUID
-	clearedasset  bool
-	alerts        map[uuid.UUID]struct{}
-	removedalerts map[uuid.UUID]struct{}
-	clearedalerts bool
-	done          bool
-	oldValue      func(context.Context) (*Event, error)
-	predicates    []predicate.Event
+	op                  Op
+	typ                 string
+	id                  *uuid.UUID
+	ts                  *time.Time
+	class_uid           *int
+	addclass_uid        *int
+	source              *string
+	process_guid        *uuid.UUID
+	parent_process_guid *uuid.UUID
+	username            *string
+	conn_tuple          *string
+	raw                 *json.RawMessage
+	appendraw           json.RawMessage
+	clearedFields       map[string]struct{}
+	asset               *uuid.UUID
+	clearedasset        bool
+	alerts              map[uuid.UUID]struct{}
+	removedalerts       map[uuid.UUID]struct{}
+	clearedalerts       bool
+	done                bool
+	oldValue            func(context.Context) (*Event, error)
+	predicates          []predicate.Event
 }
 
 var _ ent.Mutation = (*EventMutation)(nil)
@@ -2250,6 +2251,55 @@ func (m *EventMutation) ResetProcessGUID() {
 	delete(m.clearedFields, event.FieldProcessGUID)
 }
 
+// SetParentProcessGUID sets the "parent_process_guid" field.
+func (m *EventMutation) SetParentProcessGUID(u uuid.UUID) {
+	m.parent_process_guid = &u
+}
+
+// ParentProcessGUID returns the value of the "parent_process_guid" field in the mutation.
+func (m *EventMutation) ParentProcessGUID() (r uuid.UUID, exists bool) {
+	v := m.parent_process_guid
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldParentProcessGUID returns the old "parent_process_guid" field's value of the Event entity.
+// If the Event object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EventMutation) OldParentProcessGUID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldParentProcessGUID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldParentProcessGUID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldParentProcessGUID: %w", err)
+	}
+	return oldValue.ParentProcessGUID, nil
+}
+
+// ClearParentProcessGUID clears the value of the "parent_process_guid" field.
+func (m *EventMutation) ClearParentProcessGUID() {
+	m.parent_process_guid = nil
+	m.clearedFields[event.FieldParentProcessGUID] = struct{}{}
+}
+
+// ParentProcessGUIDCleared returns if the "parent_process_guid" field was cleared in this mutation.
+func (m *EventMutation) ParentProcessGUIDCleared() bool {
+	_, ok := m.clearedFields[event.FieldParentProcessGUID]
+	return ok
+}
+
+// ResetParentProcessGUID resets all changes to the "parent_process_guid" field.
+func (m *EventMutation) ResetParentProcessGUID() {
+	m.parent_process_guid = nil
+	delete(m.clearedFields, event.FieldParentProcessGUID)
+}
+
 // SetUsername sets the "username" field.
 func (m *EventMutation) SetUsername(s string) {
 	m.username = &s
@@ -2514,7 +2564,7 @@ func (m *EventMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *EventMutation) Fields() []string {
-	fields := make([]string, 0, 8)
+	fields := make([]string, 0, 9)
 	if m.ts != nil {
 		fields = append(fields, event.FieldTs)
 	}
@@ -2529,6 +2579,9 @@ func (m *EventMutation) Fields() []string {
 	}
 	if m.process_guid != nil {
 		fields = append(fields, event.FieldProcessGUID)
+	}
+	if m.parent_process_guid != nil {
+		fields = append(fields, event.FieldParentProcessGUID)
 	}
 	if m.username != nil {
 		fields = append(fields, event.FieldUsername)
@@ -2557,6 +2610,8 @@ func (m *EventMutation) Field(name string) (ent.Value, bool) {
 		return m.AssetID()
 	case event.FieldProcessGUID:
 		return m.ProcessGUID()
+	case event.FieldParentProcessGUID:
+		return m.ParentProcessGUID()
 	case event.FieldUsername:
 		return m.Username()
 	case event.FieldConnTuple:
@@ -2582,6 +2637,8 @@ func (m *EventMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldAssetID(ctx)
 	case event.FieldProcessGUID:
 		return m.OldProcessGUID(ctx)
+	case event.FieldParentProcessGUID:
+		return m.OldParentProcessGUID(ctx)
 	case event.FieldUsername:
 		return m.OldUsername(ctx)
 	case event.FieldConnTuple:
@@ -2631,6 +2688,13 @@ func (m *EventMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetProcessGUID(v)
+		return nil
+	case event.FieldParentProcessGUID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetParentProcessGUID(v)
 		return nil
 	case event.FieldUsername:
 		v, ok := value.(string)
@@ -2704,6 +2768,9 @@ func (m *EventMutation) ClearedFields() []string {
 	if m.FieldCleared(event.FieldProcessGUID) {
 		fields = append(fields, event.FieldProcessGUID)
 	}
+	if m.FieldCleared(event.FieldParentProcessGUID) {
+		fields = append(fields, event.FieldParentProcessGUID)
+	}
 	if m.FieldCleared(event.FieldUsername) {
 		fields = append(fields, event.FieldUsername)
 	}
@@ -2729,6 +2796,9 @@ func (m *EventMutation) ClearField(name string) error {
 		return nil
 	case event.FieldProcessGUID:
 		m.ClearProcessGUID()
+		return nil
+	case event.FieldParentProcessGUID:
+		m.ClearParentProcessGUID()
 		return nil
 	case event.FieldUsername:
 		m.ClearUsername()
@@ -2758,6 +2828,9 @@ func (m *EventMutation) ResetField(name string) error {
 		return nil
 	case event.FieldProcessGUID:
 		m.ResetProcessGUID()
+		return nil
+	case event.FieldParentProcessGUID:
+		m.ResetParentProcessGUID()
 		return nil
 	case event.FieldUsername:
 		m.ResetUsername()

@@ -30,6 +30,8 @@ type Event struct {
 	AssetID *uuid.UUID `json:"asset_id,omitempty"`
 	// ProcessGUID holds the value of the "process_guid" field.
 	ProcessGUID *uuid.UUID `json:"process_guid,omitempty"`
+	// ParentProcessGUID holds the value of the "parent_process_guid" field.
+	ParentProcessGUID *uuid.UUID `json:"parent_process_guid,omitempty"`
 	// Username holds the value of the "username" field.
 	Username *string `json:"username,omitempty"`
 	// ConnTuple holds the value of the "conn_tuple" field.
@@ -78,7 +80,7 @@ func (*Event) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case event.FieldAssetID, event.FieldProcessGUID:
+		case event.FieldAssetID, event.FieldProcessGUID, event.FieldParentProcessGUID:
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
 		case event.FieldRaw:
 			values[i] = new([]byte)
@@ -142,6 +144,13 @@ func (_m *Event) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.ProcessGUID = new(uuid.UUID)
 				*_m.ProcessGUID = *value.S.(*uuid.UUID)
+			}
+		case event.FieldParentProcessGUID:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field parent_process_guid", values[i])
+			} else if value.Valid {
+				_m.ParentProcessGUID = new(uuid.UUID)
+				*_m.ParentProcessGUID = *value.S.(*uuid.UUID)
 			}
 		case event.FieldUsername:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -227,6 +236,11 @@ func (_m *Event) String() string {
 	builder.WriteString(", ")
 	if v := _m.ProcessGUID; v != nil {
 		builder.WriteString("process_guid=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.ParentProcessGUID; v != nil {
+		builder.WriteString("parent_process_guid=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
 	builder.WriteString(", ")

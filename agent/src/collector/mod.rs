@@ -8,6 +8,9 @@ use tokio::sync::mpsc;
 use crate::pb::AgentEvent;
 
 mod poll;
+mod registry;
+
+pub use registry::ProcessRegistry;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -30,9 +33,10 @@ pub fn spawn(agent_id: String) -> mpsc::Receiver<AgentEvent> {
     rx
 }
 
-/// 采集器共用：组装一条进程活动事件（OCSF 1007）。
+/// 采集器共用：组装一条进程活动事件（OCSF 1007），并在注册表里建立血缘。
 fn process_event(
     agent_id: &str,
+    registry: &mut ProcessRegistry,
     pid: u32,
     name: &str,
     exe: Option<&str>,
@@ -42,14 +46,19 @@ fn process_event(
 ) -> AgentEvent {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    let (guid, parent_guid) = registry.register(pid, ppid);
     let raw = serde_json::json!({
         "activity_id": 1, // OCSF: Launch
         "process": {
             "pid": pid,
+            "uid": guid.to_string(),
             "name": name,
             "file": { "path": exe },
             "cmd_line": cmd_line,
-            "parent_process": { "pid": ppid },
+            "parent_process": {
+                "pid": ppid,
+                "uid": parent_guid.map(|g| g.to_string()),
+            },
         },
     });
 
@@ -60,7 +69,8 @@ fn process_event(
             .unwrap_or_default()
             .as_nanos() as i64,
         class_uid: 1007,
-        process_guid: uuid::Uuid::new_v4().to_string(),
+        process_guid: guid.to_string(),
+        parent_process_guid: parent_guid.map(|g| g.to_string()).unwrap_or_default(),
         username,
         conn_tuple: String::new(),
         raw_json: raw.to_string(),

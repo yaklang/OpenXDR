@@ -81,6 +81,7 @@ var (
 		{Name: "class_uid", Type: field.TypeInt},
 		{Name: "source", Type: field.TypeString},
 		{Name: "process_guid", Type: field.TypeUUID, Nullable: true},
+		{Name: "parent_process_guid", Type: field.TypeUUID, Nullable: true},
 		{Name: "username", Type: field.TypeString, Nullable: true},
 		{Name: "conn_tuple", Type: field.TypeString, Nullable: true},
 		{Name: "raw", Type: field.TypeJSON},
@@ -94,7 +95,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "events_assets_events",
-				Columns:    []*schema.Column{EventsColumns[8]},
+				Columns:    []*schema.Column{EventsColumns[9]},
 				RefColumns: []*schema.Column{AssetsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -108,12 +109,17 @@ var (
 			{
 				Name:    "event_asset_id_ts",
 				Unique:  false,
-				Columns: []*schema.Column{EventsColumns[8], EventsColumns[1]},
+				Columns: []*schema.Column{EventsColumns[9], EventsColumns[1]},
 			},
 			{
 				Name:    "event_process_guid",
 				Unique:  false,
 				Columns: []*schema.Column{EventsColumns[4]},
+			},
+			{
+				Name:    "event_parent_process_guid",
+				Unique:  false,
+				Columns: []*schema.Column{EventsColumns[5]},
 			},
 		},
 	}

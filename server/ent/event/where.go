@@ -81,6 +81,11 @@ func ProcessGUID(v uuid.UUID) predicate.Event {
 	return predicate.Event(sql.FieldEQ(FieldProcessGUID, v))
 }
 
+// ParentProcessGUID applies equality check predicate on the "parent_process_guid" field. It's identical to ParentProcessGUIDEQ.
+func ParentProcessGUID(v uuid.UUID) predicate.Event {
+	return predicate.Event(sql.FieldEQ(FieldParentProcessGUID, v))
+}
+
 // Username applies equality check predicate on the "username" field. It's identical to UsernameEQ.
 func Username(v string) predicate.Event {
 	return predicate.Event(sql.FieldEQ(FieldUsername, v))
@@ -314,6 +319,56 @@ func ProcessGUIDIsNil() predicate.Event {
 // ProcessGUIDNotNil applies the NotNil predicate on the "process_guid" field.
 func ProcessGUIDNotNil() predicate.Event {
 	return predicate.Event(sql.FieldNotNull(FieldProcessGUID))
+}
+
+// ParentProcessGUIDEQ applies the EQ predicate on the "parent_process_guid" field.
+func ParentProcessGUIDEQ(v uuid.UUID) predicate.Event {
+	return predicate.Event(sql.FieldEQ(FieldParentProcessGUID, v))
+}
+
+// ParentProcessGUIDNEQ applies the NEQ predicate on the "parent_process_guid" field.
+func ParentProcessGUIDNEQ(v uuid.UUID) predicate.Event {
+	return predicate.Event(sql.FieldNEQ(FieldParentProcessGUID, v))
+}
+
+// ParentProcessGUIDIn applies the In predicate on the "parent_process_guid" field.
+func ParentProcessGUIDIn(vs ...uuid.UUID) predicate.Event {
+	return predicate.Event(sql.FieldIn(FieldParentProcessGUID, vs...))
+}
+
+// ParentProcessGUIDNotIn applies the NotIn predicate on the "parent_process_guid" field.
+func ParentProcessGUIDNotIn(vs ...uuid.UUID) predicate.Event {
+	return predicate.Event(sql.FieldNotIn(FieldParentProcessGUID, vs...))
+}
+
+// ParentProcessGUIDGT applies the GT predicate on the "parent_process_guid" field.
+func ParentProcessGUIDGT(v uuid.UUID) predicate.Event {
+	return predicate.Event(sql.FieldGT(FieldParentProcessGUID, v))
+}
+
+// ParentProcessGUIDGTE applies the GTE predicate on the "parent_process_guid" field.
+func ParentProcessGUIDGTE(v uuid.UUID) predicate.Event {
+	return predicate.Event(sql.FieldGTE(FieldParentProcessGUID, v))
+}
+
+// ParentProcessGUIDLT applies the LT predicate on the "parent_process_guid" field.
+func ParentProcessGUIDLT(v uuid.UUID) predicate.Event {
+	return predicate.Event(sql.FieldLT(FieldParentProcessGUID, v))
+}
+
+// ParentProcessGUIDLTE applies the LTE predicate on the "parent_process_guid" field.
+func ParentProcessGUIDLTE(v uuid.UUID) predicate.Event {
+	return predicate.Event(sql.FieldLTE(FieldParentProcessGUID, v))
+}
+
+// ParentProcessGUIDIsNil applies the IsNil predicate on the "parent_process_guid" field.
+func ParentProcessGUIDIsNil() predicate.Event {
+	return predicate.Event(sql.FieldIsNull(FieldParentProcessGUID))
+}
+
+// ParentProcessGUIDNotNil applies the NotNil predicate on the "parent_process_guid" field.
+func ParentProcessGUIDNotNil() predicate.Event {
+	return predicate.Event(sql.FieldNotNull(FieldParentProcessGUID))
 }
 
 // UsernameEQ applies the EQ predicate on the "username" field.

@@ -23,6 +23,8 @@ const (
 	FieldAssetID = "asset_id"
 	// FieldProcessGUID holds the string denoting the process_guid field in the database.
 	FieldProcessGUID = "process_guid"
+	// FieldParentProcessGUID holds the string denoting the parent_process_guid field in the database.
+	FieldParentProcessGUID = "parent_process_guid"
 	// FieldUsername holds the string denoting the username field in the database.
 	FieldUsername = "username"
 	// FieldConnTuple holds the string denoting the conn_tuple field in the database.
@@ -59,6 +61,7 @@ var Columns = []string{
 	FieldSource,
 	FieldAssetID,
 	FieldProcessGUID,
+	FieldParentProcessGUID,
 	FieldUsername,
 	FieldConnTuple,
 	FieldRaw,
@@ -110,6 +113,11 @@ func ByAssetID(opts ...sql.OrderTermOption) OrderOption {
 // ByProcessGUID orders the results by the process_guid field.
 func ByProcessGUID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldProcessGUID, opts...).ToFunc()
+}
+
+// ByParentProcessGUID orders the results by the parent_process_guid field.
+func ByParentProcessGUID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldParentProcessGUID, opts...).ToFunc()
 }
 
 // ByUsername orders the results by the username field.

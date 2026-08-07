@@ -23,6 +23,7 @@ func (Event) Fields() []ent.Field {
 		field.String("source"),
 		field.UUID("asset_id", uuid.UUID{}).Optional().Nillable(),
 		field.UUID("process_guid", uuid.UUID{}).Optional().Nillable(),
+		field.UUID("parent_process_guid", uuid.UUID{}).Optional().Nillable(),
 		field.String("username").Optional().Nillable(),
 		field.String("conn_tuple").Optional().Nillable(),
 		field.JSON("raw", json.RawMessage{}),
@@ -41,5 +42,6 @@ func (Event) Indexes() []ent.Index {
 		index.Fields("ts"),
 		index.Fields("asset_id", "ts"),
 		index.Fields("process_guid"),
+		index.Fields("parent_process_guid"),
 	}
 }
