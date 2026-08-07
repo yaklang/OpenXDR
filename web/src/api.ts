@@ -102,3 +102,38 @@ export async function issueCommand(body: {
   if (!r.ok) throw new Error(await r.text())
   return r.json()
 }
+
+export interface Suppression {
+  id: string
+  createdAt: string
+  ruleId: string
+  ruleTitle: string | null
+  assetId: string | null
+  reason: string | null
+  createdBy: string
+  expiresAt: string | null
+  matchedCount: number
+  lastMatchedAt: string | null
+}
+
+export const fetchSuppressions = () => get<Suppression[]>('/api/suppressions')
+
+export async function createSuppression(body: {
+  ruleId: string
+  assetId?: string | null
+  reason?: string
+  expiresInDays?: number
+}): Promise<Suppression> {
+  const r = await fetch('/api/suppressions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function deleteSuppression(id: string): Promise<void> {
+  const r = await fetch(`/api/suppressions/${id}`, { method: 'DELETE' })
+  if (!r.ok) throw new Error(await r.text())
+}

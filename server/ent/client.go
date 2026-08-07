@@ -16,6 +16,7 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
+	"openxdr/server/ent/suppression"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect"
@@ -39,6 +40,8 @@ type Client struct {
 	Event *EventClient
 	// Incident is the client for interacting with the Incident builders.
 	Incident *IncidentClient
+	// Suppression is the client for interacting with the Suppression builders.
+	Suppression *SuppressionClient
 }
 
 // NewClient creates a new client configured with the given options.
@@ -55,6 +58,7 @@ func (c *Client) init() {
 	c.Command = NewCommandClient(c.config)
 	c.Event = NewEventClient(c.config)
 	c.Incident = NewIncidentClient(c.config)
+	c.Suppression = NewSuppressionClient(c.config)
 }
 
 type (
@@ -145,13 +149,14 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:      ctx,
-		config:   cfg,
-		Alert:    NewAlertClient(cfg),
-		Asset:    NewAssetClient(cfg),
-		Command:  NewCommandClient(cfg),
-		Event:    NewEventClient(cfg),
-		Incident: NewIncidentClient(cfg),
+		ctx:         ctx,
+		config:      cfg,
+		Alert:       NewAlertClient(cfg),
+		Asset:       NewAssetClient(cfg),
+		Command:     NewCommandClient(cfg),
+		Event:       NewEventClient(cfg),
+		Incident:    NewIncidentClient(cfg),
+		Suppression: NewSuppressionClient(cfg),
 	}, nil
 }
 
@@ -169,13 +174,14 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:      ctx,
-		config:   cfg,
-		Alert:    NewAlertClient(cfg),
-		Asset:    NewAssetClient(cfg),
-		Command:  NewCommandClient(cfg),
-		Event:    NewEventClient(cfg),
-		Incident: NewIncidentClient(cfg),
+		ctx:         ctx,
+		config:      cfg,
+		Alert:       NewAlertClient(cfg),
+		Asset:       NewAssetClient(cfg),
+		Command:     NewCommandClient(cfg),
+		Event:       NewEventClient(cfg),
+		Incident:    NewIncidentClient(cfg),
+		Suppression: NewSuppressionClient(cfg),
 	}, nil
 }
 
@@ -204,21 +210,21 @@ func (c *Client) Close() error {
 // Use adds the mutation hooks to all the entity clients.
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
-	c.Alert.Use(hooks...)
-	c.Asset.Use(hooks...)
-	c.Command.Use(hooks...)
-	c.Event.Use(hooks...)
-	c.Incident.Use(hooks...)
+	for _, n := range []interface{ Use(...Hook) }{
+		c.Alert, c.Asset, c.Command, c.Event, c.Incident, c.Suppression,
+	} {
+		n.Use(hooks...)
+	}
 }
 
 // Intercept adds the query interceptors to all the entity clients.
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
-	c.Alert.Intercept(interceptors...)
-	c.Asset.Intercept(interceptors...)
-	c.Command.Intercept(interceptors...)
-	c.Event.Intercept(interceptors...)
-	c.Incident.Intercept(interceptors...)
+	for _, n := range []interface{ Intercept(...Interceptor) }{
+		c.Alert, c.Asset, c.Command, c.Event, c.Incident, c.Suppression,
+	} {
+		n.Intercept(interceptors...)
+	}
 }
 
 // Mutate implements the ent.Mutator interface.
@@ -234,6 +240,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Event.mutate(ctx, m)
 	case *IncidentMutation:
 		return c.Incident.mutate(ctx, m)
+	case *SuppressionMutation:
+		return c.Suppression.mutate(ctx, m)
 	default:
 		return nil, fmt.Errorf("ent: unknown mutation type %T", m)
 	}
@@ -1064,12 +1072,145 @@ func (c *IncidentClient) mutate(ctx context.Context, m *IncidentMutation) (Value
 	}
 }
 
+// SuppressionClient is a client for the Suppression schema.
+type SuppressionClient struct {
+	config
+}
+
+// NewSuppressionClient returns a client for the Suppression from the given config.
+func NewSuppressionClient(c config) *SuppressionClient {
+	return &SuppressionClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `suppression.Hooks(f(g(h())))`.
+func (c *SuppressionClient) Use(hooks ...Hook) {
+	c.hooks.Suppression = append(c.hooks.Suppression, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `suppression.Intercept(f(g(h())))`.
+func (c *SuppressionClient) Intercept(interceptors ...Interceptor) {
+	c.inters.Suppression = append(c.inters.Suppression, interceptors...)
+}
+
+// Create returns a builder for creating a Suppression entity.
+func (c *SuppressionClient) Create() *SuppressionCreate {
+	mutation := newSuppressionMutation(c.config, OpCreate)
+	return &SuppressionCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of Suppression entities.
+func (c *SuppressionClient) CreateBulk(builders ...*SuppressionCreate) *SuppressionCreateBulk {
+	return &SuppressionCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *SuppressionClient) MapCreateBulk(slice any, setFunc func(*SuppressionCreate, int)) *SuppressionCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &SuppressionCreateBulk{err: fmt.Errorf("calling to SuppressionClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*SuppressionCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &SuppressionCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for Suppression.
+func (c *SuppressionClient) Update() *SuppressionUpdate {
+	mutation := newSuppressionMutation(c.config, OpUpdate)
+	return &SuppressionUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *SuppressionClient) UpdateOne(_m *Suppression) *SuppressionUpdateOne {
+	mutation := newSuppressionMutation(c.config, OpUpdateOne, withSuppression(_m))
+	return &SuppressionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *SuppressionClient) UpdateOneID(id uuid.UUID) *SuppressionUpdateOne {
+	mutation := newSuppressionMutation(c.config, OpUpdateOne, withSuppressionID(id))
+	return &SuppressionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for Suppression.
+func (c *SuppressionClient) Delete() *SuppressionDelete {
+	mutation := newSuppressionMutation(c.config, OpDelete)
+	return &SuppressionDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *SuppressionClient) DeleteOne(_m *Suppression) *SuppressionDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *SuppressionClient) DeleteOneID(id uuid.UUID) *SuppressionDeleteOne {
+	builder := c.Delete().Where(suppression.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &SuppressionDeleteOne{builder}
+}
+
+// Query returns a query builder for Suppression.
+func (c *SuppressionClient) Query() *SuppressionQuery {
+	return &SuppressionQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeSuppression},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a Suppression entity by its id.
+func (c *SuppressionClient) Get(ctx context.Context, id uuid.UUID) (*Suppression, error) {
+	return c.Query().Where(suppression.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *SuppressionClient) GetX(ctx context.Context, id uuid.UUID) *Suppression {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *SuppressionClient) Hooks() []Hook {
+	return c.hooks.Suppression
+}
+
+// Interceptors returns the client interceptors.
+func (c *SuppressionClient) Interceptors() []Interceptor {
+	return c.inters.Suppression
+}
+
+func (c *SuppressionClient) mutate(ctx context.Context, m *SuppressionMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&SuppressionCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&SuppressionUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&SuppressionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&SuppressionDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown Suppression mutation op: %q", m.Op())
+	}
+}
+
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		Alert, Asset, Command, Event, Incident []ent.Hook
+		Alert, Asset, Command, Event, Incident, Suppression []ent.Hook
 	}
 	inters struct {
-		Alert, Asset, Command, Event, Incident []ent.Interceptor
+		Alert, Asset, Command, Event, Incident, Suppression []ent.Interceptor
 	}
 )

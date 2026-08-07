@@ -9,6 +9,7 @@ import (
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/schema"
+	"openxdr/server/ent/suppression"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,4 +85,22 @@ func init() {
 	incidentDescID := incidentFields[0].Descriptor()
 	// incident.DefaultID holds the default value on creation for the id field.
 	incident.DefaultID = incidentDescID.Default.(func() uuid.UUID)
+	suppressionFields := schema.Suppression{}.Fields()
+	_ = suppressionFields
+	// suppressionDescCreatedAt is the schema descriptor for created_at field.
+	suppressionDescCreatedAt := suppressionFields[1].Descriptor()
+	// suppression.DefaultCreatedAt holds the default value on creation for the created_at field.
+	suppression.DefaultCreatedAt = suppressionDescCreatedAt.Default.(func() time.Time)
+	// suppressionDescCreatedBy is the schema descriptor for created_by field.
+	suppressionDescCreatedBy := suppressionFields[5].Descriptor()
+	// suppression.DefaultCreatedBy holds the default value on creation for the created_by field.
+	suppression.DefaultCreatedBy = suppressionDescCreatedBy.Default.(string)
+	// suppressionDescMatchedCount is the schema descriptor for matched_count field.
+	suppressionDescMatchedCount := suppressionFields[7].Descriptor()
+	// suppression.DefaultMatchedCount holds the default value on creation for the matched_count field.
+	suppression.DefaultMatchedCount = suppressionDescMatchedCount.Default.(int)
+	// suppressionDescID is the schema descriptor for id field.
+	suppressionDescID := suppressionFields[0].Descriptor()
+	// suppression.DefaultID holds the default value on creation for the id field.
+	suppression.DefaultID = suppressionDescID.Default.(func() uuid.UUID)
 }

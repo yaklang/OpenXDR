@@ -20,3 +20,6 @@ type Event func(*sql.Selector)
 
 // Incident is the predicate function for incident builders.
 type Incident func(*sql.Selector)
+
+// Suppression is the predicate function for suppression builders.
+type Suppression func(*sql.Selector)

@@ -17,6 +17,7 @@ import (
 	"openxdr/server/internal/dedup"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/suppress"
 	"openxdr/server/pb"
 )
 
@@ -26,6 +27,7 @@ type Server struct {
 	Rules       *sigma.Engine
 	DedupWindow time.Duration
 	Hub         *response.Hub
+	Suppress    *suppress.Store
 }
 
 func (s *Server) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
@@ -186,6 +188,10 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 		eventCreates = append(eventCreates, ec)
 
 		for _, rule := range s.Rules.Evaluate(int(ev.ClassUid), assetOS, rawMap) {
+			// 抑制先于去重：被压掉的命中不该占用去重槽位
+			if s.Suppress.Suppressed(rule.ID, assetID, ts) {
+				continue
+			}
 			if deduper.Hit(rule.ID, ts) {
 				continue
 			}

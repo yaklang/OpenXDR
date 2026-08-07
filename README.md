@@ -116,6 +116,15 @@ echo '*.* @<server>:514' >> /etc/rsyslog.conf && systemctl restart rsyslog
 规则里用 `logsource.category: application` 匹配这类事件，字段路径见
 `rules/lnx_ssh_auth_failure.yml`。
 
+## 误报抑制
+
+分析师把事件标记为误报后，可以顺手把噪声源掐掉：抑制指定规则在指定主机
+（或全部主机）上的告警。抑制后事件照常入库，只是不再产生告警——证据不丢，
+只是不再打扰人。
+
+抑制从不静默：每条抑制规则持续累计被压掉的次数，可在抑制清单里看到并随时撤销。
+默认带有效期，避免抑制规则无限积累后悄悄吃掉真实告警。
+
 ## 响应处置
 
 检测到攻击后可以直接下发处置指令：**结束进程**、**隔离主机**、**解除隔离**。
@@ -188,6 +197,7 @@ server 全部通过环境变量配置，均有默认值：
 | `AI_MODEL` | 空（不启用） | 研判模型名 |
 | `AI_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点 |
 | `SYSLOG_ADDR` | 空（不启用） | syslog 监听地址，如 `:514`。UDP 与 TCP 同时监听 |
+| `SUPPRESSION_RELOAD_SECONDS` | `30` | 抑制规则重载与命中计数回写周期 |
 | `RESPONSE_ENABLED` | `false` | 是否允许下发响应指令 |
 | `ISOLATION_ALLOW` | 空 | 隔离主机时放行的地址，必须包含 server 的 gRPC 端点 |
 | `RETENTION_DAYS` | `30` | 原始事件保留天数，0 表示不清理。被告警引用的证据事件不受影响 |

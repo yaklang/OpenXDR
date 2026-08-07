@@ -178,6 +178,31 @@ var (
 		Columns:    IncidentsColumns,
 		PrimaryKey: []*schema.Column{IncidentsColumns[0]},
 	}
+	// SuppressionsColumns holds the columns for the "suppressions" table.
+	SuppressionsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "rule_id", Type: field.TypeString},
+		{Name: "asset_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "reason", Type: field.TypeString, Nullable: true},
+		{Name: "created_by", Type: field.TypeString, Default: "api"},
+		{Name: "expires_at", Type: field.TypeTime, Nullable: true},
+		{Name: "matched_count", Type: field.TypeInt, Default: 0},
+		{Name: "last_matched_at", Type: field.TypeTime, Nullable: true},
+	}
+	// SuppressionsTable holds the schema information for the "suppressions" table.
+	SuppressionsTable = &schema.Table{
+		Name:       "suppressions",
+		Columns:    SuppressionsColumns,
+		PrimaryKey: []*schema.Column{SuppressionsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "suppression_rule_id",
+				Unique:  false,
+				Columns: []*schema.Column{SuppressionsColumns[2]},
+			},
+		},
+	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
 		AlertsTable,
@@ -185,6 +210,7 @@ var (
 		CommandsTable,
 		EventsTable,
 		IncidentsTable,
+		SuppressionsTable,
 	}
 )
 

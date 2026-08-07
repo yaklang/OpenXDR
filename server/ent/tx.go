@@ -22,6 +22,8 @@ type Tx struct {
 	Event *EventClient
 	// Incident is the client for interacting with the Incident builders.
 	Incident *IncidentClient
+	// Suppression is the client for interacting with the Suppression builders.
+	Suppression *SuppressionClient
 
 	// lazily loaded.
 	client     *Client
@@ -158,6 +160,7 @@ func (tx *Tx) init() {
 	tx.Command = NewCommandClient(tx.config)
 	tx.Event = NewEventClient(tx.config)
 	tx.Incident = NewIncidentClient(tx.config)
+	tx.Suppression = NewSuppressionClient(tx.config)
 }
 
 // txDriver wraps the given dialect.Tx with a nop dialect.Driver implementation.

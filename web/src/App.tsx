@@ -5,6 +5,8 @@ import {
 } from './api'
 import { IncidentGraphView } from './IncidentGraphView'
 import { ResponsePanel } from './ResponsePanel'
+import { SuppressDialog } from './SuppressDialog'
+import { SuppressionList } from './SuppressionList'
 import { VerdictCard } from './VerdictCard'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -23,6 +25,9 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<IncidentDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 标记误报后弹出抑制对话框，把分析师的判断反馈回检测链路
+  const [suppressing, setSuppressing] = useState(false)
+  const [showSuppressions, setShowSuppressions] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
@@ -51,6 +56,7 @@ export default function App() {
     await setIncidentStatus(detail.id, status)
     await refresh()
     setDetail(await fetchIncident(detail.id))
+    if (status === 'false_positive') setSuppressing(true)
   }
 
   return (
@@ -58,7 +64,10 @@ export default function App() {
       <aside className="sidebar">
         <header>
           <h1>OpenXDR</h1>
-          <span className="muted">{incidents.length} 个事件</span>
+          <div className="header-actions">
+            <span className="muted">{incidents.length} 个事件</span>
+            <button className="link" onClick={() => setShowSuppressions(true)}>抑制清单</button>
+          </div>
         </header>
         {error && <div className="error">{error}</div>}
         {incidents.map(inc => (
@@ -123,6 +132,15 @@ export default function App() {
           </>
         )}
       </main>
+
+      {suppressing && detail && (
+        <SuppressDialog
+          alerts={detail.alerts}
+          assetId={detail.assetId}
+          onClose={() => setSuppressing(false)}
+        />
+      )}
+      {showSuppressions && <SuppressionList onClose={() => setShowSuppressions(false)} />}
     </div>
   )
 }

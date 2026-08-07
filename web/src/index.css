@@ -191,3 +191,64 @@ h3 { font-size: 14px; color: var(--muted); margin: 24px 0 8px; }
   white-space: nowrap;
   color: var(--muted);
 }
+
+.header-actions { display: flex; align-items: center; gap: 10px; }
+
+.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 24px;
+  width: 460px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.modal-wide { width: 860px; }
+.modal h3 { margin: 0 0 8px; color: var(--fg); font-size: 15px; }
+.modal-actions { justify-content: flex-end; margin-top: 16px; }
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.field select, .field input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 5px 8px;
+}

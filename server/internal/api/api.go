@@ -15,6 +15,7 @@ import (
 	"openxdr/server/ent/incident"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/suppress"
 )
 
 // triaged 是引擎专属状态，分析师只能在这三个之间拨
@@ -48,9 +49,10 @@ type incidentDetail struct {
 	Alerts  []alertRow `json:"alerts"`
 }
 
-func Handler(db *ent.Client, rules *sigma.Engine, hub *response.Hub, selfEndpoints []string) http.Handler {
+func Handler(db *ent.Client, rules *sigma.Engine, hub *response.Hub, suppressions *suppress.Store, selfEndpoints []string) http.Handler {
 	mux := http.NewServeMux()
 	mapCommands(mux, db, hub, selfEndpoints)
+	mapSuppressions(mux, db, suppressions, rules)
 
 	mux.HandleFunc("GET /api/incidents", func(w http.ResponseWriter, r *http.Request) {
 		q := db.Incident.Query()

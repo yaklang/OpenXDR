@@ -11,6 +11,7 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
+	"openxdr/server/ent/suppression"
 	"reflect"
 	"sync"
 
@@ -77,11 +78,12 @@ var (
 func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			alert.Table:    alert.ValidColumn,
-			asset.Table:    asset.ValidColumn,
-			command.Table:  command.ValidColumn,
-			event.Table:    event.ValidColumn,
-			incident.Table: incident.ValidColumn,
+			alert.Table:       alert.ValidColumn,
+			asset.Table:       asset.ValidColumn,
+			command.Table:     command.ValidColumn,
+			event.Table:       event.ValidColumn,
+			incident.Table:    incident.ValidColumn,
+			suppression.Table: suppression.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

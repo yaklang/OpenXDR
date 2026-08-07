@@ -23,6 +23,7 @@ import (
 	"openxdr/server/internal/janitor"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/syslog"
 	"openxdr/server/internal/triage"
 	"openxdr/server/pb"
@@ -43,6 +44,9 @@ func main() {
 		slog.Error("schema 迁移失败", "err", err)
 		os.Exit(1)
 	}
+
+	suppressions := suppress.New(client, time.Duration(getenvInt("SUPPRESSION_RELOAD_SECONDS", 30))*time.Second)
+	go suppressions.Run(ctx)
 
 	rules := sigma.LoadDir(getenv("RULES_PATH", "../rules"))
 
@@ -78,6 +82,7 @@ func main() {
 		Rules:       rules,
 		Addr:        os.Getenv("SYSLOG_ADDR"),
 		DedupWindow: dedupWindow,
+		Suppress:    suppressions,
 	}).Run(ctx)
 
 	grpcAddr := getenv("GRPC_ADDR", ":8081")
@@ -102,11 +107,13 @@ func main() {
 		Rules:       rules,
 		DedupWindow: dedupWindow,
 		Hub:         hub,
+		Suppress:    suppressions,
 	})
 	pb.RegisterSensorServiceServer(grpcServer, &grpcsvc.SensorServer{
 		DB:          client,
 		Rules:       rules,
 		DedupWindow: dedupWindow,
+		Suppress:    suppressions,
 	})
 	go func() {
 		slog.Info("gRPC 启动", "addr", grpcAddr)
@@ -118,7 +125,7 @@ func main() {
 
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	slog.Info("HTTP 启动", "addr", httpAddr)
-	if err := http.ListenAndServe(httpAddr, api.Handler(client, rules, hub, isolationAllowlist())); err != nil {
+	if err := http.ListenAndServe(httpAddr, api.Handler(client, rules, hub, suppressions, isolationAllowlist())); err != nil {
 		slog.Error("HTTP 退出", "err", err)
 		os.Exit(1)
 	}

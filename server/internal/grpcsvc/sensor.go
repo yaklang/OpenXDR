@@ -16,6 +16,7 @@ import (
 	"openxdr/server/ent/asset"
 	"openxdr/server/internal/dedup"
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/suppress"
 	"openxdr/server/pb"
 )
 
@@ -33,6 +34,7 @@ type SensorServer struct {
 	DB          *ent.Client
 	Rules       *sigma.Engine
 	DedupWindow time.Duration
+	Suppress    *suppress.Store
 }
 
 func (s *SensorServer) ReportFlows(stream pb.SensorService_ReportFlowsServer) error {
@@ -94,6 +96,9 @@ func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, deduper 
 		eventCreates = append(eventCreates, ec)
 
 		for _, rule := range s.Rules.Evaluate(classUID, osByIP[f.SrcIp], rawMap) {
+			if s.Suppress.Suppressed(rule.ID, assetID, ts) {
+				continue
+			}
 			fingerprint := rule.ID + "|" + f.SrcIp
 			if assetID != nil {
 				fingerprint = rule.ID + "|" + assetID.String()

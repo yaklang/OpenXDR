@@ -15,6 +15,7 @@ import (
 	"openxdr/server/ent/asset"
 	"openxdr/server/internal/dedup"
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/suppress"
 )
 
 // ClassApplicationActivity 应用日志事件的 class。
@@ -36,6 +37,7 @@ type Server struct {
 	Rules       *sigma.Engine
 	Addr        string
 	DedupWindow time.Duration
+	Suppress    *suppress.Store
 }
 
 // 从网络收上来的一条报文，带来源地址用于归属资产
@@ -193,6 +195,9 @@ func (s *Server) build(ctx context.Context, in incoming, deduper *dedup.Deduper)
 
 	var created []*ent.AlertCreate
 	for _, rule := range s.Rules.Evaluate(ClassApplicationActivity, assetOS, rawMap) {
+		if s.Suppress.Suppressed(rule.ID, assetID, msg.Ts) {
+			continue
+		}
 		fingerprint := rule.ID + "|" + origin
 		if deduper.Hit(fingerprint, msg.Ts) {
 			continue
