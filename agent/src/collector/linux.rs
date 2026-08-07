@@ -1,7 +1,7 @@
 //! Linux eBPF 采集：tracepoint sched_process_exec。
 //! 捕获所有 execve（含短命进程），需要 root/CAP_BPF；失败回落轮询。
 
-use super::{EventSink, ProcessInfo, ProcessRegistry, poll, process_event};
+use super::{EventSink, ProcessInfo, ProcessRegistry, poll, process_event, seeded_registry};
 use crate::pb::AgentEvent;
 
 // 与 ebpf/src/main.rs 中的定义保持一致
@@ -82,20 +82,6 @@ async fn run_ebpf(
     // 常驻：bpf 句柄在本栈上保活，程序保持挂载
     std::future::pending::<()>().await;
     Ok(())
-}
-
-/// 用 /proc 快照预登记现有进程，之后派生的子进程才能找到父。
-fn seeded_registry() -> ProcessRegistry {
-    let mut registry = ProcessRegistry::default();
-    if let Ok(entries) = std::fs::read_dir("/proc") {
-        for pid in entries
-            .flatten()
-            .filter_map(|e| e.file_name().to_string_lossy().parse::<u32>().ok())
-        {
-            registry.seed(pid);
-        }
-    }
-    registry
 }
 
 fn to_agent_event(agent_id: &str, registry: &mut ProcessRegistry, ev: &ExecEvent) -> AgentEvent {

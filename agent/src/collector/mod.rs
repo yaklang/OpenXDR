@@ -13,9 +13,12 @@ use crate::pb::AgentEvent;
 mod poll;
 mod registry;
 
+#[cfg(target_os = "linux")]
+mod netlink;
+
 pub use registry::ProcessRegistry;
 
-// eBPF 采集是可选特性；未启用时 Linux 也走轮询，构建不需要 nightly
+// eBPF 采集是可选特性；关掉它 Linux 走 netlink，构建不需要 nightly
 #[cfg(all(target_os = "linux", feature = "ebpf"))]
 mod linux;
 
@@ -35,7 +38,18 @@ pub fn spawn(agent_id: String) -> mpsc::Receiver<AgentEvent> {
     #[cfg(target_os = "windows")]
     tokio::spawn(windows::run(agent_id, sink));
 
-    #[cfg(not(any(all(target_os = "linux", feature = "ebpf"), target_os = "windows")))]
+    // Linux 默认走三环的 netlink proc connector：内核主动推送 exec 事件，
+    // 不漏短命进程，也不需要 eBPF 工具链。权限不足时才退到轮询。
+    #[cfg(all(target_os = "linux", not(feature = "ebpf")))]
+    match netlink::spawn(agent_id.clone(), sink.clone()) {
+        Ok(()) => eprintln!("采集方式: netlink proc connector（用户态，捕获全部 exec）"),
+        Err(e) => {
+            eprintln!("netlink 采集不可用（{e}），回落到轮询采集（会漏短命进程）");
+            tokio::spawn(poll::run(agent_id, sink));
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     tokio::spawn(poll::run(agent_id, sink));
 
     rx
@@ -74,6 +88,21 @@ pub struct ProcessInfo<'a> {
     pub cmd_line: Option<&'a str>,
     pub ppid: Option<u32>,
     pub username: String,
+}
+
+/// 用 /proc 快照预登记现有进程，之后派生的子进程才能找到父。
+#[cfg(target_os = "linux")]
+fn seeded_registry() -> ProcessRegistry {
+    let mut registry = ProcessRegistry::default();
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for pid in entries
+            .flatten()
+            .filter_map(|e| e.file_name().to_string_lossy().parse::<u32>().ok())
+        {
+            registry.seed(pid);
+        }
+    }
+    registry
 }
 
 /// 采集器共用：组装一条进程活动事件（OCSF 1007），并在注册表里建立血缘。

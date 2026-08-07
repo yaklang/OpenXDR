@@ -39,7 +39,7 @@
 
 | 目录 | 说明 |
 |---|---|
-| `agent/` | Rust 端点采集 agent，支持 Linux / Windows。Linux 用 eBPF（tracepoint，需 root），Windows 用 ETW（Kernel-Process，需管理员），权限不足时自动回落轮询采集 |
+| `agent/` | Rust 端点采集 agent，支持 Linux / Windows。采集方式按可用性自动选择，内核态始终是可选项 |
 | `sensor/` | Rust 全流量探针，部署在核心交换机镜像口。AF_PACKET v3 零拷贝抓包 + FANOUT 多核并行，出会话元数据（不存 PCAP） |
 | `server/` | Go 后端（Ent + PostgreSQL）：接入、规则引擎、关联引擎、AI 研判 |
 | `web/` | React 前端 |
@@ -101,6 +101,21 @@ sudo env SENSOR_IFACE=eth0 OPENXDR_SERVER=http://<server>:8081 ./target/release/
 
 `SENSOR_WORKERS` 决定并行度。afpacket 下多个 worker 共享 FANOUT 组；afxdp 下
 worker 号即网卡队列号，数量不应超过网卡实际队列数。
+
+### 采集方式
+
+内核态（零环）始终是可选项，用户态（三环）也能完整工作：
+
+| 层次 | 方式 | 覆盖 | 前提 |
+|---|---|---|---|
+| 零环（可选） | Linux eBPF tracepoint | 全部 exec，内核直接给出路径 | `--features ebpf` + root |
+| 三环（默认） | Linux netlink proc connector | 全部 exec 通知，信息从 /proc 现补 | CAP_NET_ADMIN + 初始 pid 命名空间 |
+| 三环 | Windows ETW | 进程启动事件 | 管理员 |
+| 三环（兜底） | 进程表轮询 | 每秒快照，漏短命进程 | 无 |
+
+netlink 在**容器或 WSL2 里不可用**：proc connector 报的是初始 pid 命名空间的
+pid，在嵌套命名空间中对不上本地 /proc，采出来全是错 pid、空进程名的垃圾。
+agent 启动时会检测命名空间并主动退回轮询——宁可弱一点，也不产出假数据。
 
 采集端默认构建**不依赖任何外部二进制**——protoc 随 crate 分发，`cargo build` 直接可用。
 内核级采集是可选特性，开启后才需要 nightly 工具链：
