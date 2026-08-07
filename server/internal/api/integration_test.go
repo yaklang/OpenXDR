@@ -15,7 +15,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 )
 
@@ -68,7 +70,7 @@ func seed(t *testing.T) (*httptest.Server, uuid.UUID) {
 		t.Fatal(err)
 	}
 
-	ts := httptest.NewServer(Handler(client, loadRules(t)))
+	ts := httptest.NewServer(Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), nil))
 	t.Cleanup(ts.Close)
 	return ts, inc.ID
 }
