@@ -1,0 +1,15 @@
+title: DNS Query to Suspicious TLD
+id: 8f1d3b56-7a29-4e03-b5c8-1d4f9e2a7b60
+status: experimental
+description: 检测查询高滥用率顶级域名，常见于恶意软件的 C2 域名
+logsource:
+  category: dns_query
+detection:
+  selection:
+    query.hostname|endswith:
+      - '.tk'
+      - '.top'
+      - '.xyz'
+      - '.click'
+  condition: selection
+level: medium

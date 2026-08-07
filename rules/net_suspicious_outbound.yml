@@ -1,0 +1,15 @@
+title: Suspicious Outbound Connection to Uncommon Port
+id: 3c5e8a17-4b62-4d91-8f0a-6e2d7b9c1a34
+status: experimental
+description: 检测到非常用高危端口的外连，常见于 C2 回连和远程管理工具滥用
+logsource:
+  category: network_connection
+detection:
+  selection:
+    dst_endpoint.port:
+      - 4444
+      - 5555
+      - 6667
+      - 31337
+  condition: selection
+level: high

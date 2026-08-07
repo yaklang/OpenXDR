@@ -1,0 +1,171 @@
+// Package grpcsvc 实现 agent 专属 gRPC 通道：注册 + 事件流上报。
+package grpcsvc
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"time"
+
+	"github.com/google/uuid"
+
+	"openxdr/server/ent"
+	"openxdr/server/ent/asset"
+	"openxdr/server/internal/sigma"
+	"openxdr/server/pb"
+)
+
+type Server struct {
+	pb.UnimplementedAgentServiceServer
+	DB          *ent.Client
+	Rules       *sigma.Engine
+	DedupWindow time.Duration
+}
+
+func (s *Server) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
+	a, err := s.DB.Asset.Query().Where(asset.HostnameEQ(req.Hostname)).First(ctx)
+	if ent.IsNotFound(err) {
+		a, err = s.DB.Asset.Create().SetHostname(req.Hostname).Save(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	agentID := uuid.Must(uuid.NewV7())
+	if a.AgentID != nil {
+		agentID = *a.AgentID
+	}
+	if err := a.Update().
+		SetOs(req.Os).
+		SetAgentID(agentID).
+		SetIPAddrs(req.IpAddrs).
+		SetLastSeen(time.Now()).
+		Exec(ctx); err != nil {
+		return nil, err
+	}
+	return &pb.RegisterResponse{AgentId: agentID.String()}, nil
+}
+
+func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
+	ctx := stream.Context()
+
+	var received uint64
+	var assetID *uuid.UUID
+	var eventCreates []*ent.EventCreate
+	var alertCreates []*ent.AlertCreate
+
+	// 风暴防线第一层：一条流对应一台主机，告警指纹 (rule_id, asset_id) 在流内就是 rule_id。
+	// 窗口内同指纹只留一行，计数器累加。
+	type dedupState struct {
+		alertID uuid.UUID
+		firstTs time.Time
+		lastTs  time.Time
+		pending int
+	}
+	dedup := map[string]*dedupState{}
+
+	flush := func() error {
+		if len(eventCreates) > 0 {
+			if _, err := s.DB.Event.CreateBulk(eventCreates...).Save(ctx); err != nil {
+				return err
+			}
+			eventCreates = nil
+		}
+		if len(alertCreates) > 0 {
+			if _, err := s.DB.Alert.CreateBulk(alertCreates...).Save(ctx); err != nil {
+				return err
+			}
+			alertCreates = nil
+		}
+		for _, d := range dedup {
+			if d.pending == 0 {
+				continue
+			}
+			if err := s.DB.Alert.UpdateOneID(d.alertID).
+				AddCount(d.pending).
+				SetLastTs(d.lastTs).
+				Exec(ctx); err != nil {
+				return err
+			}
+			d.pending = 0
+		}
+		return nil
+	}
+
+	for {
+		ev, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			if err := flush(); err != nil {
+				return err
+			}
+			return stream.SendAndClose(&pb.ReportAck{Received: received})
+		}
+		if err != nil {
+			_ = flush() // 断流前尽力保住已收的
+			return err
+		}
+
+		if assetID == nil {
+			if agentGUID, err := uuid.Parse(ev.AgentId); err == nil {
+				if a, err := s.DB.Asset.Query().Where(asset.AgentIDEQ(agentGUID)).First(ctx); err == nil {
+					assetID = &a.ID
+				}
+			}
+		}
+
+		raw := json.RawMessage(ev.RawJson)
+		var rawMap map[string]any
+		if json.Unmarshal(raw, &rawMap) != nil {
+			raw = json.RawMessage("{}")
+			rawMap = map[string]any{}
+		}
+
+		eventID := uuid.Must(uuid.NewV7())
+		ts := time.Unix(0, ev.TsUnixNs)
+		ec := s.DB.Event.Create().
+			SetID(eventID).
+			SetTs(ts).
+			SetClassUID(int(ev.ClassUid)).
+			SetSource("agent").
+			SetNillableAssetID(assetID).
+			SetRaw(raw)
+		if pg, err := uuid.Parse(ev.ProcessGuid); err == nil {
+			ec.SetProcessGUID(pg)
+		}
+		if ev.Username != "" {
+			ec.SetUsername(ev.Username)
+		}
+		if ev.ConnTuple != "" {
+			ec.SetConnTuple(ev.ConnTuple)
+		}
+		eventCreates = append(eventCreates, ec)
+
+		for _, rule := range s.Rules.Evaluate(int(ev.ClassUid), rawMap) {
+			if d, ok := dedup[rule.ID]; ok && ts.Sub(d.firstTs) < s.DedupWindow {
+				d.pending++
+				if ts.After(d.lastTs) {
+					d.lastTs = ts
+				}
+				continue
+			}
+			alertID := uuid.Must(uuid.NewV7())
+			alertCreates = append(alertCreates, s.DB.Alert.Create().
+				SetID(alertID).
+				SetTs(ts).
+				SetRuleID(rule.ID).
+				SetSeverity(rule.Severity).
+				SetEventID(eventID).
+				SetNillableAssetID(assetID).
+				SetLastTs(ts))
+			dedup[rule.ID] = &dedupState{alertID: alertID, firstTs: ts, lastTs: ts}
+		}
+
+		// 长连接流，攒批落库
+		if received++; received%500 == 0 {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+}

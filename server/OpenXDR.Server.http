@@ -1,6 +1,0 @@
-@OpenXDR.Server_HostAddress = http://localhost:5117
-
-GET {{OpenXDR.Server_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###

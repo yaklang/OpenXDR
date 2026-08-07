@@ -4,7 +4,7 @@ syntax = "proto3";
 
 package openxdr.agent.v1;
 
-option csharp_namespace = "OpenXDR.Server.Grpc";
+option go_package = "openxdr/server/pb";
 
 service AgentService {
   // agent 启动时注册，server 颁发/找回 agent_id

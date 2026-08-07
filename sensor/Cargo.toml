@@ -1,0 +1,19 @@
+[package]
+name = "openxdr-sensor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+async-channel = "2.5.0"
+async-stream = "0.3.6"
+gethostname = "1.1.0"
+libc = "0.2.189"
+prost = "0.14.4"
+tokio = { version = "1.53.1", features = ["full"] }
+tokio-stream = "0.1.19"
+tonic = "0.14.6"
+tonic-prost = "0.14.6"
+
+[build-dependencies]
+tonic-prost-build = "0.14.6"

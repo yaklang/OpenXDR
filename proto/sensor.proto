@@ -1,0 +1,40 @@
+// OpenXDR sensor <-> server 通信契约。
+// 流量探针专属通道：会话记录批量上报。会话字段与端点事件差异大，独立于 agent.proto。
+syntax = "proto3";
+
+package openxdr.sensor.v1;
+
+option go_package = "openxdr/server/pb";
+
+service SensorService {
+  // 客户端流式上报会话记录，一条长连接批量推
+  rpc ReportFlows(stream FlowBatch) returns (FlowAck);
+}
+
+message FlowBatch {
+  string sensor_id = 1;   // 探针标识，通常是主机名
+  repeated FlowRecord flows = 2;
+  // 内核丢包累计数，用于判断探针是否过载
+  uint64 dropped_packets = 3;
+}
+
+message FlowRecord {
+  int64 start_unix_ns = 1;
+  int64 end_unix_ns = 2;
+  string src_ip = 3;      // 规范化五元组的 a 侧
+  string dst_ip = 4;      // b 侧
+  uint32 src_port = 5;
+  uint32 dst_port = 6;
+  uint32 protocol = 7;    // IANA 协议号：6=TCP, 17=UDP
+  uint64 src_packets = 8;
+  uint64 src_bytes = 9;
+  uint64 dst_packets = 10;
+  uint64 dst_bytes = 11;
+  uint32 tcp_flags = 12;  // 会话期间出现过的 TCP 标志位并集
+  string dns_query = 13;  // 无则空
+  string tls_sni = 14;    // 无则空
+}
+
+message FlowAck {
+  uint64 received = 1;
+}
