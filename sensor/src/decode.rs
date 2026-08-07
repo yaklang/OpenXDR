@@ -14,6 +14,7 @@ const ETHERTYPE_QINQ: u16 = 0x88a8;
 pub const TCP_FIN: u8 = 1 << 0;
 pub const TCP_SYN: u8 = 1 << 1;
 pub const TCP_RST: u8 = 1 << 2;
+pub const TCP_ACK: u8 = 1 << 4;
 
 pub struct Packet<'a> {
     pub src: IpAddr,

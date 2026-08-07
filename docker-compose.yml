@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: openxdr
+      POSTGRES_PASSWORD: openxdr
+      POSTGRES_DB: openxdr
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openxdr"]
+      interval: 5s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://openxdr:openxdr@postgres:5432/openxdr?sslmode=disable
+      RULES_PATH: /rules
+      # AI 研判：留空则不启用。接本地 Ollama 时用 host.docker.internal
+      AI_BASE_URL: ${AI_BASE_URL:-http://host.docker.internal:11434/v1}
+      AI_MODEL: ${AI_MODEL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+    volumes:
+      - ./rules:/rules:ro
+    ports:
+      - "8080:8080"   # REST API
+      - "8081:8081"   # gRPC：agent / sensor 接入
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  web:
+    build: ./web
+    depends_on:
+      - server
+    ports:
+      - "5173:80"
+
+volumes:
+  pgdata:

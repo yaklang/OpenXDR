@@ -13,19 +13,32 @@ const BATCH_INTERVAL: Duration = Duration::from_secs(2);
 
 pub type DroppedCounter = Arc<AtomicU64>;
 
+/// 上报时按客户端→服务端摆正方向：src 恒为发起方，dst 恒为服务端。
+/// 检测规则写 dst_endpoint.port 才有意义。
 pub fn to_record(flow: &Flow) -> pb::FlowRecord {
+    let (src_ip, src_port, dst_ip, dst_port) = if flow.client_is_a {
+        (flow.key.a_ip, flow.key.a_port, flow.key.b_ip, flow.key.b_port)
+    } else {
+        (flow.key.b_ip, flow.key.b_port, flow.key.a_ip, flow.key.a_port)
+    };
+    let (src_packets, src_bytes, dst_packets, dst_bytes) = if flow.client_is_a {
+        (flow.a_to_b_packets, flow.a_to_b_bytes, flow.b_to_a_packets, flow.b_to_a_bytes)
+    } else {
+        (flow.b_to_a_packets, flow.b_to_a_bytes, flow.a_to_b_packets, flow.a_to_b_bytes)
+    };
+
     pb::FlowRecord {
         start_unix_ns: flow.start_ns as i64,
         end_unix_ns: flow.last_ns as i64,
-        src_ip: flow.key.a_ip.to_string(),
-        dst_ip: flow.key.b_ip.to_string(),
-        src_port: flow.key.a_port as u32,
-        dst_port: flow.key.b_port as u32,
+        src_ip: src_ip.to_string(),
+        dst_ip: dst_ip.to_string(),
+        src_port: src_port as u32,
+        dst_port: dst_port as u32,
         protocol: flow.key.proto as u32,
-        src_packets: flow.a_to_b_packets,
-        src_bytes: flow.a_to_b_bytes,
-        dst_packets: flow.b_to_a_packets,
-        dst_bytes: flow.b_to_a_bytes,
+        src_packets,
+        src_bytes,
+        dst_packets,
+        dst_bytes,
         tcp_flags: flow.tcp_flags as u32,
         dns_query: flow.meta.dns_query.clone().unwrap_or_default(),
         tls_sni: flow.meta.tls_sni.clone().unwrap_or_default(),

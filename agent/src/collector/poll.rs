@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use sysinfo::{ProcessesToUpdate, System};
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tokio::sync::mpsc;
 
 use super::process_event;
@@ -13,13 +13,19 @@ use crate::pb::AgentEvent;
 const INTERVAL: Duration = Duration::from_secs(1);
 
 pub async fn run(agent_id: String, tx: mpsc::Sender<AgentEvent>) {
+    // 默认刷新不含命令行/可执行路径/用户，检测规则全靠这几项，必须显式要
+    let kind = ProcessRefreshKind::nothing()
+        .with_cmd(UpdateKind::Always)
+        .with_exe(UpdateKind::Always)
+        .with_user(UpdateKind::Always);
+
     let mut sys = System::new();
-    sys.refresh_processes(ProcessesToUpdate::All, true);
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
     let mut known: HashSet<sysinfo::Pid> = sys.processes().keys().copied().collect();
 
     loop {
         tokio::time::sleep(INTERVAL).await;
-        sys.refresh_processes(ProcessesToUpdate::All, true);
+        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
 
         let current: HashSet<sysinfo::Pid> = sys.processes().keys().copied().collect();
         for pid in current.difference(&known) {

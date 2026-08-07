@@ -27,8 +27,12 @@ struct TpacketReq3 {
     tp_feature_req_word: libc::c_uint,
 }
 
+/// 对应内核 struct tpacket_block_desc：前两个字段是 version 和 offset_to_priv，
+/// 之后才是 tpacket_hdr_v1。少了这 8 字节会把 version 当成 block_status 读。
 #[repr(C)]
 struct BlockDescV1 {
+    version: u32,
+    offset_to_priv: u32,
     block_status: u32,
     num_pkts: u32,
     offset_to_first_pkt: u32,
@@ -176,6 +180,12 @@ impl AfPacket {
                 }
                 return Err(err);
             }
+            if pfd.revents & (libc::POLLERR | libc::POLLNVAL | libc::POLLHUP) != 0 {
+                return Err(io::Error::other(format!(
+                    "抓包套接字异常: revents={:#x}",
+                    pfd.revents
+                )));
+            }
             return Ok(n > 0);
         }
     }
@@ -185,9 +195,15 @@ impl Capture for AfPacket {
     fn poll_batch(&mut self, f: &mut dyn FnMut(&[u8], u64)) -> io::Result<usize> {
         let desc = self.block_ptr(self.next_block);
 
-        // 内核写完整块才置 TP_STATUS_USER；未就绪就 poll 等
+        // 内核写完整块才置 TP_STATUS_USER；未就绪就 poll 等。
+        // poll 可能报可读但当前块尚未retire，限次让出，避免空转饿死上层的老化与统计。
+        let mut attempts = 0;
         while unsafe { std::ptr::read_volatile(&(*desc).block_status) } & TP_STATUS_USER == 0 {
             if !self.wait_block()? {
+                return Ok(0);
+            }
+            attempts += 1;
+            if attempts >= 8 {
                 return Ok(0);
             }
         }

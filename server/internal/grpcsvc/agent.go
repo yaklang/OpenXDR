@@ -47,8 +47,39 @@ func (s *Server) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.Reg
 	return &pb.RegisterResponse{AgentId: agentID.String()}, nil
 }
 
+// 攒批落库的两个触发条件：满 batchSize 条，或距上次落库超过 flushInterval。
+// 只按条数会让低流量的 agent 长时间不落库，事件在 server 内存里干等。
+const (
+	batchSize     = 500
+	flushInterval = 2 * time.Second
+)
+
 func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 	ctx := stream.Context()
+
+	// stream.Recv 是阻塞调用，挪进 goroutine 才能和定时 flush 一起 select
+	type recvResult struct {
+		ev  *pb.AgentEvent
+		err error
+	}
+	recvCh := make(chan recvResult)
+	go func() {
+		defer close(recvCh)
+		for {
+			ev, err := stream.Recv()
+			select {
+			case recvCh <- recvResult{ev, err}:
+				if err != nil {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	ticker := time.NewTicker(flushInterval)
+	defer ticker.Stop()
 
 	var received uint64
 	var assetID *uuid.UUID
@@ -94,16 +125,28 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 	}
 
 	for {
-		ev, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
+		var ev *pb.AgentEvent
+		select {
+		case <-ticker.C:
 			if err := flush(); err != nil {
 				return err
 			}
-			return stream.SendAndClose(&pb.ReportAck{Received: received})
-		}
-		if err != nil {
-			_ = flush() // 断流前尽力保住已收的
-			return err
+			continue
+		case result, ok := <-recvCh:
+			if !ok {
+				return ctx.Err()
+			}
+			if errors.Is(result.err, io.EOF) {
+				if err := flush(); err != nil {
+					return err
+				}
+				return stream.SendAndClose(&pb.ReportAck{Received: received})
+			}
+			if result.err != nil {
+				_ = flush() // 断流前尽力保住已收的
+				return result.err
+			}
+			ev = result.ev
 		}
 
 		if assetID == nil {
@@ -162,7 +205,7 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 		}
 
 		// 长连接流，攒批落库
-		if received++; received%500 == 0 {
+		if received++; received%batchSize == 0 {
 			if err := flush(); err != nil {
 				return err
 			}

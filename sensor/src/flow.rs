@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-use crate::decode::{Packet, IPPROTO_TCP, TCP_FIN, TCP_RST};
+use crate::decode::{Packet, IPPROTO_TCP, TCP_ACK, TCP_FIN, TCP_RST, TCP_SYN};
 
 /// 规范化五元组：小端在前，双向流量归并到同一条流。
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -60,6 +60,9 @@ pub struct Flow {
     pub meta: Metadata,
     /// 已尝试过协议识别，不再重复解析
     pub probed: bool,
+    /// a 侧是否为客户端。五元组按大小归一化会丢掉方向，
+    /// 而"谁是服务端"是网络检测的基本前提，必须单独记住。
+    pub client_is_a: bool,
 }
 
 impl Flow {
@@ -119,6 +122,14 @@ impl FlowTable {
             return None;
         }
 
+        // 方向判定：SYN 且无 ACK 的发送方是客户端；SYN+ACK 的发送方是服务端；
+        // 都不是（UDP、或从中途开始观察的 TCP）则以首包发送方为客户端。
+        let client_is_a = match pkt.tcp_flags & (TCP_SYN | TCP_ACK) {
+            TCP_SYN => forward,
+            f if f == TCP_SYN | TCP_ACK => !forward,
+            _ => forward,
+        };
+
         let flow = self.flows.entry(key).or_insert_with(|| Flow {
             key,
             start_ns: ts_ns,
@@ -130,6 +141,7 @@ impl FlowTable {
             tcp_flags: 0,
             meta: Metadata::default(),
             probed: false,
+            client_is_a,
         });
 
         flow.last_ns = ts_ns;

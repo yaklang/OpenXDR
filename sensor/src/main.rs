@@ -23,6 +23,9 @@ use flow::FlowTable;
 /// 上报队列容量：server 断线时的缓冲，满了丢弃并计数——探针绝不因为上报慢而丢包
 const REPORT_QUEUE: usize = 65536;
 
+/// 运行统计打印间隔
+const STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let iface = std::env::var("SENSOR_IFACE").unwrap_or_else(|_| "eth0".into());
@@ -77,9 +80,13 @@ fn worker(
     let mut expired = Vec::new();
     let mut last_ts_ns = 0u64;
     let mut queue_drops = 0u64;
+    let mut packets = 0u64;
+    let mut exported = 0u64;
+    let mut last_stats = std::time::Instant::now();
 
     while running.load(Ordering::Relaxed) {
         cap.poll_batch(&mut |frame, ts_ns| {
+            packets += 1;
             last_ts_ns = ts_ns;
             let Some(pkt) = decode::decode(frame) else { return };
             if let Some((flow, _forward)) = table.update(&pkt, ts_ns) {
@@ -89,12 +96,23 @@ fn worker(
 
         table.expire(last_ts_ns, &mut expired);
         for f in expired.drain(..) {
+            exported += 1;
             // 上报队列满时丢弃会话记录，绝不阻塞抓包线程
             if tx.try_send(report::to_record(&f)).is_err() {
                 queue_drops += 1;
             }
         }
         dropped.store(cap.dropped() + queue_drops, Ordering::Relaxed);
+
+        if last_stats.elapsed() >= STATS_INTERVAL {
+            eprintln!(
+                "worker {id}: packets={packets} flows={} exported={exported} \
+                 kernel_drops={} queue_drops={queue_drops}",
+                table.len(),
+                cap.dropped()
+            );
+            last_stats = std::time::Instant::now();
+        }
     }
 
     table.drain_all(&mut expired);

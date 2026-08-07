@@ -47,6 +47,52 @@
 | `rules/` | 检测规则（Sigma 兼容） |
 | `docs/` | 设计文档 |
 
+## 快速开始
+
+```bash
+# 启动 Postgres + server + web
+docker compose up -d
+# 界面: http://localhost:5173   API: http://localhost:8080   gRPC 接入: 8081
+```
+
+数据库表由 server 启动时自动创建，无需手动迁移。
+
+启用 AI 研判（不配置则只做规则告警和关联，不调用模型）：
+
+```bash
+AI_MODEL=qwen3 docker compose up -d   # 默认接本机 Ollama
+```
+
+采集端各自构建部署到被监控主机：
+
+```bash
+# 端点 agent（Linux 需 root 才能用 eBPF，否则自动回落轮询采集）
+cd agent && cargo build --release
+sudo OPENXDR_SERVER=http://<server>:8081 ./target/release/openxdr-agent
+
+# 流量探针（需 root，网卡接核心交换机镜像口）
+cd sensor && cargo build --release
+sudo env SENSOR_IFACE=eth0 OPENXDR_SERVER=http://<server>:8081 ./target/release/openxdr-sensor
+```
+
+> agent 的 eBPF 字节码在构建时编译，需要 `rustup toolchain install nightly --component rust-src`
+> 和 `cargo +nightly install bpf-linker`。
+
+## 配置
+
+server 全部通过环境变量配置，均有默认值：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `DATABASE_URL` | `postgres://openxdr:openxdr@localhost:5432/openxdr?sslmode=disable` | 数据库连接串 |
+| `RULES_PATH` | `../rules` | Sigma 规则目录 |
+| `HTTP_ADDR` / `GRPC_ADDR` | `:8080` / `:8081` | 监听地址 |
+| `ALERT_DEDUP_WINDOW_MINUTES` | `5` | 告警去重窗口 |
+| `CORRELATE_WINDOW_MINUTES` | `30` | 关联时间窗 |
+| `CORRELATE_MAX_GRAPH_NODES` | `500` | 单个事件图节点上限 |
+| `AI_MODEL` | 空（不启用） | 研判模型名 |
+| `AI_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点 |
+
 ## 技术栈
 
 - **Agent**: Rust（eBPF / ETW）

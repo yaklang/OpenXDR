@@ -167,13 +167,14 @@ func Handler(db *ent.Client, rules *sigma.Engine) http.Handler {
 			ID        uuid.UUID  `json:"id"`
 			Hostname  string     `json:"hostname"`
 			Os        *string    `json:"os"`
+			IPAddrs   []string   `json:"ipAddrs"`
 			AgentID   *uuid.UUID `json:"agentId"`
 			FirstSeen time.Time  `json:"firstSeen"`
 			LastSeen  time.Time  `json:"lastSeen"`
 		}
 		out := make([]assetRow, len(assets))
 		for i, a := range assets {
-			out[i] = assetRow{a.ID, a.Hostname, a.Os, a.AgentID, a.FirstSeen, a.LastSeen}
+			out[i] = assetRow{a.ID, a.Hostname, a.Os, a.IPAddrs, a.AgentID, a.FirstSeen, a.LastSeen}
 		}
 		writeJSON(w, out)
 	})
