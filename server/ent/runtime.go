@@ -5,11 +5,14 @@ package ent
 import (
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/asset"
+	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/schema"
+	"openxdr/server/ent/session"
 	"openxdr/server/ent/suppression"
+	"openxdr/server/ent/user"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,6 +46,16 @@ func init() {
 	assetDescID := assetFields[0].Descriptor()
 	// asset.DefaultID holds the default value on creation for the id field.
 	asset.DefaultID = assetDescID.Default.(func() uuid.UUID)
+	auditlogFields := schema.AuditLog{}.Fields()
+	_ = auditlogFields
+	// auditlogDescTs is the schema descriptor for ts field.
+	auditlogDescTs := auditlogFields[1].Descriptor()
+	// auditlog.DefaultTs holds the default value on creation for the ts field.
+	auditlog.DefaultTs = auditlogDescTs.Default.(func() time.Time)
+	// auditlogDescID is the schema descriptor for id field.
+	auditlogDescID := auditlogFields[0].Descriptor()
+	// auditlog.DefaultID holds the default value on creation for the id field.
+	auditlog.DefaultID = auditlogDescID.Default.(func() uuid.UUID)
 	commandFields := schema.Command{}.Fields()
 	_ = commandFields
 	// commandDescCreatedAt is the schema descriptor for created_at field.
@@ -85,6 +98,16 @@ func init() {
 	incidentDescID := incidentFields[0].Descriptor()
 	// incident.DefaultID holds the default value on creation for the id field.
 	incident.DefaultID = incidentDescID.Default.(func() uuid.UUID)
+	sessionFields := schema.Session{}.Fields()
+	_ = sessionFields
+	// sessionDescCreatedAt is the schema descriptor for created_at field.
+	sessionDescCreatedAt := sessionFields[1].Descriptor()
+	// session.DefaultCreatedAt holds the default value on creation for the created_at field.
+	session.DefaultCreatedAt = sessionDescCreatedAt.Default.(func() time.Time)
+	// sessionDescID is the schema descriptor for id field.
+	sessionDescID := sessionFields[0].Descriptor()
+	// session.DefaultID holds the default value on creation for the id field.
+	session.DefaultID = sessionDescID.Default.(func() uuid.UUID)
 	suppressionFields := schema.Suppression{}.Fields()
 	_ = suppressionFields
 	// suppressionDescCreatedAt is the schema descriptor for created_at field.
@@ -103,4 +126,14 @@ func init() {
 	suppressionDescID := suppressionFields[0].Descriptor()
 	// suppression.DefaultID holds the default value on creation for the id field.
 	suppression.DefaultID = suppressionDescID.Default.(func() uuid.UUID)
+	userFields := schema.User{}.Fields()
+	_ = userFields
+	// userDescCreatedAt is the schema descriptor for created_at field.
+	userDescCreatedAt := userFields[1].Descriptor()
+	// user.DefaultCreatedAt holds the default value on creation for the created_at field.
+	user.DefaultCreatedAt = userDescCreatedAt.Default.(func() time.Time)
+	// userDescID is the schema descriptor for id field.
+	userDescID := userFields[0].Descriptor()
+	// user.DefaultID holds the default value on creation for the id field.
+	user.DefaultID = userDescID.Default.(func() uuid.UUID)
 }

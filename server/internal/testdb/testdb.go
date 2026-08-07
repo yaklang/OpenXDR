@@ -51,6 +51,9 @@ func truncate(ctx context.Context, t *testing.T, c *ent.Client) {
 		func(ctx context.Context) (int, error) { return c.Event.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.Incident.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.Asset.Delete().Exec(ctx) },
+		func(ctx context.Context) (int, error) { return c.Session.Delete().Exec(ctx) },
+		func(ctx context.Context) (int, error) { return c.User.Delete().Exec(ctx) },
+		func(ctx context.Context) (int, error) { return c.AuditLog.Delete().Exec(ctx) },
 	}
 	for i, del := range dels {
 		if _, err := del(ctx); err != nil {

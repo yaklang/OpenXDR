@@ -52,11 +52,48 @@ export interface IncidentDetail extends Omit<IncidentSummary, 'alertCount'> {
   alerts: AlertRow[]
 }
 
+// 会话失效时抛出，App 捕获后切回登录页
+export class Unauthorized extends Error {}
+
+function check(r: Response) {
+  if (r.status === 401) throw new Unauthorized()
+}
+
 async function get<T>(url: string): Promise<T> {
   const r = await fetch(url)
+  check(r)
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
   return r.json()
 }
+
+async function post(url: string, body?: unknown): Promise<Response> {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  check(r)
+  return r
+}
+
+export interface Me {
+  username: string
+  role: 'admin' | 'analyst' | 'viewer'
+}
+
+export const fetchMe = () => get<Me>('/api/me')
+
+export async function login(username: string, password: string): Promise<Me> {
+  const r = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export const logout = () => post('/api/logout')
 
 export const fetchIncidents = (status?: string) =>
   get<IncidentSummary[]>(status ? `/api/incidents?status=${status}` : '/api/incidents')
@@ -64,11 +101,7 @@ export const fetchIncidents = (status?: string) =>
 export const fetchIncident = (id: string) => get<IncidentDetail>(`/api/incidents/${id}`)
 
 export async function setIncidentStatus(id: string, status: string): Promise<void> {
-  const r = await fetch(`/api/incidents/${id}/status`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status }),
-  })
+  const r = await post(`/api/incidents/${id}/status`, { status })
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
 }
 
@@ -95,11 +128,7 @@ export async function issueCommand(body: {
   pid?: number
   dryRun: boolean
 }): Promise<CommandRow> {
-  const r = await fetch('/api/commands', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+  const r = await post('/api/commands', body)
   if (!r.ok) throw new Error(await r.text())
   return r.json()
 }
@@ -137,16 +166,55 @@ export async function createSuppression(body: {
   reason?: string
   expiresInDays?: number
 }): Promise<Suppression> {
-  const r = await fetch('/api/suppressions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+  const r = await post('/api/suppressions', body)
   if (!r.ok) throw new Error(await r.text())
   return r.json()
 }
 
 export async function deleteSuppression(id: string): Promise<void> {
   const r = await fetch(`/api/suppressions/${id}`, { method: 'DELETE' })
+  check(r)
   if (!r.ok) throw new Error(await r.text())
 }
+
+export interface UserRow {
+  id: string
+  createdAt: string
+  username: string
+  role: string
+}
+
+export const fetchUsers = () => get<UserRow[]>('/api/users')
+
+export async function createUser(body: {
+  username: string
+  password: string
+  role: string
+}): Promise<UserRow> {
+  const r = await post('/api/users', body)
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  const r = await fetch(`/api/users/${id}`, { method: 'DELETE' })
+  check(r)
+  if (!r.ok) throw new Error(await r.text())
+}
+
+export async function resetUserPassword(id: string, password: string): Promise<void> {
+  const r = await post(`/api/users/${id}/password`, { password })
+  if (!r.ok) throw new Error(await r.text())
+}
+
+export interface AuditRow {
+  id: string
+  ts: string
+  username: string
+  action: string
+  target: string | null
+  detail: string | null
+  remoteAddr: string
+}
+
+export const fetchAudit = () => get<AuditRow[]>('/api/audit')

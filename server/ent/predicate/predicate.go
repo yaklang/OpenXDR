@@ -12,6 +12,9 @@ type Alert func(*sql.Selector)
 // Asset is the predicate function for asset builders.
 type Asset func(*sql.Selector)
 
+// AuditLog is the predicate function for auditlog builders.
+type AuditLog func(*sql.Selector)
+
 // Command is the predicate function for command builders.
 type Command func(*sql.Selector)
 
@@ -21,5 +24,11 @@ type Event func(*sql.Selector)
 // Incident is the predicate function for incident builders.
 type Incident func(*sql.Selector)
 
+// Session is the predicate function for session builders.
+type Session func(*sql.Selector)
+
 // Suppression is the predicate function for suppression builders.
 type Suppression func(*sql.Selector)
+
+// User is the predicate function for user builders.
+type User func(*sql.Selector)

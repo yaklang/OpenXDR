@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/asset"
+	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
+	"openxdr/server/ent/session"
 	"openxdr/server/ent/suppression"
+	"openxdr/server/ent/user"
 	"reflect"
 	"sync"
 
@@ -80,10 +83,13 @@ func checkColumn(t, c string) error {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
 			alert.Table:       alert.ValidColumn,
 			asset.Table:       asset.ValidColumn,
+			auditlog.Table:    auditlog.ValidColumn,
 			command.Table:     command.ValidColumn,
 			event.Table:       event.ValidColumn,
 			incident.Table:    incident.ValidColumn,
+			session.Table:     session.ValidColumn,
 			suppression.Table: suppression.ValidColumn,
+			user.Table:        user.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

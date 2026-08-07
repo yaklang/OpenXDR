@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { createSuppression, type AlertRow } from './api'
+import { useI18n } from './i18n'
 
 /// 标记误报后弹出：让分析师顺手把噪声源掐掉，而不是明天再看一遍同样的告警。
 export function SuppressDialog({
@@ -11,6 +12,7 @@ export function SuppressDialog({
   assetId: string | null
   onClose: () => void
 }) {
+  const { t } = useI18n()
   // 同一事件可能由多条规则触发，逐条选择要抑制哪些
   const rules = Array.from(
     new Map(alerts.map(a => [a.ruleId, a.ruleTitle ?? a.ruleId])).entries(),
@@ -45,11 +47,8 @@ export function SuppressDialog({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
-        <h3>抑制这些规则？</h3>
-        <p className="muted small">
-          抑制后这些规则不再产生告警，但事件仍然入库。被压掉的次数会记录下来，
-          可在抑制列表查看和撤销。
-        </p>
+        <h3>{t('suppressTitle')}</h3>
+        <p className="muted small">{t('suppressExplain')}</p>
 
         {rules.map(([id, title]) => (
           <label key={id} className="check-row">
@@ -74,36 +73,36 @@ export function SuppressDialog({
             onChange={e => setScopeAsset(e.target.checked)}
           />
           <span>
-            仅对本主机生效
-            {!scopeAsset && <strong className="sev-5">（将对所有主机生效）</strong>}
+            {t('scopeThisHost')}
+            {!scopeAsset && <strong className="sev-5">{t('scopeAllWarning')}</strong>}
           </span>
         </label>
 
         <label className="field">
-          有效期
+          {t('validity')}
           <select value={days} onChange={e => setDays(Number(e.target.value))}>
-            <option value={7}>7 天</option>
-            <option value={30}>30 天</option>
-            <option value={90}>90 天</option>
-            <option value={0}>长期</option>
+            <option value={7}>{t('days', { n: 7 })}</option>
+            <option value={30}>{t('days', { n: 30 })}</option>
+            <option value={90}>{t('days', { n: 90 })}</option>
+            <option value={0}>{t('longTerm')}</option>
           </select>
         </label>
 
         <label className="field">
-          原因
+          {t('reason')}
           <input
             type="text"
             value={reason}
-            placeholder="例如：运维扫描器已知噪声"
+            placeholder={t('reasonPlaceholder')}
             onChange={e => setReason(e.target.value)}
           />
         </label>
 
         {error && <div className="error">{error}</div>}
         <div className="actions modal-actions">
-          <button onClick={onClose}>跳过</button>
+          <button onClick={onClose}>{t('skip')}</button>
           <button disabled={busy || selected.length === 0} onClick={submit}>
-            创建 {selected.length} 条抑制
+            {t('createSuppressions', { n: selected.length })}
           </button>
         </div>
       </div>

@@ -9,6 +9,7 @@ import (
 
 	"openxdr/server/ent"
 	entsuppression "openxdr/server/ent/suppression"
+	"openxdr/server/internal/audit"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 )
@@ -69,7 +70,7 @@ func mapSuppressions(api *http.ServeMux, db *ent.Client, store *suppress.Store, 
 		create := db.Suppression.Create().
 			SetRuleID(body.RuleID).
 			SetNillableAssetID(body.AssetID).
-			SetCreatedBy(issuer(r))
+			SetCreatedBy(audit.Actor(r.Context()))
 		if body.Reason != "" {
 			create.SetReason(body.Reason)
 		}
@@ -83,6 +84,7 @@ func mapSuppressions(api *http.ServeMux, db *ent.Client, store *suppress.Store, 
 		}
 		// 立即生效，不必等下一个重载周期
 		store.Reload(r.Context())
+		audit.Log(r.Context(), db, r, "suppression_created", s.ID.String(), body.RuleID)
 		w.WriteHeader(http.StatusCreated)
 		writeJSON(w, suppressionRow{
 			ID: s.ID, CreatedAt: s.CreatedAt, RuleID: s.RuleID, AssetID: s.AssetID,
@@ -106,6 +108,7 @@ func mapSuppressions(api *http.ServeMux, db *ent.Client, store *suppress.Store, 
 			return
 		}
 		store.Reload(r.Context())
+		audit.Log(r.Context(), db, r, "suppression_deleted", id.String(), "")
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

@@ -57,6 +57,11 @@ docker compose up -d
 
 数据库表由 server 启动时自动创建，无需手动迁移。
 
+首次启动会创建 `admin` 账号：密码取 `ADMIN_PASSWORD` 环境变量，
+未配置则随机生成并打印在 server 日志里（`docker compose logs server | grep admin`）。
+登录后可在界面里建号，角色三档：admin（用户管理）/ analyst（研判与处置）/ viewer（只读）。
+所有登录与处置操作都有审计日志，admin 可在界面查看。
+
 启用 AI 研判（不配置则只做规则告警和关联，不调用模型）：
 
 ```bash

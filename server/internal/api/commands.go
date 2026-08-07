@@ -9,6 +9,7 @@ import (
 
 	"openxdr/server/ent"
 	entcommand "openxdr/server/ent/command"
+	"openxdr/server/internal/audit"
 	"openxdr/server/internal/response"
 )
 
@@ -67,7 +68,7 @@ func mapCommands(api *http.ServeMux, db *ent.Client, hub *response.Hub, selfEndp
 			IncidentID:  body.IncidentID,
 			ProcessGUID: body.ProcessGUID,
 			PID:         body.PID,
-			IssuedBy:    issuer(r),
+			IssuedBy:    audit.Actor(r.Context()),
 		}
 		// 隔离必须放行 server 自身，否则 agent 失联后再也解除不了
 		if body.Kind == "isolate_host" {
@@ -79,6 +80,11 @@ func mapCommands(api *http.ServeMux, db *ent.Client, hub *response.Hub, selfEndp
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
+		mode := "live"
+		if dryRun {
+			mode = "dry-run"
+		}
+		audit.Log(r.Context(), db, r, "command_issued", cmd.ID.String(), body.Kind+" ("+mode+")")
 		w.WriteHeader(http.StatusAccepted)
 		writeJSON(w, toRow(cmd))
 	})
@@ -104,13 +110,4 @@ func mapCommands(api *http.ServeMux, db *ent.Client, hub *response.Hub, selfEndp
 		}
 		writeJSON(w, out)
 	})
-}
-
-// issuer 记录下发者。目前没有认证体系，退回调用方地址，
-// 至少让审计能追到来源；接入认证后换成用户身份。
-func issuer(r *http.Request) string {
-	if u := r.Header.Get("X-OpenXDR-User"); u != "" {
-		return u
-	}
-	return r.RemoteAddr
 }

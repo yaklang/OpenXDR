@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useState } from 'react'
 import { fetchCommands, issueCommand, type CommandRow } from './api'
+import { useI18n, type MsgKey } from './i18n'
 
-const STATUS_LABEL: Record<string, string> = {
-  pending: '待下发',
-  sent: '已下发',
-  succeeded: '成功',
-  failed: '失败',
-  unsupported: '不支持',
+const STATUS_KEY: Record<string, MsgKey> = {
+  pending: 'cmdPending',
+  sent: 'cmdSent',
+  succeeded: 'cmdSucceeded',
+  failed: 'cmdFailed',
+  unsupported: 'cmdUnsupported',
 }
 
-const KIND_LABEL: Record<string, string> = {
-  kill_process: '结束进程',
-  isolate_host: '隔离主机',
-  unisolate_host: '解除隔离',
+const KIND_KEY: Record<string, MsgKey> = {
+  kill_process: 'killProcess',
+  isolate_host: 'isolateHost',
+  unisolate_host: 'unisolateHost',
 }
 
 const fmt = (iso: string) => new Date(iso).toLocaleString()
@@ -20,10 +21,13 @@ const fmt = (iso: string) => new Date(iso).toLocaleString()
 export function ResponsePanel({
   incidentId,
   assetId,
+  canAct,
 }: {
   incidentId: string
   assetId: string | null
+  canAct: boolean
 }) {
+  const { t } = useI18n()
   const [history, setHistory] = useState<CommandRow[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -44,7 +48,7 @@ export function ResponsePanel({
 
   const issue = async (kind: string) => {
     if (!assetId) return
-    if (live && !confirm(`确认对该主机执行「${KIND_LABEL[kind]}」？这会立即生效。`)) return
+    if (live && !confirm(t('confirmLive', { kind: t(KIND_KEY[kind]) }))) return
     setBusy(true)
     setError(null)
     try {
@@ -58,36 +62,41 @@ export function ResponsePanel({
   }
 
   if (!assetId) {
-    return <div className="card muted">该事件没有归属主机，无法下发响应指令</div>
+    return <div className="card muted">{t('noAssetForResponse')}</div>
   }
 
   return (
     <div className="card">
-      <div className="response-head">
-        <label className={`live-toggle ${live ? 'live-on' : ''}`}>
-          <input type="checkbox" checked={live} onChange={e => setLive(e.target.checked)} />
-          {live ? '真实执行' : '演练模式'}
-        </label>
-        <div className="actions">
-          <button disabled={busy} onClick={() => issue('isolate_host')}>隔离主机</button>
-          <button disabled={busy} onClick={() => issue('unisolate_host')}>解除隔离</button>
+      {canAct && (
+        <div className="response-head">
+          <label className={`live-toggle ${live ? 'live-on' : ''}`}>
+            <input type="checkbox" checked={live} onChange={e => setLive(e.target.checked)} />
+            {live ? t('liveMode') : t('drillMode')}
+          </label>
+          <div className="actions">
+            <button disabled={busy} onClick={() => issue('isolate_host')}>{t('isolateHost')}</button>
+            <button disabled={busy} onClick={() => issue('unisolate_host')}>{t('unisolateHost')}</button>
+          </div>
         </div>
-      </div>
-      {!live && <p className="muted small">演练模式只报告将要执行的动作，不产生任何实际影响。</p>}
+      )}
+      {canAct && !live && <p className="muted small">{t('drillNote')}</p>}
       {error && <div className="error">{error}</div>}
 
       {history.length > 0 && (
         <table>
           <thead>
-            <tr><th>时间</th><th>动作</th><th>模式</th><th>状态</th><th>结果</th></tr>
+            <tr>
+              <th>{t('thTime')}</th><th>{t('thAction')}</th><th>{t('thMode')}</th>
+              <th>{t('thStatus')}</th><th>{t('thResult')}</th>
+            </tr>
           </thead>
           <tbody>
             {history.map(c => (
               <tr key={c.id}>
                 <td>{fmt(c.createdAt)}</td>
-                <td>{KIND_LABEL[c.kind] ?? c.kind}</td>
-                <td>{c.dryRun ? '演练' : <span className="sev-5">真实</span>}</td>
-                <td className={`cmd-${c.status}`}>{STATUS_LABEL[c.status] ?? c.status}</td>
+                <td>{KIND_KEY[c.kind] ? t(KIND_KEY[c.kind]) : c.kind}</td>
+                <td>{c.dryRun ? t('drill') : <span className="sev-5">{t('live')}</span>}</td>
+                <td className={`cmd-${c.status}`}>{STATUS_KEY[c.status] ? t(STATUS_KEY[c.status]) : c.status}</td>
                 <td className="cmd-detail" title={c.detail ?? ''}>{c.detail}</td>
               </tr>
             ))}

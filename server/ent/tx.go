@@ -16,14 +16,20 @@ type Tx struct {
 	Alert *AlertClient
 	// Asset is the client for interacting with the Asset builders.
 	Asset *AssetClient
+	// AuditLog is the client for interacting with the AuditLog builders.
+	AuditLog *AuditLogClient
 	// Command is the client for interacting with the Command builders.
 	Command *CommandClient
 	// Event is the client for interacting with the Event builders.
 	Event *EventClient
 	// Incident is the client for interacting with the Incident builders.
 	Incident *IncidentClient
+	// Session is the client for interacting with the Session builders.
+	Session *SessionClient
 	// Suppression is the client for interacting with the Suppression builders.
 	Suppression *SuppressionClient
+	// User is the client for interacting with the User builders.
+	User *UserClient
 
 	// lazily loaded.
 	client     *Client
@@ -157,10 +163,13 @@ func (tx *Tx) Client() *Client {
 func (tx *Tx) init() {
 	tx.Alert = NewAlertClient(tx.config)
 	tx.Asset = NewAssetClient(tx.config)
+	tx.AuditLog = NewAuditLogClient(tx.config)
 	tx.Command = NewCommandClient(tx.config)
 	tx.Event = NewEventClient(tx.config)
 	tx.Incident = NewIncidentClient(tx.config)
+	tx.Session = NewSessionClient(tx.config)
 	tx.Suppression = NewSuppressionClient(tx.config)
+	tx.User = NewUserClient(tx.config)
 }
 
 // txDriver wraps the given dialect.Tx with a nop dialect.Driver implementation.

@@ -236,6 +236,21 @@ h3 { font-size: 14px; color: var(--muted); margin: 24px 0 8px; }
   padding: 0;
 }
 
+.subnav {
+  padding: 8px 16px 0;
+  font-size: 12px;
+}
+
+.login-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+}
+
+.login-box { width: 320px; }
+.login-box h1 { margin: 0 0 12px; font-size: 20px; letter-spacing: 1px; text-align: center; }
+
 .modal-backdrop {
   position: fixed;
   inset: 0;

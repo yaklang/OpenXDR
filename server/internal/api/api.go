@@ -13,6 +13,7 @@ import (
 	"openxdr/server/ent/alert"
 	entasset "openxdr/server/ent/asset"
 	"openxdr/server/ent/incident"
+	"openxdr/server/internal/audit"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
@@ -53,6 +54,7 @@ func Handler(db *ent.Client, rules *sigma.Engine, hub *response.Hub, suppression
 	mux := http.NewServeMux()
 	mapCommands(mux, db, hub, selfEndpoints)
 	mapSuppressions(mux, db, suppressions, rules)
+	mapUsers(mux, db)
 
 	mux.HandleFunc("GET /api/incidents", func(w http.ResponseWriter, r *http.Request) {
 		q := db.Incident.Query()
@@ -165,6 +167,7 @@ func Handler(db *ent.Client, rules *sigma.Engine, hub *response.Hub, suppression
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		audit.Log(r.Context(), db, r, "incident_status", id.String(), body.Status)
 		w.WriteHeader(http.StatusNoContent)
 	})
 

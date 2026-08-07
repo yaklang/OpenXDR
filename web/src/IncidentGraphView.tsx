@@ -1,4 +1,5 @@
 import type { Graph, GraphNode } from './api'
+import { useI18n } from './i18n'
 
 // 中间一列既放进程也放连接：端点证据和流量证据在同一层
 const COLUMNS = ['asset', 'process', 'connection', 'alert'] as const
@@ -14,6 +15,7 @@ const COLORS: Record<string, string> = {
 }
 
 export function IncidentGraphView({ graph }: { graph: Graph }) {
+  const { t } = useI18n()
   const columns: Record<string, GraphNode[]> = { asset: [], process: [], connection: [], alert: [] }
   for (const node of graph.nodes) (columns[node.type] ?? columns.process).push(node)
 
@@ -77,7 +79,9 @@ export function IncidentGraphView({ graph }: { graph: Graph }) {
           )
         })}
       </svg>
-      {graph.overflow > 0 && <div className="graph-overflow">+{graph.overflow} 条告警未入图</div>}
+      {graph.overflow > 0 && (
+        <div className="graph-overflow">{t('graphOverflow', { n: graph.overflow })}</div>
+      )}
     </div>
   )
 }

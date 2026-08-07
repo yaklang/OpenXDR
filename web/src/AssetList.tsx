@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchAssets, type Asset } from './api'
+import { useI18n } from './i18n'
 
 const fmt = (iso: string) => new Date(iso).toLocaleString()
 
@@ -7,6 +8,7 @@ const fmt = (iso: string) => new Date(iso).toLocaleString()
 const STALE_MS = 5 * 60_000
 
 export function AssetList({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n()
   const [rows, setRows] = useState<Asset[]>([])
 
   useEffect(() => {
@@ -16,15 +18,15 @@ export function AssetList({ onClose }: { onClose: () => void }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal modal-wide" onClick={e => e.stopPropagation()}>
-        <h3>资产清单（{rows.length}）</h3>
+        <h3>{t('assetListTitle', { n: rows.length })}</h3>
         {rows.length === 0 ? (
-          <p className="muted">还没有资产。agent 上线或日志接入后会自动登记。</p>
+          <p className="muted">{t('noAssets')}</p>
         ) : (
           <table>
             <thead>
               <tr>
-                <th></th><th>主机名</th><th>OS</th><th>IP</th>
-                <th>来源</th><th>最近心跳</th>
+                <th></th><th>{t('thHostname')}</th><th>OS</th><th>{t('thIP')}</th>
+                <th>{t('thSource')}</th><th>{t('thLastSeen')}</th>
               </tr>
             </thead>
             <tbody>
@@ -33,21 +35,21 @@ export function AssetList({ onClose }: { onClose: () => void }) {
                   <td>
                     <span
                       className={`dot ${Date.now() - Date.parse(a.lastSeen) < STALE_MS ? 'dot-benign' : 'dot-stale'}`}
-                      title={Date.now() - Date.parse(a.lastSeen) < STALE_MS ? '在线' : '失联'}
+                      title={Date.now() - Date.parse(a.lastSeen) < STALE_MS ? t('online') : t('stale')}
                     />
                   </td>
                   <td>{a.hostname}</td>
                   <td className="muted">{a.os ?? '-'}</td>
                   <td className="muted">{a.ipAddrs?.join(', ') ?? '-'}</td>
-                  <td className="muted">{a.agentId ? 'agent' : '日志'}</td>
-                  <td title={`首次发现 ${fmt(a.firstSeen)}`}>{fmt(a.lastSeen)}</td>
+                  <td className="muted">{a.agentId ? t('sourceAgent') : t('sourceLog')}</td>
+                  <td title={t('firstSeenAt', { time: fmt(a.firstSeen) })}>{fmt(a.lastSeen)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
         <div className="actions modal-actions">
-          <button onClick={onClose}>关闭</button>
+          <button onClick={onClose}>{t('close')}</button>
         </div>
       </div>
     </div>

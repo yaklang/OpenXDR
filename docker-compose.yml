@@ -26,6 +26,8 @@ services:
       AI_BASE_URL: ${AI_BASE_URL:-http://host.docker.internal:11434/v1}
       AI_MODEL: ${AI_MODEL:-}
       AI_API_KEY: ${AI_API_KEY:-}
+      # 首次启动的 admin 密码；不设则随机生成并打印在 server 日志里
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     volumes:
       - ./rules:/rules:ro
     ports:

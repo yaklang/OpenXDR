@@ -18,6 +18,7 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/internal/api"
+	"openxdr/server/internal/auth"
 	"openxdr/server/internal/correlate"
 	"openxdr/server/internal/grpcsvc"
 	"openxdr/server/internal/janitor"
@@ -123,9 +124,15 @@ func main() {
 		}
 	}()
 
+	if err := auth.Bootstrap(ctx, client); err != nil {
+		slog.Error("初始化 admin 账号失败", "err", err)
+		os.Exit(1)
+	}
+
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	slog.Info("HTTP 启动", "addr", httpAddr)
-	if err := http.ListenAndServe(httpAddr, api.Handler(client, rules, hub, suppressions, isolationAllowlist())); err != nil {
+	handler := auth.Middleware(client, api.Handler(client, rules, hub, suppressions, isolationAllowlist()))
+	if err := http.ListenAndServe(httpAddr, handler); err != nil {
 		slog.Error("HTTP 退出", "err", err)
 		os.Exit(1)
 	}
