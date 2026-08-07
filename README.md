@@ -63,6 +63,23 @@ docker compose up -d
 AI_MODEL=qwen3 docker compose up -d   # 默认接本机 Ollama
 ```
 
+也可以接任意 OpenAI 兼容端点，包括自建的私有化部署：
+
+```bash
+AI_BASE_URL=http://<推理服务>/v1 \
+AI_MODEL=<模型名> \
+AI_API_KEY=<密钥> \
+AI_TIMEOUT_SECONDS=300 \
+docker compose up -d
+```
+
+推理服务在内网时注意 `NO_PROXY`：Go 默认读取 `HTTP_PROXY` 环境变量，
+若部署环境设了代理，内网端点的请求会被错误地转发出去。
+
+实测接入自建 DeepSeek-V4-Flash（6× RTX 5090，vLLM）：单个 incident 研判
+5–13 秒，模型能从事件图里读出父进程并给出可执行的处置建议。推理型模型返回的
+`reasoning_content` 不影响解析，引擎只取 `content` 里的 JSON。
+
 采集端各自构建部署到被监控主机：
 
 ```bash
