@@ -5,14 +5,11 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-use tokio::sync::mpsc;
-
-use super::{process_event, ProcessRegistry};
-use crate::pb::AgentEvent;
+use super::{process_event, EventSink, ProcessRegistry};
 
 const INTERVAL: Duration = Duration::from_secs(1);
 
-pub async fn run(agent_id: String, tx: mpsc::Sender<AgentEvent>) {
+pub async fn run(agent_id: String, tx: EventSink) {
     // 默认刷新不含命令行/可执行路径/用户，检测规则全靠这几项，必须显式要
     let kind = ProcessRefreshKind::nothing()
         .with_cmd(UpdateKind::Always)
@@ -54,7 +51,7 @@ pub async fn run(agent_id: String, tx: mpsc::Sender<AgentEvent>) {
                 proc.user_id().map(|u| u.to_string()).unwrap_or_default(),
             );
 
-            if tx.send(event).await.is_err() {
+            if !tx.send(event) {
                 return; // 上报端已断开，本采集任务随之退出
             }
         }

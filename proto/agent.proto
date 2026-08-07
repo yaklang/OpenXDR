@@ -34,6 +34,8 @@ message AgentEvent {
   string raw_json = 7;     // 归一化后的完整 OCSF 事件体（JSON）
   // 父进程 GUID，进程血缘的唯一来源。空表示父进程未被本 agent 观察到
   string parent_process_guid = 8;
+  // 采集队列满而丢弃的事件累计数，用于判断 agent 是否过载
+  uint64 dropped_events = 9;
 }
 
 message ReportAck {

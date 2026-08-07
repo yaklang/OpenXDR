@@ -147,8 +147,10 @@ type AgentEvent struct {
 	RawJson     string                 `protobuf:"bytes,7,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`       // 归一化后的完整 OCSF 事件体（JSON）
 	// 父进程 GUID，进程血缘的唯一来源。空表示父进程未被本 agent 观察到
 	ParentProcessGuid string `protobuf:"bytes,8,opt,name=parent_process_guid,json=parentProcessGuid,proto3" json:"parent_process_guid,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// 采集队列满而丢弃的事件累计数，用于判断 agent 是否过载
+	DroppedEvents uint64 `protobuf:"varint,9,opt,name=dropped_events,json=droppedEvents,proto3" json:"dropped_events,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentEvent) Reset() {
@@ -237,6 +239,13 @@ func (x *AgentEvent) GetParentProcessGuid() string {
 	return ""
 }
 
+func (x *AgentEvent) GetDroppedEvents() uint64 {
+	if x != nil {
+		return x.DroppedEvents
+	}
+	return 0
+}
+
 type ReportAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Received      uint64                 `protobuf:"varint,1,opt,name=received,proto3" json:"received,omitempty"`
@@ -292,7 +301,7 @@ const file_agent_proto_rawDesc = "" +
 	"\bip_addrs\x18\x03 \x03(\tR\aipAddrs\x12#\n" +
 	"\ragent_version\x18\x04 \x01(\tR\fagentVersion\"-\n" +
 	"\x10RegisterResponse\x12\x19\n" +
-	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\x8b\x02\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\xb2\x02\n" +
 	"\n" +
 	"AgentEvent\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1c\n" +
@@ -304,7 +313,8 @@ const file_agent_proto_rawDesc = "" +
 	"\n" +
 	"conn_tuple\x18\x06 \x01(\tR\tconnTuple\x12\x19\n" +
 	"\braw_json\x18\a \x01(\tR\arawJson\x12.\n" +
-	"\x13parent_process_guid\x18\b \x01(\tR\x11parentProcessGuid\"'\n" +
+	"\x13parent_process_guid\x18\b \x01(\tR\x11parentProcessGuid\x12%\n" +
+	"\x0edropped_events\x18\t \x01(\x04R\rdroppedEvents\"'\n" +
 	"\tReportAck\x12\x1a\n" +
 	"\breceived\x18\x01 \x01(\x04R\breceived2\xae\x01\n" +
 	"\fAgentService\x12Q\n" +

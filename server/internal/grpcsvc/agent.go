@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -83,6 +84,7 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 
 	var received uint64
 	var assetID *uuid.UUID
+	var lastDropped uint64
 	var eventCreates []*ent.EventCreate
 	var alertCreates []*ent.AlertCreate
 
@@ -128,6 +130,13 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 				return result.err
 			}
 			ev = result.ev
+		}
+
+		// 累计值只在增长时报，避免每条事件刷屏
+		if ev.DroppedEvents > lastDropped {
+			slog.Warn("agent 采集队列溢出",
+				"agent", ev.AgentId, "dropped", ev.DroppedEvents)
+			lastDropped = ev.DroppedEvents
 		}
 
 		if assetID == nil {

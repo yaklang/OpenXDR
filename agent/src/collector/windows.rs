@@ -6,15 +6,12 @@ use ferrisetw::provider::Provider;
 use ferrisetw::schema_locator::SchemaLocator;
 use ferrisetw::trace::UserTrace;
 use ferrisetw::EventRecord;
-use tokio::sync::mpsc;
-
-use super::{poll, process_event, ProcessRegistry};
-use crate::pb::AgentEvent;
+use super::{poll, process_event, EventSink, ProcessRegistry};
 
 const KERNEL_PROCESS_GUID: &str = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716";
 const EVENT_PROCESS_START: u16 = 1;
 
-pub async fn run(agent_id: String, tx: mpsc::Sender<AgentEvent>) {
+pub async fn run(agent_id: String, tx: EventSink) {
     let cb_agent_id = agent_id.clone();
     let cb_tx = tx.clone();
     // ETW 回调是 Fn，注册表用 Mutex 包起来共享
@@ -34,9 +31,8 @@ pub async fn run(agent_id: String, tx: mpsc::Sender<AgentEvent>) {
             let image: String = parser.try_parse("ImageName").unwrap_or_default();
             let name = image.rsplit('\\').next().unwrap_or(&image).to_string();
 
-            // ETW 回调跑在 trace 线程上，用阻塞发送
             let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
-            let _ = cb_tx.blocking_send(process_event(
+            cb_tx.send(process_event(
                 &cb_agent_id,
                 &mut reg,
                 pid,

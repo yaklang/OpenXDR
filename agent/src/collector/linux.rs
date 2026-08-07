@@ -1,9 +1,7 @@
 //! Linux eBPF 采集：tracepoint sched_process_exec。
 //! 捕获所有 execve（含短命进程），需要 root/CAP_BPF；失败回落轮询。
 
-use tokio::sync::mpsc;
-
-use super::{poll, process_event, ProcessRegistry};
+use super::{poll, process_event, EventSink, ProcessRegistry};
 use crate::pb::AgentEvent;
 
 // 与 ebpf/src/main.rs 中的定义保持一致
@@ -15,7 +13,7 @@ struct ExecEvent {
     filename: [u8; 256],
 }
 
-pub async fn run(agent_id: String, tx: mpsc::Sender<AgentEvent>) {
+pub async fn run(agent_id: String, tx: EventSink) {
     if let Err(e) = run_ebpf(agent_id.clone(), tx.clone()).await {
         eprintln!("eBPF 采集不可用（{e}），回落到轮询采集");
         poll::run(agent_id, tx).await;
@@ -24,7 +22,7 @@ pub async fn run(agent_id: String, tx: mpsc::Sender<AgentEvent>) {
 
 async fn run_ebpf(
     agent_id: String,
-    tx: mpsc::Sender<AgentEvent>,
+    tx: EventSink,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use aya::maps::perf::AsyncPerfEventArray;
     use aya::programs::TracePoint;
@@ -71,7 +69,7 @@ async fn run_ebpf(
                         let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
                         to_agent_event(&agent_id, &mut reg, &ev)
                     };
-                    if tx.send(event).await.is_err() {
+                    if !tx.send(event) {
                         return;
                     }
                 }
