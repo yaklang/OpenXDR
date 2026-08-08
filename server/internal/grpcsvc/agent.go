@@ -209,12 +209,24 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 		}
 		eventCreates = append(eventCreates, ec)
 
+		// 文件事件的实体键是路径：同一规则命中不同文件是不同的事，不能被合并；
+		// 进程/网络事件保持粗指纹，那正是防告警风暴的设计
+		fpSuffix := ""
+		if ev.ClassUid == 1001 {
+			if f, ok := rawMap["file"].(map[string]any); ok {
+				if p, ok := f["path"].(string); ok {
+					fpSuffix = "|" + p
+				}
+			}
+		}
+
 		for _, h := range intel.Detections(s.Rules.Evaluate(int(ev.ClassUid), assetOS, rawMap), s.Intel.Match(rawMap, ts)) {
 			// 抑制先于去重：被压掉的命中不该占用去重槽位
 			if s.Suppress.Suppressed(h.RuleID, assetID, ts) {
 				continue
 			}
-			if deduper.Hit(h.RuleID, ts) {
+			fingerprint := h.RuleID + fpSuffix
+			if deduper.Hit(fingerprint, ts) {
 				continue
 			}
 			alertID := uuid.Must(uuid.NewV7())
@@ -226,7 +238,7 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 				SetEventID(eventID).
 				SetNillableAssetID(assetID).
 				SetLastTs(ts))
-			deduper.Track(h.RuleID, alertID, ts)
+			deduper.Track(fingerprint, alertID, ts)
 		}
 
 		// 长连接流，攒批落库
