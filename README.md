@@ -167,6 +167,7 @@ echo '*.* @<server>:514' >> /etc/rsyslog.conf && systemctl restart rsyslog
 内置 IOC 库：恶意 IP / 域名 / 文件哈希。三路事件（EDR / NTA / 日志）入库时
 自动与情报碰撞，命中即产生告警，走与规则告警相同的去重、抑制与关联链路。
 域名情报按后缀匹配，`evil.com` 能撞上 `c2.evil.com` 的 DNS 查询、TLS SNI 与 HTTP Host。
+哈希情报撞的是 agent 随进程事件上报的 exe SHA-256（同一二进制只算一次，缓存按 mtime 失效）。
 
 界面上（威胁情报入口）可直接粘贴清单批量导入：一行一条，类型自动识别，
 重复条目跳过。每条情报持续累计命中次数——长期零命中的陈年 IOC 应当清理，

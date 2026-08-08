@@ -19,6 +19,7 @@ if-addrs = "0.15.0"
 libc = "0.2.189"
 prost = "0.14.4"
 serde_json = "1.0.151"
+sha2 = "0.10"
 sysinfo = "0.39.6"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-stream = "0.1.19"

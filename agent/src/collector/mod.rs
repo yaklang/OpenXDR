@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 
 use crate::pb::AgentEvent;
 
+mod hash;
 mod poll;
 mod registry;
 
@@ -129,7 +130,7 @@ fn process_event(
             "pid": pid,
             "uid": guid.to_string(),
             "name": name,
-            "file": { "path": exe },
+            "file": { "path": exe, "sha256": exe.and_then(hash::exe_sha256) },
             "cmd_line": cmd_line,
             "parent_process": {
                 "pid": ppid,
