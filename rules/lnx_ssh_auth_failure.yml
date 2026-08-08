@@ -2,6 +2,9 @@ title: SSH Authentication Failure
 id: b1e7a4f0-2c93-4d58-9a16-5f0d3e8c7b24
 status: experimental
 description: 检测 SSH 登录失败，密集出现时是暴力破解的直接信号
+tags:
+  - attack.credential_access
+  - attack.t1110.001
 logsource:
   category: application
   product: linux

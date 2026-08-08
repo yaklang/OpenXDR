@@ -2,6 +2,11 @@ title: Sensitive File Modified
 id: 5a7c1d9e-3b64-4f28-a0d5-8e9f2c4b6a17
 status: experimental
 description: 检测持久化与提权相关的敏感文件变更：预加载库、cron、sudoers、SSH 密钥、账号库
+tags:
+  - attack.persistence
+  - attack.t1543.002
+  - attack.t1053.003
+  - attack.t1574.006
 logsource:
   category: file_event
   product: linux

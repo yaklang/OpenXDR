@@ -2,6 +2,11 @@ title: Suspicious PowerShell Invocation
 id: 98f947bf-49b0-4dad-aec8-02b07f41ed9a
 status: experimental
 description: 检测编码执行、隐藏窗口与内存加载等 PowerShell 攻击特征
+tags:
+  - attack.execution
+  - attack.defense_evasion
+  - attack.t1059.001
+  - attack.t1027
 logsource:
   category: process_creation
   product: windows

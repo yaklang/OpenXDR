@@ -53,3 +53,40 @@ func TestRepoRulesAllLoad(t *testing.T) {
 		t.Errorf("登录失败未命中规则：%v", ruleIDs(hits))
 	}
 }
+
+// 自带规则必须全部打了 ATT&CK 标签——矩阵里的空白应当反映真实缺口，
+// 而不是有人忘了写 tags。
+func TestRepoRulesAllTagged(t *testing.T) {
+	engine, _ := LoadDirReport("../../../rules")
+	for _, r := range engine.Rules() {
+		if len(r.Tactics) == 0 {
+			t.Errorf("规则 %s（%s）缺少 attack 战术标签", r.ID, r.Title)
+		}
+		if len(r.Techniques) == 0 {
+			t.Errorf("规则 %s（%s）缺少 attack 技术标签", r.ID, r.Title)
+		}
+	}
+}
+
+// 新补的缺口规则要真能命中：勒索删卷影、横向远程执行、数据打包暂存。
+func TestGapFillingRulesMatch(t *testing.T) {
+	engine, _ := LoadDirReport("../../../rules")
+	cases := []struct {
+		name   string
+		os     string
+		cmd    string
+		ruleID string
+	}{
+		{"删卷影", "windows", `vssadmin delete shadows /all /quiet`, "2cdb08a1-0247-424f-b2f4-492d10716e0e"},
+		{"远程执行", "windows", `wmic /node:10.0.0.8 process call create "cmd /c evil.exe"`, "7cf2f54d-543f-433d-98f9-e6d7b51d0866"},
+		{"数据打包", "linux", `tar czf /tmp/x.tar.gz /home/alice`, "be49049f-6ff2-4620-8ce1-6b6f833fe943"},
+	}
+	for _, c := range cases {
+		hits := engine.Evaluate(1007, c.os, map[string]any{
+			"process": map[string]any{"cmd_line": c.cmd},
+		})
+		if !containsStr(ruleIDs(hits), c.ruleID) {
+			t.Errorf("%s 未命中：%v", c.name, ruleIDs(hits))
+		}
+	}
+}

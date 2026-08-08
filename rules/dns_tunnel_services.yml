@@ -2,6 +2,10 @@ title: DNS Query to Tunneling or Exfil Service
 id: bae25b03-2a0e-44f0-a36d-fe0042b9e66f
 status: experimental
 description: 检测对隧道、内网穿透与匿名文件外传服务的 DNS 查询
+tags:
+  - attack.command_and_control
+  - attack.t1071.004
+  - attack.t1572
 logsource:
   category: dns
 detection:

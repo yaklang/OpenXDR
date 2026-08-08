@@ -1,0 +1,26 @@
+title: Remote Execution Tool Used for Lateral Movement
+id: 7cf2f54d-543f-433d-98f9-e6d7b51d0866
+status: experimental
+description: 检测通过 psexec、wmic、schtasks、sc 对远程主机下发执行——横向移动的常规手段
+tags:
+  - attack.lateral_movement
+  - attack.execution
+  - attack.t1021.002
+  - attack.t1569.002
+  - attack.t1047
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  psexec:
+    CommandLine|contains:
+      - 'psexec '
+      - 'psexesvc'
+  wmic_remote:
+    CommandLine|contains: 'wmic /node:'
+  remote_flag:
+    CommandLine|contains:
+      - 'schtasks /create /s '
+      - 'sc \\\\'
+  condition: psexec or wmic_remote or remote_flag
+level: high

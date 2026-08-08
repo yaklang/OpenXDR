@@ -2,6 +2,9 @@ title: Shell History Tampering
 id: 59283b6a-5e10-4c13-9834-e6cb64299287
 status: experimental
 description: 检测清除或禁用 shell 历史记录——入侵后反取证的常见动作
+tags:
+  - attack.defense_evasion
+  - attack.t1070.003
 logsource:
   category: process_creation
   product: linux

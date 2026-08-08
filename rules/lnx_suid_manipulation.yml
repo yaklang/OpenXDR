@@ -2,6 +2,10 @@ title: SUID Bit Manipulation or Enumeration
 id: eb327785-b160-44a6-9bd5-b5ee27a45fbf
 status: experimental
 description: 检测设置 SUID 位或枚举 SUID 文件——本地提权的准备动作
+tags:
+  - attack.privilege_escalation
+  - attack.discovery
+  - attack.t1548.001
 logsource:
   category: process_creation
   product: linux

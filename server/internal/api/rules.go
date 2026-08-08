@@ -14,8 +14,10 @@ type ruleRow struct {
 	ClassUID int    `json:"classUid"`
 	Product  string `json:"product"`
 	// 该类别是否有采集源在供数：false 表示规则加载了但撞不到事件
-	Ingested bool   `json:"ingested"`
-	Source   string `json:"source"`
+	Ingested   bool     `json:"ingested"`
+	Source     string   `json:"source"`
+	Tactics    []string `json:"tactics"`
+	Techniques []string `json:"techniques"`
 }
 
 // mapRules 检测面透明化：运营要能看到跑着哪些规则、哪些只是摆设。
@@ -33,6 +35,7 @@ func mapRules(api *http.ServeMux, rules *sigma.Engine) {
 				ID: rule.ID, Title: rule.Title, Severity: rule.Severity,
 				ClassUID: rule.ClassUID, Product: rule.Product,
 				Ingested: ingested, Source: source,
+				Tactics: rule.Tactics, Techniques: rule.Techniques,
 			}
 		}
 		sort.Slice(out, func(i, j int) bool {

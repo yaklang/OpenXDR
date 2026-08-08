@@ -2,6 +2,11 @@ title: LOLBin Used for Download
 id: 3d95e779-e05e-4d93-9e63-a98932f3762c
 status: experimental
 description: 检测系统自带工具被用于下载载荷：certutil、bitsadmin、mshta
+tags:
+  - attack.command_and_control
+  - attack.defense_evasion
+  - attack.t1105
+  - attack.t1218.005
 logsource:
   category: process_creation
   product: windows

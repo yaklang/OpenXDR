@@ -2,6 +2,9 @@ title: Failed Interactive Login
 id: 9c4e6b2d-8f13-47a5-9e07-3d5a8c1f6b42
 status: experimental
 description: 检测失败的交互式登录（btmp）。高频命中配合去重计数就是爆破画像
+tags:
+  - attack.credential_access
+  - attack.t1110.001
 logsource:
   category: authentication
   product: linux

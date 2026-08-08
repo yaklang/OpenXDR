@@ -2,6 +2,11 @@ title: Windows Recon Command Execution
 id: 7b9e2a44-5f10-4c8d-9a3b-8e1f0c6d2a91
 status: experimental
 description: 检测常见的主机侦察程序执行
+tags:
+  - attack.discovery
+  - attack.t1082
+  - attack.t1033
+  - attack.t1016
 logsource:
   category: process_creation
   product: windows

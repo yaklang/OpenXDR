@@ -4,6 +4,7 @@ import {
   type IncidentDetail, type IncidentSummary, type Me,
 } from './api'
 import { AssetList } from './AssetList'
+import { AttackMatrixView } from './AttackMatrixView'
 import { AuditLogView } from './AuditLogView'
 import { DashboardView } from './DashboardView'
 import { EventSearchView } from './EventSearchView'
@@ -47,6 +48,7 @@ export default function App() {
   const [showEventSearch, setShowEventSearch] = useState(false)
   const [showRules, setShowRules] = useState(false)
   const [showHunt, setShowHunt] = useState(false)
+  const [showAttack, setShowAttack] = useState(false)
   const [showAssets, setShowAssets] = useState(false)
   const [showUsers, setShowUsers] = useState(false)
   const [showAudit, setShowAudit] = useState(false)
@@ -129,6 +131,7 @@ export default function App() {
           <button className="link" onClick={() => setShowSuppressions(true)}>{t('suppressions')}</button>
           <button className="link" onClick={() => setShowIntel(true)}>{t('intel')}</button>
           <button className="link" onClick={() => setShowRules(true)}>{t('rules')}</button>
+          <button className="link" onClick={() => setShowAttack(true)}>{t('attackMatrix')}</button>
           {isAdmin && (
             <>
               <button className="link" onClick={() => setShowUsers(true)}>{t('users')}</button>
@@ -253,6 +256,7 @@ export default function App() {
       {showEventSearch && <EventSearchView onClose={() => setShowEventSearch(false)} />}
       {showRules && <RulesView onClose={() => setShowRules(false)} />}
       {showHunt && <HuntView onClose={() => setShowHunt(false)} />}
+      {showAttack && <AttackMatrixView onClose={() => setShowAttack(false)} />}
       {showIntel && <IntelList canAct={canWrite} onClose={() => setShowIntel(false)} />}
       {showAssets && <AssetList onClose={() => setShowAssets(false)} />}
       {showUsers && <UserManagement self={me.username} onClose={() => setShowUsers(false)} />}

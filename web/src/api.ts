@@ -218,6 +218,18 @@ export const searchEvents = (params: {
   return get<EventRow[]>(`/api/events?${qs}`)
 }
 
+export interface AttackCoverage {
+  tactics: {
+    tactic: string
+    rules: number
+    techniques: { id: string; rules: number; hasData: boolean }[] | null
+  }[]
+  untagged: number
+  noDataSource: number
+}
+
+export const fetchAttack = () => get<AttackCoverage>('/api/attack')
+
 export interface HuntStep {
   tool: string
   args: string

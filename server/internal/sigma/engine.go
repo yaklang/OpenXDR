@@ -140,6 +140,9 @@ type Rule struct {
 	Severity int16
 	ClassUID int    // 0 = 不限
 	Product  string // logsource product，空表示不限操作系统
+	// ATT&CK 标签，来自 Sigma tags。不影响匹配，用于覆盖矩阵
+	Tactics    []string
+	Techniques []string
 	// selection 按下标存放，condition 里的引用编译期就解析成下标
 	sels []selection
 	cond node
@@ -559,6 +562,7 @@ func compileFile(path string) (*Rule, error) {
 			rule.Severity = sev
 		}
 	}
+	rule.Tactics, rule.Techniques = parseAttackTags(doc["tags"])
 	ls, _ := doc["logsource"].(map[string]any)
 	if ls == nil {
 		return nil, fmt.Errorf("缺少 logsource")

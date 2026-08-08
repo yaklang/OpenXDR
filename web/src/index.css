@@ -359,3 +359,26 @@ h3 { font-size: 14px; color: var(--muted); margin: 24px 0 8px; }
 .hunt-steps { margin-top: 8px; font-size: 12px; }
 .hunt-steps summary { cursor: pointer; }
 .hunt-steps .mono { padding: 2px 0 2px 12px; word-break: break-all; }
+
+/* ATT&CK 覆盖矩阵 */
+.matrix { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; }
+.matrix-col { min-width: 108px; flex: 0 0 auto; }
+.matrix-head {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 4px;
+  border-bottom: 2px solid var(--accent);
+  margin-bottom: 4px;
+}
+.matrix-gap .matrix-head { border-bottom-color: var(--border); color: var(--muted); }
+.matrix-cell {
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  padding: 4px 6px;
+  margin-bottom: 3px;
+  border-radius: 4px;
+  background: var(--bg-soft);
+  border-left: 3px solid var(--accent);
+}
+.matrix-cell-nodata { border-left-color: var(--amber); color: var(--muted); }
+.matrix-empty { font-size: 11px; color: var(--muted); padding: 4px 6px; font-style: italic; }

@@ -2,6 +2,9 @@ title: SSH Authorized Keys Persistence
 id: 84b1e985-ad6b-40c3-8720-b6ab9e58c9b2
 status: experimental
 description: 检测向 authorized_keys 追加内容——植入 SSH 后门的标准持久化手法
+tags:
+  - attack.persistence
+  - attack.t1098.004
 logsource:
   category: process_creation
   product: linux

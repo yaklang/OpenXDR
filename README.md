@@ -220,6 +220,14 @@ RESPONSE_ENABLED=true ISOLATION_ALLOW=<server>:8081 docker compose up -d
 每条指令连同下发者、演练与否、执行结果一并落库，可在事件详情页查看。
 隔离在 Linux 用 nftables 独立表实现（不触碰主机原有规则），Windows 用防火墙规则。
 
+## ATT&CK 覆盖
+
+规则的 Sigma `tags` 会被解析成 ATT&CK 战术与技术，界面「ATT&CK 覆盖」按
+杀伤链顺序出矩阵。空列就是检测缺口，不是排版问题。
+
+矩阵还会标出**有规则但无数据源**的格子——纸面覆盖率与真实覆盖率的差额，
+这是挂载大规则库后最容易自欺欺人的地方。
+
 ## 导入社区规则
 
 规则引擎兼容 Sigma，可直接挂载 [SigmaHQ](https://github.com/SigmaHQ/sigma) 规则库：

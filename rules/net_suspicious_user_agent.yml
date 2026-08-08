@@ -2,6 +2,9 @@ title: Suspicious HTTP User-Agent
 id: 5a91c0e2-63f7-4b18-9d24-7c8e0b3f1a52
 status: experimental
 description: 检测常见攻击工具与脚本客户端的 User-Agent，明文 HTTP 下可直接识别
+tags:
+  - attack.command_and_control
+  - attack.t1071.001
 logsource:
   category: network_connection
 detection:

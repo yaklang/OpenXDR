@@ -1,0 +1,28 @@
+title: Data Staged into Archive
+id: be49049f-6ff2-4620-8ce1-6b6f833fe943
+status: experimental
+description: 检测把敏感目录打包成压缩档——外传前的数据暂存动作
+tags:
+  - attack.collection
+  - attack.exfiltration
+  - attack.t1560.001
+  - attack.t1074.001
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  archiver:
+    CommandLine|contains:
+      - 'tar c'
+      - 'zip -r'
+      - 'rar a'
+      - '7z a'
+  sensitive_target:
+    CommandLine|contains:
+      - '/etc/'
+      - '/home/'
+      - '/root/'
+      - '/var/lib/mysql'
+      - '.ssh'
+  condition: archiver and sensitive_target
+level: medium
