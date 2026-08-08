@@ -53,7 +53,7 @@ type incidentDetail struct {
 	Alerts  []alertRow `json:"alerts"`
 }
 
-func Handler(db *ent.Client, rules *sigma.Engine, hub *response.Hub, suppressions *suppress.Store, intelStore *intel.Store, h hunter, selfEndpoints []string) http.Handler {
+func Handler(db *ent.Client, rules *sigma.Engine, rulesDir string, hub *response.Hub, suppressions *suppress.Store, intelStore *intel.Store, h hunter, selfEndpoints []string) http.Handler {
 	mux := http.NewServeMux()
 	mapHunt(mux, db, h)
 	mapCommands(mux, db, hub, selfEndpoints)
@@ -61,7 +61,7 @@ func Handler(db *ent.Client, rules *sigma.Engine, hub *response.Hub, suppression
 	mapIntel(mux, db, intelStore)
 	mapStats(mux, db, rules)
 	mapEvents(mux, db)
-	mapRules(mux, rules)
+	mapRules(mux, rules, db, rulesDir)
 	mapAttack(mux, rules)
 	mapReport(mux, db, rules)
 	mapAgentConfig(mux, db)

@@ -71,7 +71,7 @@ func seed(t *testing.T) (*httptest.Server, uuid.UUID) {
 		t.Fatal(err)
 	}
 
-	ts := httptest.NewServer(Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil, nil))
+	ts := httptest.NewServer(Handler(client, loadRules(t), t.TempDir(), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil, nil))
 	t.Cleanup(ts.Close)
 	return ts, inc.ID
 }

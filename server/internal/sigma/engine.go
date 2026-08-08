@@ -510,6 +510,12 @@ func compileFile(path string) (*Rule, error) {
 	if err != nil {
 		return nil, err
 	}
+	return Compile(data)
+}
+
+// Compile 编译一条规则文本。狩猎产出的规则草稿在落盘前必须过同一编译器——
+// 能通过 Compile 的规则才保证热重载后真的会生效。
+func Compile(data []byte) (*Rule, error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, err

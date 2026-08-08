@@ -157,7 +157,7 @@ func main() {
 
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	slog.Info("HTTP 启动", "addr", httpAddr)
-	handler := auth.Middleware(client, api.Handler(client, rules, hub, suppressions, intelStore, triageEngine, isolationAllowlist()))
+	handler := auth.Middleware(client, api.Handler(client, rules, rulesPath, hub, suppressions, intelStore, triageEngine, isolationAllowlist()))
 	if err := http.ListenAndServe(httpAddr, handler); err != nil {
 		slog.Error("HTTP 退出", "err", err)
 		os.Exit(1)

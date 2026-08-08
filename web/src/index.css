@@ -359,6 +359,17 @@ h3 { font-size: 14px; color: var(--muted); margin: 24px 0 8px; }
 .hunt-steps { margin-top: 8px; font-size: 12px; }
 .hunt-steps summary { cursor: pointer; }
 .hunt-steps .mono { padding: 2px 0 2px 12px; word-break: break-all; }
+.hunt-draft { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.hunt-draft textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
 
 /* ATT&CK 覆盖矩阵 */
 .matrix { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; }
