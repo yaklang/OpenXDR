@@ -173,5 +173,59 @@ func (e *Engine) buildContext(ctx context.Context, inc *ent.Incident) (string, e
 		fmt.Fprintf(&sb, "- [%s] severity=%d count=%d rule=%s event=%s\n",
 			a.Ts.Format("15:04:05"), a.Severity, a.Count, rule, raw)
 	}
+	e.appendFalsePositiveHistory(ctx, &sb, alerts)
 	return sb.String(), nil
+}
+
+// appendFalsePositiveHistory 把分析师的历史判断喂回模型：同样规则最近被
+// 人工判为误报的案例。人的反馈是最贵的信号，不用等于白扔。
+func (e *Engine) appendFalsePositiveHistory(ctx context.Context, sb *strings.Builder, alerts []*ent.Alert) {
+	ruleIDs := make([]string, 0, len(alerts))
+	for _, a := range alerts {
+		ruleIDs = append(ruleIDs, a.RuleID)
+	}
+	fpAlerts, err := e.DB.Alert.Query().
+		Where(
+			alert.RuleIDIn(ruleIDs...),
+			alert.TsGTE(time.Now().AddDate(0, 0, -90)),
+			alert.HasIncidentWith(incident.StatusEQ("false_positive")),
+		).
+		WithIncident().
+		Order(ent.Desc(alert.FieldTs)).
+		Limit(20).
+		All(ctx)
+	if err != nil || len(fpAlerts) == 0 {
+		return
+	}
+
+	seen := map[string]bool{}
+	var lines []string
+	for _, a := range fpAlerts {
+		if a.Edges.Incident == nil || len(lines) >= 5 {
+			continue
+		}
+		rule := a.RuleID
+		if e.Rules != nil {
+			if title := e.Rules.TitleOf(a.RuleID); title != "" {
+				rule = title
+			}
+		}
+		caseTitle := ""
+		if t := a.Edges.Incident.Title; t != nil {
+			caseTitle = *t
+		}
+		key := rule + "|" + caseTitle
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		lines = append(lines, fmt.Sprintf("- 规则「%s」曾于 %s 被分析师判为误报（案例: %s）",
+			rule, a.Ts.Format("2006-01-02"), caseTitle))
+	}
+	if len(lines) == 0 {
+		return
+	}
+	sb.WriteString("## 历史误报参考（分析师人工判断，仅供权衡，本次证据不同则不适用）\n")
+	sb.WriteString(strings.Join(lines, "\n"))
+	sb.WriteString("\n")
 }

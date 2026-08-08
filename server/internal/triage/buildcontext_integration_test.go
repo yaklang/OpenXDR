@@ -66,3 +66,63 @@ func TestBuildContext(t *testing.T) {
 		}
 	}
 }
+
+// 同规则的历史误报案例应回流进上下文；无案例时不加该段落。
+func TestBuildContextFalsePositiveHistory(t *testing.T) {
+	ctx, client := testdb.New(t)
+	now := time.Now()
+
+	// 历史：r-noisy 所在 incident 被判误报
+	fpTitle := "扫描器噪声"
+	fpInc, err := client.Incident.Create().
+		SetStatus("false_positive").SetTitle(fpTitle).
+		SetGraph(json.RawMessage(`{}`)).Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Alert.Create().
+		SetTs(now.Add(-24 * time.Hour)).SetRuleID("r-noisy").SetSeverity(3).
+		SetIncidentID(fpInc.ID).Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// 当前：同一规则的新 incident
+	inc, err := client.Incident.Create().
+		SetStatus("open").SetTitle("新事件").SetGraph(json.RawMessage(`{}`)).Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Alert.Create().
+		SetTs(now).SetRuleID("r-noisy").SetSeverity(3).
+		SetIncidentID(inc.ID).Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	e := &Engine{DB: client}
+	out, err := e.buildContext(ctx, inc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "历史误报参考") || !strings.Contains(out, fpTitle) {
+		t.Errorf("上下文应包含历史误报案例：\n%s", out)
+	}
+
+	// 无历史案例的规则不该出现该段落
+	inc2, err := client.Incident.Create().
+		SetStatus("open").SetTitle("另一事件").SetGraph(json.RawMessage(`{}`)).Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Alert.Create().
+		SetTs(now).SetRuleID("r-clean").SetSeverity(3).
+		SetIncidentID(inc2.ID).Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+	out2, err := e.buildContext(ctx, inc2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out2, "历史误报参考") {
+		t.Errorf("无案例时不该有误报参考段落：\n%s", out2)
+	}
+}
