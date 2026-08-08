@@ -1,7 +1,10 @@
-// gencerts 生成 OpenXDR 自签证书：一个 CA，一张服务端证书，一张采集端证书。
-// 只用标准库，不依赖 openssl 命令。
+// gencerts 生成 OpenXDR 自签证书：一个 CA，一张服务端证书，一张采集端通用证书，
+// 以及可选的按主机绑定的 agent 证书。只用标准库，不依赖 openssl 命令。
 //
-// 用法: go run ./cmd/gencerts <输出目录> [server 的域名或 IP]
+// 用法: go run ./cmd/gencerts <输出目录> [server 的域名或 IP] [agent 主机名...]
+//
+// 按主机发证时 CN 写成 "host:<hostname>"，server 会强制该证书只能以
+// 对应主机的身份注册、上报和认领指令流；通用证书不受限（sensor 用它）。
 package main
 
 import (
@@ -30,13 +33,13 @@ func main() {
 	if len(os.Args) > 2 {
 		host = os.Args[2]
 	}
-	if err := run(dir, host); err != nil {
+	if err := run(dir, host, os.Args[3:]); err != nil {
 		fmt.Fprintln(os.Stderr, "生成失败:", err)
 		os.Exit(1)
 	}
 }
 
-func run(dir, host string) error {
+func run(dir, host string, agentHosts []string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -101,9 +104,28 @@ func run(dir, host string) error {
 		return err
 	}
 
+	// 按主机绑定的 agent 证书：server 强制它只能以该主机身份行事
+	for _, agentHost := range agentHosts {
+		tmpl := &x509.Certificate{
+			SerialNumber: serial(),
+			Subject:      pkix.Name{CommonName: "host:" + agentHost},
+			NotBefore:    notBefore,
+			NotAfter:     notAfter,
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		}
+		if err := issue(dir, "agent-"+agentHost, tmpl, ca, caKey); err != nil {
+			return err
+		}
+	}
+
 	fmt.Printf("证书已生成于 %s:\n", dir)
 	fmt.Println("  server: TLS_CA_FILE=ca.crt TLS_CERT_FILE=server.crt TLS_KEY_FILE=server.key")
 	fmt.Println("  采集端: OPENXDR_CA=ca.crt OPENXDR_CERT=client.crt OPENXDR_KEY=client.key")
+	for _, agentHost := range agentHosts {
+		fmt.Printf("  %s: OPENXDR_CERT=agent-%s.crt OPENXDR_KEY=agent-%s.key（身份已绑定，只能以该主机注册上报）\n",
+			agentHost, agentHost, agentHost)
+	}
 	return nil
 }
 

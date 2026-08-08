@@ -1,0 +1,70 @@
+//go:build integration
+
+package grpcsvc
+
+import (
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"openxdr/server/internal/suppress"
+	"openxdr/server/internal/testdb"
+	"openxdr/server/pb"
+)
+
+// 绑定证书的身份强制：注册冒名被拒，上报假 agent_id 断流。
+func TestIdentityEnforcement(t *testing.T) {
+	ctx, client := testdb.New(t)
+	srv := &Server{
+		DB: client, Rules: loadMimikatzRule(t),
+		DedupWindow: time.Minute, Suppress: suppress.New(client, 0),
+	}
+
+	// 用 web01 的绑定证书注册 web01：放行，拿到 agent_id
+	resp, err := srv.Register(ctxWithCN("host:web01"), &pb.RegisterRequest{Hostname: "web01"})
+	if err != nil {
+		t.Fatalf("本机注册应放行: %v", err)
+	}
+	webID := resp.AgentId
+
+	// 用 web01 的证书注册 db01：拒绝
+	if _, err := srv.Register(ctxWithCN("host:web01"), &pb.RegisterRequest{Hostname: "db01"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("冒名注册应 PermissionDenied，got %v", err)
+	}
+
+	// 通用证书注册任意主机：不受限（sensor / 旧发证的兼容路径）
+	if _, err := srv.Register(ctxWithCN("openxdr-collector"), &pb.RegisterRequest{Hostname: "db01"}); err != nil {
+		t.Fatalf("通用证书注册应放行: %v", err)
+	}
+
+	event := func(agentID string) *pb.AgentEvent {
+		return &pb.AgentEvent{
+			AgentId: agentID, TsUnixNs: time.Now().UnixNano(), ClassUid: 1007,
+			ProcessGuid: uuid.NewString(), RawJson: `{"process":{"cmd_line":"ls"}}`,
+		}
+	}
+
+	// 正确身份上报：接受
+	ok := &fakeAgentStream{ctx: ctxWithCN("host:web01"), events: []*pb.AgentEvent{event(webID)}}
+	if err := srv.ReportEvents(ok); err != nil {
+		t.Fatalf("本机上报应放行: %v", err)
+	}
+	if ok.ack == nil || ok.ack.Received != 1 {
+		t.Fatalf("应回执 1 条，got %+v", ok.ack)
+	}
+
+	// 持 web01 证书冒用 db01 的 agent_id：断流
+	dbResp, err := srv.Register(ctxWithCN("openxdr-collector"), &pb.RegisterRequest{Hostname: "db01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := &fakeAgentStream{ctx: ctxWithCN("host:web01"), events: []*pb.AgentEvent{event(dbResp.AgentId)}}
+	if err := srv.ReportEvents(forged); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("冒用他机 agent_id 应 PermissionDenied，got %v", err)
+	}
+
+	_ = ctx
+}

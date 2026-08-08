@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
@@ -31,6 +33,10 @@ type Server struct {
 }
 
 func (s *Server) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
+	// 绑定证书只能注册自己的主机名，防止认领他人身份拿走 agent_id
+	if host, bound := certHostname(ctx); bound && host != req.Hostname {
+		return nil, status.Error(codes.PermissionDenied, "hostname 与证书绑定的主机不符")
+	}
 	a, err := s.DB.Asset.Query().Where(asset.HostnameEQ(req.Hostname)).First(ctx)
 	if ent.IsNotFound(err) {
 		a, err = s.DB.Asset.Create().SetHostname(req.Hostname).Save(ctx)
@@ -92,6 +98,8 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 	var assetID *uuid.UUID
 	var assetOS string
 	var lastDropped uint64
+	// 每个 agent_id 首次出现时核对证书身份，之后放行；假 id 直接断流
+	verifiedIDs := map[string]bool{}
 	var eventCreates []*ent.EventCreate
 	var alertCreates []*ent.AlertCreate
 
@@ -137,6 +145,18 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 				return result.err
 			}
 			ev = result.ev
+		}
+
+		if !verifiedIDs[ev.AgentId] {
+			id, err := uuid.Parse(ev.AgentId)
+			if err != nil {
+				return status.Error(codes.InvalidArgument, "agent_id 不是合法 UUID")
+			}
+			if err := s.verifyAgentID(ctx, id); err != nil {
+				_ = flush() // 断流前保住此前已核验的事件
+				return err
+			}
+			verifiedIDs[ev.AgentId] = true
 		}
 
 		// 累计值只在增长时报，避免每条事件刷屏

@@ -228,6 +228,19 @@ OPENXDR_CA=certs/ca.crt OPENXDR_CERT=certs/client.crt OPENXDR_KEY=certs/client.k
 
 三个变量必须同时配置，只配一部分会直接报错而不是悄悄降级成明文。
 
+通用 client 证书所有采集端共用，持证者可以冒充任何主机上报。给 agent 逐台发
+绑定证书可以消除这一点（sensor 没有主机身份，继续用通用证书）：
+
+```bash
+# 在通用证书之外，为 web01、db01 各签一张身份绑定的证书
+go run ./cmd/gencerts ../certs <server 地址> web01 db01
+
+# web01 上的 agent 用自己的证书，server 会强制它只能以 web01 的身份注册、上报、接收指令
+OPENXDR_CERT=certs/agent-web01.crt OPENXDR_KEY=certs/agent-web01.key ...
+```
+
+绑定是证书自身的属性（CN 前缀 `host:`），失陷主机拿自己的证书冒充不了别人。
+
 ## 配置
 
 server 全部通过环境变量配置，均有默认值：

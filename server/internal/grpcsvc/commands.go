@@ -26,6 +26,10 @@ func (s *Server) Commands(stream pb.AgentService_CommandsServer) error {
 	if err != nil {
 		return errors.New("首条消息必须带合法的 agent_id")
 	}
+	// 指令流是响应处置的下发通道，冒领等于劫持隔离/杀进程指令
+	if err := s.verifyAgentID(ctx, agentID); err != nil {
+		return err
+	}
 
 	outbound := s.Hub.Attach(agentID)
 	defer s.Hub.Detach(agentID, outbound)
