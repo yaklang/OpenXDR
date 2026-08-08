@@ -54,12 +54,12 @@ export function Hero24() {
       className="relative flex min-h-[900px] w-full items-start overflow-hidden bg-neutral-950 px-4 pb-20 pt-32 sm:px-6 sm:pb-24 sm:pt-36 lg:min-h-screen lg:items-center lg:px-8"
     >
       {isVisible && (
-        <div className="pointer-events-none absolute right-[-48%] top-16 h-[680px] w-[136%] sm:right-[-30%] sm:top-20 sm:h-[760px] sm:w-[112%] lg:-right-[8%] lg:inset-y-0 lg:h-auto lg:w-[70%]">
+        <div className="pointer-events-none absolute inset-0">
           <BlackHole
             width="100%"
             height="100%"
             speed={reduceMotion ? 0 : 0.72}
-            zoom={1.65}
+            zoom={1.48}
             particleCount={16}
             orbSize={0.76}
             glow={0.075}
@@ -76,7 +76,7 @@ export function Hero24() {
 
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,#0a0a0a_0%,#0a0a0a_32%,rgba(10,10,10,0.94)_48%,rgba(10,10,10,0.58)_68%,rgba(10,10,10,0.08)_100%)] lg:bg-[linear-gradient(90deg,#0a0a0a_0%,#0a0a0a_36%,rgba(10,10,10,0.9)_49%,rgba(10,10,10,0.28)_66%,rgba(10,10,10,0)_84%)]"
+        className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(10,10,10,0.94)_0%,rgba(10,10,10,0.86)_36%,rgba(10,10,10,0.66)_58%,rgba(10,10,10,0.24)_82%,rgba(10,10,10,0.08)_100%)] lg:bg-[linear-gradient(90deg,rgba(10,10,10,0.92)_0%,rgba(10,10,10,0.82)_30%,rgba(10,10,10,0.52)_50%,rgba(10,10,10,0.16)_70%,rgba(10,10,10,0)_88%)]"
       />
       <div
         aria-hidden="true"
