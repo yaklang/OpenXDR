@@ -190,6 +190,33 @@ export interface Stats {
 
 export const fetchStats = () => get<Stats>('/api/stats')
 
+export interface EventRow {
+  id: string
+  ts: string
+  classUid: number
+  source: string
+  assetId: string | null
+  username: string | null
+  connTuple: string | null
+  raw: unknown
+}
+
+export const searchEvents = (params: {
+  q?: string
+  source?: string
+  classUid?: number
+  hours?: number
+}) => {
+  const qs = new URLSearchParams()
+  if (params.q) qs.set('q', params.q)
+  if (params.source) qs.set('source', params.source)
+  if (params.classUid) qs.set('classUid', String(params.classUid))
+  if (params.hours)
+    qs.set('from', new Date(Date.now() - params.hours * 3_600_000).toISOString())
+  qs.set('limit', '200')
+  return get<EventRow[]>(`/api/events?${qs}`)
+}
+
 export interface IntelRow {
   id: string
   createdAt: string

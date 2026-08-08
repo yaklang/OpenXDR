@@ -205,7 +205,7 @@ func (c *collector) walk(key string, v any) {
 			c.ips = append(c.ips, val)
 		case "hostname", "sni":
 			c.domains = append(c.domains, strings.ToLower(strings.TrimSuffix(val, ".")))
-		case "sha256", "sha1", "md5", "hashes", "hash":
+		case "sha256", "sha1", "md5", "hashes", "hash", "ja3_hash":
 			c.hashes = append(c.hashes, strings.ToLower(val))
 		}
 	}

@@ -46,6 +46,16 @@ func TestMatchIPAndDomainAndHash(t *testing.T) {
 
 const sha256of = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
+func TestMatchJA3(t *testing.T) {
+	const ja3 = "e7d705a3286e19ea42f587b344ee6865"
+	s := storeWith(map[string]entry{"hash:" + ja3: e(4, nil)})
+	raw := map[string]any{"tls": map[string]any{"ja3_hash": ja3, "sni": "ok.example.com"}}
+	hits := s.Match(raw, time.Now())
+	if len(hits) != 1 || hits[0].RuleID != "intel:hash:"+ja3 {
+		t.Fatalf("JA3 指纹应作为 hash 情报命中：%v", hits)
+	}
+}
+
 func TestMatchExpiredAndMiss(t *testing.T) {
 	past := time.Now().Add(-time.Hour)
 	s := storeWith(map[string]entry{
