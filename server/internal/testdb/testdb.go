@@ -50,11 +50,14 @@ func truncate(ctx context.Context, t *testing.T, c *ent.Client) {
 		func(ctx context.Context) (int, error) { return c.Alert.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.Event.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.Incident.Delete().Exec(ctx) },
+		// Command 引用 Asset，必须先删
+		func(ctx context.Context) (int, error) { return c.Command.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.Asset.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.Session.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.User.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.AuditLog.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.Intel.Delete().Exec(ctx) },
+		func(ctx context.Context) (int, error) { return c.Suppression.Delete().Exec(ctx) },
 	}
 	for i, del := range dels {
 		if _, err := del(ctx); err != nil {

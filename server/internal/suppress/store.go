@@ -52,7 +52,8 @@ func (s *Store) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.flush(ctx)
+			// ctx 已取消，回写要用不带取消的副本，否则关停时丢计数
+			s.flush(context.WithoutCancel(ctx))
 			return
 		case <-ticker.C:
 			s.flush(ctx)
