@@ -143,6 +143,14 @@ func login(db *ent.Client, w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := audit.WithActor(r.Context(), body.Username)
 
+	ip := clientIP(r)
+	now := time.Now()
+	if loginThrottle.Blocked(ip, now) {
+		audit.Log(ctx, db, r, "login_throttled", "", "")
+		http.Error(w, "尝试过于频繁，稍后再试", http.StatusTooManyRequests)
+		return
+	}
+
 	u, err := db.User.Query().Where(user.UsernameEQ(body.Username)).Only(ctx)
 	// 用户不存在也走一次 bcrypt，别让响应时间泄露用户名是否存在
 	hash := dummyHash
@@ -150,10 +158,12 @@ func login(db *ent.Client, w http.ResponseWriter, r *http.Request) {
 		hash = u.PasswordHash
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.Password)) != nil || err != nil {
+		loginThrottle.Fail(ip, now)
 		audit.Log(ctx, db, r, "login_failed", "", "")
 		http.Error(w, "用户名或密码错误", http.StatusUnauthorized)
 		return
 	}
+	loginThrottle.Clear(ip)
 
 	token := rand.Text()
 	tokenHash := sha256.Sum256([]byte(token))
