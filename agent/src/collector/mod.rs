@@ -27,6 +27,9 @@ pub use registry::ProcessRegistry;
 mod linux;
 
 #[cfg(target_os = "windows")]
+mod persistwatch;
+
+#[cfg(target_os = "windows")]
 mod windows;
 
 pub fn spawn(agent_id: String) -> mpsc::Receiver<AgentEvent> {
@@ -42,6 +45,10 @@ pub fn spawn(agent_id: String) -> mpsc::Receiver<AgentEvent> {
 
     #[cfg(all(target_os = "linux", feature = "ebpf"))]
     tokio::spawn(linux::run(agent_id, sink));
+
+    // 持久化点监控与进程采集并行
+    #[cfg(target_os = "windows")]
+    persistwatch::spawn(agent_id.clone(), sink.clone());
 
     #[cfg(target_os = "windows")]
     tokio::spawn(windows::run(agent_id, sink));

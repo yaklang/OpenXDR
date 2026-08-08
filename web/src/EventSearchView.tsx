@@ -3,7 +3,9 @@ import { searchEvents, type EventRow } from './api'
 import { useI18n, type MsgKey } from './i18n'
 
 const CLASS_KEY: Record<number, MsgKey> = {
+  1001: 'classFile',
   1007: 'classProcess',
+  201002: 'classRegistry',
   4001: 'classNetwork',
   4003: 'classDNS',
   100001: 'classLog',

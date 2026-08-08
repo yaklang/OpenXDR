@@ -34,4 +34,13 @@ func TestRepoRulesAllLoad(t *testing.T) {
 	if !containsStr(ruleIDs(hits), "5a7c1d9e-3b64-4f28-a0d5-8e9f2c4b6a17") {
 		t.Errorf("敏感文件变更未命中规则：%v", ruleIDs(hits))
 	}
+
+	hits = engine.Evaluate(201002, "windows", map[string]any{
+		"activity_id": 1,
+		"reg_key":     map[string]any{"path": `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\evil`},
+		"reg_value":   map[string]any{"data": `C:\Users\x\evil.exe`},
+	})
+	if !containsStr(ruleIDs(hits), "7b3f2c8a-1d5e-4a96-b0c4-9e8d6f2a5c31") {
+		t.Errorf("注册表持久化未命中规则：%v", ruleIDs(hits))
+	}
 }

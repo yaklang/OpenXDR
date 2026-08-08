@@ -124,6 +124,7 @@ const dicts = {
     thDataSource: '数据源',
     noDataSource: '无数据源',
     classFile: '文件',
+    classRegistry: '注册表',
     // 威胁情报
     intel: '威胁情报',
     intelListTitle: '威胁情报清单（{n}）',
@@ -292,6 +293,7 @@ const dicts = {
     thDataSource: 'Data source',
     noDataSource: 'no data source',
     classFile: 'File',
+    classRegistry: 'Registry',
     intel: 'Threat intel',
     intelListTitle: 'Threat intel ({n})',
     noIntel: 'No IOCs yet. Paste a list to import — one per line, type auto-detected.',

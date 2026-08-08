@@ -1,0 +1,16 @@
+title: Registry Run Key Persistence
+id: 7b3f2c8a-1d5e-4a96-b0c4-9e8d6f2a5c31
+status: experimental
+description: 检测自启动注册表键与 Winlogon 的写入——最经典的 Windows 持久化手法
+logsource:
+  category: registry_set
+  product: windows
+detection:
+  selection:
+    TargetObject|contains:
+      - '\CurrentVersion\Run'
+      - '\CurrentVersion\RunOnce'
+      - '\Winlogon\Shell'
+      - '\Winlogon\Userinit'
+  condition: selection
+level: high

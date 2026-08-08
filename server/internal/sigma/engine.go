@@ -68,6 +68,9 @@ var fieldMap = map[string]string{
 	"useragent":   "http_request.user_agent",
 	"c-host":      "http_request.hostname",
 	"ja3":         "tls.ja3_hash",
+	// 注册表
+	"targetobject": "reg_key.path",
+	"details":      "reg_value.data",
 }
 
 // Sigma logsource category -> OCSF class。
@@ -88,6 +91,11 @@ var categoryMap = map[string]int{
 	// 模块加载
 	"image_load":  1005,
 	"driver_load": 1005,
+	// 注册表（OCSF Windows 扩展：Registry Value Activity）
+	"registry_set":    201002,
+	"registry_add":    201002,
+	"registry_event":  201002,
+	"registry_delete": 201002,
 	// 网络
 	"network_connection": 4001,
 	"dns_query":          4003,
@@ -102,8 +110,9 @@ var categoryMap = map[string]int{
 
 // 当前采集端真正会产生的 OCSF class，用于区分"规则能加载"与"规则能命中"
 var ingestedClasses = map[int]string{
-	1001:   "文件活动（agent inotify）",
+	1001:   "文件活动（agent）",
 	1007:   "进程活动（agent）",
+	201002: "注册表变更（agent）",
 	4001:   "网络活动（sensor）",
 	4003:   "DNS 活动（sensor）",
 	100001: "应用日志（syslog）",
