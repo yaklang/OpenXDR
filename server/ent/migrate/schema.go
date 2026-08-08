@@ -229,6 +229,26 @@ var (
 			},
 		},
 	}
+	// ProcessBaselinesColumns holds the columns for the "process_baselines" table.
+	ProcessBaselinesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "asset_id", Type: field.TypeUUID},
+		{Name: "exe_path", Type: field.TypeString},
+		{Name: "first_seen", Type: field.TypeTime},
+	}
+	// ProcessBaselinesTable holds the schema information for the "process_baselines" table.
+	ProcessBaselinesTable = &schema.Table{
+		Name:       "process_baselines",
+		Columns:    ProcessBaselinesColumns,
+		PrimaryKey: []*schema.Column{ProcessBaselinesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "processbaseline_asset_id_exe_path",
+				Unique:  true,
+				Columns: []*schema.Column{ProcessBaselinesColumns[1], ProcessBaselinesColumns[2]},
+			},
+		},
+	}
 	// SessionsColumns holds the columns for the "sessions" table.
 	SessionsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -298,6 +318,7 @@ var (
 		EventsTable,
 		IncidentsTable,
 		IntelsTable,
+		ProcessBaselinesTable,
 		SessionsTable,
 		SuppressionsTable,
 		UsersTable,

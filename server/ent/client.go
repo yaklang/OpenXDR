@@ -18,6 +18,7 @@ import (
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/intel"
+	"openxdr/server/ent/processbaseline"
 	"openxdr/server/ent/session"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/user"
@@ -48,6 +49,8 @@ type Client struct {
 	Incident *IncidentClient
 	// Intel is the client for interacting with the Intel builders.
 	Intel *IntelClient
+	// ProcessBaseline is the client for interacting with the ProcessBaseline builders.
+	ProcessBaseline *ProcessBaselineClient
 	// Session is the client for interacting with the Session builders.
 	Session *SessionClient
 	// Suppression is the client for interacting with the Suppression builders.
@@ -72,6 +75,7 @@ func (c *Client) init() {
 	c.Event = NewEventClient(c.config)
 	c.Incident = NewIncidentClient(c.config)
 	c.Intel = NewIntelClient(c.config)
+	c.ProcessBaseline = NewProcessBaselineClient(c.config)
 	c.Session = NewSessionClient(c.config)
 	c.Suppression = NewSuppressionClient(c.config)
 	c.User = NewUserClient(c.config)
@@ -165,18 +169,19 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:         ctx,
-		config:      cfg,
-		Alert:       NewAlertClient(cfg),
-		Asset:       NewAssetClient(cfg),
-		AuditLog:    NewAuditLogClient(cfg),
-		Command:     NewCommandClient(cfg),
-		Event:       NewEventClient(cfg),
-		Incident:    NewIncidentClient(cfg),
-		Intel:       NewIntelClient(cfg),
-		Session:     NewSessionClient(cfg),
-		Suppression: NewSuppressionClient(cfg),
-		User:        NewUserClient(cfg),
+		ctx:             ctx,
+		config:          cfg,
+		Alert:           NewAlertClient(cfg),
+		Asset:           NewAssetClient(cfg),
+		AuditLog:        NewAuditLogClient(cfg),
+		Command:         NewCommandClient(cfg),
+		Event:           NewEventClient(cfg),
+		Incident:        NewIncidentClient(cfg),
+		Intel:           NewIntelClient(cfg),
+		ProcessBaseline: NewProcessBaselineClient(cfg),
+		Session:         NewSessionClient(cfg),
+		Suppression:     NewSuppressionClient(cfg),
+		User:            NewUserClient(cfg),
 	}, nil
 }
 
@@ -194,18 +199,19 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:         ctx,
-		config:      cfg,
-		Alert:       NewAlertClient(cfg),
-		Asset:       NewAssetClient(cfg),
-		AuditLog:    NewAuditLogClient(cfg),
-		Command:     NewCommandClient(cfg),
-		Event:       NewEventClient(cfg),
-		Incident:    NewIncidentClient(cfg),
-		Intel:       NewIntelClient(cfg),
-		Session:     NewSessionClient(cfg),
-		Suppression: NewSuppressionClient(cfg),
-		User:        NewUserClient(cfg),
+		ctx:             ctx,
+		config:          cfg,
+		Alert:           NewAlertClient(cfg),
+		Asset:           NewAssetClient(cfg),
+		AuditLog:        NewAuditLogClient(cfg),
+		Command:         NewCommandClient(cfg),
+		Event:           NewEventClient(cfg),
+		Incident:        NewIncidentClient(cfg),
+		Intel:           NewIntelClient(cfg),
+		ProcessBaseline: NewProcessBaselineClient(cfg),
+		Session:         NewSessionClient(cfg),
+		Suppression:     NewSuppressionClient(cfg),
+		User:            NewUserClient(cfg),
 	}, nil
 }
 
@@ -236,7 +242,7 @@ func (c *Client) Close() error {
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.Alert, c.Asset, c.AuditLog, c.Command, c.Event, c.Incident, c.Intel,
-		c.Session, c.Suppression, c.User,
+		c.ProcessBaseline, c.Session, c.Suppression, c.User,
 	} {
 		n.Use(hooks...)
 	}
@@ -247,7 +253,7 @@ func (c *Client) Use(hooks ...Hook) {
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.Alert, c.Asset, c.AuditLog, c.Command, c.Event, c.Incident, c.Intel,
-		c.Session, c.Suppression, c.User,
+		c.ProcessBaseline, c.Session, c.Suppression, c.User,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -270,6 +276,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Incident.mutate(ctx, m)
 	case *IntelMutation:
 		return c.Intel.mutate(ctx, m)
+	case *ProcessBaselineMutation:
+		return c.ProcessBaseline.mutate(ctx, m)
 	case *SessionMutation:
 		return c.Session.mutate(ctx, m)
 	case *SuppressionMutation:
@@ -1372,6 +1380,139 @@ func (c *IntelClient) mutate(ctx context.Context, m *IntelMutation) (Value, erro
 	}
 }
 
+// ProcessBaselineClient is a client for the ProcessBaseline schema.
+type ProcessBaselineClient struct {
+	config
+}
+
+// NewProcessBaselineClient returns a client for the ProcessBaseline from the given config.
+func NewProcessBaselineClient(c config) *ProcessBaselineClient {
+	return &ProcessBaselineClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `processbaseline.Hooks(f(g(h())))`.
+func (c *ProcessBaselineClient) Use(hooks ...Hook) {
+	c.hooks.ProcessBaseline = append(c.hooks.ProcessBaseline, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `processbaseline.Intercept(f(g(h())))`.
+func (c *ProcessBaselineClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ProcessBaseline = append(c.inters.ProcessBaseline, interceptors...)
+}
+
+// Create returns a builder for creating a ProcessBaseline entity.
+func (c *ProcessBaselineClient) Create() *ProcessBaselineCreate {
+	mutation := newProcessBaselineMutation(c.config, OpCreate)
+	return &ProcessBaselineCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ProcessBaseline entities.
+func (c *ProcessBaselineClient) CreateBulk(builders ...*ProcessBaselineCreate) *ProcessBaselineCreateBulk {
+	return &ProcessBaselineCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ProcessBaselineClient) MapCreateBulk(slice any, setFunc func(*ProcessBaselineCreate, int)) *ProcessBaselineCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ProcessBaselineCreateBulk{err: fmt.Errorf("calling to ProcessBaselineClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ProcessBaselineCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ProcessBaselineCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ProcessBaseline.
+func (c *ProcessBaselineClient) Update() *ProcessBaselineUpdate {
+	mutation := newProcessBaselineMutation(c.config, OpUpdate)
+	return &ProcessBaselineUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ProcessBaselineClient) UpdateOne(_m *ProcessBaseline) *ProcessBaselineUpdateOne {
+	mutation := newProcessBaselineMutation(c.config, OpUpdateOne, withProcessBaseline(_m))
+	return &ProcessBaselineUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ProcessBaselineClient) UpdateOneID(id uuid.UUID) *ProcessBaselineUpdateOne {
+	mutation := newProcessBaselineMutation(c.config, OpUpdateOne, withProcessBaselineID(id))
+	return &ProcessBaselineUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ProcessBaseline.
+func (c *ProcessBaselineClient) Delete() *ProcessBaselineDelete {
+	mutation := newProcessBaselineMutation(c.config, OpDelete)
+	return &ProcessBaselineDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ProcessBaselineClient) DeleteOne(_m *ProcessBaseline) *ProcessBaselineDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ProcessBaselineClient) DeleteOneID(id uuid.UUID) *ProcessBaselineDeleteOne {
+	builder := c.Delete().Where(processbaseline.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ProcessBaselineDeleteOne{builder}
+}
+
+// Query returns a query builder for ProcessBaseline.
+func (c *ProcessBaselineClient) Query() *ProcessBaselineQuery {
+	return &ProcessBaselineQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeProcessBaseline},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ProcessBaseline entity by its id.
+func (c *ProcessBaselineClient) Get(ctx context.Context, id uuid.UUID) (*ProcessBaseline, error) {
+	return c.Query().Where(processbaseline.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ProcessBaselineClient) GetX(ctx context.Context, id uuid.UUID) *ProcessBaseline {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ProcessBaselineClient) Hooks() []Hook {
+	return c.hooks.ProcessBaseline
+}
+
+// Interceptors returns the client interceptors.
+func (c *ProcessBaselineClient) Interceptors() []Interceptor {
+	return c.inters.ProcessBaseline
+}
+
+func (c *ProcessBaselineClient) mutate(ctx context.Context, m *ProcessBaselineMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ProcessBaselineCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ProcessBaselineUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ProcessBaselineUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ProcessBaselineDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ProcessBaseline mutation op: %q", m.Op())
+	}
+}
+
 // SessionClient is a client for the Session schema.
 type SessionClient struct {
 	config
@@ -1774,11 +1915,11 @@ func (c *UserClient) mutate(ctx context.Context, m *UserMutation) (Value, error)
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		Alert, Asset, AuditLog, Command, Event, Incident, Intel, Session, Suppression,
-		User []ent.Hook
+		Alert, Asset, AuditLog, Command, Event, Incident, Intel, ProcessBaseline,
+		Session, Suppression, User []ent.Hook
 	}
 	inters struct {
-		Alert, Asset, AuditLog, Command, Event, Incident, Intel, Session, Suppression,
-		User []ent.Interceptor
+		Alert, Asset, AuditLog, Command, Event, Incident, Intel, ProcessBaseline,
+		Session, Suppression, User []ent.Interceptor
 	}
 )

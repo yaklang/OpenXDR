@@ -13,6 +13,7 @@ import (
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/intel"
+	"openxdr/server/ent/processbaseline"
 	"openxdr/server/ent/session"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/user"
@@ -82,16 +83,17 @@ var (
 func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			alert.Table:       alert.ValidColumn,
-			asset.Table:       asset.ValidColumn,
-			auditlog.Table:    auditlog.ValidColumn,
-			command.Table:     command.ValidColumn,
-			event.Table:       event.ValidColumn,
-			incident.Table:    incident.ValidColumn,
-			intel.Table:       intel.ValidColumn,
-			session.Table:     session.ValidColumn,
-			suppression.Table: suppression.ValidColumn,
-			user.Table:        user.ValidColumn,
+			alert.Table:           alert.ValidColumn,
+			asset.Table:           asset.ValidColumn,
+			auditlog.Table:        auditlog.ValidColumn,
+			command.Table:         command.ValidColumn,
+			event.Table:           event.ValidColumn,
+			incident.Table:        incident.ValidColumn,
+			intel.Table:           intel.ValidColumn,
+			processbaseline.Table: processbaseline.ValidColumn,
+			session.Table:         session.ValidColumn,
+			suppression.Table:     suppression.ValidColumn,
+			user.Table:            user.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

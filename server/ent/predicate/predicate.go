@@ -27,6 +27,9 @@ type Incident func(*sql.Selector)
 // Intel is the predicate function for intel builders.
 type Intel func(*sql.Selector)
 
+// ProcessBaseline is the predicate function for processbaseline builders.
+type ProcessBaseline func(*sql.Selector)
+
 // Session is the predicate function for session builders.
 type Session func(*sql.Selector)
 

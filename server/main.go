@@ -29,6 +29,7 @@ import (
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/syslog"
 	"openxdr/server/internal/triage"
+	"openxdr/server/internal/ueba"
 	"openxdr/server/pb"
 )
 
@@ -67,6 +68,14 @@ func main() {
 		Window:        time.Duration(getenvInt("CORRELATE_WINDOW_MINUTES", 30)) * time.Minute,
 		Interval:      time.Duration(getenvInt("CORRELATE_INTERVAL_SECONDS", 10)) * time.Second,
 		MaxGraphNodes: getenvInt("CORRELATE_MAX_GRAPH_NODES", 500),
+	}).Run(ctx)
+
+	// UEBA 首次出现：先学习后告警，学习期按资产从首次观测起算
+	go (&ueba.Engine{
+		DB:             client,
+		Suppress:       suppressions,
+		LearningPeriod: time.Duration(getenvInt("UEBA_LEARNING_DAYS", 7)) * 24 * time.Hour,
+		Interval:       time.Duration(getenvInt("UEBA_INTERVAL_SECONDS", 30)) * time.Second,
 	}).Run(ctx)
 
 	go (&janitor.Janitor{

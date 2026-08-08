@@ -26,6 +26,8 @@ type Tx struct {
 	Incident *IncidentClient
 	// Intel is the client for interacting with the Intel builders.
 	Intel *IntelClient
+	// ProcessBaseline is the client for interacting with the ProcessBaseline builders.
+	ProcessBaseline *ProcessBaselineClient
 	// Session is the client for interacting with the Session builders.
 	Session *SessionClient
 	// Suppression is the client for interacting with the Suppression builders.
@@ -170,6 +172,7 @@ func (tx *Tx) init() {
 	tx.Event = NewEventClient(tx.config)
 	tx.Incident = NewIncidentClient(tx.config)
 	tx.Intel = NewIntelClient(tx.config)
+	tx.ProcessBaseline = NewProcessBaselineClient(tx.config)
 	tx.Session = NewSessionClient(tx.config)
 	tx.Suppression = NewSuppressionClient(tx.config)
 	tx.User = NewUserClient(tx.config)

@@ -15,6 +15,7 @@ import (
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/intel"
 	"openxdr/server/ent/predicate"
+	"openxdr/server/ent/processbaseline"
 	"openxdr/server/ent/session"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/user"
@@ -35,16 +36,17 @@ const (
 	OpUpdateOne = ent.OpUpdateOne
 
 	// Node types.
-	TypeAlert       = "Alert"
-	TypeAsset       = "Asset"
-	TypeAuditLog    = "AuditLog"
-	TypeCommand     = "Command"
-	TypeEvent       = "Event"
-	TypeIncident    = "Incident"
-	TypeIntel       = "Intel"
-	TypeSession     = "Session"
-	TypeSuppression = "Suppression"
-	TypeUser        = "User"
+	TypeAlert           = "Alert"
+	TypeAsset           = "Asset"
+	TypeAuditLog        = "AuditLog"
+	TypeCommand         = "Command"
+	TypeEvent           = "Event"
+	TypeIncident        = "Incident"
+	TypeIntel           = "Intel"
+	TypeProcessBaseline = "ProcessBaseline"
+	TypeSession         = "Session"
+	TypeSuppression     = "Suppression"
+	TypeUser            = "User"
 )
 
 // AlertMutation represents an operation that mutates the Alert nodes in the graph.
@@ -6405,6 +6407,446 @@ func (m *IntelMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *IntelMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown Intel edge %s", name)
+}
+
+// ProcessBaselineMutation represents an operation that mutates the ProcessBaseline nodes in the graph.
+type ProcessBaselineMutation struct {
+	config
+	op            Op
+	typ           string
+	id            *uuid.UUID
+	asset_id      *uuid.UUID
+	exe_path      *string
+	first_seen    *time.Time
+	clearedFields map[string]struct{}
+	done          bool
+	oldValue      func(context.Context) (*ProcessBaseline, error)
+	predicates    []predicate.ProcessBaseline
+}
+
+var _ ent.Mutation = (*ProcessBaselineMutation)(nil)
+
+// processbaselineOption allows management of the mutation configuration using functional options.
+type processbaselineOption func(*ProcessBaselineMutation)
+
+// newProcessBaselineMutation creates new mutation for the ProcessBaseline entity.
+func newProcessBaselineMutation(c config, op Op, opts ...processbaselineOption) *ProcessBaselineMutation {
+	m := &ProcessBaselineMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeProcessBaseline,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withProcessBaselineID sets the ID field of the mutation.
+func withProcessBaselineID(id uuid.UUID) processbaselineOption {
+	return func(m *ProcessBaselineMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *ProcessBaseline
+		)
+		m.oldValue = func(ctx context.Context) (*ProcessBaseline, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().ProcessBaseline.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withProcessBaseline sets the old ProcessBaseline of the mutation.
+func withProcessBaseline(node *ProcessBaseline) processbaselineOption {
+	return func(m *ProcessBaselineMutation) {
+		m.oldValue = func(context.Context) (*ProcessBaseline, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m ProcessBaselineMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m ProcessBaselineMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of ProcessBaseline entities.
+func (m *ProcessBaselineMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *ProcessBaselineMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *ProcessBaselineMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().ProcessBaseline.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetAssetID sets the "asset_id" field.
+func (m *ProcessBaselineMutation) SetAssetID(u uuid.UUID) {
+	m.asset_id = &u
+}
+
+// AssetID returns the value of the "asset_id" field in the mutation.
+func (m *ProcessBaselineMutation) AssetID() (r uuid.UUID, exists bool) {
+	v := m.asset_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAssetID returns the old "asset_id" field's value of the ProcessBaseline entity.
+// If the ProcessBaseline object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProcessBaselineMutation) OldAssetID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAssetID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAssetID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAssetID: %w", err)
+	}
+	return oldValue.AssetID, nil
+}
+
+// ResetAssetID resets all changes to the "asset_id" field.
+func (m *ProcessBaselineMutation) ResetAssetID() {
+	m.asset_id = nil
+}
+
+// SetExePath sets the "exe_path" field.
+func (m *ProcessBaselineMutation) SetExePath(s string) {
+	m.exe_path = &s
+}
+
+// ExePath returns the value of the "exe_path" field in the mutation.
+func (m *ProcessBaselineMutation) ExePath() (r string, exists bool) {
+	v := m.exe_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExePath returns the old "exe_path" field's value of the ProcessBaseline entity.
+// If the ProcessBaseline object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProcessBaselineMutation) OldExePath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExePath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExePath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExePath: %w", err)
+	}
+	return oldValue.ExePath, nil
+}
+
+// ResetExePath resets all changes to the "exe_path" field.
+func (m *ProcessBaselineMutation) ResetExePath() {
+	m.exe_path = nil
+}
+
+// SetFirstSeen sets the "first_seen" field.
+func (m *ProcessBaselineMutation) SetFirstSeen(t time.Time) {
+	m.first_seen = &t
+}
+
+// FirstSeen returns the value of the "first_seen" field in the mutation.
+func (m *ProcessBaselineMutation) FirstSeen() (r time.Time, exists bool) {
+	v := m.first_seen
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFirstSeen returns the old "first_seen" field's value of the ProcessBaseline entity.
+// If the ProcessBaseline object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProcessBaselineMutation) OldFirstSeen(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFirstSeen is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFirstSeen requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFirstSeen: %w", err)
+	}
+	return oldValue.FirstSeen, nil
+}
+
+// ResetFirstSeen resets all changes to the "first_seen" field.
+func (m *ProcessBaselineMutation) ResetFirstSeen() {
+	m.first_seen = nil
+}
+
+// Where appends a list predicates to the ProcessBaselineMutation builder.
+func (m *ProcessBaselineMutation) Where(ps ...predicate.ProcessBaseline) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the ProcessBaselineMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *ProcessBaselineMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.ProcessBaseline, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *ProcessBaselineMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *ProcessBaselineMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (ProcessBaseline).
+func (m *ProcessBaselineMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *ProcessBaselineMutation) Fields() []string {
+	fields := make([]string, 0, 3)
+	if m.asset_id != nil {
+		fields = append(fields, processbaseline.FieldAssetID)
+	}
+	if m.exe_path != nil {
+		fields = append(fields, processbaseline.FieldExePath)
+	}
+	if m.first_seen != nil {
+		fields = append(fields, processbaseline.FieldFirstSeen)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *ProcessBaselineMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case processbaseline.FieldAssetID:
+		return m.AssetID()
+	case processbaseline.FieldExePath:
+		return m.ExePath()
+	case processbaseline.FieldFirstSeen:
+		return m.FirstSeen()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *ProcessBaselineMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case processbaseline.FieldAssetID:
+		return m.OldAssetID(ctx)
+	case processbaseline.FieldExePath:
+		return m.OldExePath(ctx)
+	case processbaseline.FieldFirstSeen:
+		return m.OldFirstSeen(ctx)
+	}
+	return nil, fmt.Errorf("unknown ProcessBaseline field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ProcessBaselineMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case processbaseline.FieldAssetID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAssetID(v)
+		return nil
+	case processbaseline.FieldExePath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExePath(v)
+		return nil
+	case processbaseline.FieldFirstSeen:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFirstSeen(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ProcessBaseline field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *ProcessBaselineMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *ProcessBaselineMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ProcessBaselineMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown ProcessBaseline numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *ProcessBaselineMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *ProcessBaselineMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *ProcessBaselineMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown ProcessBaseline nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *ProcessBaselineMutation) ResetField(name string) error {
+	switch name {
+	case processbaseline.FieldAssetID:
+		m.ResetAssetID()
+		return nil
+	case processbaseline.FieldExePath:
+		m.ResetExePath()
+		return nil
+	case processbaseline.FieldFirstSeen:
+		m.ResetFirstSeen()
+		return nil
+	}
+	return fmt.Errorf("unknown ProcessBaseline field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *ProcessBaselineMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *ProcessBaselineMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *ProcessBaselineMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *ProcessBaselineMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *ProcessBaselineMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *ProcessBaselineMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *ProcessBaselineMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown ProcessBaseline unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *ProcessBaselineMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown ProcessBaseline edge %s", name)
 }
 
 // SessionMutation represents an operation that mutates the Session nodes in the graph.

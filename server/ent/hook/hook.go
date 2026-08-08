@@ -92,6 +92,18 @@ func (f IntelFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.IntelMutation", m)
 }
 
+// The ProcessBaselineFunc type is an adapter to allow the use of ordinary
+// function as ProcessBaseline mutator.
+type ProcessBaselineFunc func(context.Context, *ent.ProcessBaselineMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ProcessBaselineFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ProcessBaselineMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ProcessBaselineMutation", m)
+}
+
 // The SessionFunc type is an adapter to allow the use of ordinary
 // function as Session mutator.
 type SessionFunc func(context.Context, *ent.SessionMutation) (ent.Value, error)

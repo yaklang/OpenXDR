@@ -10,6 +10,7 @@ import (
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/intel"
+	"openxdr/server/ent/processbaseline"
 	"openxdr/server/ent/schema"
 	"openxdr/server/ent/session"
 	"openxdr/server/ent/suppression"
@@ -121,6 +122,12 @@ func init() {
 	intelDescID := intelFields[0].Descriptor()
 	// intel.DefaultID holds the default value on creation for the id field.
 	intel.DefaultID = intelDescID.Default.(func() uuid.UUID)
+	processbaselineFields := schema.ProcessBaseline{}.Fields()
+	_ = processbaselineFields
+	// processbaselineDescID is the schema descriptor for id field.
+	processbaselineDescID := processbaselineFields[0].Descriptor()
+	// processbaseline.DefaultID holds the default value on creation for the id field.
+	processbaseline.DefaultID = processbaselineDescID.Default.(func() uuid.UUID)
 	sessionFields := schema.Session{}.Fields()
 	_ = sessionFields
 	// sessionDescCreatedAt is the schema descriptor for created_at field.

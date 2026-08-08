@@ -494,8 +494,12 @@ func (e *Engine) Rules() []*Rule {
 // 跨事件计数超出单事件匹配引擎的能力，逻辑在 ingest 侧实现，标题在此登记。
 const RuleBruteforceSuccess = "xdr:bruteforce-success"
 
+// RuleNewProcess UEBA 合成检测：学习期满的资产上首次出现的可执行文件。
+const RuleNewProcess = "xdr:new-process"
+
 var syntheticTitles = map[string]string{
 	RuleBruteforceSuccess: "Brute Force Success (多次失败后登录成功)",
+	RuleNewProcess:        "New Process First Seen (新进程首次出现)",
 }
 
 func (e *Engine) TitleOf(ruleID string) string {
