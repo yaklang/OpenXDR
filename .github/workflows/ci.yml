@@ -113,6 +113,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # ring 的构建脚本要 mingw 交叉编译器
+      - name: 安装 mingw
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-gnu
