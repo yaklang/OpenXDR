@@ -267,6 +267,7 @@ server 全部通过环境变量配置，均有默认值：
 |---|---|---|
 | `DATABASE_URL` | `postgres://openxdr:openxdr@localhost:5432/openxdr?sslmode=disable` | 数据库连接串 |
 | `RULES_PATH` | `../rules` | Sigma 规则目录 |
+| `RULES_RELOAD_SECONDS` | `30` | 规则目录变更检测周期，变更自动热重载；0 关闭 |
 | `HTTP_ADDR` / `GRPC_ADDR` | `:8080` / `:8081` | 监听地址 |
 | `ALERT_DEDUP_WINDOW_MINUTES` | `5` | 告警去重窗口 |
 | `CORRELATE_WINDOW_MINUTES` | `30` | 关联时间窗 |

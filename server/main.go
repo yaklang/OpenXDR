@@ -54,7 +54,11 @@ func main() {
 	intelStore := intel.New(client, time.Duration(getenvInt("INTEL_RELOAD_SECONDS", 30))*time.Second)
 	go intelStore.Run(ctx)
 
-	rules := sigma.LoadDir(getenv("RULES_PATH", "../rules"))
+	rulesPath := getenv("RULES_PATH", "../rules")
+	rules := sigma.LoadDir(rulesPath)
+	if sec := getenvInt("RULES_RELOAD_SECONDS", 30); sec > 0 {
+		go rules.Watch(ctx, rulesPath, time.Duration(sec)*time.Second)
+	}
 
 	go (&correlate.Engine{
 		DB:            client,

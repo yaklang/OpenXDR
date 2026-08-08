@@ -321,7 +321,7 @@ detection:
 	}
 
 	eng := LoadDir(dir)
-	if got := len(eng.rules); got != 4 {
+	if got := len(eng.load().rules); got != 4 {
 		t.Fatalf("期望加载 4 条规则，得到 %d", got)
 	}
 

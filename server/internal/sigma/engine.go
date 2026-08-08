@@ -11,6 +11,7 @@
 package sigma
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -19,6 +20,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -279,7 +282,9 @@ func resolve(raw map[string]any, path []string) (string, bool) {
 	}
 }
 
-type Engine struct {
+// engineState 一次加载的全部规则与索引。热重载时整体原子替换，
+// Evaluate 拿到的永远是某个完整一致的版本，不加锁。
+type engineState struct {
 	rules []*Rule
 	byID  map[string]*Rule
 	// 按 OCSF class 分桶：一条网络事件没必要去碰一千多条进程规则
@@ -288,16 +293,30 @@ type Engine struct {
 	maxSels  int     // 单条规则的最多 selection 数，决定 memo 缓冲大小
 }
 
-func (e *Engine) index() {
-	e.byClass = map[int][]*Rule{}
-	for _, r := range e.rules {
+type Engine struct {
+	state atomic.Pointer[engineState]
+}
+
+// 零值 Engine（测试常用）也要能安全求值
+var emptyState = &engineState{byID: map[string]*Rule{}}
+
+func (e *Engine) load() *engineState {
+	if s := e.state.Load(); s != nil {
+		return s
+	}
+	return emptyState
+}
+
+func (s *engineState) index() {
+	s.byClass = map[int][]*Rule{}
+	for _, r := range s.rules {
 		if r.ClassUID == 0 {
-			e.anyClass = append(e.anyClass, r)
+			s.anyClass = append(s.anyClass, r)
 		} else {
-			e.byClass[r.ClassUID] = append(e.byClass[r.ClassUID], r)
+			s.byClass[r.ClassUID] = append(s.byClass[r.ClassUID], r)
 		}
-		if n := len(r.sels); n > e.maxSels {
-			e.maxSels = n
+		if n := len(r.sels); n > s.maxSels {
+			s.maxSels = n
 		}
 	}
 }
@@ -320,7 +339,14 @@ func LoadDir(dir string) *Engine {
 }
 
 func LoadDirReport(dir string) (*Engine, Report) {
-	e := &Engine{byID: map[string]*Rule{}}
+	s, report := loadState(dir)
+	e := &Engine{}
+	e.state.Store(s)
+	return e, report
+}
+
+func loadState(dir string) (*engineState, Report) {
+	s := &engineState{byID: map[string]*Rule{}}
 	report := Report{ByClass: map[int]int{}, Skipped: map[string][]string{}}
 
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -339,17 +365,62 @@ func LoadDirReport(dir string) (*Engine, Report) {
 		}
 		report.Loaded++
 		report.ByClass[rule.ClassUID]++
-		e.rules = append(e.rules, rule)
-		if _, dup := e.byID[rule.ID]; !dup {
-			e.byID[rule.ID] = rule
+		s.rules = append(s.rules, rule)
+		if _, dup := s.byID[rule.ID]; !dup {
+			s.byID[rule.ID] = rule
 		}
 		return nil
 	})
 	if err != nil {
 		slog.Warn("Sigma 规则目录不可读", "dir", dir, "err", err)
 	}
-	e.index()
-	return e, report
+	s.index()
+	return s, report
+}
+
+// Watch 周期扫描规则目录，文件集合或修改时间变化时整体重载并原子切换。
+// 编译失败的规则照常跳过并记日志，不会让旧规则集失效——改坏一条规则
+// 的代价是那一条不生效，而不是整个检测面归零。
+func (e *Engine) Watch(ctx context.Context, dir string, interval time.Duration) {
+	fingerprint := dirFingerprint(dir)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fp := dirFingerprint(dir)
+			if fp == fingerprint {
+				continue
+			}
+			fingerprint = fp
+			s, report := loadState(dir)
+			e.state.Store(s)
+			slog.Info("Sigma 规则已热重载", "loaded", report.Loaded, "total", report.Total)
+			for reason, files := range report.Skipped {
+				slog.Warn("跳过规则", "reason", reason, "count", len(files), "files", files)
+			}
+		}
+	}
+}
+
+// dirFingerprint 规则目录的变更指纹：全部规则文件的路径 + mtime + 大小。
+func dirFingerprint(dir string) string {
+	var sb strings.Builder
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if ext := filepath.Ext(path); ext != ".yml" && ext != ".yaml" {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			fmt.Fprintf(&sb, "%s|%d|%d\n", path, info.ModTime().UnixNano(), info.Size())
+		}
+		return nil
+	})
+	return sb.String()
 }
 
 // classify 把具体错误归成可统计的类别，具体值（规则名、字段名）剥掉。
@@ -378,7 +449,8 @@ func classify(err error) string {
 // 用于把 Windows 规则挡在 Linux 事件之外——反之亦然。
 // 可并发调用：除按事件分配的 memo 外不持有可变状态。
 func (e *Engine) Evaluate(classUID int, os string, raw map[string]any) []*Rule {
-	ctx := evalCtx{raw: raw, memo: make([]int8, e.maxSels)}
+	s := e.load()
+	ctx := evalCtx{raw: raw, memo: make([]int8, s.maxSels)}
 	var hits []*Rule
 	match := func(rules []*Rule) {
 		for _, r := range rules {
@@ -393,13 +465,13 @@ func (e *Engine) Evaluate(classUID int, os string, raw map[string]any) []*Rule {
 			}
 		}
 	}
-	match(e.byClass[classUID])
-	match(e.anyClass)
+	match(s.byClass[classUID])
+	match(s.anyClass)
 	return hits
 }
 
 func (e *Engine) TitleOf(ruleID string) string {
-	if r, ok := e.byID[ruleID]; ok {
+	if r, ok := e.load().byID[ruleID]; ok {
 		return r.Title
 	}
 	return ""
