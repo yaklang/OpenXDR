@@ -1,0 +1,19 @@
+title: Sensitive File Modified
+id: 5a7c1d9e-3b64-4f28-a0d5-8e9f2c4b6a17
+status: experimental
+description: 检测持久化与提权相关的敏感文件变更：预加载库、cron、sudoers、SSH 密钥、账号库
+logsource:
+  category: file_event
+  product: linux
+detection:
+  selection:
+    TargetFilename|contains:
+      - '/etc/ld.so.preload'
+      - '/etc/cron'
+      - '/etc/sudoers'
+      - 'authorized_keys'
+      - '/etc/passwd'
+      - '/etc/shadow'
+      - '/etc/ssh/sshd_config'
+  condition: selection
+level: high

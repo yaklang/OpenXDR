@@ -26,4 +26,12 @@ func TestRepoRulesAllLoad(t *testing.T) {
 	if !containsStr(ruleIDs(hits), "bae25b03-2a0e-44f0-a36d-fe0042b9e66f") {
 		t.Errorf("隧道服务 DNS 查询未命中规则：%v", ruleIDs(hits))
 	}
+
+	hits = engine.Evaluate(1001, "linux", map[string]any{
+		"activity_id": 3,
+		"file":        map[string]any{"path": "/root/.ssh/authorized_keys"},
+	})
+	if !containsStr(ruleIDs(hits), "5a7c1d9e-3b64-4f28-a0d5-8e9f2c4b6a17") {
+		t.Errorf("敏感文件变更未命中规则：%v", ruleIDs(hits))
+	}
 }

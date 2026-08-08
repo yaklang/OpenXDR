@@ -126,6 +126,7 @@ worker 号即网卡队列号，数量不应超过网卡实际队列数。
 | 三环（默认） | Linux netlink proc connector | 全部 exec 通知，信息从 /proc 现补 | CAP_NET_ADMIN + 初始 pid 命名空间 |
 | 三环 | Windows ETW | 进程启动事件 | 管理员 |
 | 三环（兜底） | 进程表轮询 | 每秒快照，漏短命进程 | 无 |
+| 三环（并行） | Linux inotify | 敏感文件变更（cron、sudoers、SSH 密钥、预加载库等） | 无 |
 
 netlink 在**容器或 WSL2 里不可用**：proc connector 报的是初始 pid 命名空间的
 pid，在嵌套命名空间中对不上本地 /proc，采出来全是错 pid、空进程名的垃圾。

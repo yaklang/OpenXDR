@@ -15,6 +15,9 @@ mod poll;
 mod registry;
 
 #[cfg(target_os = "linux")]
+mod fswatch;
+
+#[cfg(target_os = "linux")]
 mod netlink;
 
 pub use registry::ProcessRegistry;
@@ -33,6 +36,10 @@ pub fn spawn(agent_id: String) -> mpsc::Receiver<AgentEvent> {
         dropped: Arc::new(AtomicU64::new(0)),
     };
 
+    // 进程采集的各分支会拿走 agent_id/sink 所有权，文件监控的副本先留出来
+    #[cfg(target_os = "linux")]
+    let (agent_id_fs, sink_fs) = (agent_id.clone(), sink.clone());
+
     #[cfg(all(target_os = "linux", feature = "ebpf"))]
     tokio::spawn(linux::run(agent_id, sink));
 
@@ -48,6 +55,13 @@ pub fn spawn(agent_id: String) -> mpsc::Receiver<AgentEvent> {
             eprintln!("netlink 采集不可用（{e}），回落到轮询采集（会漏短命进程）");
             tokio::spawn(poll::run(agent_id, sink));
         }
+    }
+
+    // 敏感文件监控与进程采集并行，各自独立降级
+    #[cfg(target_os = "linux")]
+    match fswatch::spawn(agent_id_fs, sink_fs) {
+        Ok(n) => eprintln!("文件监控: inotify 盯 {n} 个敏感目录"),
+        Err(e) => eprintln!("文件监控不可用（{e}）"),
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]

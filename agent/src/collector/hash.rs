@@ -16,7 +16,10 @@ const MAX_FILE_SIZE: u64 = 128 * 1024 * 1024;
 /// 缓存条目上限，防御路径爆炸；满了整体清空，代价只是重算一轮
 const MAX_ENTRIES: usize = 4096;
 
-static CACHE: LazyLock<Mutex<HashMap<(String, SystemTime, u64), String>>> =
+/// 缓存键：(路径, mtime, 大小)。三者任一变化都视为新文件
+type CacheKey = (String, SystemTime, u64);
+
+static CACHE: LazyLock<Mutex<HashMap<CacheKey, String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 计算可执行文件的 SHA-256（十六进制小写）。文件不可读或过大时返回 None。

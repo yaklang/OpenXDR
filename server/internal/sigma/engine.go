@@ -99,6 +99,7 @@ var categoryMap = map[string]int{
 
 // 当前采集端真正会产生的 OCSF class，用于区分"规则能加载"与"规则能命中"
 var ingestedClasses = map[int]string{
+	1001:   "文件活动（agent inotify）",
 	1007:   "进程活动（agent）",
 	4001:   "网络活动（sensor）",
 	4003:   "DNS 活动（sensor）",
