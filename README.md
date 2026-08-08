@@ -77,6 +77,10 @@ docker compose up -d   # 格式支持 generic / dingtalk / feishu / wecom
 AI_MODEL=qwen3 docker compose up -d   # 默认接本机 Ollama
 ```
 
+研判是**主动调查**式的：模型可以调用工具检索原始事件、追进程血缘、
+查主机告警前科，像分析师一样查证后再定性（最多 6 轮）。模型不支持
+tool calling 时自动退化为单轮研判，无需配置。
+
 也可以接任意 OpenAI 兼容端点，包括自建的私有化部署：
 
 ```bash

@@ -17,7 +17,9 @@ import (
 
 const systemPrompt = `你是资深安全分析师，负责研判 XDR 平台聚合出的安全事件。
 输入包含事件的实体关系图（主机/进程/告警）和按时间排序的告警明细。
-只输出一个 JSON 对象，不要输出任何其他文字，结构如下：
+你可以调用工具主动调查：检索原始事件、追进程血缘、查主机告警前科。
+证据不足时先调查再下结论，证据已经充分时直接给结论，不要为了调查而调查。
+最终结论只输出一个 JSON 对象，不要输出任何其他文字，结构如下：
 {
   "verdict": "malicious | suspicious | benign",
   "confidence": 0 到 100 的整数,
@@ -70,7 +72,7 @@ func (e *Engine) batch(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		answer, err := e.LLM.Chat(ctx, systemPrompt, context_)
+		answer, err := e.investigate(ctx, context_)
 		if err != nil {
 			return err
 		}
@@ -84,6 +86,40 @@ func (e *Engine) batch(ctx context.Context) error {
 		slog.Info("incident 研判完成", "id", inc.ID)
 	}
 	return nil
+}
+
+// 工具调用轮数上限：防模型在调查里打转。用尽后强制收结论。
+const maxToolTurns = 6
+
+// investigate 带工具的研判循环。模型不调用工具时第一轮就返回结论，
+// 不支持工具的模型也走同一条路径，天然退化为单轮研判。
+func (e *Engine) investigate(ctx context.Context, incidentContext string) (string, error) {
+	msgs := []Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: incidentContext},
+	}
+	for turn := 0; turn < maxToolTurns; turn++ {
+		msg, err := e.LLM.Chat(ctx, msgs, investigationTools)
+		if err != nil {
+			return "", err
+		}
+		if len(msg.ToolCalls) == 0 {
+			return msg.Content, nil
+		}
+		msgs = append(msgs, msg)
+		for _, tc := range msg.ToolCalls {
+			result := e.execTool(ctx, tc.Function.Name, tc.Function.Arguments)
+			slog.Info("研判调查", "tool", tc.Function.Name, "args", tc.Function.Arguments)
+			msgs = append(msgs, Message{Role: "tool", ToolCallID: tc.ID, Content: result})
+		}
+	}
+	// 轮数用尽：收走工具，强制给结论
+	msgs = append(msgs, Message{Role: "user", Content: "调查轮数已用尽，基于以上全部信息立即输出最终 JSON 结论。"})
+	msg, err := e.LLM.Chat(ctx, msgs, nil)
+	if err != nil {
+		return "", err
+	}
+	return msg.Content, nil
 }
 
 func parseVerdict(incidentID, answer string) json.RawMessage {
