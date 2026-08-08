@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import {
-  Unauthorized, fetchIncident, fetchIncidents, fetchMe, logout, setIncidentStatus,
+  Unauthorized, downloadReport, fetchIncident, fetchIncidents, fetchMe, logout, setIncidentStatus,
   type IncidentDetail, type IncidentSummary, type Me,
 } from './api'
 import { AssetList } from './AssetList'
@@ -184,6 +184,10 @@ export default function App() {
                 <span className={`status status-${detail.status}`}>
                   {STATUS_KEY[detail.status] ? t(STATUS_KEY[detail.status]) : detail.status}
                 </span>
+                {/* 只读角色也能导报告：写汇报不是处置动作 */}
+                <button onClick={() => downloadReport(detail.id, detail.title)}>
+                  {t('exportReport')}
+                </button>
                 {canWrite && (
                   <>
                     <button onClick={() => changeStatus('closed')}>{t('close')}</button>

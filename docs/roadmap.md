@@ -52,8 +52,8 @@ resource-development、exfiltration（仅间接覆盖）。前两个本质上需
 日志（邮件网关、WAF、VPN），属于接入面而非规则问题——等有真实环境再说，
 不为假想数据源写规则。
 
-**6. incident 报告导出。** 一键 Markdown：判定、攻击链、时间线、告警明细、
-处置记录。分析师写汇报的时间不该花在复制粘贴上。
+**6. ~~incident 报告导出~~ ✅ 已完成。** `GET /api/incidents/{id}/report`
+输出 Markdown，界面一键下载。渲染是纯函数，脱库单测。
 
 **7. ~~AI 研判升级为工具调用~~ ✅ 已完成。** 研判可调用 query_events /
 process_lineage / host_alerts 主动查证；误报反馈已回流进上下文；

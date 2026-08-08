@@ -22,6 +22,7 @@ const dicts = {
     // 详情
     close: '关闭',
     markFp: '标记误报',
+    exportReport: '导出报告',
     reopen: '重开',
     responseTitle: '响应处置',
     graphTitle: '实体关系图',
@@ -216,6 +217,7 @@ const dicts = {
     statusFalsePositive: 'False positive',
     close: 'Close',
     markFp: 'Mark false positive',
+    exportReport: 'Export report',
     reopen: 'Reopen',
     responseTitle: 'Response',
     graphTitle: 'Entity graph',

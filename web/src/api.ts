@@ -106,6 +106,19 @@ export async function setIncidentStatus(id: string, status: string): Promise<voi
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
 }
 
+// 报告是文件下载：拿到 blob 后用临时链接触发浏览器保存
+export async function downloadReport(id: string, title: string | null): Promise<void> {
+  const r = await fetch(`/api/incidents/${id}/report`)
+  check(r)
+  if (!r.ok) throw new Error(await r.text())
+  const url = URL.createObjectURL(await r.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${(title ?? id).replace(/[/\\?%*:|"<>]/g, '-')}.md`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 export interface CommandRow {
   id: string
   createdAt: string

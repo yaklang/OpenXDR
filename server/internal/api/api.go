@@ -63,6 +63,7 @@ func Handler(db *ent.Client, rules *sigma.Engine, hub *response.Hub, suppression
 	mapEvents(mux, db)
 	mapRules(mux, rules)
 	mapAttack(mux, rules)
+	mapReport(mux, db, rules)
 	mapUsers(mux, db)
 
 	mux.HandleFunc("GET /api/incidents", func(w http.ResponseWriter, r *http.Request) {

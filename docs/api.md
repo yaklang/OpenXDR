@@ -19,6 +19,7 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | GET | `/api/incidents?status=` | incident 列表（最新 50 条），含派生严重度与告警数 |
 | GET | `/api/incidents/{id}` | 详情：实体图、告警明细（含原始事件）、AI verdict |
 | POST | `/api/incidents/{id}/status` | `{"status":"open\|closed\|false_positive"}` |
+| GET | `/api/incidents/{id}/report` | 事件报告（Markdown 附件下载）：判定、攻击链、涉及实体、告警时间线、处置记录、处置建议 |
 | GET | `/api/events` | 原始事件检索，参数见下 |
 | GET | `/api/stats` | 概览：24h 降噪漏斗、告警趋势、Top 规则、资产在线率 |
 | GET | `/api/rules` | 引擎当前加载的规则（热重载后即时反映），含数据源覆盖标记与 ATT&CK 标签 |

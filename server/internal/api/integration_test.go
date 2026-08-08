@@ -199,3 +199,40 @@ func TestAPIGetAssets(t *testing.T) {
 		t.Errorf("资产列表不符: %v", assets)
 	}
 }
+
+// GET /api/incidents/{id}/report 导出 Markdown：带附件头，内容含告警明细。
+func TestAPIIncidentReport(t *testing.T) {
+	ts, incID := seed(t)
+	resp, body := get(t, ts, "/api/incidents/"+incID.String()+"/report")
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d: %s", resp.StatusCode, body)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/markdown") {
+		t.Errorf("Content-Type 应为 markdown，实际 %s", ct)
+	}
+	if cd := resp.Header.Get("Content-Disposition"); !strings.Contains(cd, ".md") {
+		t.Errorf("应带附件下载头，实际 %s", cd)
+	}
+	md := string(body)
+	for _, want := range []string{
+		"# 安全事件报告：SSH brute force",
+		"## 研判结论",
+		"## 告警时间线",
+		"Sample Rule", // 规则标题而非裸 UUID
+		"ssh failed",  // 证据取自原始事件
+		"## 处置记录",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("报告缺少 %q\n---\n%s", want, md)
+		}
+	}
+}
+
+// 不存在的 incident 返回 404，不是 500
+func TestAPIReportNotFound(t *testing.T) {
+	ts, _ := seed(t)
+	resp, _ := get(t, ts, "/api/incidents/"+uuid.New().String()+"/report")
+	if resp.StatusCode != 404 {
+		t.Errorf("应返回 404，实际 %d", resp.StatusCode)
+	}
+}
