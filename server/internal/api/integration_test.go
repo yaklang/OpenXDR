@@ -15,9 +15,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"openxdr/server/internal/intel"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
-	"openxdr/server/internal/intel"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 )

@@ -59,7 +59,7 @@ func TestCorrelateLateralMovement(t *testing.T) {
 	// A → B 的网络会话（sensor 流事件按源 IP 归属到 A）
 	tuple := "tcp:10.0.0.5:44000>10.0.0.8:22"
 	if _, err := client.Event.Create().
-		SetTs(now.Add(-5*time.Minute)).SetClassUID(4001).SetSource("sensor").
+		SetTs(now.Add(-5 * time.Minute)).SetClassUID(4001).SetSource("sensor").
 		SetNillableAssetID(&hostA.ID).SetConnTuple(tuple).
 		SetRaw(json.RawMessage(`{"dst_endpoint":{"ip":"10.0.0.8","port":22}}`)).
 		Save(ctx); err != nil {

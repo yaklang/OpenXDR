@@ -18,9 +18,9 @@ import (
 	entuser "openxdr/server/ent/user"
 	"openxdr/server/internal/api"
 	"openxdr/server/internal/auth"
+	"openxdr/server/internal/intel"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
-	"openxdr/server/internal/intel"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 )

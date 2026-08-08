@@ -33,8 +33,8 @@ func TestMatchIPAndDomainAndHash(t *testing.T) {
 		t.Fatalf("期望 3 次命中，得到 %d：%v", len(hits), hits)
 	}
 	want := map[string]bool{
-		"intel:ip:6.6.6.6":      true,
-		"intel:domain:evil.com": true, // 子域命中根域情报，大小写与尾点已归一
+		"intel:ip:6.6.6.6":       true,
+		"intel:domain:evil.com":  true, // 子域命中根域情报，大小写与尾点已归一
 		"intel:hash:" + sha256of: true,
 	}
 	for _, h := range hits {

@@ -14,6 +14,19 @@ jobs:
   server:
     name: Server (Go)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: openxdr
+          POSTGRES_PASSWORD: openxdr
+          POSTGRES_DB: openxdr_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -32,6 +45,12 @@ jobs:
       - name: 测试
         working-directory: server
         run: go test ./...
+      # 集成测试共享一个测试库，必须 -p 1 串行
+      - name: 集成测试
+        working-directory: server
+        run: go test -tags integration -p 1 ./...
+        env:
+          INTEGRATION_DATABASE_URL: postgres://openxdr:openxdr@localhost:5432/openxdr_test?sslmode=disable
       - name: 自带规则必须全部可加载
         working-directory: server
         run: go run ./cmd/sigmacheck --strict ../rules

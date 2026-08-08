@@ -12,6 +12,7 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/event"
+	"openxdr/server/ent/session"
 )
 
 // 单批删除量：太大容易长事务锁表，太小则清理跟不上写入
@@ -26,7 +27,6 @@ type Janitor struct {
 func (j *Janitor) Run(ctx context.Context) {
 	if j.Retention <= 0 {
 		slog.Warn("事件保留策略未启用：RETENTION_DAYS 为 0，events 表会持续增长")
-		return
 	}
 	ticker := time.NewTicker(j.Interval)
 	defer ticker.Stop()
@@ -35,11 +35,21 @@ func (j *Janitor) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			deleted, err := j.sweep(ctx)
-			if err != nil {
-				slog.Error("清理过期事件失败", "err", err)
-			} else if deleted > 0 {
-				slog.Info("清理过期事件", "deleted", deleted)
+			if j.Retention > 0 {
+				deleted, err := j.sweep(ctx)
+				if err != nil {
+					slog.Error("清理过期事件失败", "err", err)
+				} else if deleted > 0 {
+					slog.Info("清理过期事件", "deleted", deleted)
+				}
+			}
+			// 过期会话是纯垃圾：认证早已拒绝它们，行却一直躺在表里
+			if n, err := j.DB.Session.Delete().
+				Where(session.ExpiresAtLT(time.Now())).
+				Exec(ctx); err != nil {
+				slog.Error("清理过期会话失败", "err", err)
+			} else if n > 0 {
+				slog.Info("清理过期会话", "deleted", n)
 			}
 		}
 	}
