@@ -75,7 +75,8 @@ func main() {
 		Interval:  time.Duration(getenvInt("RETENTION_INTERVAL_MINUTES", 60)) * time.Minute,
 	}).Run(ctx)
 
-	go (&triage.Engine{
+	// 研判引擎同时是狩猎的执行者：共用同一套调查工具与模型配置
+	triageEngine := &triage.Engine{
 		DB:    client,
 		Rules: rules,
 		LLM: triage.NewLLM(
@@ -85,7 +86,8 @@ func main() {
 			time.Duration(getenvInt("AI_TIMEOUT_SECONDS", 120))*time.Second,
 		),
 		Interval: time.Duration(getenvInt("AI_INTERVAL_SECONDS", 30)) * time.Second,
-	}).Run(ctx)
+	}
+	go triageEngine.Run(ctx)
 
 	go (&notify.Notifier{
 		DB:          client,
@@ -155,7 +157,7 @@ func main() {
 
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	slog.Info("HTTP 启动", "addr", httpAddr)
-	handler := auth.Middleware(client, api.Handler(client, rules, hub, suppressions, intelStore, isolationAllowlist()))
+	handler := auth.Middleware(client, api.Handler(client, rules, hub, suppressions, intelStore, triageEngine, isolationAllowlist()))
 	if err := http.ListenAndServe(httpAddr, handler); err != nil {
 		slog.Error("HTTP 退出", "err", err)
 		os.Exit(1)

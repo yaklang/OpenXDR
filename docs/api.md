@@ -21,6 +21,8 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | POST | `/api/incidents/{id}/status` | `{"status":"open\|closed\|false_positive"}` |
 | GET | `/api/events` | 原始事件检索，参数见下 |
 | GET | `/api/stats` | 概览：24h 降噪漏斗、告警趋势、Top 规则、资产在线率 |
+| GET | `/api/rules` | 引擎当前加载的规则（热重载后即时反映），含数据源覆盖标记 |
+| POST | `/api/hunt` | 自然语言狩猎：`{"question"}` → `{answer, steps}`。模型用只读调查工具查证后作答，`steps` 是调用过的工具与参数，供复核。未配置 `AI_MODEL` 返回 503 |
 
 `GET /api/events` 参数：`from`/`to`（RFC3339，默认近 24h）、`assetId`、
 `classUid`（1007 进程 / 4001 网络 / 4003 DNS / 100001 日志）、

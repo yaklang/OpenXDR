@@ -7,6 +7,7 @@ import { AssetList } from './AssetList'
 import { AuditLogView } from './AuditLogView'
 import { DashboardView } from './DashboardView'
 import { EventSearchView } from './EventSearchView'
+import { HuntView } from './HuntView'
 import { IncidentGraphView } from './IncidentGraphView'
 import { IntelList } from './IntelList'
 import { LoginPage } from './LoginPage'
@@ -45,6 +46,7 @@ export default function App() {
   const [showDashboard, setShowDashboard] = useState(false)
   const [showEventSearch, setShowEventSearch] = useState(false)
   const [showRules, setShowRules] = useState(false)
+  const [showHunt, setShowHunt] = useState(false)
   const [showAssets, setShowAssets] = useState(false)
   const [showUsers, setShowUsers] = useState(false)
   const [showAudit, setShowAudit] = useState(false)
@@ -120,6 +122,9 @@ export default function App() {
           <span className="muted">{t('events', { n: incidents.length })}</span>
           <button className="link" onClick={() => setShowDashboard(true)}>{t('dashboard')}</button>
           <button className="link" onClick={() => setShowEventSearch(true)}>{t('eventSearch')}</button>
+          {canWrite && (
+            <button className="link" onClick={() => setShowHunt(true)}>{t('hunt')}</button>
+          )}
           <button className="link" onClick={() => setShowAssets(true)}>{t('assets')}</button>
           <button className="link" onClick={() => setShowSuppressions(true)}>{t('suppressions')}</button>
           <button className="link" onClick={() => setShowIntel(true)}>{t('intel')}</button>
@@ -247,6 +252,7 @@ export default function App() {
       {showDashboard && <DashboardView onClose={() => setShowDashboard(false)} />}
       {showEventSearch && <EventSearchView onClose={() => setShowEventSearch(false)} />}
       {showRules && <RulesView onClose={() => setShowRules(false)} />}
+      {showHunt && <HuntView onClose={() => setShowHunt(false)} />}
       {showIntel && <IntelList canAct={canWrite} onClose={() => setShowIntel(false)} />}
       {showAssets && <AssetList onClose={() => setShowAssets(false)} />}
       {showUsers && <UserManagement self={me.username} onClose={() => setShowUsers(false)} />}

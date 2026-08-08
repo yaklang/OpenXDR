@@ -91,35 +91,48 @@ func (e *Engine) batch(ctx context.Context) error {
 // 工具调用轮数上限：防模型在调查里打转。用尽后强制收结论。
 const maxToolTurns = 6
 
-// investigate 带工具的研判循环。模型不调用工具时第一轮就返回结论，
-// 不支持工具的模型也走同一条路径，天然退化为单轮研判。
-func (e *Engine) investigate(ctx context.Context, incidentContext string) (string, error) {
-	msgs := []Message{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: incidentContext},
-	}
+// Step 一次工具调用的记录。调查过程要能给人看——
+// 无从复核的 AI 结论在安全场景里没有价值。
+type Step struct {
+	Tool string `json:"tool"`
+	Args string `json:"args"`
+}
+
+// toolLoop 带工具的对话循环，研判与狩猎共用。模型不调用工具时第一轮
+// 就返回答案，不支持工具的模型也走同一条路径，天然退化为单轮问答。
+func (e *Engine) toolLoop(ctx context.Context, msgs []Message, nudge string) (string, []Step, error) {
+	var steps []Step
 	for turn := 0; turn < maxToolTurns; turn++ {
 		msg, err := e.LLM.Chat(ctx, msgs, investigationTools)
 		if err != nil {
-			return "", err
+			return "", steps, err
 		}
 		if len(msg.ToolCalls) == 0 {
-			return msg.Content, nil
+			return msg.Content, steps, nil
 		}
 		msgs = append(msgs, msg)
 		for _, tc := range msg.ToolCalls {
 			result := e.execTool(ctx, tc.Function.Name, tc.Function.Arguments)
-			slog.Info("研判调查", "tool", tc.Function.Name, "args", tc.Function.Arguments)
+			slog.Info("调查", "tool", tc.Function.Name, "args", tc.Function.Arguments)
+			steps = append(steps, Step{Tool: tc.Function.Name, Args: tc.Function.Arguments})
 			msgs = append(msgs, Message{Role: "tool", ToolCallID: tc.ID, Content: result})
 		}
 	}
-	// 轮数用尽：收走工具，强制给结论
-	msgs = append(msgs, Message{Role: "user", Content: "调查轮数已用尽，基于以上全部信息立即输出最终 JSON 结论。"})
+	// 轮数用尽：收走工具，强制收口
+	msgs = append(msgs, Message{Role: "user", Content: nudge})
 	msg, err := e.LLM.Chat(ctx, msgs, nil)
 	if err != nil {
-		return "", err
+		return "", steps, err
 	}
-	return msg.Content, nil
+	return msg.Content, steps, nil
+}
+
+func (e *Engine) investigate(ctx context.Context, incidentContext string) (string, error) {
+	answer, _, err := e.toolLoop(ctx, []Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: incidentContext},
+	}, "调查轮数已用尽，基于以上全部信息立即输出最终 JSON 结论。")
+	return answer, err
 }
 
 func parseVerdict(incidentID, answer string) json.RawMessage {

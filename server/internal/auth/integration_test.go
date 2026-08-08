@@ -45,7 +45,7 @@ func setup(t *testing.T) (context.Context, *ent.Client, *httptest.Server) {
 	rules := sigma.LoadDir(t.TempDir())
 	hub := response.NewHub(client, false)
 	store := suppress.New(client, 0)
-	ts := httptest.NewServer(auth.Middleware(client, api.Handler(client, rules, hub, store, intel.New(client, 0), nil)))
+	ts := httptest.NewServer(auth.Middleware(client, api.Handler(client, rules, hub, store, intel.New(client, 0), nil, nil)))
 	t.Cleanup(ts.Close)
 	return ctx, client, ts
 }

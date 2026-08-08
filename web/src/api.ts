@@ -218,6 +218,17 @@ export const searchEvents = (params: {
   return get<EventRow[]>(`/api/events?${qs}`)
 }
 
+export interface HuntStep {
+  tool: string
+  args: string
+}
+
+export async function hunt(question: string): Promise<{ answer: string; steps: HuntStep[] | null }> {
+  const r = await post('/api/hunt', { question })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
 export interface RuleRow {
   id: string
   title: string

@@ -349,3 +349,13 @@ h3 { font-size: 14px; color: var(--muted); margin: 24px 0 8px; }
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* 威胁狩猎 */
+.hunt-examples { margin-bottom: 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.hunt-turn { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.hunt-question { font-weight: 600; margin-bottom: 6px; }
+.hunt-question::before { content: '> '; color: var(--accent); }
+.hunt-answer { white-space: pre-wrap; line-height: 1.55; }
+.hunt-steps { margin-top: 8px; font-size: 12px; }
+.hunt-steps summary { cursor: pointer; }
+.hunt-steps .mono { padding: 2px 0 2px 12px; word-break: break-all; }
