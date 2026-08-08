@@ -4,6 +4,7 @@ package ent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"openxdr/server/ent/alert"
@@ -130,6 +131,24 @@ func (_u *AssetUpdate) SetNillableLastSeen(v *time.Time) *AssetUpdate {
 	if v != nil {
 		_u.SetLastSeen(*v)
 	}
+	return _u
+}
+
+// SetConfig sets the "config" field.
+func (_u *AssetUpdate) SetConfig(v json.RawMessage) *AssetUpdate {
+	_u.mutation.SetConfig(v)
+	return _u
+}
+
+// AppendConfig appends value to the "config" field.
+func (_u *AssetUpdate) AppendConfig(v json.RawMessage) *AssetUpdate {
+	_u.mutation.AppendConfig(v)
+	return _u
+}
+
+// ClearConfig clears the value of the "config" field.
+func (_u *AssetUpdate) ClearConfig() *AssetUpdate {
+	_u.mutation.ClearConfig()
 	return _u
 }
 
@@ -313,6 +332,17 @@ func (_u *AssetUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.LastSeen(); ok {
 		_spec.SetField(asset.FieldLastSeen, field.TypeTime, value)
+	}
+	if value, ok := _u.mutation.Config(); ok {
+		_spec.SetField(asset.FieldConfig, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedConfig(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, asset.FieldConfig, value)
+		})
+	}
+	if _u.mutation.ConfigCleared() {
+		_spec.ClearField(asset.FieldConfig, field.TypeJSON)
 	}
 	if _u.mutation.EventsCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -569,6 +599,24 @@ func (_u *AssetUpdateOne) SetNillableLastSeen(v *time.Time) *AssetUpdateOne {
 	return _u
 }
 
+// SetConfig sets the "config" field.
+func (_u *AssetUpdateOne) SetConfig(v json.RawMessage) *AssetUpdateOne {
+	_u.mutation.SetConfig(v)
+	return _u
+}
+
+// AppendConfig appends value to the "config" field.
+func (_u *AssetUpdateOne) AppendConfig(v json.RawMessage) *AssetUpdateOne {
+	_u.mutation.AppendConfig(v)
+	return _u
+}
+
+// ClearConfig clears the value of the "config" field.
+func (_u *AssetUpdateOne) ClearConfig() *AssetUpdateOne {
+	_u.mutation.ClearConfig()
+	return _u
+}
+
 // AddEventIDs adds the "events" edge to the Event entity by IDs.
 func (_u *AssetUpdateOne) AddEventIDs(ids ...uuid.UUID) *AssetUpdateOne {
 	_u.mutation.AddEventIDs(ids...)
@@ -779,6 +827,17 @@ func (_u *AssetUpdateOne) sqlSave(ctx context.Context) (_node *Asset, err error)
 	}
 	if value, ok := _u.mutation.LastSeen(); ok {
 		_spec.SetField(asset.FieldLastSeen, field.TypeTime, value)
+	}
+	if value, ok := _u.mutation.Config(); ok {
+		_spec.SetField(asset.FieldConfig, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedConfig(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, asset.FieldConfig, value)
+		})
+	}
+	if _u.mutation.ConfigCleared() {
+		_spec.ClearField(asset.FieldConfig, field.TypeJSON)
 	}
 	if _u.mutation.EventsCleared() {
 		edge := &sqlgraph.EdgeSpec{

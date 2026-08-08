@@ -36,12 +36,13 @@ async fn run(server: &str) -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?
         .into_inner();
-    println!("registered: agent_id={}", resp.agent_id);
+    let cfg = collector::Config::parse(&resp.config_json);
+    println!("registered: agent_id={} config={cfg:?}", resp.agent_id);
 
     // 指令通道与事件上报并行：上报是长连接，不能让它挡住指令
     let commands = tokio::spawn(command_loop(client.clone(), resp.agent_id.clone()));
 
-    let events = collector::spawn(resp.agent_id);
+    let events = collector::spawn(resp.agent_id, cfg);
     let report = client.report_events(ReceiverStream::new(events)).await;
     commands.abort();
     report?;

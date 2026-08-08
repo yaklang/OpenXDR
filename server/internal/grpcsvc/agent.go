@@ -59,7 +59,11 @@ func (s *Server) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.Reg
 		Exec(ctx); err != nil {
 		return nil, err
 	}
-	return &pb.RegisterResponse{AgentId: agentID.String()}, nil
+	// 采集配置随注册下发：agent 断线重连会重新注册，改配置最迟一次重连后生效
+	return &pb.RegisterResponse{
+		AgentId:    agentID.String(),
+		ConfigJson: string(a.Config),
+	}, nil
 }
 
 // 攒批落库的两个触发条件：满 batchSize 条，或距上次落库超过 flushInterval。

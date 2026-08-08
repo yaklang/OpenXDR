@@ -1064,6 +1064,8 @@ type AssetMutation struct {
 	agent_id        *uuid.UUID
 	first_seen      *time.Time
 	last_seen       *time.Time
+	_config         *json.RawMessage
+	append_config   json.RawMessage
 	clearedFields   map[string]struct{}
 	events          map[uuid.UUID]struct{}
 	removedevents   map[uuid.UUID]struct{}
@@ -1454,6 +1456,71 @@ func (m *AssetMutation) ResetLastSeen() {
 	m.last_seen = nil
 }
 
+// SetConfig sets the "config" field.
+func (m *AssetMutation) SetConfig(jm json.RawMessage) {
+	m._config = &jm
+	m.append_config = nil
+}
+
+// Config returns the value of the "config" field in the mutation.
+func (m *AssetMutation) Config() (r json.RawMessage, exists bool) {
+	v := m._config
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConfig returns the old "config" field's value of the Asset entity.
+// If the Asset object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AssetMutation) OldConfig(ctx context.Context) (v json.RawMessage, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConfig is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConfig requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConfig: %w", err)
+	}
+	return oldValue.Config, nil
+}
+
+// AppendConfig adds jm to the "config" field.
+func (m *AssetMutation) AppendConfig(jm json.RawMessage) {
+	m.append_config = append(m.append_config, jm...)
+}
+
+// AppendedConfig returns the list of values that were appended to the "config" field in this mutation.
+func (m *AssetMutation) AppendedConfig() (json.RawMessage, bool) {
+	if len(m.append_config) == 0 {
+		return nil, false
+	}
+	return m.append_config, true
+}
+
+// ClearConfig clears the value of the "config" field.
+func (m *AssetMutation) ClearConfig() {
+	m._config = nil
+	m.append_config = nil
+	m.clearedFields[asset.FieldConfig] = struct{}{}
+}
+
+// ConfigCleared returns if the "config" field was cleared in this mutation.
+func (m *AssetMutation) ConfigCleared() bool {
+	_, ok := m.clearedFields[asset.FieldConfig]
+	return ok
+}
+
+// ResetConfig resets all changes to the "config" field.
+func (m *AssetMutation) ResetConfig() {
+	m._config = nil
+	m.append_config = nil
+	delete(m.clearedFields, asset.FieldConfig)
+}
+
 // AddEventIDs adds the "events" edge to the Event entity by ids.
 func (m *AssetMutation) AddEventIDs(ids ...uuid.UUID) {
 	if m.events == nil {
@@ -1650,7 +1717,7 @@ func (m *AssetMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AssetMutation) Fields() []string {
-	fields := make([]string, 0, 6)
+	fields := make([]string, 0, 7)
 	if m.hostname != nil {
 		fields = append(fields, asset.FieldHostname)
 	}
@@ -1668,6 +1735,9 @@ func (m *AssetMutation) Fields() []string {
 	}
 	if m.last_seen != nil {
 		fields = append(fields, asset.FieldLastSeen)
+	}
+	if m._config != nil {
+		fields = append(fields, asset.FieldConfig)
 	}
 	return fields
 }
@@ -1689,6 +1759,8 @@ func (m *AssetMutation) Field(name string) (ent.Value, bool) {
 		return m.FirstSeen()
 	case asset.FieldLastSeen:
 		return m.LastSeen()
+	case asset.FieldConfig:
+		return m.Config()
 	}
 	return nil, false
 }
@@ -1710,6 +1782,8 @@ func (m *AssetMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldFirstSeen(ctx)
 	case asset.FieldLastSeen:
 		return m.OldLastSeen(ctx)
+	case asset.FieldConfig:
+		return m.OldConfig(ctx)
 	}
 	return nil, fmt.Errorf("unknown Asset field %s", name)
 }
@@ -1761,6 +1835,13 @@ func (m *AssetMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetLastSeen(v)
 		return nil
+	case asset.FieldConfig:
+		v, ok := value.(json.RawMessage)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConfig(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Asset field %s", name)
 }
@@ -1800,6 +1881,9 @@ func (m *AssetMutation) ClearedFields() []string {
 	if m.FieldCleared(asset.FieldAgentID) {
 		fields = append(fields, asset.FieldAgentID)
 	}
+	if m.FieldCleared(asset.FieldConfig) {
+		fields = append(fields, asset.FieldConfig)
+	}
 	return fields
 }
 
@@ -1822,6 +1906,9 @@ func (m *AssetMutation) ClearField(name string) error {
 		return nil
 	case asset.FieldAgentID:
 		m.ClearAgentID()
+		return nil
+	case asset.FieldConfig:
+		m.ClearConfig()
 		return nil
 	}
 	return fmt.Errorf("unknown Asset nullable field %s", name)
@@ -1848,6 +1935,9 @@ func (m *AssetMutation) ResetField(name string) error {
 		return nil
 	case asset.FieldLastSeen:
 		m.ResetLastSeen()
+		return nil
+	case asset.FieldConfig:
+		m.ResetConfig()
 		return nil
 	}
 	return fmt.Errorf("unknown Asset field %s", name)

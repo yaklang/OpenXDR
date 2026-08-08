@@ -28,8 +28,16 @@ const WATCH_DIRS: &[&str] = &[
 const EVENT_MASK: u32 =
     libc::IN_CREATE | libc::IN_MODIFY | libc::IN_ATTRIB | libc::IN_DELETE | libc::IN_MOVED_TO;
 
-pub fn spawn(agent_id: String, sink: EventSink) -> io::Result<usize> {
-    let (fd, watched) = init_watches(WATCH_DIRS)?;
+/// dirs 为空时用内置的敏感目录清单；非空表示按下发配置覆盖。
+pub fn spawn(agent_id: String, sink: EventSink, dirs: &[String]) -> io::Result<usize> {
+    let owned: Vec<&str>;
+    let targets: &[&str] = if dirs.is_empty() {
+        WATCH_DIRS
+    } else {
+        owned = dirs.iter().map(String::as_str).collect();
+        &owned
+    };
+    let (fd, watched) = init_watches(targets)?;
     let n = watched.len();
     std::thread::spawn(move || run(fd, &watched, &agent_id, &sink));
     Ok(n)

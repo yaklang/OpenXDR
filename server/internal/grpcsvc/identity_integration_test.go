@@ -3,6 +3,8 @@
 package grpcsvc
 
 import (
+	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"openxdr/server/internal/intel"
+	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 	"openxdr/server/pb"
@@ -68,4 +71,41 @@ func TestIdentityEnforcement(t *testing.T) {
 	}
 
 	_ = ctx
+}
+
+// 采集配置随 Register 下发：设过配置的资产，agent 注册时应拿到它。
+func TestRegisterReturnsConfig(t *testing.T) {
+	ctx, client := testdb.New(t)
+	srv := &Server{
+		DB: client, Rules: sigma.LoadDir(t.TempDir()),
+		DedupWindow: time.Minute, Suppress: suppress.New(client, 0), Intel: intel.New(client, 0),
+	}
+
+	// 首次注册：还没配置，下发空串（agent 用内置默认）
+	resp, err := srv.Register(ctx, &pb.RegisterRequest{Hostname: "web01", Os: "linux"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ConfigJson != "" {
+		t.Errorf("未配置时应下发空串，实际 %q", resp.ConfigJson)
+	}
+
+	// 配置后重连：注册应带回配置
+	cfg := `{"fileWatchDirs":["/srv/app"],"collectAuth":false}`
+	if err := client.Asset.Update().SetConfig([]byte(cfg)).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = srv.Register(ctx, &pb.RegisterRequest{Hostname: "web01", Os: "linux"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// jsonb 会重排键序，按语义比较——agent 解析 JSON 本就不在乎顺序
+	var got, want map[string]any
+	if err := json.Unmarshal([]byte(resp.ConfigJson), &got); err != nil {
+		t.Fatalf("下发的配置不是合法 JSON：%q", resp.ConfigJson)
+	}
+	_ = json.Unmarshal([]byte(cfg), &want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("配置未正确下发：got %v want %v", got, want)
+	}
 }

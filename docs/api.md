@@ -63,6 +63,8 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/assets` | 资产清单 |
+| GET | `/api/assets/{id}/config` | 该主机的采集配置 |
+| PUT | `/api/assets/{id}/config` | 设置采集配置：`{"fileWatchDirs":[...],"collectFiles":true,"collectAuth":true,"collectPersist":true}`。随 agent 下次注册（重连或重启）生效 |
 | GET | `/api/users` | 用户列表（admin） |
 | POST | `/api/users` | 建号：`{"username","password","role"}`（admin） |
 | POST | `/api/users/{id}/password` | 重置密码（admin） |

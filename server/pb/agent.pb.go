@@ -352,8 +352,11 @@ func (x *RegisterRequest) GetAgentVersion() string {
 }
 
 type RegisterResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AgentId       string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // UUID
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	AgentId string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // UUID
+	// 采集配置（JSON）。随注册下发，重连即生效——不做热更新：
+	// agent 断线重连本就会重新注册，这条路已经够了
+	ConfigJson    string `protobuf:"bytes,2,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -391,6 +394,13 @@ func (*RegisterResponse) Descriptor() ([]byte, []int) {
 func (x *RegisterResponse) GetAgentId() string {
 	if x != nil {
 		return x.AgentId
+	}
+	return ""
+}
+
+func (x *RegisterResponse) GetConfigJson() string {
+	if x != nil {
+		return x.ConfigJson
 	}
 	return ""
 }
@@ -577,9 +587,11 @@ const file_agent_proto_rawDesc = "" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x19\n" +
 	"\bip_addrs\x18\x03 \x03(\tR\aipAddrs\x12#\n" +
-	"\ragent_version\x18\x04 \x01(\tR\fagentVersion\"-\n" +
+	"\ragent_version\x18\x04 \x01(\tR\fagentVersion\"N\n" +
 	"\x10RegisterResponse\x12\x19\n" +
-	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\xb2\x02\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1f\n" +
+	"\vconfig_json\x18\x02 \x01(\tR\n" +
+	"configJson\"\xb2\x02\n" +
 	"\n" +
 	"AgentEvent\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1c\n" +

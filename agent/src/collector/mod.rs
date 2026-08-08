@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 
 use crate::pb::AgentEvent;
 
+mod config;
 mod hash;
 mod poll;
 mod registry;
@@ -23,6 +24,7 @@ mod fswatch;
 #[cfg(target_os = "linux")]
 mod netlink;
 
+pub use config::Config;
 pub use registry::ProcessRegistry;
 
 // eBPF 采集是可选特性；关掉它 Linux 走 netlink，构建不需要 nightly
@@ -35,7 +37,7 @@ mod persistwatch;
 #[cfg(target_os = "windows")]
 mod windows;
 
-pub fn spawn(agent_id: String) -> mpsc::Receiver<AgentEvent> {
+pub fn spawn(agent_id: String, cfg: Config) -> mpsc::Receiver<AgentEvent> {
     let (tx, rx) = mpsc::channel(1024);
     let sink = EventSink {
         tx,
@@ -53,7 +55,9 @@ pub fn spawn(agent_id: String) -> mpsc::Receiver<AgentEvent> {
 
     // 持久化点监控与进程采集并行
     #[cfg(target_os = "windows")]
-    persistwatch::spawn(agent_id.clone(), sink.clone());
+    if cfg.collect_persist {
+        persistwatch::spawn(agent_id.clone(), sink.clone());
+    }
 
     #[cfg(target_os = "windows")]
     tokio::spawn(windows::run(agent_id, sink));
@@ -71,14 +75,18 @@ pub fn spawn(agent_id: String) -> mpsc::Receiver<AgentEvent> {
 
     // 敏感文件监控与进程采集并行，各自独立降级
     #[cfg(target_os = "linux")]
-    match fswatch::spawn(agent_id_fs, sink_fs) {
-        Ok(n) => eprintln!("文件监控: inotify 盯 {n} 个敏感目录"),
-        Err(e) => eprintln!("文件监控不可用（{e}）"),
+    if cfg.collect_files {
+        match fswatch::spawn(agent_id_fs, sink_fs, &cfg.file_watch_dirs) {
+            Ok(n) => eprintln!("文件监控: inotify 盯 {n} 个敏感目录"),
+            Err(e) => eprintln!("文件监控不可用（{e}）"),
+        }
     }
 
     // 登录事件：wtmp/btmp 增量读，认证可见性不依赖 syslog 配置
     #[cfg(target_os = "linux")]
-    authwatch::spawn(agent_id_auth, sink_auth);
+    if cfg.collect_auth {
+        authwatch::spawn(agent_id_auth, sink_auth);
+    }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     tokio::spawn(poll::run(agent_id, sink));

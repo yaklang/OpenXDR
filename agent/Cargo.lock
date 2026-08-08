@@ -922,6 +922,7 @@ dependencies = [
  "libc",
  "prost",
  "protoc-bin-vendored",
+ "serde",
  "serde_json",
  "sha2",
  "sysinfo",

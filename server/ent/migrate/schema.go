@@ -67,6 +67,7 @@ var (
 		{Name: "agent_id", Type: field.TypeUUID, Unique: true, Nullable: true},
 		{Name: "first_seen", Type: field.TypeTime},
 		{Name: "last_seen", Type: field.TypeTime},
+		{Name: "config", Type: field.TypeJSON, Nullable: true},
 	}
 	// AssetsTable holds the schema information for the "assets" table.
 	AssetsTable = &schema.Table{

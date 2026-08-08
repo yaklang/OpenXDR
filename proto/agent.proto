@@ -58,6 +58,9 @@ message RegisterRequest {
 
 message RegisterResponse {
   string agent_id = 1; // UUID
+  // 采集配置（JSON）。随注册下发，重连即生效——不做热更新：
+  // agent 断线重连本就会重新注册，这条路已经够了
+  string config_json = 2;
 }
 
 message AgentEvent {

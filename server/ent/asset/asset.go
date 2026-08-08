@@ -27,6 +27,8 @@ const (
 	FieldFirstSeen = "first_seen"
 	// FieldLastSeen holds the string denoting the last_seen field in the database.
 	FieldLastSeen = "last_seen"
+	// FieldConfig holds the string denoting the config field in the database.
+	FieldConfig = "config"
 	// EdgeEvents holds the string denoting the events edge name in mutations.
 	EdgeEvents = "events"
 	// EdgeAlerts holds the string denoting the alerts edge name in mutations.
@@ -67,6 +69,7 @@ var Columns = []string{
 	FieldAgentID,
 	FieldFirstSeen,
 	FieldLastSeen,
+	FieldConfig,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).

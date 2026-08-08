@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"time"
 
 	"entgo.io/ent"
@@ -25,6 +26,8 @@ func (Asset) Fields() []ent.Field {
 		field.UUID("agent_id", uuid.UUID{}).Optional().Nillable().Unique(),
 		field.Time("first_seen").Default(time.Now),
 		field.Time("last_seen").Default(time.Now),
+		// 采集配置，随 Register 下发给 agent。为空表示用 agent 内置默认
+		field.JSON("config", json.RawMessage{}).Optional(),
 	}
 }
 

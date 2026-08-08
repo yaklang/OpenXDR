@@ -361,6 +361,16 @@ func LastSeenLTE(v time.Time) predicate.Asset {
 	return predicate.Asset(sql.FieldLTE(FieldLastSeen, v))
 }
 
+// ConfigIsNil applies the IsNil predicate on the "config" field.
+func ConfigIsNil() predicate.Asset {
+	return predicate.Asset(sql.FieldIsNull(FieldConfig))
+}
+
+// ConfigNotNil applies the NotNil predicate on the "config" field.
+func ConfigNotNil() predicate.Asset {
+	return predicate.Asset(sql.FieldNotNull(FieldConfig))
+}
+
 // HasEvents applies the HasEdge predicate on the "events" edge.
 func HasEvents() predicate.Asset {
 	return predicate.Asset(func(s *sql.Selector) {

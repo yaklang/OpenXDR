@@ -126,6 +126,19 @@ sudo env SENSOR_IFACE=eth0 OPENXDR_SERVER=http://<server>:8081 ./target/release/
 `SENSOR_WORKERS` 决定并行度。afpacket 下多个 worker 共享 FANOUT 组；afxdp 下
 worker 号即网卡队列号，数量不应超过网卡实际队列数。
 
+### 按主机下发采集配置
+
+采集范围不必编译期写死，可按主机调整：
+
+```bash
+curl -X PUT http://localhost:8080/api/assets/<asset-id>/config \
+  -H 'Content-Type: application/json' -b cookie.txt \
+  -d '{"fileWatchDirs": ["/srv/app", "/opt/secrets"], "collectAuth": false}'
+```
+
+配置随 agent 下次注册生效——agent 断线重连本就会重新注册，因此没有
+单独的热更新通道。坏配置一律退回内置默认：让 agent 变瞎比配置不生效严重得多。
+
 ### 采集方式
 
 内核态（零环）始终是可选项，用户态（三环）也能完整工作：

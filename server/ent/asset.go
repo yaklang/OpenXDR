@@ -31,6 +31,8 @@ type Asset struct {
 	FirstSeen time.Time `json:"first_seen,omitempty"`
 	// LastSeen holds the value of the "last_seen" field.
 	LastSeen time.Time `json:"last_seen,omitempty"`
+	// Config holds the value of the "config" field.
+	Config json.RawMessage `json:"config,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the AssetQuery when eager-loading is set.
 	Edges        AssetEdges `json:"edges"`
@@ -84,7 +86,7 @@ func (*Asset) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case asset.FieldAgentID:
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
-		case asset.FieldIPAddrs:
+		case asset.FieldIPAddrs, asset.FieldConfig:
 			values[i] = new([]byte)
 		case asset.FieldHostname, asset.FieldOs:
 			values[i] = new(sql.NullString)
@@ -152,6 +154,14 @@ func (_m *Asset) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field last_seen", values[i])
 			} else if value.Valid {
 				_m.LastSeen = value.Time
+			}
+		case asset.FieldConfig:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field config", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.Config); err != nil {
+					return fmt.Errorf("unmarshal field config: %w", err)
+				}
 			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
@@ -225,6 +235,9 @@ func (_m *Asset) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("last_seen=")
 	builder.WriteString(_m.LastSeen.Format(time.ANSIC))
+	builder.WriteString(", ")
+	builder.WriteString("config=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Config))
 	builder.WriteByte(')')
 	return builder.String()
 }
