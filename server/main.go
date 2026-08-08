@@ -83,10 +83,10 @@ func main() {
 	}).Run(ctx)
 
 	go (&notify.Notifier{
-		DB:         client,
-		URL:        os.Getenv("WEBHOOK_URL"),
-		Format:     getenv("WEBHOOK_FORMAT", "generic"),
-		Interval:   time.Duration(getenvInt("WEBHOOK_INTERVAL_SECONDS", 30)) * time.Second,
+		DB:          client,
+		URL:         os.Getenv("WEBHOOK_URL"),
+		Format:      getenv("WEBHOOK_FORMAT", "generic"),
+		Interval:    time.Duration(getenvInt("WEBHOOK_INTERVAL_SECONDS", 30)) * time.Second,
 		WaitTriage:  os.Getenv("AI_MODEL") != "",
 		LinkBase:    os.Getenv("WEBHOOK_LINK_BASE"),
 		MinSeverity: int16(getenvInt("WEBHOOK_MIN_SEVERITY", 0)),
