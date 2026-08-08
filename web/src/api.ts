@@ -218,6 +218,18 @@ export const searchEvents = (params: {
   return get<EventRow[]>(`/api/events?${qs}`)
 }
 
+export interface RuleRow {
+  id: string
+  title: string
+  severity: number
+  classUid: number
+  product: string
+  ingested: boolean
+  source: string
+}
+
+export const fetchRules = () => get<RuleRow[]>('/api/rules')
+
 export interface IntelRow {
   id: string
   createdAt: string

@@ -11,6 +11,7 @@ import { IncidentGraphView } from './IncidentGraphView'
 import { IntelList } from './IntelList'
 import { LoginPage } from './LoginPage'
 import { ResponsePanel } from './ResponsePanel'
+import { RulesView } from './RulesView'
 import { SuppressDialog } from './SuppressDialog'
 import { SuppressionList } from './SuppressionList'
 import { UserManagement } from './UserManagement'
@@ -43,6 +44,7 @@ export default function App() {
   const [showIntel, setShowIntel] = useState(false)
   const [showDashboard, setShowDashboard] = useState(false)
   const [showEventSearch, setShowEventSearch] = useState(false)
+  const [showRules, setShowRules] = useState(false)
   const [showAssets, setShowAssets] = useState(false)
   const [showUsers, setShowUsers] = useState(false)
   const [showAudit, setShowAudit] = useState(false)
@@ -121,6 +123,7 @@ export default function App() {
           <button className="link" onClick={() => setShowAssets(true)}>{t('assets')}</button>
           <button className="link" onClick={() => setShowSuppressions(true)}>{t('suppressions')}</button>
           <button className="link" onClick={() => setShowIntel(true)}>{t('intel')}</button>
+          <button className="link" onClick={() => setShowRules(true)}>{t('rules')}</button>
           {isAdmin && (
             <>
               <button className="link" onClick={() => setShowUsers(true)}>{t('users')}</button>
@@ -243,6 +246,7 @@ export default function App() {
       )}
       {showDashboard && <DashboardView onClose={() => setShowDashboard(false)} />}
       {showEventSearch && <EventSearchView onClose={() => setShowEventSearch(false)} />}
+      {showRules && <RulesView onClose={() => setShowRules(false)} />}
       {showIntel && <IntelList canAct={canWrite} onClose={() => setShowIntel(false)} />}
       {showAssets && <AssetList onClose={() => setShowAssets(false)} />}
       {showUsers && <UserManagement self={me.username} onClose={() => setShowUsers(false)} />}

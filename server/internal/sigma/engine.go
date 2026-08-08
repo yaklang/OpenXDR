@@ -470,6 +470,11 @@ func (e *Engine) Evaluate(classUID int, os string, raw map[string]any) []*Rule {
 	return hits
 }
 
+// Rules 当前加载的全部规则。返回的切片属于某个不可变状态版本，只读。
+func (e *Engine) Rules() []*Rule {
+	return e.load().rules
+}
+
 func (e *Engine) TitleOf(ruleID string) string {
 	if r, ok := e.load().byID[ruleID]; ok {
 		return r.Title
