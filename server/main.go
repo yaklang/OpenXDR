@@ -47,6 +47,7 @@ func main() {
 		slog.Error("schema 迁移失败", "err", err)
 		os.Exit(1)
 	}
+	ensureSearchIndex(ctx, db)
 
 	suppressions := suppress.New(client, time.Duration(getenvInt("SUPPRESSION_RELOAD_SECONDS", 30))*time.Second)
 	go suppressions.Run(ctx)
@@ -158,6 +159,22 @@ func main() {
 	if err := http.ListenAndServe(httpAddr, handler); err != nil {
 		slog.Error("HTTP 退出", "err", err)
 		os.Exit(1)
+	}
+}
+
+// ensureSearchIndex 事件全文检索的 trgm 索引。没有它，关键词检索在大表上
+// 是全表扫。CREATE EXTENSION 需要数据库权限，失败只降级警告——检索仍然可用，
+// 只是慢，比起启动失败这是正确的取舍。
+func ensureSearchIndex(ctx context.Context, db *sql.DB) {
+	stmts := []string{
+		"CREATE EXTENSION IF NOT EXISTS pg_trgm",
+		"CREATE INDEX IF NOT EXISTS events_raw_trgm ON events USING gin ((raw::text) gin_trgm_ops)",
+	}
+	for _, stmt := range stmts {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			slog.Warn("检索索引未启用，大数据量下关键词搜索会退化为全表扫描", "err", err)
+			return
+		}
 	}
 }
 
