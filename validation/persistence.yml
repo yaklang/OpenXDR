@@ -1,0 +1,36 @@
+technique: T1547.001
+name: Registry Run Keys / Startup Folder
+cases:
+  - name: 注册表 Run 键新增值（采集端 diff 出的注册表事件）
+    source: atomic T1547.001
+    class: 201002
+    os: windows
+    event:
+      activity_id: 1
+      reg_key:
+        path: "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\\Atomic"
+      reg_value:
+        data: "C:\\Users\\Public\\evil.exe"
+
+  - name: Winlogon Shell 劫持
+    technique: T1547.004
+    source: atomic T1547.004
+    class: 201002
+    os: windows
+    event:
+      activity_id: 3
+      reg_key:
+        path: "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\Shell"
+      reg_value:
+        data: "explorer.exe, C:\\evil.exe"
+
+  - name: reg.exe 命令行写 Run 键（进程视角）
+    source: atomic T1547.001
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: reg.exe
+        file:
+          path: "C:\\Windows\\System32\\reg.exe"
+        cmd_line: 'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Atomic /t REG_SZ /d "C:\evil.exe" /f'

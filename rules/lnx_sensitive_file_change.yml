@@ -7,6 +7,7 @@ tags:
   - attack.t1543.002
   - attack.t1053.003
   - attack.t1574.006
+  - attack.t1098.004
 logsource:
   category: file_event
   product: linux

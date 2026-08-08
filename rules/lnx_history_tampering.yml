@@ -16,6 +16,10 @@ detection:
       - 'HISTFILESIZE=0'
       - 'HISTSIZE=0'
       - 'rm ~/.bash_history'
+      - '> ~/.bash_history'
+      - '> $HISTFILE'
+      - '> ~/.bash_history'
+      - '> $HISTFILE'
       - 'shred ~/.bash_history'
       - 'ln -sf /dev/null ~/.bash_history'
   condition: selection

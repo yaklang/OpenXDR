@@ -5,6 +5,7 @@ description: 检测自启动注册表键与 Winlogon 的写入——最经典的
 tags:
   - attack.persistence
   - attack.t1547.001
+  - attack.t1547.004
 logsource:
   category: registry_set
   product: windows

@@ -16,5 +16,9 @@ detection:
       - '\whoami.exe'
       - '\systeminfo.exe'
       - '\quser.exe'
+      - '\ipconfig.exe'
+      - '\arp.exe'
+      - '\netstat.exe'
+      - '\nltest.exe'
   condition: selection
 level: medium

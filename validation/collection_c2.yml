@@ -1,0 +1,57 @@
+technique: T1560.001
+name: Archive Collected Data
+cases:
+  - name: tar 打包家目录
+    source: atomic T1560.001
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: tar
+        cmd_line: "tar czf /tmp/loot.tar.gz /home/alice"
+
+  - name: zip 打包 /etc
+    source: atomic T1560.001
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: zip
+        cmd_line: "zip -r /tmp/etc.zip /etc"
+
+  - name: 打包 SSH 私钥
+    source: atomic T1560.001
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: tar
+        cmd_line: "tar cvf /tmp/keys.tar /root/.ssh"
+
+  - name: 打包临时构建产物（良性对照）
+    source: 良性对照
+    class: 1007
+    os: linux
+    expect: undetected
+    event:
+      process:
+        name: tar
+        cmd_line: "tar czf /tmp/build.tar.gz /opt/build/output"
+
+  - name: DNS 查询隧道服务
+    technique: T1071.004
+    source: atomic T1071.004
+    class: 4003
+    os: linux
+    event:
+      query:
+        hostname: "tunnel.ngrok.io"
+
+  - name: C2 常用高危端口外连
+    technique: T1571
+    source: atomic T1571
+    class: 4001
+    event:
+      dst_endpoint:
+        ip: "10.0.0.1"
+        port: 4444

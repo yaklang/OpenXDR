@@ -23,5 +23,9 @@ detection:
     CommandLine|contains:
       - 'mshta http'
       - 'mshta.exe http'
+      - 'mshta javascript'
+      - 'mshta.exe javascript'
+      - 'mshta javascript'
+      - 'mshta.exe javascript'
   condition: (certutil and certutil_dl) or bitsadmin or mshta
 level: high

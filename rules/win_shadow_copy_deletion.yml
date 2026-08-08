@@ -11,8 +11,9 @@ logsource:
 detection:
   vssadmin:
     CommandLine|contains:
-      - 'vssadmin delete shadows'
-      - 'vssadmin resize shadowstorage'
+      # 不写命令名：真实调用可能是 vssadmin.exe，带上就匹配不到了
+      - 'delete shadows'
+      - 'resize shadowstorage'
   wmic:
     CommandLine|contains: 'shadowcopy delete'
   bcdedit:

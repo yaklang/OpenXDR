@@ -45,6 +45,7 @@
 | `web/` | React 前端 |
 | `schema/` | 统一事件 schema（基于 OCSF）与数据库 DDL |
 | `rules/` | 检测规则（Sigma 兼容） |
+| `validation/` | [检测验证语料](validation/README.md)：真实攻击命令回放过规则引擎，守住检测能力 |
 | `docs/` | 设计文档：[架构](docs/architecture.md) / [API 参考](docs/api.md) / [路线图](docs/roadmap.md) |
 
 ## 快速开始
@@ -227,6 +228,11 @@ RESPONSE_ENABLED=true ISOLATION_ALLOW=<server>:8081 docker compose up -d
 
 矩阵还会标出**有规则但无数据源**的格子——纸面覆盖率与真实覆盖率的差额，
 这是挂载大规则库后最容易自欺欺人的地方。
+
+覆盖率不靠自我感觉：`validation/` 下是攻击手法的真实命令行语料，
+`go run ./cmd/detectcheck` 回放过引擎，验证规则真能抓住 Atomic Red Team
+实际执行的命令，且命中的规则标了对应技术。CI 每次都跑，规则改动
+导致检测退化会直接失败。
 
 ## 导入社区规则
 

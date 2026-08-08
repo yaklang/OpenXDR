@@ -1,0 +1,57 @@
+technique: T1490
+name: Inhibit System Recovery
+cases:
+  - name: vssadmin 删除全部卷影
+    source: atomic T1490
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: vssadmin.exe
+        file:
+          path: "C:\\Windows\\System32\\vssadmin.exe"
+        cmd_line: "vssadmin.exe delete shadows /all /quiet"
+
+  - name: wmic 删除卷影
+    source: atomic T1490
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: wmic.exe
+        file:
+          path: "C:\\Windows\\System32\\wbem\\WMIC.exe"
+        cmd_line: "wmic.exe shadowcopy delete /nointeractive"
+
+  - name: bcdedit 关闭恢复
+    source: atomic T1490
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: bcdedit.exe
+        file:
+          path: "C:\\Windows\\System32\\bcdedit.exe"
+        cmd_line: "bcdedit.exe /set {default} recoveryenabled no"
+
+  - name: wbadmin 删除备份目录
+    source: atomic T1490
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: wbadmin.exe
+        file:
+          path: "C:\\Windows\\System32\\wbadmin.exe"
+        cmd_line: "wbadmin delete catalog -quiet"
+
+  - name: vssadmin 缩容卷影存储
+    source: atomic T1490
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: vssadmin.exe
+        file:
+          path: "C:\\Windows\\System32\\vssadmin.exe"
+        cmd_line: "vssadmin resize shadowstorage /for=c: /on=c: /maxsize=401MB"

@@ -1,0 +1,60 @@
+technique: T1098.004
+name: SSH Authorized Keys
+cases:
+  - name: 追加公钥到 authorized_keys
+    source: atomic T1098.004
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: bash
+        cmd_line: "echo 'ssh-rsa AAAAB3NzaC1yc2EAAAA attacker' >> /root/.ssh/authorized_keys"
+
+  - name: tee -a 写入 authorized_keys
+    source: atomic T1098.004
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: tee
+        cmd_line: "echo 'ssh-rsa AAAA' | tee -a /home/user/.ssh/authorized_keys"
+
+  - name: authorized_keys 文件被改动（文件视角）
+    source: atomic T1098.004
+    class: 1001
+    os: linux
+    event:
+      activity_id: 3
+      file:
+        path: "/root/.ssh/authorized_keys"
+
+  - name: cron 目录落新任务
+    technique: T1053.003
+    source: atomic T1053.003
+    class: 1001
+    os: linux
+    event:
+      activity_id: 1
+      file:
+        path: "/etc/cron.d/atomic-persist"
+
+  - name: ld.so.preload 劫持
+    technique: T1574.006
+    source: atomic T1574.006
+    class: 1001
+    os: linux
+    event:
+      activity_id: 3
+      file:
+        path: "/etc/ld.so.preload"
+
+  - name: systemd 服务落盘
+    technique: T1543.002
+    source: atomic T1543.002
+    class: 1001
+    os: linux
+    expect: undetected
+    event:
+      activity_id: 1
+      file:
+        path: "/etc/systemd/system/atomic.service"

@@ -1,0 +1,64 @@
+technique: T1082
+name: System Information Discovery
+cases:
+  - name: uname -a
+    source: atomic T1082
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: uname
+        cmd_line: "uname -a"
+
+  - name: whoami
+    technique: T1033
+    source: atomic T1033
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: whoami
+        cmd_line: "whoami"
+
+  - name: 读取 passwd 枚举账号
+    technique: T1087.001
+    source: atomic T1087.001
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: cat
+        cmd_line: "cat /etc/passwd"
+
+  - name: Windows systeminfo
+    source: atomic T1082
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: systeminfo.exe
+        file:
+          path: "C:\\Windows\\System32\\systeminfo.exe"
+        cmd_line: "systeminfo"
+
+  - name: Windows 网络配置枚举
+    technique: T1016
+    source: atomic T1016
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: ipconfig.exe
+        file:
+          path: "C:\\Windows\\System32\\ipconfig.exe"
+        cmd_line: "ipconfig /all"
+
+  - name: SUID 文件枚举
+    technique: T1548.001
+    source: atomic T1548.001
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: find
+        cmd_line: "find / -perm -4000 -type f 2>/dev/null"

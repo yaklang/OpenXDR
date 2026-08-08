@@ -54,6 +54,10 @@ jobs:
       - name: 自带规则必须全部可加载
         working-directory: server
         run: go run ./cmd/sigmacheck --strict ../rules
+      # 检测能力回归线：规则改动后真实攻击命令还能不能抓住
+      - name: 检测验证对拍
+        working-directory: server
+        run: go run ./cmd/detectcheck --strict
 
   web:
     name: Web (React)

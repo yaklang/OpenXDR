@@ -8,13 +8,14 @@ tags:
   - attack.t1021.002
   - attack.t1569.002
   - attack.t1047
+  - attack.t1053.005
 logsource:
   category: process_creation
   product: windows
 detection:
   psexec:
     CommandLine|contains:
-      - 'psexec '
+      - 'psexec'
       - 'psexesvc'
   wmic_remote:
     CommandLine|contains: 'wmic /node:'
