@@ -43,4 +43,13 @@ func TestRepoRulesAllLoad(t *testing.T) {
 	if !containsStr(ruleIDs(hits), "7b3f2c8a-1d5e-4a96-b0c4-9e8d6f2a5c31") {
 		t.Errorf("注册表持久化未命中规则：%v", ruleIDs(hits))
 	}
+
+	hits = engine.Evaluate(3002, "linux", map[string]any{
+		"activity_id": 1, "status_id": 2,
+		"user":         map[string]any{"name": "root"},
+		"src_endpoint": map[string]any{"ip": "10.9.8.7"},
+	})
+	if !containsStr(ruleIDs(hits), "9c4e6b2d-8f13-47a5-9e07-3d5a8c1f6b42") {
+		t.Errorf("登录失败未命中规则：%v", ruleIDs(hits))
+	}
 }

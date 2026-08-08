@@ -15,6 +15,9 @@ mod poll;
 mod registry;
 
 #[cfg(target_os = "linux")]
+mod authwatch;
+
+#[cfg(target_os = "linux")]
 mod fswatch;
 
 #[cfg(target_os = "linux")]
@@ -42,6 +45,8 @@ pub fn spawn(agent_id: String) -> mpsc::Receiver<AgentEvent> {
     // 进程采集的各分支会拿走 agent_id/sink 所有权，文件监控的副本先留出来
     #[cfg(target_os = "linux")]
     let (agent_id_fs, sink_fs) = (agent_id.clone(), sink.clone());
+    #[cfg(target_os = "linux")]
+    let (agent_id_auth, sink_auth) = (agent_id.clone(), sink.clone());
 
     #[cfg(all(target_os = "linux", feature = "ebpf"))]
     tokio::spawn(linux::run(agent_id, sink));
@@ -70,6 +75,10 @@ pub fn spawn(agent_id: String) -> mpsc::Receiver<AgentEvent> {
         Ok(n) => eprintln!("文件监控: inotify 盯 {n} 个敏感目录"),
         Err(e) => eprintln!("文件监控不可用（{e}）"),
     }
+
+    // 登录事件：wtmp/btmp 增量读，认证可见性不依赖 syslog 配置
+    #[cfg(target_os = "linux")]
+    authwatch::spawn(agent_id_auth, sink_auth);
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     tokio::spawn(poll::run(agent_id, sink));
