@@ -9,6 +9,7 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
+	"openxdr/server/ent/intel"
 	"openxdr/server/ent/schema"
 	"openxdr/server/ent/session"
 	"openxdr/server/ent/suppression"
@@ -98,6 +99,28 @@ func init() {
 	incidentDescID := incidentFields[0].Descriptor()
 	// incident.DefaultID holds the default value on creation for the id field.
 	incident.DefaultID = incidentDescID.Default.(func() uuid.UUID)
+	intelFields := schema.Intel{}.Fields()
+	_ = intelFields
+	// intelDescCreatedAt is the schema descriptor for created_at field.
+	intelDescCreatedAt := intelFields[1].Descriptor()
+	// intel.DefaultCreatedAt holds the default value on creation for the created_at field.
+	intel.DefaultCreatedAt = intelDescCreatedAt.Default.(func() time.Time)
+	// intelDescSource is the schema descriptor for source field.
+	intelDescSource := intelFields[4].Descriptor()
+	// intel.DefaultSource holds the default value on creation for the source field.
+	intel.DefaultSource = intelDescSource.Default.(string)
+	// intelDescSeverity is the schema descriptor for severity field.
+	intelDescSeverity := intelFields[5].Descriptor()
+	// intel.DefaultSeverity holds the default value on creation for the severity field.
+	intel.DefaultSeverity = intelDescSeverity.Default.(int16)
+	// intelDescMatchedCount is the schema descriptor for matched_count field.
+	intelDescMatchedCount := intelFields[8].Descriptor()
+	// intel.DefaultMatchedCount holds the default value on creation for the matched_count field.
+	intel.DefaultMatchedCount = intelDescMatchedCount.Default.(int)
+	// intelDescID is the schema descriptor for id field.
+	intelDescID := intelFields[0].Descriptor()
+	// intel.DefaultID holds the default value on creation for the id field.
+	intel.DefaultID = intelDescID.Default.(func() uuid.UUID)
 	sessionFields := schema.Session{}.Fields()
 	_ = sessionFields
 	// sessionDescCreatedAt is the schema descriptor for created_at field.

@@ -300,3 +300,16 @@ h3 { font-size: 14px; color: var(--muted); margin: 24px 0 8px; }
   border-radius: 6px;
   padding: 5px 8px;
 }
+
+/* 威胁情报导入 */
+.intel-import { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.intel-import textarea, .intel-import input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+}
+.intel-import label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.intel-import input[type="number"] { width: 64px; }

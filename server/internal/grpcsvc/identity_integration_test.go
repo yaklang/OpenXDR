@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"openxdr/server/internal/intel"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 	"openxdr/server/pb"
@@ -20,7 +21,7 @@ func TestIdentityEnforcement(t *testing.T) {
 	ctx, client := testdb.New(t)
 	srv := &Server{
 		DB: client, Rules: loadMimikatzRule(t),
-		DedupWindow: time.Minute, Suppress: suppress.New(client, 0),
+		DedupWindow: time.Minute, Suppress: suppress.New(client, 0), Intel: intel.New(client, 0),
 	}
 
 	// 用 web01 的绑定证书注册 web01：放行，拿到 agent_id

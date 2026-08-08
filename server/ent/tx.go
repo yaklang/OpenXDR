@@ -24,6 +24,8 @@ type Tx struct {
 	Event *EventClient
 	// Incident is the client for interacting with the Incident builders.
 	Incident *IncidentClient
+	// Intel is the client for interacting with the Intel builders.
+	Intel *IntelClient
 	// Session is the client for interacting with the Session builders.
 	Session *SessionClient
 	// Suppression is the client for interacting with the Suppression builders.
@@ -167,6 +169,7 @@ func (tx *Tx) init() {
 	tx.Command = NewCommandClient(tx.config)
 	tx.Event = NewEventClient(tx.config)
 	tx.Incident = NewIncidentClient(tx.config)
+	tx.Intel = NewIntelClient(tx.config)
 	tx.Session = NewSessionClient(tx.config)
 	tx.Suppression = NewSuppressionClient(tx.config)
 	tx.User = NewUserClient(tx.config)

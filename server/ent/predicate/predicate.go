@@ -24,6 +24,9 @@ type Event func(*sql.Selector)
 // Incident is the predicate function for incident builders.
 type Incident func(*sql.Selector)
 
+// Intel is the predicate function for intel builders.
+type Intel func(*sql.Selector)
+
 // Session is the predicate function for session builders.
 type Session func(*sql.Selector)
 

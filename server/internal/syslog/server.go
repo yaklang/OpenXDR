@@ -14,6 +14,7 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
 	"openxdr/server/internal/dedup"
+	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 )
@@ -38,6 +39,7 @@ type Server struct {
 	Addr        string
 	DedupWindow time.Duration
 	Suppress    *suppress.Store
+	Intel       *intel.Store
 }
 
 // 从网络收上来的一条报文，带来源地址用于归属资产
@@ -194,11 +196,11 @@ func (s *Server) build(ctx context.Context, in incoming, deduper *dedup.Deduper)
 	}
 
 	var created []*ent.AlertCreate
-	for _, rule := range s.Rules.Evaluate(ClassApplicationActivity, assetOS, rawMap) {
-		if s.Suppress.Suppressed(rule.ID, assetID, msg.Ts) {
+	for _, h := range intel.Detections(s.Rules.Evaluate(ClassApplicationActivity, assetOS, rawMap), s.Intel.Match(rawMap, msg.Ts)) {
+		if s.Suppress.Suppressed(h.RuleID, assetID, msg.Ts) {
 			continue
 		}
-		fingerprint := rule.ID + "|" + origin
+		fingerprint := h.RuleID + "|" + origin
 		if deduper.Hit(fingerprint, msg.Ts) {
 			continue
 		}
@@ -206,8 +208,8 @@ func (s *Server) build(ctx context.Context, in incoming, deduper *dedup.Deduper)
 		created = append(created, s.DB.Alert.Create().
 			SetID(alertID).
 			SetTs(msg.Ts).
-			SetRuleID(rule.ID).
-			SetSeverity(rule.Severity).
+			SetRuleID(h.RuleID).
+			SetSeverity(h.Severity).
 			SetEventID(eventID).
 			SetNillableAssetID(assetID).
 			SetLastTs(msg.Ts))

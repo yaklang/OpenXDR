@@ -1,0 +1,88 @@
+package intel
+
+import (
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"openxdr/server/internal/sigma"
+)
+
+func storeWith(keys map[string]entry) *Store {
+	return &Store{byKey: keys, counters: map[uuid.UUID]*counter{}}
+}
+
+func e(sev int16, expires *time.Time) entry {
+	return entry{id: uuid.Must(uuid.NewV7()), severity: sev, expires: expires}
+}
+
+func TestMatchIPAndDomainAndHash(t *testing.T) {
+	s := storeWith(map[string]entry{
+		"ip:6.6.6.6":       e(5, nil),
+		"domain:evil.com":  e(4, nil),
+		"hash:" + sha256of: e(5, nil),
+	})
+	raw := map[string]any{
+		"dst_endpoint": map[string]any{"ip": "6.6.6.6", "port": 443},
+		"query":        map[string]any{"hostname": "C2.Evil.com."},
+		"file":         map[string]any{"sha256": sha256of},
+	}
+	hits := s.Match(raw, time.Now())
+	if len(hits) != 3 {
+		t.Fatalf("期望 3 次命中，得到 %d：%v", len(hits), hits)
+	}
+	want := map[string]bool{
+		"intel:ip:6.6.6.6":      true,
+		"intel:domain:evil.com": true, // 子域命中根域情报，大小写与尾点已归一
+		"intel:hash:" + sha256of: true,
+	}
+	for _, h := range hits {
+		if !want[h.RuleID] {
+			t.Errorf("意外命中 %s", h.RuleID)
+		}
+	}
+}
+
+const sha256of = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+func TestMatchExpiredAndMiss(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	s := storeWith(map[string]entry{
+		"ip:6.6.6.6": e(5, &past),
+	})
+	raw := map[string]any{
+		"src_endpoint": map[string]any{"ip": "10.0.0.1"},
+		"dst_endpoint": map[string]any{"ip": "6.6.6.6"},
+	}
+	if hits := s.Match(raw, time.Now()); len(hits) != 0 {
+		t.Fatalf("过期情报不该命中：%v", hits)
+	}
+}
+
+func TestMatchDedupWithinEvent(t *testing.T) {
+	s := storeWith(map[string]entry{"ip:6.6.6.6": e(5, nil)})
+	raw := map[string]any{
+		"src_endpoint": map[string]any{"ip": "6.6.6.6"},
+		"dst_endpoint": map[string]any{"ip": "6.6.6.6"},
+	}
+	if hits := s.Match(raw, time.Now()); len(hits) != 1 {
+		t.Fatalf("同一事件里重复出现的值只算一次：%v", hits)
+	}
+}
+
+func TestMatchEmptyIndexSkipsWalk(t *testing.T) {
+	s := storeWith(map[string]entry{})
+	if hits := s.Match(map[string]any{"dst_endpoint": map[string]any{"ip": "6.6.6.6"}}, time.Now()); hits != nil {
+		t.Fatalf("空情报库不该有命中：%v", hits)
+	}
+}
+
+func TestDetectionsMerge(t *testing.T) {
+	rules := []*sigma.Rule{{ID: "r1", Severity: 3}}
+	iocs := []Hit{{RuleID: "intel:ip:6.6.6.6", Severity: 5}}
+	got := Detections(rules, iocs)
+	if len(got) != 2 || got[0].RuleID != "r1" || got[1].RuleID != "intel:ip:6.6.6.6" {
+		t.Fatalf("合并结果不对：%v", got)
+	}
+}

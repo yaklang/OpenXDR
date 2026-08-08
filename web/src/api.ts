@@ -177,6 +177,38 @@ export async function deleteSuppression(id: string): Promise<void> {
   if (!r.ok) throw new Error(await r.text())
 }
 
+export interface IntelRow {
+  id: string
+  createdAt: string
+  kind: 'ip' | 'domain' | 'hash'
+  value: string
+  source: string
+  severity: number
+  note: string | null
+  expiresAt: string | null
+  matchedCount: number
+  lastMatchedAt: string | null
+}
+
+export const fetchIntel = () => get<IntelRow[]>('/api/intel')
+
+export async function importIntel(body: {
+  text: string
+  source?: string
+  severity?: number
+  expiresInDays?: number
+}): Promise<{ imported: number; skipped: number }> {
+  const r = await post('/api/intel/import', body)
+  if (!r.ok) throw new Error(await r.text())
+  return r.json()
+}
+
+export async function deleteIntel(id: string): Promise<void> {
+  const r = await fetch(`/api/intel/${id}`, { method: 'DELETE' })
+  check(r)
+  if (!r.ok) throw new Error(await r.text())
+}
+
 export interface UserRow {
   id: string
   createdAt: string

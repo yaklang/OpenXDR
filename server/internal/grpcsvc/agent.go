@@ -17,6 +17,7 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
 	"openxdr/server/internal/dedup"
+	"openxdr/server/internal/intel"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
@@ -30,6 +31,7 @@ type Server struct {
 	DedupWindow time.Duration
 	Hub         *response.Hub
 	Suppress    *suppress.Store
+	Intel       *intel.Store
 }
 
 func (s *Server) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
@@ -207,24 +209,24 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 		}
 		eventCreates = append(eventCreates, ec)
 
-		for _, rule := range s.Rules.Evaluate(int(ev.ClassUid), assetOS, rawMap) {
+		for _, h := range intel.Detections(s.Rules.Evaluate(int(ev.ClassUid), assetOS, rawMap), s.Intel.Match(rawMap, ts)) {
 			// 抑制先于去重：被压掉的命中不该占用去重槽位
-			if s.Suppress.Suppressed(rule.ID, assetID, ts) {
+			if s.Suppress.Suppressed(h.RuleID, assetID, ts) {
 				continue
 			}
-			if deduper.Hit(rule.ID, ts) {
+			if deduper.Hit(h.RuleID, ts) {
 				continue
 			}
 			alertID := uuid.Must(uuid.NewV7())
 			alertCreates = append(alertCreates, s.DB.Alert.Create().
 				SetID(alertID).
 				SetTs(ts).
-				SetRuleID(rule.ID).
-				SetSeverity(rule.Severity).
+				SetRuleID(h.RuleID).
+				SetSeverity(h.Severity).
 				SetEventID(eventID).
 				SetNillableAssetID(assetID).
 				SetLastTs(ts))
-			deduper.Track(rule.ID, alertID, ts)
+			deduper.Track(h.RuleID, alertID, ts)
 		}
 
 		// 长连接流，攒批落库

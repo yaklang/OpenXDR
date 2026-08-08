@@ -15,6 +15,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
@@ -93,7 +94,7 @@ func TestAgentReportEvents(t *testing.T) {
 	}
 
 	stream := &fakeAgentStream{ctx: ctx, events: []*pb.AgentEvent{enroll, boring}}
-	s := &Server{DB: client, Rules: loadMimikatzRule(t), DedupWindow: time.Hour, Suppress: suppress.New(client, time.Hour)}
+	s := &Server{DB: client, Rules: loadMimikatzRule(t), DedupWindow: time.Hour, Suppress: suppress.New(client, time.Hour), Intel: intel.New(client, time.Hour)}
 	if err := s.ReportEvents(stream); err != nil {
 		t.Fatalf("ReportEvents 失败: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestAgentReportEvents(t *testing.T) {
 func TestAgentReportEventsEOF(t *testing.T) {
 	ctx, client := testdb.New(t)
 	empty := &fakeAgentStream{ctx: ctx} // 无事件，立即 EOF
-	s := &Server{DB: client, Rules: loadMimikatzRule(t), DedupWindow: time.Hour, Suppress: suppress.New(client, time.Hour)}
+	s := &Server{DB: client, Rules: loadMimikatzRule(t), DedupWindow: time.Hour, Suppress: suppress.New(client, time.Hour), Intel: intel.New(client, time.Hour)}
 	if err := s.ReportEvents(empty); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("空流应正常收尾，得到 %v", err)
 	}

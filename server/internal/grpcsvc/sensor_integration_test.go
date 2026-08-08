@@ -10,6 +10,7 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/internal/dedup"
+	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
@@ -47,7 +48,7 @@ func TestSensorIngest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := &SensorServer{DB: client, Rules: loadDNSRule(t), Suppress: suppress.New(client, time.Hour)}
+	s := &SensorServer{DB: client, Rules: loadDNSRule(t), Suppress: suppress.New(client, time.Hour), Intel: intel.New(client, time.Hour)}
 	ded := dedup.New(time.Hour)
 	now := time.Now().UnixNano()
 

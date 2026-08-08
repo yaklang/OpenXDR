@@ -6,6 +6,7 @@ import {
 import { AssetList } from './AssetList'
 import { AuditLogView } from './AuditLogView'
 import { IncidentGraphView } from './IncidentGraphView'
+import { IntelList } from './IntelList'
 import { LoginPage } from './LoginPage'
 import { ResponsePanel } from './ResponsePanel'
 import { SuppressDialog } from './SuppressDialog'
@@ -37,6 +38,7 @@ export default function App() {
   // 标记误报后弹出抑制对话框，把分析师的判断反馈回检测链路
   const [suppressing, setSuppressing] = useState(false)
   const [showSuppressions, setShowSuppressions] = useState(false)
+  const [showIntel, setShowIntel] = useState(false)
   const [showAssets, setShowAssets] = useState(false)
   const [showUsers, setShowUsers] = useState(false)
   const [showAudit, setShowAudit] = useState(false)
@@ -112,6 +114,7 @@ export default function App() {
           <span className="muted">{t('events', { n: incidents.length })}</span>
           <button className="link" onClick={() => setShowAssets(true)}>{t('assets')}</button>
           <button className="link" onClick={() => setShowSuppressions(true)}>{t('suppressions')}</button>
+          <button className="link" onClick={() => setShowIntel(true)}>{t('intel')}</button>
           {isAdmin && (
             <>
               <button className="link" onClick={() => setShowUsers(true)}>{t('users')}</button>
@@ -229,6 +232,7 @@ export default function App() {
       {showSuppressions && (
         <SuppressionList canAct={canWrite} onClose={() => setShowSuppressions(false)} />
       )}
+      {showIntel && <IntelList canAct={canWrite} onClose={() => setShowIntel(false)} />}
       {showAssets && <AssetList onClose={() => setShowAssets(false)} />}
       {showUsers && <UserManagement self={me.username} onClose={() => setShowUsers(false)} />}
       {showAudit && <AuditLogView onClose={() => setShowAudit(false)} />}

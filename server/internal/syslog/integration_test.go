@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"openxdr/server/internal/dedup"
+	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
@@ -50,7 +51,7 @@ func TestSyslogBuildLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := &Server{DB: client, Rules: loadSSHRule(t), Suppress: suppress.New(client, time.Hour)}
+	s := &Server{DB: client, Rules: loadSSHRule(t), Suppress: suppress.New(client, time.Hour), Intel: intel.New(client, time.Hour)}
 	ded := dedup.New(time.Hour)
 	line := `<34>Oct 11 22:14:15 web01 sshd[123]: Failed password for root from 1.2.3.4`
 

@@ -21,6 +21,7 @@ import (
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/correlate"
 	"openxdr/server/internal/grpcsvc"
+	"openxdr/server/internal/intel"
 	"openxdr/server/internal/janitor"
 	"openxdr/server/internal/notify"
 	"openxdr/server/internal/response"
@@ -49,6 +50,9 @@ func main() {
 
 	suppressions := suppress.New(client, time.Duration(getenvInt("SUPPRESSION_RELOAD_SECONDS", 30))*time.Second)
 	go suppressions.Run(ctx)
+
+	intelStore := intel.New(client, time.Duration(getenvInt("INTEL_RELOAD_SECONDS", 30))*time.Second)
+	go intelStore.Run(ctx)
 
 	rules := sigma.LoadDir(getenv("RULES_PATH", "../rules"))
 
@@ -94,6 +98,7 @@ func main() {
 		Addr:        os.Getenv("SYSLOG_ADDR"),
 		DedupWindow: dedupWindow,
 		Suppress:    suppressions,
+		Intel:       intelStore,
 	}).Run(ctx)
 
 	grpcAddr := getenv("GRPC_ADDR", ":8081")
@@ -119,12 +124,14 @@ func main() {
 		DedupWindow: dedupWindow,
 		Hub:         hub,
 		Suppress:    suppressions,
+		Intel:       intelStore,
 	})
 	pb.RegisterSensorServiceServer(grpcServer, &grpcsvc.SensorServer{
 		DB:          client,
 		Rules:       rules,
 		DedupWindow: dedupWindow,
 		Suppress:    suppressions,
+		Intel:       intelStore,
 	})
 	go func() {
 		slog.Info("gRPC 启动", "addr", grpcAddr)
@@ -141,7 +148,7 @@ func main() {
 
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	slog.Info("HTTP 启动", "addr", httpAddr)
-	handler := auth.Middleware(client, api.Handler(client, rules, hub, suppressions, isolationAllowlist()))
+	handler := auth.Middleware(client, api.Handler(client, rules, hub, suppressions, intelStore, isolationAllowlist()))
 	if err := http.ListenAndServe(httpAddr, handler); err != nil {
 		slog.Error("HTTP 退出", "err", err)
 		os.Exit(1)

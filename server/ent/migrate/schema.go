@@ -202,6 +202,32 @@ var (
 		Columns:    IncidentsColumns,
 		PrimaryKey: []*schema.Column{IncidentsColumns[0]},
 	}
+	// IntelsColumns holds the columns for the "intels" table.
+	IntelsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "kind", Type: field.TypeEnum, Enums: []string{"ip", "domain", "hash"}},
+		{Name: "value", Type: field.TypeString},
+		{Name: "source", Type: field.TypeString, Default: "manual"},
+		{Name: "severity", Type: field.TypeInt16, Default: 4},
+		{Name: "note", Type: field.TypeString, Nullable: true},
+		{Name: "expires_at", Type: field.TypeTime, Nullable: true},
+		{Name: "matched_count", Type: field.TypeInt, Default: 0},
+		{Name: "last_matched_at", Type: field.TypeTime, Nullable: true},
+	}
+	// IntelsTable holds the schema information for the "intels" table.
+	IntelsTable = &schema.Table{
+		Name:       "intels",
+		Columns:    IntelsColumns,
+		PrimaryKey: []*schema.Column{IntelsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "intel_kind_value",
+				Unique:  true,
+				Columns: []*schema.Column{IntelsColumns[2], IntelsColumns[3]},
+			},
+		},
+	}
 	// SessionsColumns holds the columns for the "sessions" table.
 	SessionsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -270,6 +296,7 @@ var (
 		CommandsTable,
 		EventsTable,
 		IncidentsTable,
+		IntelsTable,
 		SessionsTable,
 		SuppressionsTable,
 		UsersTable,

@@ -12,6 +12,7 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
+	"openxdr/server/ent/intel"
 	"openxdr/server/ent/session"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/user"
@@ -87,6 +88,7 @@ func checkColumn(t, c string) error {
 			command.Table:     command.ValidColumn,
 			event.Table:       event.ValidColumn,
 			incident.Table:    incident.ValidColumn,
+			intel.Table:       intel.ValidColumn,
 			session.Table:     session.ValidColumn,
 			suppression.Table: suppression.ValidColumn,
 			user.Table:        user.ValidColumn,

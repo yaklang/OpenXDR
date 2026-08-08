@@ -80,6 +80,18 @@ func (f IncidentFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, er
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.IncidentMutation", m)
 }
 
+// The IntelFunc type is an adapter to allow the use of ordinary
+// function as Intel mutator.
+type IntelFunc func(context.Context, *ent.IntelMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f IntelFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.IntelMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.IntelMutation", m)
+}
+
 // The SessionFunc type is an adapter to allow the use of ordinary
 // function as Session mutator.
 type SessionFunc func(context.Context, *ent.SessionMutation) (ent.Value, error)

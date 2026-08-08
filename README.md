@@ -162,6 +162,22 @@ echo '*.* @<server>:514' >> /etc/rsyslog.conf && systemctl restart rsyslog
 规则里用 `logsource.category: application` 匹配这类事件，字段路径见
 `rules/lnx_ssh_auth_failure.yml`。
 
+## 威胁情报
+
+内置 IOC 库：恶意 IP / 域名 / 文件哈希。三路事件（EDR / NTA / 日志）入库时
+自动与情报碰撞，命中即产生告警，走与规则告警相同的去重、抑制与关联链路。
+域名情报按后缀匹配，`evil.com` 能撞上 `c2.evil.com` 的 DNS 查询、TLS SNI 与 HTTP Host。
+
+界面上（威胁情报入口）可直接粘贴清单批量导入：一行一条，类型自动识别，
+重复条目跳过。每条情报持续累计命中次数——长期零命中的陈年 IOC 应当清理，
+默认可设有效期到期自动失效。也可通过 API 对接情报源：
+
+```bash
+curl -X POST http://localhost:8080/api/intel/import \
+  -H 'Content-Type: application/json' -b cookie.txt \
+  -d '{"text": "6.6.6.6\nevil.example.com", "source": "feed-x", "expiresInDays": 30}'
+```
+
 ## 误报抑制
 
 分析师把事件标记为误报后，可以顺手把噪声源掐掉：抑制指定规则在指定主机
@@ -257,6 +273,7 @@ server 全部通过环境变量配置，均有默认值：
 | `AI_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点 |
 | `SYSLOG_ADDR` | 空（不启用） | syslog 监听地址，如 `:514`。UDP 与 TCP 同时监听 |
 | `SUPPRESSION_RELOAD_SECONDS` | `30` | 抑制规则重载与命中计数回写周期 |
+| `INTEL_RELOAD_SECONDS` | `30` | 威胁情报重载与命中计数回写周期 |
 | `RESPONSE_ENABLED` | `false` | 是否允许下发响应指令 |
 | `ISOLATION_ALLOW` | 空 | 隔离主机时放行的地址，必须包含 server 的 gRPC 端点 |
 | `RETENTION_DAYS` | `30` | 原始事件保留天数，0 表示不清理。被告警引用的证据事件不受影响 |

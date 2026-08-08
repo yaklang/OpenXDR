@@ -13,6 +13,7 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
+	"openxdr/server/ent/intel"
 	"openxdr/server/ent/predicate"
 	"openxdr/server/ent/session"
 	"openxdr/server/ent/suppression"
@@ -40,6 +41,7 @@ const (
 	TypeCommand     = "Command"
 	TypeEvent       = "Event"
 	TypeIncident    = "Incident"
+	TypeIntel       = "Intel"
 	TypeSession     = "Session"
 	TypeSuppression = "Suppression"
 	TypeUser        = "User"
@@ -5420,6 +5422,899 @@ func (m *IncidentMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown Incident edge %s", name)
+}
+
+// IntelMutation represents an operation that mutates the Intel nodes in the graph.
+type IntelMutation struct {
+	config
+	op               Op
+	typ              string
+	id               *uuid.UUID
+	created_at       *time.Time
+	kind             *intel.Kind
+	value            *string
+	source           *string
+	severity         *int16
+	addseverity      *int16
+	note             *string
+	expires_at       *time.Time
+	matched_count    *int
+	addmatched_count *int
+	last_matched_at  *time.Time
+	clearedFields    map[string]struct{}
+	done             bool
+	oldValue         func(context.Context) (*Intel, error)
+	predicates       []predicate.Intel
+}
+
+var _ ent.Mutation = (*IntelMutation)(nil)
+
+// intelOption allows management of the mutation configuration using functional options.
+type intelOption func(*IntelMutation)
+
+// newIntelMutation creates new mutation for the Intel entity.
+func newIntelMutation(c config, op Op, opts ...intelOption) *IntelMutation {
+	m := &IntelMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeIntel,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withIntelID sets the ID field of the mutation.
+func withIntelID(id uuid.UUID) intelOption {
+	return func(m *IntelMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *Intel
+		)
+		m.oldValue = func(ctx context.Context) (*Intel, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().Intel.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withIntel sets the old Intel of the mutation.
+func withIntel(node *Intel) intelOption {
+	return func(m *IntelMutation) {
+		m.oldValue = func(context.Context) (*Intel, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m IntelMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m IntelMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of Intel entities.
+func (m *IntelMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *IntelMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *IntelMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().Intel.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *IntelMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *IntelMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the Intel entity.
+// If the Intel object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *IntelMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *IntelMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetKind sets the "kind" field.
+func (m *IntelMutation) SetKind(i intel.Kind) {
+	m.kind = &i
+}
+
+// Kind returns the value of the "kind" field in the mutation.
+func (m *IntelMutation) Kind() (r intel.Kind, exists bool) {
+	v := m.kind
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKind returns the old "kind" field's value of the Intel entity.
+// If the Intel object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *IntelMutation) OldKind(ctx context.Context) (v intel.Kind, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKind is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKind requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKind: %w", err)
+	}
+	return oldValue.Kind, nil
+}
+
+// ResetKind resets all changes to the "kind" field.
+func (m *IntelMutation) ResetKind() {
+	m.kind = nil
+}
+
+// SetValue sets the "value" field.
+func (m *IntelMutation) SetValue(s string) {
+	m.value = &s
+}
+
+// Value returns the value of the "value" field in the mutation.
+func (m *IntelMutation) Value() (r string, exists bool) {
+	v := m.value
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldValue returns the old "value" field's value of the Intel entity.
+// If the Intel object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *IntelMutation) OldValue(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldValue is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldValue requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldValue: %w", err)
+	}
+	return oldValue.Value, nil
+}
+
+// ResetValue resets all changes to the "value" field.
+func (m *IntelMutation) ResetValue() {
+	m.value = nil
+}
+
+// SetSource sets the "source" field.
+func (m *IntelMutation) SetSource(s string) {
+	m.source = &s
+}
+
+// Source returns the value of the "source" field in the mutation.
+func (m *IntelMutation) Source() (r string, exists bool) {
+	v := m.source
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSource returns the old "source" field's value of the Intel entity.
+// If the Intel object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *IntelMutation) OldSource(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSource is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSource requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSource: %w", err)
+	}
+	return oldValue.Source, nil
+}
+
+// ResetSource resets all changes to the "source" field.
+func (m *IntelMutation) ResetSource() {
+	m.source = nil
+}
+
+// SetSeverity sets the "severity" field.
+func (m *IntelMutation) SetSeverity(i int16) {
+	m.severity = &i
+	m.addseverity = nil
+}
+
+// Severity returns the value of the "severity" field in the mutation.
+func (m *IntelMutation) Severity() (r int16, exists bool) {
+	v := m.severity
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSeverity returns the old "severity" field's value of the Intel entity.
+// If the Intel object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *IntelMutation) OldSeverity(ctx context.Context) (v int16, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSeverity is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSeverity requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSeverity: %w", err)
+	}
+	return oldValue.Severity, nil
+}
+
+// AddSeverity adds i to the "severity" field.
+func (m *IntelMutation) AddSeverity(i int16) {
+	if m.addseverity != nil {
+		*m.addseverity += i
+	} else {
+		m.addseverity = &i
+	}
+}
+
+// AddedSeverity returns the value that was added to the "severity" field in this mutation.
+func (m *IntelMutation) AddedSeverity() (r int16, exists bool) {
+	v := m.addseverity
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetSeverity resets all changes to the "severity" field.
+func (m *IntelMutation) ResetSeverity() {
+	m.severity = nil
+	m.addseverity = nil
+}
+
+// SetNote sets the "note" field.
+func (m *IntelMutation) SetNote(s string) {
+	m.note = &s
+}
+
+// Note returns the value of the "note" field in the mutation.
+func (m *IntelMutation) Note() (r string, exists bool) {
+	v := m.note
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNote returns the old "note" field's value of the Intel entity.
+// If the Intel object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *IntelMutation) OldNote(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNote is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNote requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNote: %w", err)
+	}
+	return oldValue.Note, nil
+}
+
+// ClearNote clears the value of the "note" field.
+func (m *IntelMutation) ClearNote() {
+	m.note = nil
+	m.clearedFields[intel.FieldNote] = struct{}{}
+}
+
+// NoteCleared returns if the "note" field was cleared in this mutation.
+func (m *IntelMutation) NoteCleared() bool {
+	_, ok := m.clearedFields[intel.FieldNote]
+	return ok
+}
+
+// ResetNote resets all changes to the "note" field.
+func (m *IntelMutation) ResetNote() {
+	m.note = nil
+	delete(m.clearedFields, intel.FieldNote)
+}
+
+// SetExpiresAt sets the "expires_at" field.
+func (m *IntelMutation) SetExpiresAt(t time.Time) {
+	m.expires_at = &t
+}
+
+// ExpiresAt returns the value of the "expires_at" field in the mutation.
+func (m *IntelMutation) ExpiresAt() (r time.Time, exists bool) {
+	v := m.expires_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExpiresAt returns the old "expires_at" field's value of the Intel entity.
+// If the Intel object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *IntelMutation) OldExpiresAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExpiresAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExpiresAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExpiresAt: %w", err)
+	}
+	return oldValue.ExpiresAt, nil
+}
+
+// ClearExpiresAt clears the value of the "expires_at" field.
+func (m *IntelMutation) ClearExpiresAt() {
+	m.expires_at = nil
+	m.clearedFields[intel.FieldExpiresAt] = struct{}{}
+}
+
+// ExpiresAtCleared returns if the "expires_at" field was cleared in this mutation.
+func (m *IntelMutation) ExpiresAtCleared() bool {
+	_, ok := m.clearedFields[intel.FieldExpiresAt]
+	return ok
+}
+
+// ResetExpiresAt resets all changes to the "expires_at" field.
+func (m *IntelMutation) ResetExpiresAt() {
+	m.expires_at = nil
+	delete(m.clearedFields, intel.FieldExpiresAt)
+}
+
+// SetMatchedCount sets the "matched_count" field.
+func (m *IntelMutation) SetMatchedCount(i int) {
+	m.matched_count = &i
+	m.addmatched_count = nil
+}
+
+// MatchedCount returns the value of the "matched_count" field in the mutation.
+func (m *IntelMutation) MatchedCount() (r int, exists bool) {
+	v := m.matched_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMatchedCount returns the old "matched_count" field's value of the Intel entity.
+// If the Intel object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *IntelMutation) OldMatchedCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMatchedCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMatchedCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMatchedCount: %w", err)
+	}
+	return oldValue.MatchedCount, nil
+}
+
+// AddMatchedCount adds i to the "matched_count" field.
+func (m *IntelMutation) AddMatchedCount(i int) {
+	if m.addmatched_count != nil {
+		*m.addmatched_count += i
+	} else {
+		m.addmatched_count = &i
+	}
+}
+
+// AddedMatchedCount returns the value that was added to the "matched_count" field in this mutation.
+func (m *IntelMutation) AddedMatchedCount() (r int, exists bool) {
+	v := m.addmatched_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetMatchedCount resets all changes to the "matched_count" field.
+func (m *IntelMutation) ResetMatchedCount() {
+	m.matched_count = nil
+	m.addmatched_count = nil
+}
+
+// SetLastMatchedAt sets the "last_matched_at" field.
+func (m *IntelMutation) SetLastMatchedAt(t time.Time) {
+	m.last_matched_at = &t
+}
+
+// LastMatchedAt returns the value of the "last_matched_at" field in the mutation.
+func (m *IntelMutation) LastMatchedAt() (r time.Time, exists bool) {
+	v := m.last_matched_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastMatchedAt returns the old "last_matched_at" field's value of the Intel entity.
+// If the Intel object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *IntelMutation) OldLastMatchedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastMatchedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastMatchedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastMatchedAt: %w", err)
+	}
+	return oldValue.LastMatchedAt, nil
+}
+
+// ClearLastMatchedAt clears the value of the "last_matched_at" field.
+func (m *IntelMutation) ClearLastMatchedAt() {
+	m.last_matched_at = nil
+	m.clearedFields[intel.FieldLastMatchedAt] = struct{}{}
+}
+
+// LastMatchedAtCleared returns if the "last_matched_at" field was cleared in this mutation.
+func (m *IntelMutation) LastMatchedAtCleared() bool {
+	_, ok := m.clearedFields[intel.FieldLastMatchedAt]
+	return ok
+}
+
+// ResetLastMatchedAt resets all changes to the "last_matched_at" field.
+func (m *IntelMutation) ResetLastMatchedAt() {
+	m.last_matched_at = nil
+	delete(m.clearedFields, intel.FieldLastMatchedAt)
+}
+
+// Where appends a list predicates to the IntelMutation builder.
+func (m *IntelMutation) Where(ps ...predicate.Intel) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the IntelMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *IntelMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.Intel, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *IntelMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *IntelMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (Intel).
+func (m *IntelMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *IntelMutation) Fields() []string {
+	fields := make([]string, 0, 9)
+	if m.created_at != nil {
+		fields = append(fields, intel.FieldCreatedAt)
+	}
+	if m.kind != nil {
+		fields = append(fields, intel.FieldKind)
+	}
+	if m.value != nil {
+		fields = append(fields, intel.FieldValue)
+	}
+	if m.source != nil {
+		fields = append(fields, intel.FieldSource)
+	}
+	if m.severity != nil {
+		fields = append(fields, intel.FieldSeverity)
+	}
+	if m.note != nil {
+		fields = append(fields, intel.FieldNote)
+	}
+	if m.expires_at != nil {
+		fields = append(fields, intel.FieldExpiresAt)
+	}
+	if m.matched_count != nil {
+		fields = append(fields, intel.FieldMatchedCount)
+	}
+	if m.last_matched_at != nil {
+		fields = append(fields, intel.FieldLastMatchedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *IntelMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case intel.FieldCreatedAt:
+		return m.CreatedAt()
+	case intel.FieldKind:
+		return m.Kind()
+	case intel.FieldValue:
+		return m.Value()
+	case intel.FieldSource:
+		return m.Source()
+	case intel.FieldSeverity:
+		return m.Severity()
+	case intel.FieldNote:
+		return m.Note()
+	case intel.FieldExpiresAt:
+		return m.ExpiresAt()
+	case intel.FieldMatchedCount:
+		return m.MatchedCount()
+	case intel.FieldLastMatchedAt:
+		return m.LastMatchedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *IntelMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case intel.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case intel.FieldKind:
+		return m.OldKind(ctx)
+	case intel.FieldValue:
+		return m.OldValue(ctx)
+	case intel.FieldSource:
+		return m.OldSource(ctx)
+	case intel.FieldSeverity:
+		return m.OldSeverity(ctx)
+	case intel.FieldNote:
+		return m.OldNote(ctx)
+	case intel.FieldExpiresAt:
+		return m.OldExpiresAt(ctx)
+	case intel.FieldMatchedCount:
+		return m.OldMatchedCount(ctx)
+	case intel.FieldLastMatchedAt:
+		return m.OldLastMatchedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown Intel field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *IntelMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case intel.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case intel.FieldKind:
+		v, ok := value.(intel.Kind)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKind(v)
+		return nil
+	case intel.FieldValue:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetValue(v)
+		return nil
+	case intel.FieldSource:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSource(v)
+		return nil
+	case intel.FieldSeverity:
+		v, ok := value.(int16)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSeverity(v)
+		return nil
+	case intel.FieldNote:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNote(v)
+		return nil
+	case intel.FieldExpiresAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExpiresAt(v)
+		return nil
+	case intel.FieldMatchedCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMatchedCount(v)
+		return nil
+	case intel.FieldLastMatchedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastMatchedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown Intel field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *IntelMutation) AddedFields() []string {
+	var fields []string
+	if m.addseverity != nil {
+		fields = append(fields, intel.FieldSeverity)
+	}
+	if m.addmatched_count != nil {
+		fields = append(fields, intel.FieldMatchedCount)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *IntelMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case intel.FieldSeverity:
+		return m.AddedSeverity()
+	case intel.FieldMatchedCount:
+		return m.AddedMatchedCount()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *IntelMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case intel.FieldSeverity:
+		v, ok := value.(int16)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSeverity(v)
+		return nil
+	case intel.FieldMatchedCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMatchedCount(v)
+		return nil
+	}
+	return fmt.Errorf("unknown Intel numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *IntelMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(intel.FieldNote) {
+		fields = append(fields, intel.FieldNote)
+	}
+	if m.FieldCleared(intel.FieldExpiresAt) {
+		fields = append(fields, intel.FieldExpiresAt)
+	}
+	if m.FieldCleared(intel.FieldLastMatchedAt) {
+		fields = append(fields, intel.FieldLastMatchedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *IntelMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *IntelMutation) ClearField(name string) error {
+	switch name {
+	case intel.FieldNote:
+		m.ClearNote()
+		return nil
+	case intel.FieldExpiresAt:
+		m.ClearExpiresAt()
+		return nil
+	case intel.FieldLastMatchedAt:
+		m.ClearLastMatchedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown Intel nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *IntelMutation) ResetField(name string) error {
+	switch name {
+	case intel.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case intel.FieldKind:
+		m.ResetKind()
+		return nil
+	case intel.FieldValue:
+		m.ResetValue()
+		return nil
+	case intel.FieldSource:
+		m.ResetSource()
+		return nil
+	case intel.FieldSeverity:
+		m.ResetSeverity()
+		return nil
+	case intel.FieldNote:
+		m.ResetNote()
+		return nil
+	case intel.FieldExpiresAt:
+		m.ResetExpiresAt()
+		return nil
+	case intel.FieldMatchedCount:
+		m.ResetMatchedCount()
+		return nil
+	case intel.FieldLastMatchedAt:
+		m.ResetLastMatchedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown Intel field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *IntelMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *IntelMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *IntelMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *IntelMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *IntelMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *IntelMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *IntelMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown Intel unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *IntelMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown Intel edge %s", name)
 }
 
 // SessionMutation represents an operation that mutates the Session nodes in the graph.

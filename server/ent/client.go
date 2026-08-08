@@ -17,6 +17,7 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
+	"openxdr/server/ent/intel"
 	"openxdr/server/ent/session"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/user"
@@ -45,6 +46,8 @@ type Client struct {
 	Event *EventClient
 	// Incident is the client for interacting with the Incident builders.
 	Incident *IncidentClient
+	// Intel is the client for interacting with the Intel builders.
+	Intel *IntelClient
 	// Session is the client for interacting with the Session builders.
 	Session *SessionClient
 	// Suppression is the client for interacting with the Suppression builders.
@@ -68,6 +71,7 @@ func (c *Client) init() {
 	c.Command = NewCommandClient(c.config)
 	c.Event = NewEventClient(c.config)
 	c.Incident = NewIncidentClient(c.config)
+	c.Intel = NewIntelClient(c.config)
 	c.Session = NewSessionClient(c.config)
 	c.Suppression = NewSuppressionClient(c.config)
 	c.User = NewUserClient(c.config)
@@ -169,6 +173,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		Command:     NewCommandClient(cfg),
 		Event:       NewEventClient(cfg),
 		Incident:    NewIncidentClient(cfg),
+		Intel:       NewIntelClient(cfg),
 		Session:     NewSessionClient(cfg),
 		Suppression: NewSuppressionClient(cfg),
 		User:        NewUserClient(cfg),
@@ -197,6 +202,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		Command:     NewCommandClient(cfg),
 		Event:       NewEventClient(cfg),
 		Incident:    NewIncidentClient(cfg),
+		Intel:       NewIntelClient(cfg),
 		Session:     NewSessionClient(cfg),
 		Suppression: NewSuppressionClient(cfg),
 		User:        NewUserClient(cfg),
@@ -229,8 +235,8 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.Alert, c.Asset, c.AuditLog, c.Command, c.Event, c.Incident, c.Session,
-		c.Suppression, c.User,
+		c.Alert, c.Asset, c.AuditLog, c.Command, c.Event, c.Incident, c.Intel,
+		c.Session, c.Suppression, c.User,
 	} {
 		n.Use(hooks...)
 	}
@@ -240,8 +246,8 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.Alert, c.Asset, c.AuditLog, c.Command, c.Event, c.Incident, c.Session,
-		c.Suppression, c.User,
+		c.Alert, c.Asset, c.AuditLog, c.Command, c.Event, c.Incident, c.Intel,
+		c.Session, c.Suppression, c.User,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -262,6 +268,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Event.mutate(ctx, m)
 	case *IncidentMutation:
 		return c.Incident.mutate(ctx, m)
+	case *IntelMutation:
+		return c.Intel.mutate(ctx, m)
 	case *SessionMutation:
 		return c.Session.mutate(ctx, m)
 	case *SuppressionMutation:
@@ -1231,6 +1239,139 @@ func (c *IncidentClient) mutate(ctx context.Context, m *IncidentMutation) (Value
 	}
 }
 
+// IntelClient is a client for the Intel schema.
+type IntelClient struct {
+	config
+}
+
+// NewIntelClient returns a client for the Intel from the given config.
+func NewIntelClient(c config) *IntelClient {
+	return &IntelClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `intel.Hooks(f(g(h())))`.
+func (c *IntelClient) Use(hooks ...Hook) {
+	c.hooks.Intel = append(c.hooks.Intel, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `intel.Intercept(f(g(h())))`.
+func (c *IntelClient) Intercept(interceptors ...Interceptor) {
+	c.inters.Intel = append(c.inters.Intel, interceptors...)
+}
+
+// Create returns a builder for creating a Intel entity.
+func (c *IntelClient) Create() *IntelCreate {
+	mutation := newIntelMutation(c.config, OpCreate)
+	return &IntelCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of Intel entities.
+func (c *IntelClient) CreateBulk(builders ...*IntelCreate) *IntelCreateBulk {
+	return &IntelCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *IntelClient) MapCreateBulk(slice any, setFunc func(*IntelCreate, int)) *IntelCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &IntelCreateBulk{err: fmt.Errorf("calling to IntelClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*IntelCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &IntelCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for Intel.
+func (c *IntelClient) Update() *IntelUpdate {
+	mutation := newIntelMutation(c.config, OpUpdate)
+	return &IntelUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *IntelClient) UpdateOne(_m *Intel) *IntelUpdateOne {
+	mutation := newIntelMutation(c.config, OpUpdateOne, withIntel(_m))
+	return &IntelUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *IntelClient) UpdateOneID(id uuid.UUID) *IntelUpdateOne {
+	mutation := newIntelMutation(c.config, OpUpdateOne, withIntelID(id))
+	return &IntelUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for Intel.
+func (c *IntelClient) Delete() *IntelDelete {
+	mutation := newIntelMutation(c.config, OpDelete)
+	return &IntelDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *IntelClient) DeleteOne(_m *Intel) *IntelDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *IntelClient) DeleteOneID(id uuid.UUID) *IntelDeleteOne {
+	builder := c.Delete().Where(intel.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &IntelDeleteOne{builder}
+}
+
+// Query returns a query builder for Intel.
+func (c *IntelClient) Query() *IntelQuery {
+	return &IntelQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeIntel},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a Intel entity by its id.
+func (c *IntelClient) Get(ctx context.Context, id uuid.UUID) (*Intel, error) {
+	return c.Query().Where(intel.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *IntelClient) GetX(ctx context.Context, id uuid.UUID) *Intel {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *IntelClient) Hooks() []Hook {
+	return c.hooks.Intel
+}
+
+// Interceptors returns the client interceptors.
+func (c *IntelClient) Interceptors() []Interceptor {
+	return c.inters.Intel
+}
+
+func (c *IntelClient) mutate(ctx context.Context, m *IntelMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&IntelCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&IntelUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&IntelUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&IntelDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown Intel mutation op: %q", m.Op())
+	}
+}
+
 // SessionClient is a client for the Session schema.
 type SessionClient struct {
 	config
@@ -1633,11 +1774,11 @@ func (c *UserClient) mutate(ctx context.Context, m *UserMutation) (Value, error)
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		Alert, Asset, AuditLog, Command, Event, Incident, Session, Suppression,
+		Alert, Asset, AuditLog, Command, Event, Incident, Intel, Session, Suppression,
 		User []ent.Hook
 	}
 	inters struct {
-		Alert, Asset, AuditLog, Command, Event, Incident, Session, Suppression,
+		Alert, Asset, AuditLog, Command, Event, Incident, Intel, Session, Suppression,
 		User []ent.Interceptor
 	}
 )

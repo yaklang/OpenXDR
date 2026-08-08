@@ -20,6 +20,7 @@ import (
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/intel"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 )
@@ -44,7 +45,7 @@ func setup(t *testing.T) (context.Context, *ent.Client, *httptest.Server) {
 	rules := sigma.LoadDir(t.TempDir())
 	hub := response.NewHub(client, false)
 	store := suppress.New(client, 0)
-	ts := httptest.NewServer(auth.Middleware(client, api.Handler(client, rules, hub, store, nil)))
+	ts := httptest.NewServer(auth.Middleware(client, api.Handler(client, rules, hub, store, intel.New(client, 0), nil)))
 	t.Cleanup(ts.Close)
 	return ctx, client, ts
 }

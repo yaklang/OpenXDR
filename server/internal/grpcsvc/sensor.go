@@ -15,6 +15,7 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
 	"openxdr/server/internal/dedup"
+	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/pb"
@@ -35,6 +36,7 @@ type SensorServer struct {
 	Rules       *sigma.Engine
 	DedupWindow time.Duration
 	Suppress    *suppress.Store
+	Intel       *intel.Store
 }
 
 func (s *SensorServer) ReportFlows(stream pb.SensorService_ReportFlowsServer) error {
@@ -95,13 +97,13 @@ func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, deduper 
 			SetRaw(raw)
 		eventCreates = append(eventCreates, ec)
 
-		for _, rule := range s.Rules.Evaluate(classUID, osByIP[f.SrcIp], rawMap) {
-			if s.Suppress.Suppressed(rule.ID, assetID, ts) {
+		for _, h := range intel.Detections(s.Rules.Evaluate(classUID, osByIP[f.SrcIp], rawMap), s.Intel.Match(rawMap, ts)) {
+			if s.Suppress.Suppressed(h.RuleID, assetID, ts) {
 				continue
 			}
-			fingerprint := rule.ID + "|" + f.SrcIp
+			fingerprint := h.RuleID + "|" + f.SrcIp
 			if assetID != nil {
-				fingerprint = rule.ID + "|" + assetID.String()
+				fingerprint = h.RuleID + "|" + assetID.String()
 			}
 			if deduper.Hit(fingerprint, ts) {
 				continue
@@ -110,8 +112,8 @@ func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, deduper 
 			alertCreates = append(alertCreates, s.DB.Alert.Create().
 				SetID(alertID).
 				SetTs(ts).
-				SetRuleID(rule.ID).
-				SetSeverity(rule.Severity).
+				SetRuleID(h.RuleID).
+				SetSeverity(h.Severity).
 				SetEventID(eventID).
 				SetNillableAssetID(assetID).
 				SetLastTs(ts))
