@@ -22,7 +22,10 @@ import (
 // 进程血缘上溯的层数上限，防止父子关系成环时打转
 const maxLineageDepth = 16
 
-var errNoLineage = errors.New("无可用的进程血缘")
+var (
+	errNoLineage = errors.New("无可用的进程血缘")
+	errNoLateral = errors.New("无横向移动痕迹")
+)
 
 type Engine struct {
 	DB            *ent.Client
@@ -74,14 +77,20 @@ func (e *Engine) batch(ctx context.Context) error {
 		}
 
 		// 进程血缘优先于时间窗：父进程所在的 incident 就是这条告警的归属，
-		// 攻击链因此能跨越时间窗——这是 XDR 区别于孤立告警系统的地方
+		// 攻击链因此能跨越时间窗——这是 XDR 区别于孤立告警系统的地方。
+		// 本机没有故事可归时再看横向移动：时间窗内有别的主机连过来，
+		// 这台机器上的告警就是那台机器攻击故事的延续。
 		var inc *ent.Incident
+		var lateralFrom *ent.Asset
 		if found, err := e.findByLineage(ctx, al); err == nil {
 			inc = found
 		} else if cached, ok := byAsset[bucket]; ok {
 			inc = cached
 		} else if found, err := e.findOpen(ctx, al.AssetID, al.Ts.Add(-e.Window)); err == nil {
 			inc = found
+		} else if found, src, err := e.findByLateral(ctx, al); err == nil {
+			inc = found
+			lateralFrom = src
 		}
 		if inc == nil {
 			hostname := "unknown"
@@ -109,6 +118,12 @@ func (e *Engine) batch(ctx context.Context) error {
 			graphs[inc.ID] = g
 		}
 		e.attach(ctx, g, al)
+		// 横向移动在图上是一条主机到主机的边，攻击路径一眼可见
+		if lateralFrom != nil && al.AssetID != nil && len(g.Nodes) < e.MaxGraphNodes {
+			src := "asset:" + lateralFrom.ID.String()
+			g.ensureNode(src, "asset", lateralFrom.Hostname)
+			g.ensureEdge(src, "asset:"+al.AssetID.String(), "lateral")
+		}
 		assign[inc.ID] = append(assign[inc.ID], al.ID)
 	}
 
@@ -164,6 +179,38 @@ func (e *Engine) findByLineage(ctx context.Context, al *ent.Alert) (*ent.Inciden
 		guid = *up.ParentProcessGUID
 	}
 	return nil, errNoLineage
+}
+
+// findByLateral 横向移动：本机没有可归属的故事时，看时间窗内是否有别的
+// 主机向本机发起过网络会话（sensor 流事件按源 IP 归属，conn_tuple 的
+// 目的端是本机 IP），有则归并进对端的 incident。返回对端资产用于画图。
+func (e *Engine) findByLateral(ctx context.Context, al *ent.Alert) (*ent.Incident, *ent.Asset, error) {
+	if al.AssetID == nil || al.Edges.Asset == nil {
+		return nil, nil, errNoLateral
+	}
+	since := al.Ts.Add(-e.Window)
+	for _, ip := range al.Edges.Asset.IPAddrs {
+		conns, err := e.DB.Event.Query().
+			Where(
+				event.TsGTE(since),
+				event.ConnTupleContains(">"+ip+":"),
+				event.AssetIDNotNil(),
+				event.AssetIDNEQ(*al.AssetID),
+			).
+			WithAsset().
+			Order(ent.Desc(event.FieldTs)).
+			Limit(5).
+			All(ctx)
+		if err != nil {
+			continue
+		}
+		for _, c := range conns {
+			if inc, err := e.findOpen(ctx, c.AssetID, since); err == nil {
+				return inc, c.Edges.Asset, nil
+			}
+		}
+	}
+	return nil, nil, errNoLateral
 }
 
 // findOpen 找同一归属桶在时间窗内最近的 open/triaged incident。
