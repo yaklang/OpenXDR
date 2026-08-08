@@ -33,7 +33,9 @@ type Notifier struct {
 	WaitTriage bool
 	// 拼进消息的控制台链接前缀，如 https://xdr.example.com
 	LinkBase string
-	Client   *http.Client
+	// 低于该级别的事件不推送，0 表示全推。降噪的最后一道闸
+	MinSeverity int16
+	Client      *http.Client
 
 	start time.Time
 }
@@ -92,6 +94,12 @@ func (n *Notifier) sweep(ctx context.Context) error {
 		msg, err := n.message(ctx, inc)
 		if err != nil {
 			return err
+		}
+		if msg.Severity < n.MinSeverity {
+			if err := n.markNotified(ctx, inc); err != nil {
+				return err
+			}
+			continue
 		}
 		if err := n.post(ctx, msg); err != nil {
 			slog.Error("webhook 推送失败，下周期重试", "incident", inc.ID, "err", err)

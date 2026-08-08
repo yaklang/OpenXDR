@@ -131,3 +131,53 @@ func TestSweepRetries(t *testing.T) {
 		t.Fatal("恢复后重试应成功落标记")
 	}
 }
+
+// 低于 MinSeverity 的事件静默落标记，不打扰人。
+func TestSweepMinSeverity(t *testing.T) {
+	ctx, client := testdb.New(t)
+
+	var received int
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received++
+	}))
+	t.Cleanup(hook.Close)
+
+	n := &Notifier{
+		DB: client, URL: hook.URL, Format: "generic",
+		MinSeverity: 4,
+		Client:      hook.Client(), start: time.Now().Add(-time.Minute),
+	}
+
+	low, err := client.Incident.Create().
+		SetGraph(json.RawMessage(`{}`)).SetStatus("open").Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Alert.Create().
+		SetTs(time.Now()).SetRuleID("r-low").SetSeverity(2).
+		SetIncidentID(low.ID).Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+	high, err := client.Incident.Create().
+		SetGraph(json.RawMessage(`{}`)).SetStatus("open").Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Alert.Create().
+		SetTs(time.Now()).SetRuleID("r-high").SetSeverity(5).
+		SetIncidentID(high.ID).Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := n.sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if received != 1 {
+		t.Fatalf("只有高危应被推送，实际推了 %d 条", received)
+	}
+	// 低危也要落标记，不能每轮都重新评估
+	got, _ := client.Incident.Query().Where(incident.IDEQ(low.ID)).Only(ctx)
+	if got.NotifiedAt == nil {
+		t.Fatal("低于阈值的事件应静默落标记")
+	}
+}
