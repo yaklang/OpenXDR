@@ -41,6 +41,12 @@ impl ProcessRegistry {
     pub fn seed(&mut self, pid: u32) {
         self.register(pid, None);
     }
+
+    /// 查 pid 当前的 GUID，未登记返回 None。网络事件靠它挂进进程血缘。
+    #[cfg(feature = "ebpf")]
+    pub fn guid_of(&self, pid: u32) -> Option<Uuid> {
+        self.guids.get(&pid).map(|e| e.guid)
+    }
 }
 
 #[cfg(test)]

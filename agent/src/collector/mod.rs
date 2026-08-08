@@ -27,9 +27,13 @@ mod netlink;
 pub use config::Config;
 pub use registry::ProcessRegistry;
 
-// eBPF 采集是可选特性；关掉它 Linux 走 netlink，构建不需要 nightly
+// eBPF 采集是可选特性；关掉它 Linux 走 netlink，构建不需要 nightly。
+// 网络采集（TCP 出站）只在 eBPF 模式下提供
 #[cfg(all(target_os = "linux", feature = "ebpf"))]
 mod linux;
+
+#[cfg(all(target_os = "linux", feature = "ebpf"))]
+mod netwatch;
 
 #[cfg(target_os = "windows")]
 mod authwatch_win;
@@ -54,7 +58,7 @@ pub fn spawn(agent_id: String, cfg: Config) -> mpsc::Receiver<AgentEvent> {
     let (agent_id_auth, sink_auth) = (agent_id.clone(), sink.clone());
 
     #[cfg(all(target_os = "linux", feature = "ebpf"))]
-    tokio::spawn(linux::run(agent_id, sink));
+    tokio::spawn(linux::run(agent_id, sink, cfg.collect_network));
 
     // 持久化点监控与进程采集并行
     #[cfg(target_os = "windows")]

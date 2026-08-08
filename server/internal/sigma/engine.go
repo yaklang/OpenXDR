@@ -116,7 +116,7 @@ var ingestedClasses = map[int]string{
 	1007:   "进程活动（agent）",
 	3002:   "认证活动（agent）",
 	201002: "注册表变更（agent）",
-	4001:   "网络活动（sensor）",
+	4001:   "网络活动（sensor/agent）",
 	4003:   "DNS 活动（sensor）",
 	100001: "应用日志（syslog）",
 }

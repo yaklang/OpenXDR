@@ -19,6 +19,7 @@ type agentConfig struct {
 	CollectFiles   *bool `json:"collectFiles,omitempty"`
 	CollectAuth    *bool `json:"collectAuth,omitempty"`
 	CollectPersist *bool `json:"collectPersist,omitempty"`
+	CollectNetwork *bool `json:"collectNetwork,omitempty"`
 }
 
 func mapAgentConfig(api *http.ServeMux, db *ent.Client) {

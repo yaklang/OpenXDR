@@ -83,8 +83,14 @@ agent 断线重连本就会重新注册，因此不需要热更新通道也不�
 主机白名单（`AUTO_RESPONSE_EXEMPT`）、每次决策含跳过都进审计。
 同一 incident 同一资产只动一次，重开重判不重复隔离。
 
-- **agent 独立网络采集**（无 sensor 的小部署盲区；eBPF tcp_connect 采样）
-- **macOS agent**（Endpoint Security Framework）
+**11. ~~agent 独立网络采集~~ ✅ 已完成（eBPF 模式）。** tracepoint
+`sock:inet_sock_set_state` 抓 TCP 进 SYN_SENT（本机主动出站，必然在发起
+进程上下文里），带 pid → 进程 GUID，网络事件直接挂进血缘。同目标 60s
+采样去重，loopback 不报。conn_tuple 与 sensor 同格式，横向移动关联与
+现有网络规则零改动复用。仅 eBPF 模式提供；netlink 模式不做——
+proc connector 没有网络事件，为它单开轮询不值。
+
+- **macOS agent**（Endpoint Security Framework，需 Mac 开发环境）
 
 ## 不做
 

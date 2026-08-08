@@ -1,6 +1,10 @@
-//! Linux eBPF 采集：tracepoint sched_process_exec。
+//! Linux eBPF 采集：tracepoint sched_process_exec 抓进程，
+//! tracepoint sock:inet_sock_set_state 抓 TCP 出站连接。
 //! 捕获所有 execve（含短命进程），需要 root/CAP_BPF；失败回落轮询。
 
+use std::net::IpAddr;
+
+use super::netwatch::{self, ConnInfo, ConnSampler};
 use super::{EventSink, ProcessInfo, ProcessRegistry, poll, process_event, seeded_registry};
 use crate::pb::AgentEvent;
 
@@ -13,8 +17,23 @@ struct ExecEvent {
     filename: [u8; 256],
 }
 
-pub async fn run(agent_id: String, tx: EventSink) {
-    if let Err(e) = run_ebpf(agent_id.clone(), tx.clone()).await {
+// 与 ebpf/src/main.rs 中的定义保持一致
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ConnEvent {
+    pid: u32,
+    family: u16,
+    sport: u16,
+    dport: u16,
+    _pad: u16,
+    saddr: [u8; 16],
+    daddr: [u8; 16],
+}
+
+const AF_INET: u16 = 2;
+
+pub async fn run(agent_id: String, tx: EventSink, collect_network: bool) {
+    if let Err(e) = run_ebpf(agent_id.clone(), tx.clone(), collect_network).await {
         eprintln!("eBPF 采集不可用（{e}），回落到轮询采集");
         poll::run(agent_id, tx).await;
     }
@@ -23,6 +42,7 @@ pub async fn run(agent_id: String, tx: EventSink) {
 async fn run_ebpf(
     agent_id: String,
     tx: EventSink,
+    collect_network: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use aya::maps::perf::AsyncPerfEventArray;
     use aya::programs::TracePoint;
@@ -79,9 +99,118 @@ async fn run_ebpf(
         });
     }
 
+    // 网络采集独立降级：老内核没有 inet_sock_set_state 时进程采集照常
+    if collect_network {
+        match spawn_conn_readers(&mut bpf, &agent_id, &tx, &registry).await {
+            Ok(()) => eprintln!("网络采集: eBPF inet_sock_set_state（TCP 出站，60s 采样）"),
+            Err(e) => eprintln!("网络采集不可用（{e}）"),
+        }
+    }
+
     // 常驻：bpf 句柄在本栈上保活，程序保持挂载
     std::future::pending::<()>().await;
     Ok(())
+}
+
+/// 挂载出站连接 tracepoint 并按 CPU 派发读取任务。
+async fn spawn_conn_readers(
+    bpf: &mut aya::Ebpf,
+    agent_id: &str,
+    tx: &EventSink,
+    registry: &std::sync::Arc<std::sync::Mutex<ProcessRegistry>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use aya::maps::perf::AsyncPerfEventArray;
+    use aya::programs::TracePoint;
+    use aya::util::online_cpus;
+
+    let program: &mut TracePoint = bpf
+        .program_mut("inet_sock_set_state")
+        .ok_or("eBPF 程序缺失")?
+        .try_into()?;
+    program.load()?;
+    program.attach("sock", "inet_sock_set_state")?;
+
+    let mut conns: AsyncPerfEventArray<_> = bpf
+        .take_map("CONNS")
+        .ok_or("CONNS map 缺失")?
+        .try_into()?;
+
+    // 采样表跨 CPU 共享：同一目标不因内核把事件派到不同 CPU 而重复上报
+    let sampler = std::sync::Arc::new(std::sync::Mutex::new(ConnSampler::default()));
+
+    for cpu in online_cpus().map_err(|(_, e)| e)? {
+        let mut buf = conns.open(cpu, None)?;
+        let tx = tx.clone();
+        let agent_id = agent_id.to_string();
+        let registry = registry.clone();
+        let sampler = sampler.clone();
+        tokio::spawn(async move {
+            let mut bufs = (0..8)
+                .map(|_| bytes::BytesMut::with_capacity(1024))
+                .collect::<Vec<_>>();
+            loop {
+                let Ok(batch) = buf.read_events(&mut bufs).await else {
+                    return;
+                };
+                for b in bufs.iter().take(batch.read) {
+                    if b.len() < size_of::<ConnEvent>() {
+                        continue;
+                    }
+                    let ev = unsafe { std::ptr::read_unaligned(b.as_ptr() as *const ConnEvent) };
+                    let Some(event) = to_conn_event(&agent_id, &registry, &sampler, &ev) else {
+                        continue;
+                    };
+                    if !tx.send(event) {
+                        return;
+                    }
+                }
+            }
+        });
+    }
+    Ok(())
+}
+
+fn to_conn_event(
+    agent_id: &str,
+    registry: &std::sync::Mutex<ProcessRegistry>,
+    sampler: &std::sync::Mutex<ConnSampler>,
+    ev: &ConnEvent,
+) -> Option<AgentEvent> {
+    let dst = ip_of(ev.family, &ev.daddr);
+    // 本机自娱自乐的连接没有检测价值
+    if dst.is_loopback() {
+        return None;
+    }
+    if !sampler
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .should_report(dst, ev.dport)
+    {
+        return None;
+    }
+    let guid = registry
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .guid_of(ev.pid);
+    Some(netwatch::conn_event(
+        agent_id,
+        &ConnInfo {
+            pid: ev.pid,
+            guid,
+            src: ip_of(ev.family, &ev.saddr),
+            sport: ev.sport,
+            dst,
+            dport: ev.dport,
+        },
+    ))
+}
+
+fn ip_of(family: u16, bytes: &[u8; 16]) -> IpAddr {
+    if family == AF_INET {
+        IpAddr::from([bytes[0], bytes[1], bytes[2], bytes[3]])
+    } else {
+        IpAddr::from(*bytes)
+    }
 }
 
 fn to_agent_event(agent_id: &str, registry: &mut ProcessRegistry, ev: &ExecEvent) -> AgentEvent {

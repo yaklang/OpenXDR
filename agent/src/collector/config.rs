@@ -15,6 +15,7 @@ pub struct Config {
     pub collect_files: bool,
     pub collect_auth: bool,
     pub collect_persist: bool,
+    pub collect_network: bool,
 }
 
 impl Default for Config {
@@ -24,6 +25,7 @@ impl Default for Config {
             collect_files: true,
             collect_auth: true,
             collect_persist: true,
+            collect_network: true,
         }
     }
 }
