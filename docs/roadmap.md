@@ -17,10 +17,12 @@
 **1. ~~Windows 采集对称性~~ ✅ 已完成。** 注册表 Run/RunOnce/Winlogon 与
 Startup 目录快照 diff。仍缺：服务与计划任务持久化点。
 
-**2. ~~登录事件采集~~ ✅ Linux 已完成**（wtmp/btmp 增量读，OCSF 3002）。
+**2. ~~登录事件采集~~ ✅ 已完成。** Linux：wtmp/btmp 增量读；Windows：
+Security 日志 4624/4625 订阅（Security-Auditing 的 ETW provider 是受保护
+通道，Event Log API 是正路），滤掉机器账号与服务会话。两侧同出 OCSF 3002。
 **✅ 爆破得手升级已完成**："窗口内 N 次失败后一次成功"在 ingest 侧检测
 （成功登录稀少，回查一次库即可，无需引擎状态），合成 critical 告警
-`xdr:bruteforce-success`，按用户维度隔离。仍缺：Windows ETW Logon。
+`xdr:bruteforce-success`，按用户维度隔离，Linux/Windows 通用。
 
 **3. ~~事件检索规模化~~ ✅ 索引已完成**（pg_trgm GIN）。
 待评估：events 表按时间分区（原生分区即可，TimescaleDB 作为可选增强），

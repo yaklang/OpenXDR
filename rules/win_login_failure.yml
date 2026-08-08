@@ -1,0 +1,15 @@
+title: Failed Windows Logon
+id: d2b870a5-1c34-4738-9f35-0b49bac2cb76
+status: experimental
+description: 检测失败的 Windows 登录（Security 4625）。高频命中配合去重计数就是爆破画像
+tags:
+  - attack.credential_access
+  - attack.t1110.001
+logsource:
+  category: authentication
+  product: windows
+detection:
+  selection:
+    status_id: 2
+  condition: selection
+level: medium

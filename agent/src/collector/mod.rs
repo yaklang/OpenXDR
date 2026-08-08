@@ -32,6 +32,9 @@ pub use registry::ProcessRegistry;
 mod linux;
 
 #[cfg(target_os = "windows")]
+mod authwatch_win;
+
+#[cfg(target_os = "windows")]
 mod persistwatch;
 
 #[cfg(target_os = "windows")]
@@ -57,6 +60,12 @@ pub fn spawn(agent_id: String, cfg: Config) -> mpsc::Receiver<AgentEvent> {
     #[cfg(target_os = "windows")]
     if cfg.collect_persist {
         persistwatch::spawn(agent_id.clone(), sink.clone());
+    }
+
+    // 登录事件：Security 日志 4624/4625，认证可见性与 Linux 侧对称
+    #[cfg(target_os = "windows")]
+    if cfg.collect_auth {
+        authwatch_win::spawn(agent_id.clone(), sink.clone());
     }
 
     #[cfg(target_os = "windows")]
