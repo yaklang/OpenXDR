@@ -31,6 +31,8 @@ type Engine struct {
 	DB       *ent.Client
 	LLM      *LLM
 	Interval time.Duration
+	// Rules 用于把上下文里的规则 UUID 翻译成标题，模型看得懂才判得准
+	Rules interface{ TitleOf(id string) string }
 }
 
 func (e *Engine) Run(ctx context.Context) {
@@ -126,8 +128,14 @@ func (e *Engine) buildContext(ctx context.Context, inc *ent.Incident) (string, e
 				raw = raw[:500] + "…"
 			}
 		}
+		rule := a.RuleID
+		if e.Rules != nil {
+			if title := e.Rules.TitleOf(a.RuleID); title != "" {
+				rule = title
+			}
+		}
 		fmt.Fprintf(&sb, "- [%s] severity=%d count=%d rule=%s event=%s\n",
-			a.Ts.Format("15:04:05"), a.Severity, a.Count, a.RuleID, raw)
+			a.Ts.Format("15:04:05"), a.Severity, a.Count, rule, raw)
 	}
 	return sb.String(), nil
 }

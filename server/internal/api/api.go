@@ -30,6 +30,8 @@ type incidentSummary struct {
 	Title      *string         `json:"title"`
 	AiVerdict  json.RawMessage `json:"aiVerdict"`
 	AlertCount int             `json:"alertCount"`
+	// 派生自告警的最高级别，列表按轻重着色用
+	Severity int16 `json:"severity"`
 }
 
 type alertRow struct {
@@ -78,20 +80,23 @@ func Handler(db *ent.Client, rules *sigma.Engine, hub *response.Hub, suppression
 		var counts []struct {
 			IncidentID uuid.UUID `json:"incident_id"`
 			Count      int       `json:"count"`
+			Max        int16     `json:"max"`
 		}
 		_ = db.Alert.Query().
 			Where(alert.IncidentIDIn(ids...)).
 			GroupBy(alert.FieldIncidentID).
-			Aggregate(ent.Count()).
+			Aggregate(ent.Count(), ent.Max(alert.FieldSeverity)).
 			Scan(r.Context(), &counts)
 		countBy := map[uuid.UUID]int{}
+		sevBy := map[uuid.UUID]int16{}
 		for _, c := range counts {
 			countBy[c.IncidentID] = c.Count
+			sevBy[c.IncidentID] = c.Max
 		}
 
 		out := make([]incidentSummary, len(incidents))
 		for i, inc := range incidents {
-			out[i] = summarize(inc, countBy[inc.ID])
+			out[i] = summarize(inc, countBy[inc.ID], sevBy[inc.ID])
 		}
 		writeJSON(w, out)
 	})
@@ -124,10 +129,14 @@ func Handler(db *ent.Client, rules *sigma.Engine, hub *response.Hub, suppression
 		}
 
 		var assetID *uuid.UUID
+		var maxSev int16
 		rows := make([]alertRow, len(alerts))
 		for i, a := range alerts {
 			if assetID == nil && a.AssetID != nil {
 				assetID = a.AssetID
+			}
+			if a.Severity > maxSev {
+				maxSev = a.Severity
 			}
 			row := alertRow{
 				ID: a.ID, Ts: a.Ts, LastTs: a.LastTs, Count: a.Count,
@@ -142,7 +151,7 @@ func Handler(db *ent.Client, rules *sigma.Engine, hub *response.Hub, suppression
 			rows[i] = row
 		}
 		writeJSON(w, incidentDetail{
-			incidentSummary: summarize(inc, len(alerts)),
+			incidentSummary: summarize(inc, len(alerts), maxSev),
 			Graph:           inc.Graph,
 			AssetID:         assetID,
 			Alerts:          rows,
@@ -200,10 +209,11 @@ func Handler(db *ent.Client, rules *sigma.Engine, hub *response.Hub, suppression
 	return mux
 }
 
-func summarize(inc *ent.Incident, alertCount int) incidentSummary {
+func summarize(inc *ent.Incident, alertCount int, severity int16) incidentSummary {
 	return incidentSummary{
 		ID: inc.ID, CreatedAt: inc.CreatedAt, Status: inc.Status,
 		Title: inc.Title, AiVerdict: inc.AiVerdict, AlertCount: alertCount,
+		Severity: severity,
 	}
 }
 

@@ -146,7 +146,10 @@ export default function App() {
             className={`incident-item ${inc.id === selectedId ? 'selected' : ''}`}
             onClick={() => setSelectedId(inc.id)}
           >
-            <div className="incident-title">{inc.title ?? inc.id}</div>
+            <div className="incident-title">
+              {inc.severity > 0 && <span className={`sev-${inc.severity}`}>●&nbsp;</span>}
+              {inc.title ?? inc.id}
+            </div>
             <div className="incident-meta">
               <span className={`status status-${inc.status}`}>
                 {STATUS_KEY[inc.status] ? t(STATUS_KEY[inc.status]) : inc.status}

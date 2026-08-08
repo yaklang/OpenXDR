@@ -33,6 +33,7 @@ export interface IncidentSummary {
   title: string | null
   aiVerdict: Verdict | null
   alertCount: number
+  severity: number
 }
 
 export interface AlertRow {

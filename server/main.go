@@ -71,7 +71,8 @@ func main() {
 	}).Run(ctx)
 
 	go (&triage.Engine{
-		DB: client,
+		DB:    client,
+		Rules: rules,
 		LLM: triage.NewLLM(
 			getenv("AI_BASE_URL", "http://localhost:11434/v1"),
 			os.Getenv("AI_MODEL"),
