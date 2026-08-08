@@ -33,6 +33,15 @@ services:
       WEBHOOK_FORMAT: ${WEBHOOK_FORMAT:-generic}
       # 消息里控制台链接的前缀，如 http://xdr.internal:5173
       WEBHOOK_LINK_BASE: ${WEBHOOK_LINK_BASE:-}
+      # 低于该级别的事件不推送（1~5），0 表示全推
+      WEBHOOK_MIN_SEVERITY: ${WEBHOOK_MIN_SEVERITY:-0}
+      # syslog 接入：留空不启用，如 ":514"（记得同时映射端口）
+      SYSLOG_ADDR: ${SYSLOG_ADDR:-}
+      # 响应处置：结束进程 / 主机隔离
+      RESPONSE_ENABLED: ${RESPONSE_ENABLED:-false}
+      ISOLATION_ALLOW: ${ISOLATION_ALLOW:-}
+      # 原始事件保留天数
+      RETENTION_DAYS: ${RETENTION_DAYS:-30}
     volumes:
       - ./rules:/rules:ro
     ports:
