@@ -490,11 +490,19 @@ func (e *Engine) Rules() []*Rule {
 	return e.load().rules
 }
 
+// RuleBruteforceSuccess 爆破得手合成检测：多次登录失败后同用户登录成功。
+// 跨事件计数超出单事件匹配引擎的能力，逻辑在 ingest 侧实现，标题在此登记。
+const RuleBruteforceSuccess = "xdr:bruteforce-success"
+
+var syntheticTitles = map[string]string{
+	RuleBruteforceSuccess: "Brute Force Success (多次失败后登录成功)",
+}
+
 func (e *Engine) TitleOf(ruleID string) string {
 	if r, ok := e.load().byID[ruleID]; ok {
 		return r.Title
 	}
-	return ""
+	return syntheticTitles[ruleID]
 }
 
 func compileFile(path string) (*Rule, error) {

@@ -245,6 +245,31 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 			deduper.Track(fingerprint, alertID, ts)
 		}
 
+		// 爆破得手跨事件升级：成功登录前的窗口内同用户多次失败。
+		// 先 flush 让同批未落库的失败事件可见，再回查——成功登录稀少，不构成负担
+		if int(ev.ClassUid) == classAuth && authStatus(rawMap) == authStatusSuccess &&
+			assetID != nil && ev.Username != "" {
+			if err := flush(); err != nil {
+				return err
+			}
+			if s.countAuthFailures(ctx, *assetID, ev.Username, ts) >= bruteforceThreshold &&
+				!s.Suppress.Suppressed(sigma.RuleBruteforceSuccess, assetID, ts) {
+				fingerprint := sigma.RuleBruteforceSuccess + "|" + ev.Username
+				if !deduper.Hit(fingerprint, ts) {
+					alertID := uuid.Must(uuid.NewV7())
+					alertCreates = append(alertCreates, s.DB.Alert.Create().
+						SetID(alertID).
+						SetTs(ts).
+						SetRuleID(sigma.RuleBruteforceSuccess).
+						SetSeverity(5).
+						SetEventID(eventID).
+						SetAssetID(*assetID).
+						SetLastTs(ts))
+					deduper.Track(fingerprint, alertID, ts)
+				}
+			}
+		}
+
 		// 长连接流，攒批落库
 		if received++; received%batchSize == 0 {
 			if err := flush(); err != nil {

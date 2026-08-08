@@ -18,8 +18,9 @@
 Startup 目录快照 diff。仍缺：服务与计划任务持久化点。
 
 **2. ~~登录事件采集~~ ✅ Linux 已完成**（wtmp/btmp 增量读，OCSF 3002）。
-仍缺：Windows ETW Logon；以及关联引擎里"N 次失败后一次成功 = 爆破得手"
-的跨事件升级检测——这是登录数据真正的价值所在。
+**✅ 爆破得手升级已完成**："窗口内 N 次失败后一次成功"在 ingest 侧检测
+（成功登录稀少，回查一次库即可，无需引擎状态），合成 critical 告警
+`xdr:bruteforce-success`，按用户维度隔离。仍缺：Windows ETW Logon。
 
 **3. ~~事件检索规模化~~ ✅ 索引已完成**（pg_trgm GIN）。
 待评估：events 表按时间分区（原生分区即可，TimescaleDB 作为可选增强），
