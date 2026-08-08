@@ -45,7 +45,7 @@
 | `web/` | React 前端 |
 | `schema/` | 统一事件 schema（基于 OCSF）与数据库 DDL |
 | `rules/` | 检测规则（Sigma 兼容） |
-| `docs/` | 设计文档 |
+| `docs/` | 设计文档：[架构](docs/architecture.md) / [API 参考](docs/api.md) |
 
 ## 快速开始
 
