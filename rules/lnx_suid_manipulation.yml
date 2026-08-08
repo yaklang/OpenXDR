@@ -1,0 +1,18 @@
+title: SUID Bit Manipulation or Enumeration
+id: eb327785-b160-44a6-9bd5-b5ee27a45fbf
+status: experimental
+description: 检测设置 SUID 位或枚举 SUID 文件——本地提权的准备动作
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains:
+      - 'chmod u+s'
+      - 'chmod +s'
+      - 'chmod 4755'
+      - 'chmod 4777'
+      - '-perm -4000'
+      - '-perm -u=s'
+  condition: selection
+level: medium

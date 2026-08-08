@@ -1,0 +1,16 @@
+title: Sudo Authentication Failure
+id: 1220f8e7-d94e-4840-9ac4-80a6dede491d
+status: experimental
+description: 检测 sudo 认证失败——已入侵账号尝试提权时的常见痕迹
+logsource:
+  category: application
+detection:
+  sudo:
+    metadata.product.name: 'sudo'
+  failure:
+    message|contains:
+      - 'authentication failure'
+      - 'incorrect password attempt'
+      - 'NOT in sudoers'
+  condition: sudo and failure
+level: medium

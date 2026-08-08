@@ -1,0 +1,20 @@
+title: Download and Pipe to Shell
+id: 223020a8-492c-4258-9bc3-230e5777aa24
+status: experimental
+description: 检测下载内容直接管道进 shell 执行——一句话植入的标准形态
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  download:
+    CommandLine|contains:
+      - 'curl '
+      - 'wget '
+  pipe_shell:
+    CommandLine|contains:
+      - '| sh'
+      - '| bash'
+      - '|sh'
+      - '|bash'
+  condition: download and pipe_shell
+level: high

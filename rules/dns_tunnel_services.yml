@@ -1,0 +1,19 @@
+title: DNS Query to Tunneling or Exfil Service
+id: bae25b03-2a0e-44f0-a36d-fe0042b9e66f
+status: experimental
+description: 检测对隧道、内网穿透与匿名文件外传服务的 DNS 查询
+logsource:
+  category: dns
+detection:
+  selection:
+    query|endswith:
+      - '.ngrok.io'
+      - '.ngrok-free.app'
+      - '.duckdns.org'
+      - '.portmap.io'
+      - '.localtunnel.me'
+      - '.serveo.net'
+      - 'transfer.sh'
+      - 'file.io'
+  condition: selection
+level: medium

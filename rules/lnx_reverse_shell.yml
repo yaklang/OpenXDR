@@ -1,0 +1,19 @@
+title: Linux Reverse Shell Indicators
+id: 6742a2ee-b09c-4eb9-a040-1be583da8332
+status: experimental
+description: 检测常见反弹 shell 命令特征：/dev/tcp 重定向、交互式 shell 反连、nc -e
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains:
+      - '/dev/tcp/'
+      - '/dev/udp/'
+      - 'bash -i >&'
+      - 'sh -i >&'
+      - 'nc -e /bin/'
+      - 'ncat -e /bin/'
+      - 'socket.SOCK_STREAM'
+  condition: selection
+level: critical
