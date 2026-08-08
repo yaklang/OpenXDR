@@ -130,10 +130,8 @@ async fn spawn_conn_readers(
     program.load()?;
     program.attach("sock", "inet_sock_set_state")?;
 
-    let mut conns: AsyncPerfEventArray<_> = bpf
-        .take_map("CONNS")
-        .ok_or("CONNS map 缺失")?
-        .try_into()?;
+    let mut conns: AsyncPerfEventArray<_> =
+        bpf.take_map("CONNS").ok_or("CONNS map 缺失")?.try_into()?;
 
     // 采样表跨 CPU 共享：同一目标不因内核把事件派到不同 CPU 而重复上报
     let sampler = std::sync::Arc::new(std::sync::Mutex::new(ConnSampler::default()));

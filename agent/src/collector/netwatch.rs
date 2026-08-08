@@ -30,7 +30,8 @@ impl ConnSampler {
     pub fn should_report(&mut self, dst: IpAddr, dport: u16) -> bool {
         let now = Instant::now();
         if self.seen.len() >= MAX_TRACKED {
-            self.seen.retain(|_, t| now.duration_since(*t) < SAMPLE_WINDOW);
+            self.seen
+                .retain(|_, t| now.duration_since(*t) < SAMPLE_WINDOW);
         }
         match self.seen.get(&(dst, dport)) {
             Some(t) if now.duration_since(*t) < SAMPLE_WINDOW => false,
