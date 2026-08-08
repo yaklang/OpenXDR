@@ -313,3 +313,13 @@ h3 { font-size: 14px; color: var(--muted); margin: 24px 0 8px; }
 }
 .intel-import label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
 .intel-import input[type="number"] { width: 64px; }
+
+/* 概览面板 */
+.funnel { display: flex; align-items: center; gap: 14px; margin: 12px 0 18px; flex-wrap: wrap; }
+.funnel-stage { text-align: center; }
+.funnel-num { font-size: 26px; font-weight: 600; }
+.funnel-arrow { color: var(--muted); font-size: 20px; }
+.funnel-assets { margin-left: auto; }
+.trend { display: flex; align-items: flex-end; gap: 3px; height: 72px; margin: 8px 0 16px; }
+.trend-bar { flex: 1; height: 100%; display: flex; align-items: flex-end; background: var(--bg); border-radius: 2px; }
+.trend-fill { width: 100%; background: var(--accent); border-radius: 2px; min-height: 1px; }

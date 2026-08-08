@@ -177,6 +177,19 @@ export async function deleteSuppression(id: string): Promise<void> {
   if (!r.ok) throw new Error(await r.text())
 }
 
+export interface Stats {
+  events24h: number
+  alerts24h: number
+  openIncidents: number
+  incidentsByStatus: Record<string, number>
+  alertTrend: { hour: string; count: number }[]
+  topRules: { ruleId: string; ruleTitle: string | null; count: number }[]
+  assetsTotal: number
+  assetsOnline: number
+}
+
+export const fetchStats = () => get<Stats>('/api/stats')
+
 export interface IntelRow {
   id: string
   createdAt: string

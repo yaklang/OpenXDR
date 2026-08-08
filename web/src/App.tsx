@@ -5,6 +5,7 @@ import {
 } from './api'
 import { AssetList } from './AssetList'
 import { AuditLogView } from './AuditLogView'
+import { DashboardView } from './DashboardView'
 import { IncidentGraphView } from './IncidentGraphView'
 import { IntelList } from './IntelList'
 import { LoginPage } from './LoginPage'
@@ -39,6 +40,7 @@ export default function App() {
   const [suppressing, setSuppressing] = useState(false)
   const [showSuppressions, setShowSuppressions] = useState(false)
   const [showIntel, setShowIntel] = useState(false)
+  const [showDashboard, setShowDashboard] = useState(false)
   const [showAssets, setShowAssets] = useState(false)
   const [showUsers, setShowUsers] = useState(false)
   const [showAudit, setShowAudit] = useState(false)
@@ -112,6 +114,7 @@ export default function App() {
         </header>
         <div className="header-actions subnav">
           <span className="muted">{t('events', { n: incidents.length })}</span>
+          <button className="link" onClick={() => setShowDashboard(true)}>{t('dashboard')}</button>
           <button className="link" onClick={() => setShowAssets(true)}>{t('assets')}</button>
           <button className="link" onClick={() => setShowSuppressions(true)}>{t('suppressions')}</button>
           <button className="link" onClick={() => setShowIntel(true)}>{t('intel')}</button>
@@ -232,6 +235,7 @@ export default function App() {
       {showSuppressions && (
         <SuppressionList canAct={canWrite} onClose={() => setShowSuppressions(false)} />
       )}
+      {showDashboard && <DashboardView onClose={() => setShowDashboard(false)} />}
       {showIntel && <IntelList canAct={canWrite} onClose={() => setShowIntel(false)} />}
       {showAssets && <AssetList onClose={() => setShowAssets(false)} />}
       {showUsers && <UserManagement self={me.username} onClose={() => setShowUsers(false)} />}
