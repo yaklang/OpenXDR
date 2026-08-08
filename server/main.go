@@ -84,6 +84,9 @@ func main() {
 		Interval:  time.Duration(getenvInt("RETENTION_INTERVAL_MINUTES", 60)) * time.Minute,
 	}).Run(ctx)
 
+	hub := response.NewHub(client, os.Getenv("RESPONSE_ENABLED") == "true")
+	allowlist := isolationAllowlist()
+
 	// 研判引擎同时是狩猎的执行者：共用同一套调查工具与模型配置
 	triageEngine := &triage.Engine{
 		DB:    client,
@@ -95,6 +98,16 @@ func main() {
 			time.Duration(getenvInt("AI_TIMEOUT_SECONDS", 120))*time.Second,
 		),
 		Interval: time.Duration(getenvInt("AI_INTERVAL_SECONDS", 30)) * time.Second,
+	}
+	// 自动响应：显式开启才挂钩子，默认 dry-run，白名单主机绝不自动隔离
+	if os.Getenv("AUTO_RESPONSE_ENABLED") == "true" {
+		triageEngine.OnVerdict = (&response.Auto{
+			Hub:            hub,
+			MinConfidence:  getenvInt("AUTO_RESPONSE_MIN_CONFIDENCE", 90),
+			Live:           os.Getenv("AUTO_RESPONSE_LIVE") == "true",
+			Exempt:         hostSet(os.Getenv("AUTO_RESPONSE_EXEMPT")),
+			AllowEndpoints: allowlist,
+		}).React
 	}
 	go triageEngine.Run(ctx)
 
@@ -125,8 +138,6 @@ func main() {
 		slog.Error("gRPC 监听失败", "err", err)
 		os.Exit(1)
 	}
-	hub := response.NewHub(client, os.Getenv("RESPONSE_ENABLED") == "true")
-
 	tlsOpts, mtls, err := grpcsvc.ServerOptions()
 	if err != nil {
 		slog.Error("TLS 配置无效", "err", err)
@@ -166,7 +177,7 @@ func main() {
 
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	slog.Info("HTTP 启动", "addr", httpAddr)
-	handler := auth.Middleware(client, api.Handler(client, rules, rulesPath, hub, suppressions, intelStore, triageEngine, isolationAllowlist()))
+	handler := auth.Middleware(client, api.Handler(client, rules, rulesPath, hub, suppressions, intelStore, triageEngine, allowlist))
 	if err := http.ListenAndServe(httpAddr, handler); err != nil {
 		slog.Error("HTTP 退出", "err", err)
 		os.Exit(1)
@@ -197,6 +208,17 @@ func isolationAllowlist() []string {
 	}
 	slog.Warn("未配置 ISOLATION_ALLOW，主机隔离将被 agent 拒绝执行")
 	return nil
+}
+
+// hostSet 逗号分隔的主机名清单转集合。
+func hostSet(v string) map[string]bool {
+	set := map[string]bool{}
+	for _, h := range strings.Split(v, ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			set[h] = true
+		}
+	}
+	return set
 }
 
 func getenv(key, def string) string {

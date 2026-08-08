@@ -28,10 +28,19 @@ func Actor(ctx context.Context) string {
 
 // Log 记一条审计。target/detail 可为空串，空串不落列。
 func Log(ctx context.Context, db *ent.Client, r *http.Request, action, target, detail string) {
+	write(ctx, db, Actor(ctx), remoteAddr(r), action, target, detail)
+}
+
+// System 系统自动动作的审计：没有请求、没有登录用户，但同样必须留痕。
+func System(ctx context.Context, db *ent.Client, action, target, detail string) {
+	write(ctx, db, "system", "server", action, target, detail)
+}
+
+func write(ctx context.Context, db *ent.Client, username, remote, action, target, detail string) {
 	create := db.AuditLog.Create().
-		SetUsername(Actor(ctx)).
+		SetUsername(username).
 		SetAction(action).
-		SetRemoteAddr(remoteAddr(r))
+		SetRemoteAddr(remote)
 	if target != "" {
 		create.SetTarget(target)
 	}

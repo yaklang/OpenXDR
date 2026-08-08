@@ -318,6 +318,11 @@ server 全部通过环境变量配置，均有默认值：
 | `WEBHOOK_MIN_SEVERITY` | `0` | 低于该级别的事件不推送（1 信息 ~ 5 严重），0 表示全推 |
 | `RESPONSE_ENABLED` | `false` | 是否允许下发响应指令 |
 | `ISOLATION_ALLOW` | 空 | 隔离主机时放行的地址，必须包含 server 的 gRPC 端点 |
+| `AUTO_RESPONSE_ENABLED` | `false` | AI 研判高置信度 malicious 时自动隔离涉事主机（依赖 `RESPONSE_ENABLED`） |
+| `AUTO_RESPONSE_LIVE` | `false` | 自动隔离真执行；默认只 dry-run 演练并留痕 |
+| `AUTO_RESPONSE_MIN_CONFIDENCE` | `90` | 触发自动响应的置信度门槛 |
+| `AUTO_RESPONSE_EXEMPT` | 空 | 逗号分隔的主机名，绝不自动隔离 |
+| `UEBA_LEARNING_DAYS` | `7` | 首次出现检测的按资产学习期 |
 | `RETENTION_DAYS` | `30` | 原始事件保留天数，0 表示不清理。被告警引用的证据事件不受影响 |
 
 ## 技术栈

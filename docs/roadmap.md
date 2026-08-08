@@ -77,9 +77,13 @@ agent 断线重连本就会重新注册，因此不需要热更新通道也不�
 状态就避开告警风暴。断点存在基线表里，重启不回放历史。
 外连基线偏离仍不做：信噪比不够，等首次出现在真实环境里证明自己再说。
 
+**10. ~~自动响应~~ ✅ 已完成。** 研判钩子：verdict 为 malicious 且置信度
+达标（默认 90）→ 对 incident 涉事资产下发隔离。四道保险：显式开启
+（`AUTO_RESPONSE_ENABLED`）、默认 dry-run（真执行要 `AUTO_RESPONSE_LIVE`）、
+主机白名单（`AUTO_RESPONSE_EXEMPT`）、每次决策含跳过都进审计。
+同一 incident 同一资产只动一次，重开重判不重复隔离。
+
 - **agent 独立网络采集**（无 sensor 的小部署盲区；eBPF tcp_connect 采样）
-- **自动响应**：高置信度 malicious 自动隔离。必须默认 dry-run + 白名单 +
-  审计，误杀一台生产机的代价高于慢五分钟
 - **macOS agent**（Endpoint Security Framework）
 
 ## 不做

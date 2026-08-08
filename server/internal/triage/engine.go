@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"openxdr/server/ent"
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/incident"
@@ -35,6 +37,8 @@ type Engine struct {
 	Interval time.Duration
 	// Rules 用于把上下文里的规则 UUID 翻译成标题，模型看得懂才判得准
 	Rules interface{ TitleOf(id string) string }
+	// OnVerdict 结论落库后的钩子（自动响应挂在这里），nil 表示无人关心
+	OnVerdict func(ctx context.Context, incidentID uuid.UUID, verdict json.RawMessage)
 }
 
 func (e *Engine) Run(ctx context.Context) {
@@ -76,14 +80,18 @@ func (e *Engine) batch(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		verdict := parseVerdict(inc.ID.String(), answer)
 		// LLM 调用慢，逐个落库，中途挂了不丢已完成的研判
 		if err := e.DB.Incident.UpdateOneID(inc.ID).
-			SetAiVerdict(parseVerdict(inc.ID.String(), answer)).
+			SetAiVerdict(verdict).
 			SetStatus("triaged").
 			Exec(ctx); err != nil {
 			return err
 		}
 		slog.Info("incident 研判完成", "id", inc.ID)
+		if e.OnVerdict != nil {
+			e.OnVerdict(ctx, inc.ID, verdict)
+		}
 	}
 	return nil
 }

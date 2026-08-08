@@ -40,6 +40,10 @@ services:
       # 响应处置：结束进程 / 主机隔离
       RESPONSE_ENABLED: ${RESPONSE_ENABLED:-false}
       ISOLATION_ALLOW: ${ISOLATION_ALLOW:-}
+      # 自动响应：AI 高置信度 malicious 自动隔离，默认 dry-run
+      AUTO_RESPONSE_ENABLED: ${AUTO_RESPONSE_ENABLED:-false}
+      AUTO_RESPONSE_LIVE: ${AUTO_RESPONSE_LIVE:-false}
+      AUTO_RESPONSE_EXEMPT: ${AUTO_RESPONSE_EXEMPT:-}
       # 原始事件保留天数
       RETENTION_DAYS: ${RETENTION_DAYS:-30}
     volumes:
