@@ -39,7 +39,7 @@ where ts > now() - interval '15 minutes' group by 1;
 | 短命进程 cmdline | ✅（极快进程有竞争，见下注） | ❌ 多为空（轮询固有） | 未验证 | ✅ uname/whoami/cat/sh/timeout 完整 |
 | 文件监控（RDCW / fanotify / inotify） | ✅ RDCW 增改删 | ✅ fanotify 全生命周期+肇事进程 | — | ✅ fanotify 增改删+肇事进程 |
 | 持久化点（注册表/Startup/服务/计划任务） | ✅ 增删，删除带旧值 | ✅（经 fanotify 覆盖 systemd/cron/.ssh） | — | — |
-| 网络（eBPF 出站） | 不采集（设计：交给 sensor） | ✅ 捕获 10.0.0.1:4444 出站 | — | 未验证 |
+| 网络（ETW / eBPF 出站） | ✅ ETW TcpConnect + 进程 GUID | ✅ eBPF 捕获 10.0.0.1:4444 | — | ✅ eBPF 完整五元组+进程 GUID |
 | 登录（4624/4625 / wtmp-btmp） | ✅ 4625 含失败原因码 | 不适用（WSL 无 wtmp 写入） | 未验证 | ✅ wtmp SSH 登录 |
 
 注：Windows 上秒退进程（如 `reg add`）的 cmdline 靠 ETW 事件触发后回读，
@@ -97,8 +97,8 @@ Defender 排除项（第三方杀毒在管，Defender 未运行，Add-MpPreferen
    污染后续快照基线。
 2. 快照类采集（persistwatch 30s / kmodwatch 30s）回放时建删之间必须留
    ≥35s，否则中间态被跳过（与第一轮 persistwatch 教训同型）。
-3. 监控目录在 agent 启动后新建的（如 /var/spool/at），当前不会被补盯
-   ——已知边界，回放时先建目录再起 agent。
+3. 监控目录在 agent 启动后新建的（如 /var/spool/at）曾经不会被补盯；现已增加
+   5 秒周期补扫，fanotify/inotify 两条路径都会自动补挂。
 
 ## 第三轮：真 Linux 双机回放（2026-08-09）
 
@@ -116,11 +116,25 @@ Defender 排除项（第三方杀毒在管，Defender 未运行，Add-MpPreferen
   1005 事件和 Linux Kernel Module Loaded 规则均命中。
 - 回放结束后 agent/server/数据库、测试文件和内核模块全部撤销，无常驻产物。
 
+## 第四轮：eBPF 双机长期试运行（2026-08-09）
+
+在 pve2 创建独立 `openxdr-lab`（`192.0.2.10`），server 强制 mTLS，pve1/pve2
+使用按主机绑定证书常驻接入。两台均成功加载 eBPF 进程与
+`inet_sock_set_state` 网络采集。
+
+首轮实测发现 SYN_SENT tracepoint 的 `sport` 在 PVE 7.0 内核确实为 0。内核侧
+改为用 `skaddr` 暂存 SYN_SENT 的发起 PID，在 ESTABLISHED/CLOSE 再读取真实端口
+并上报；复测得到完整 `src_ip:ephemeral_port > dst_ip:port` 和进程 GUID。启动后
+创建 `/var/spool/at`，5 秒补扫后文件建/改/删均被 fanotify 捕获。
+
+pilot 每小时记录事件、告警、incident、活跃资产和数据库体积，作为是否需要时间
+分区及降噪效果的真实依据，详见 [pilot.md](../../docs/pilot.md)。
+
 ## 已知边界
 
 - agent 异常退出会泄漏 ETW 会话（`logman query -ets` 里的 `n4r1b-trace-*`），
   攒多了新会话创建报"系统资源不足"→ 手动 `logman stop <name> -ets` 清理。
 - WSL2 不能验证：netlink proc connector（命名空间，agent 正确降级）、wtmp
-  登录（无写入）、短命进程 cmdline（轮询固有）。进程类规则的实机命中
-  需要真 Linux 机器。
-- server 热重载偶现不及时（一次未定位），重启 server 后规则立即生效。
+  登录（无写入）、短命进程 cmdline（轮询固有）；这些格子已由真 Linux 双机补验。
+- ~~server 热重载偶现不及时~~：已确认元数据指纹与 watcher 启动竞态两个根因，
+  改为内容 SHA-256 指纹并从 Engine 已加载指纹起步，等大小/等 mtime 覆盖写回归通过。

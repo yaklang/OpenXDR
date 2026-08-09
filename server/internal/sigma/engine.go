@@ -12,6 +12,7 @@ package sigma
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -310,7 +311,8 @@ type engineState struct {
 }
 
 type Engine struct {
-	state atomic.Pointer[engineState]
+	state       atomic.Pointer[engineState]
+	fingerprint atomic.Pointer[string]
 }
 
 // 零值 Engine（测试常用）也要能安全求值
@@ -355,9 +357,11 @@ func LoadDir(dir string) *Engine {
 }
 
 func LoadDirReport(dir string) (*Engine, Report) {
+	fingerprint := dirFingerprint(dir)
 	s, report := loadState(dir)
 	e := &Engine{}
 	e.state.Store(s)
+	e.fingerprint.Store(&fingerprint)
 	return e, report
 }
 
@@ -398,7 +402,10 @@ func loadState(dir string) (*engineState, Report) {
 // 编译失败的规则照常跳过并记日志，不会让旧规则集失效——改坏一条规则
 // 的代价是那一条不生效，而不是整个检测面归零。
 func (e *Engine) Watch(ctx context.Context, dir string, interval time.Duration) {
-	fingerprint := dirFingerprint(dir)
+	fingerprint := ""
+	if loaded := e.fingerprint.Load(); loaded != nil {
+		fingerprint = *loaded
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -413,6 +420,8 @@ func (e *Engine) Watch(ctx context.Context, dir string, interval time.Duration) 
 			fingerprint = fp
 			s, report := loadState(dir)
 			e.state.Store(s)
+			loadedFingerprint := fingerprint
+			e.fingerprint.Store(&loadedFingerprint)
 			slog.Info("Sigma 规则已热重载", "loaded", report.Loaded, "total", report.Total)
 			for reason, files := range report.Skipped {
 				slog.Warn("跳过规则", "reason", reason, "count", len(files), "files", files)
@@ -421,9 +430,11 @@ func (e *Engine) Watch(ctx context.Context, dir string, interval time.Duration) 
 	}
 }
 
-// dirFingerprint 规则目录的变更指纹：全部规则文件的路径 + mtime + 大小。
+// dirFingerprint 规则目录的变更指纹：全部规则文件的路径 + 内容。
+// 不能只看 mtime/大小：原子替换、网络文件系统或快速连续写入可能保留相同元数据，
+// 这正是热重载偶发不及时的根因。规则库很小，周期读取内容比漏重载更划算。
 func dirFingerprint(dir string) string {
-	var sb strings.Builder
+	h := sha256.New()
 	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
@@ -431,12 +442,17 @@ func dirFingerprint(dir string) string {
 		if ext := filepath.Ext(path); ext != ".yml" && ext != ".yaml" {
 			return nil
 		}
-		if info, err := d.Info(); err == nil {
-			fmt.Fprintf(&sb, "%s|%d|%d\n", path, info.ModTime().UnixNano(), info.Size())
+		fmt.Fprintf(h, "%s\x00", path)
+		body, readErr := os.ReadFile(path)
+		if readErr != nil {
+			fmt.Fprintf(h, "error:%v\x00", readErr)
+			return nil
 		}
+		_, _ = h.Write(body)
+		_, _ = h.Write([]byte{0})
 		return nil
 	})
-	return sb.String()
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // classify 把具体错误归成可统计的类别，具体值（规则名、字段名）剥掉。

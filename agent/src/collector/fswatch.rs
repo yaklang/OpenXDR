@@ -22,10 +22,10 @@
 //!
 //! fanotify 初始化或打标失败都干净回落 inotify，绝不上报残缺数据。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::os::unix::io::RawFd;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::pb::AgentEvent;
 
@@ -36,6 +36,17 @@ const CLASS_FILE_ACTIVITY: u32 = 1001;
 
 /// 递归挂载的最大深度（相对监控根），防 watch/mark 数量爆炸
 const MAX_DEPTH: usize = 4;
+
+/// 启动时尚不存在的目标目录不会永远漏采：事件循环周期补扫目标根。
+/// 这主要覆盖 `/var/spool/at` 这类按需创建、且父目录不在监控范围内的路径。
+#[cfg(not(test))]
+const TARGET_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const TARGET_RESCAN_INTERVAL: Duration = Duration::from_millis(100);
+#[cfg(not(test))]
+const EVENT_POLL_TIMEOUT_MS: i32 = 1000;
+#[cfg(test)]
+const EVENT_POLL_TIMEOUT_MS: i32 = 50;
 
 /// 监控的目录清单（递归，限深 MAX_DEPTH）；不存在的路径跳过。
 /// 覆盖的持久化面：cron、at 任务、systemd 服务、SSH 免密、sudoers、/etc 账号库。
@@ -282,7 +293,28 @@ fn ino_run(
 ) {
     // 单条 inotify_event 最大 sizeof(event) + NAME_MAX + 1，缓冲区放宽裕些
     let mut buf = [0u8; 16384];
+    let mut last_rescan = Instant::now();
     loop {
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let prc = unsafe { libc::poll(&mut pfd, 1, EVENT_POLL_TIMEOUT_MS) };
+        if prc < 0 {
+            if io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            unsafe { libc::close(fd) };
+            return;
+        }
+        if last_rescan.elapsed() >= TARGET_RESCAN_INTERVAL {
+            ino_reconcile(fd, &roots, &mut watched);
+            last_rescan = Instant::now();
+        }
+        if prc == 0 {
+            continue;
+        }
         let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
         if n <= 0 {
             unsafe { libc::close(fd) };
@@ -342,6 +374,21 @@ fn ino_run(
     }
 }
 
+/// 给启动时不存在、删除后重建的目标根补挂 watch。已存在的根不重复添加，
+/// 子目录仍由事件驱动的动态补挂负责。
+fn ino_reconcile(fd: RawFd, roots: &[String], watched: &mut HashMap<i32, WatchEntry>) {
+    for root in roots {
+        if watched.values().any(|entry| entry.path == *root) {
+            continue;
+        }
+        if std::path::Path::new(root).is_file() {
+            ino_add_file(fd, root, watched);
+        } else if std::path::Path::new(root).is_dir() {
+            ino_add_tree(fd, root, MAX_DEPTH, watched);
+        }
+    }
+}
+
 /// inotify mask -> OCSF File Activity：1 Create / 3 Update / 4 Delete
 fn ino_activity(mask: u32) -> u8 {
     match () {
@@ -357,6 +404,7 @@ fn ino_activity(mask: u32) -> u8 {
 struct FaState {
     fd: RawFd,
     roots: Vec<String>,
+    marked: HashSet<String>,
     mounts: HashMap<(i32, i32), RawFd>,
     warned_overflow: bool,
     warned_resolve: bool,
@@ -372,11 +420,12 @@ fn fa_setup(targets: &[String]) -> io::Result<(FaState, usize)> {
         return Err(io::Error::last_os_error());
     }
     let mut n = 0;
+    let mut marked = HashSet::new();
     for root in targets {
         if std::path::Path::new(root).is_file() {
-            n += fa_mark_file(fd, root);
+            n += fa_mark_file(fd, root, &mut marked);
         } else {
-            n += fa_mark_tree(fd, root, MAX_DEPTH);
+            n += fa_mark_tree(fd, root, MAX_DEPTH, &mut marked);
         }
     }
     if n == 0 {
@@ -386,6 +435,7 @@ fn fa_setup(targets: &[String]) -> io::Result<(FaState, usize)> {
     let st = FaState {
         fd,
         roots: targets.to_vec(),
+        marked,
         mounts: HashMap::new(),
         warned_overflow: false,
         warned_resolve: false,
@@ -394,9 +444,12 @@ fn fa_setup(targets: &[String]) -> io::Result<(FaState, usize)> {
 }
 
 /// 给 root 及其限深内的子目录全部打上 mark，返回成功数。
-fn fa_mark_tree(fd: RawFd, root: &str, max_depth: usize) -> usize {
+fn fa_mark_tree(fd: RawFd, root: &str, max_depth: usize, marked: &mut HashSet<String>) -> usize {
     let mut n = 0;
     for dir in collect_subdirs(root, max_depth) {
+        if marked.contains(&dir) {
+            continue;
+        }
         let Ok(c) = std::ffi::CString::new(dir.as_str()) else {
             continue;
         };
@@ -410,6 +463,7 @@ fn fa_mark_tree(fd: RawFd, root: &str, max_depth: usize) -> usize {
             )
         };
         if rc == 0 {
+            marked.insert(dir);
             n += 1;
         }
     }
@@ -419,9 +473,11 @@ fn fa_mark_tree(fd: RawFd, root: &str, max_depth: usize) -> usize {
 /// 给单个文件打 mark（shell rc 等单文件目标），成功返回 1。
 /// 不加 FAN_MARK_ONLYDIR（那会把文件目标直接拒掉），也不带
 /// FAN_EVENT_ON_CHILD——文件没有子项，事件本来就落在本体上。
-/// 文件被删后内核自动摘 mark，删除事件本身能收到，之后重建的文件
-/// 要等下次启动才重新盯上（与 inotify 路径的已知缺口相同）。
-fn fa_mark_file(fd: RawFd, path: &str) -> usize {
+/// 文件被删后内核自动摘 mark，删除事件本身能收到，周期补扫会为重建文件补标。
+fn fa_mark_file(fd: RawFd, path: &str, marked: &mut HashSet<String>) -> usize {
+    if marked.contains(path) {
+        return 0;
+    }
     let Ok(c) = std::ffi::CString::new(path) else {
         return 0;
     };
@@ -434,7 +490,23 @@ fn fa_mark_file(fd: RawFd, path: &str) -> usize {
             c.as_ptr(),
         )
     };
-    usize::from(rc == 0)
+    if rc == 0 {
+        marked.insert(path.to_string());
+        1
+    } else {
+        0
+    }
+}
+
+fn fa_reconcile(st: &mut FaState) {
+    st.marked.retain(|path| std::path::Path::new(path).exists());
+    for root in st.roots.clone() {
+        if std::path::Path::new(&root).is_file() {
+            fa_mark_file(st.fd, &root, &mut st.marked);
+        } else if std::path::Path::new(&root).is_dir() {
+            fa_mark_tree(st.fd, &root, MAX_DEPTH, &mut st.marked);
+        }
+    }
 }
 
 /// 一条解析后的 fanotify 事件。FID 模式下 fd 恒为 FAN_NOFD，路径靠 fid 还原。
@@ -612,6 +684,7 @@ fn fa_resolve(mounts: &mut HashMap<(i32, i32), RawFd>, fid: &Fid) -> Option<Stri
 
 fn fa_run(mut st: FaState, agent_id: &str, sink: &EventSink) {
     let mut buf = [0u8; 65536];
+    let mut last_rescan = Instant::now();
     loop {
         // fd 是 FAN_NONBLOCK：先 poll 等事件再读，避免空转
         let mut pfd = libc::pollfd {
@@ -619,12 +692,19 @@ fn fa_run(mut st: FaState, agent_id: &str, sink: &EventSink) {
             events: libc::POLLIN,
             revents: 0,
         };
-        let prc = unsafe { libc::poll(&mut pfd, 1, -1) };
-        if prc <= 0 {
+        let prc = unsafe { libc::poll(&mut pfd, 1, EVENT_POLL_TIMEOUT_MS) };
+        if prc < 0 {
             if io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
                 continue;
             }
             break;
+        }
+        if last_rescan.elapsed() >= TARGET_RESCAN_INTERVAL {
+            fa_reconcile(&mut st);
+            last_rescan = Instant::now();
+        }
+        if prc == 0 {
+            continue;
         }
         let n = unsafe { libc::read(st.fd, buf.as_mut_ptr().cast(), buf.len()) };
         if n == 0 {
@@ -660,7 +740,7 @@ fn fa_run(mut st: FaState, agent_id: &str, sink: &EventSink) {
                 && let Some(d) = rel_depth(&st.roots, &path)
                 && d <= MAX_DEPTH
             {
-                fa_mark_tree(st.fd, &path, MAX_DEPTH - d);
+                fa_mark_tree(st.fd, &path, MAX_DEPTH - d, &mut st.marked);
             }
             let activity = fa_activity(ev.mask);
             // pid <= 0 是内核侧事件，没有可回填的肇事者
@@ -803,6 +883,35 @@ mod tests {
             v["file"]["path"],
             dir.join("sub").join("evil.sh").to_str().unwrap()
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn watch_picks_up_target_created_after_start() {
+        let dir = temp_root("late-root");
+        let existing = dir.join("existing");
+        let late = dir.join("late");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&existing).unwrap();
+        let targets = vec![
+            existing.to_string_lossy().into_owned(),
+            late.to_string_lossy().into_owned(),
+        ];
+
+        let (fd, watched) = ino_init(&targets).unwrap();
+        let (sink, mut rx) = test_sink();
+        std::thread::spawn(move || ino_run(fd, watched, targets, "agent-t", &sink));
+
+        std::fs::create_dir(&late).unwrap();
+        std::thread::sleep(TARGET_RESCAN_INTERVAL * 3);
+        let payload = late.join("job");
+        std::fs::write(&payload, b"/bin/false").unwrap();
+
+        let ev = rx.blocking_recv().expect("启动后创建的目标根应被周期补挂");
+        let v: serde_json::Value = serde_json::from_str(&ev.raw_json).unwrap();
+        assert_eq!(v["file"]["path"], payload.to_str().unwrap());
+        assert_eq!(v["activity_id"], 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

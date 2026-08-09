@@ -9,7 +9,7 @@ use aya_ebpf::{
     EbpfContext,
     helpers::{bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_probe_read_kernel_str_bytes},
     macros::{map, tracepoint},
-    maps::PerfEventArray,
+    maps::{HashMap, PerfEventArray},
     programs::TracePointContext,
 };
 
@@ -99,8 +99,14 @@ pub struct ConnEvent {
 #[map]
 static CONNS: PerfEventArray<ConnEvent> = PerfEventArray::new(0);
 
+/// SYN_SENT 时 tracepoint 的 sport 仍是 0。先按 socket 地址记住发起进程，
+/// 等 ESTABLISHED（成功）或 CLOSE（失败）拿到内核分配的真实源端口再上报。
+#[map]
+static CONNECTING: HashMap<u64, u32> = HashMap::with_max_entries(16384, 0);
+
 // /sys/kernel/tracing/events/sock/inet_sock_set_state/format
 const NEWSTATE_OFFSET: usize = 20;
+const SKADDR_OFFSET: usize = 8;
 const SPORT_OFFSET: usize = 24;
 const DPORT_OFFSET: usize = 26;
 const FAMILY_OFFSET: usize = 28;
@@ -111,6 +117,8 @@ const SADDR6_OFFSET: usize = 40;
 const DADDR6_OFFSET: usize = 56;
 
 const TCP_SYN_SENT: i32 = 2;
+const TCP_ESTABLISHED: i32 = 1;
+const TCP_CLOSE: i32 = 7;
 const IPPROTO_TCP: u16 = 6;
 const AF_INET: u16 = 2;
 
@@ -123,19 +131,29 @@ pub fn inet_sock_set_state(ctx: TracePointContext) -> u32 {
 }
 
 fn try_conn(ctx: &TracePointContext) -> Result<(), i64> {
-    // 只看 TCP 进入 SYN_SENT：本机主动发起的出站连接，且必然在发起进程的上下文里
+    // SYN_SENT 必然在发起进程上下文，但此时源端口尚未写入 tracepoint。
+    // 用 skaddr 关联到后续 ESTABLISHED/CLOSE，再输出完整五元组。
     let newstate: i32 = unsafe { ctx.read_at(NEWSTATE_OFFSET)? };
-    if newstate != TCP_SYN_SENT {
-        return Ok(());
-    }
     let protocol: u16 = unsafe { ctx.read_at(PROTOCOL_OFFSET)? };
     if protocol != IPPROTO_TCP {
         return Ok(());
     }
+    let skaddr: u64 = unsafe { ctx.read_at(SKADDR_OFFSET)? };
+    if newstate == TCP_SYN_SENT {
+        let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
+        CONNECTING.insert(&skaddr, &pid, 0)?;
+        return Ok(());
+    }
+    if newstate != TCP_ESTABLISHED && newstate != TCP_CLOSE {
+        return Ok(());
+    }
+    let Some(pid) = (unsafe { CONNECTING.get(&skaddr).copied() }) else {
+        return Ok(());
+    };
 
     let family: u16 = unsafe { ctx.read_at(FAMILY_OFFSET)? };
     let mut event = ConnEvent {
-        pid: (bpf_get_current_pid_tgid() >> 32) as u32,
+        pid,
         family,
         sport: unsafe { ctx.read_at(SPORT_OFFSET)? },
         dport: unsafe { ctx.read_at(DPORT_OFFSET)? },
@@ -154,6 +172,7 @@ fn try_conn(ctx: &TracePointContext) -> Result<(), i64> {
     }
 
     CONNS.output(ctx, &event, 0);
+    let _ = CONNECTING.remove(&skaddr);
     Ok(())
 }
 

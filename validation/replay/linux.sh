@@ -3,7 +3,7 @@
 # 用法：bash validation/replay/linux.sh
 # 注意：fanotify 在 9p/网络文件系统（如 WSL 的 /mnt/c）上不工作，必须在 ext4 等本地 fs 上跑；
 #       WSL2 里 agent 按命名空间设计降级为轮询采集（短命进程 cmdline 可能为空），
-#       进程类规则的实机命中验证需要真 Linux 机器。
+#       进程类规则的实机命中已在真 Linux 验证，WSL2 仍只能覆盖轮询兜底。
 mark() { echo "=== [$1] $(date +%T) ==="; }
 
 mark 'T1082/T1033/T1087.001/T1003.008 发现与读取'
@@ -64,7 +64,7 @@ rm -f /root/.ssh/authorized_keys /home/user/.ssh/authorized_keys
 mark '回放完成'
 
 # ---- AB 档新采集项（2026-08-09 第二轮）----
-# 注意：/var/spool/at 若不存在要先建目录并重启 agent（启动后新建的目录不会被补盯）；
+# 注意：agent 会在 5s 内补盯启动后新建的 /var/spool/at；
 #       kmodwatch 是 30s 快照 diff，模块要保持加载 35s 以上
 
 mark 'T1053.001 at 任务文件'

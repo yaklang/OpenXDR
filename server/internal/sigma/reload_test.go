@@ -1,9 +1,11 @@
 package sigma
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const reloadRuleA = `
@@ -66,6 +68,65 @@ func TestReloadSwapsState(t *testing.T) {
 	if eng.TitleOf("r-b") != "Rule B" {
 		t.Fatal("TitleOf 应读到新状态")
 	}
+}
+
+func TestFingerprintDetectsSameSizeSameMtimeRewrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rule.yml")
+	if err := os.WriteFile(path, []byte(reloadRuleA), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := dirFingerprint(dir)
+
+	// 两份规则等长，且把 mtime 恢复成原值，模拟元数据指纹看不见的覆盖写。
+	if len(reloadRuleA) != len(reloadRuleB) {
+		t.Fatalf("测试语料必须等长：A=%d B=%d", len(reloadRuleA), len(reloadRuleB))
+	}
+	if err := os.WriteFile(path, []byte(reloadRuleB), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if after := dirFingerprint(dir); after == before {
+		t.Fatal("内容变化即使大小和 mtime 相同也必须触发热重载")
+	}
+}
+
+func TestWatchReloadsSameMetadataRewrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rule.yml")
+	if err := os.WriteFile(path, []byte(reloadRuleA), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := LoadDir(dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go eng.Watch(ctx, dir, 10*time.Millisecond)
+
+	if err := os.WriteFile(path, []byte(reloadRuleB), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	raw := map[string]any{"process": map[string]any{"cmd_line": "run bbb now"}}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if hits := eng.Evaluate(1007, "", raw); len(hits) == 1 && hits[0].ID == "r-b" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("Watch 未在期限内加载元数据不变的新规则内容")
 }
 
 // 零值 Engine 必须能安全求值——测试里到处这么用。
