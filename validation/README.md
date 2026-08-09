@@ -14,7 +14,8 @@ cd server && go run ./cmd/detectcheck --strict   # 有未达预期用例则非�
 
 **不验证**：采集端能否看见这个动作。合成回放绕过了采集层——
 `vssadmin delete shadows` 的语料能过，不代表 ETW 真的报了这条进程事件。
-那部分要实机跑 Atomic Red Team。
+那部分由实机回放覆盖：见 [replay/](replay/README.md)（脚本 + 各系统×
+采集路径验证矩阵）。
 
 ## 判定标准
 
