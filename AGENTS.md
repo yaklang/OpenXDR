@@ -26,6 +26,8 @@
   容器或 WSL2 中 netlink 不可用，agent 会主动退回轮询——宁可弱采集也不产假数据。
 - **sensor/**（Rust，crate 名 `openxdr-sensor`）：全流量探针，只出会话元数据不存 PCAP。
   双抓包后端：AF_PACKET v3（默认）与 AF_XDP（`--features xdp`，需驱动支持，仅入向）。
+  协议解析：DNS 查询/应答、TLS SNI/JA3/JA3S 与证书元数据（仅 TLS ≤1.2，
+  有界重组 16KB，`x509.rs` 迷你 DER 解析）、HTTP 头。
 - **server/**（Go 1.25，module `openxdr/server`）：单体后端。Ent ORM + PostgreSQL；
   HTTP REST（:8080，会话 cookie 认证）与 gRPC（:8081，agent/sensor 接入 + 控制信道）。
   启动时自动建表（`client.Schema.Create`），无手动迁移。

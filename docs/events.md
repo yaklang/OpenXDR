@@ -151,13 +151,20 @@ Kernel-Network `netwatch_win.rs`，订阅 TcpConnect 事件 12，端口为网络
   "src_endpoint": { "ip": "...", "port": 51234 },
   "dst_endpoint": { "ip": "...", "port": 443 },
   "traffic": { "packets": 10, "bytes": 2048, "packets_in": 6, "bytes_in": 1200, "packets_out": 4, "bytes_out": 848 },
-  "tls": { "sni": "example.com", "ja3_hash": "...", "ja3s_hash": "..." },
+  "tls": { "sni": "example.com", "ja3_hash": "...", "ja3s_hash": "...",
+           "cert": { "subject": "example.com", "issuer": "DigiCert CA",
+                     "self_signed": false, "not_before": 1754000000, "not_after": 1786000000 } },
   "http_request": { "hostname": "...", "url": { "path": "/x" }, "user_agent": "..." }
 }
 ```
 
-- `tls` 对象在 SNI/JA3/JA3S 任一非空时出现；`ja3s_hash` 是服务端指纹，
+- `tls` 对象在 SNI/JA3/JA3S/证书任一非空时出现；`ja3s_hash` 是服务端指纹，
   与 `ja3_hash` 一样参与哈希情报碰撞
+- `tls.cert` 在解析到服务端 Certificate 消息时出现（仅 **TLS ≤1.2**——TLS 1.3 的
+  证书加密传输，被动嗅探看不到）：subject/issuer 是叶证书 CN，
+  `self_signed` 是 subject 与 issuer 原始 DER 相等的启发式（非签名验证），
+  `not_before`/`not_after` 是 unix 秒。sensor 侧做有界重组（16KB 上限）应对
+  证书跨 TCP 分段
 - sensor 上报前把 src 摆正为客户端方向（`sensor/src/report.rs:19-49`）
 - sensor 无进程信息；资产归属按**源 IP** 反查 asset（`sensor.go:67-98`）
 - `conn_tuple` 格式统一为 `tcp:src:sport>dst:dport`，agent 与 sensor 同格式，

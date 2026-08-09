@@ -41,6 +41,7 @@ where ts > now() - interval '15 minutes' group by 1;
 | 持久化点（注册表/Startup/服务/计划任务） | ✅ 增删，删除带旧值 | ✅（经 fanotify 覆盖 systemd/cron/.ssh） | — | — |
 | 网络（ETW / eBPF 出站） | ✅ ETW TcpConnect + 进程 GUID | ✅ eBPF 捕获 10.0.0.1:4444 | — | ✅ eBPF 完整五元组+进程 GUID |
 | 登录（4624/4625 / wtmp-btmp） | ✅ 4625 含失败原因码 | 不适用（WSL 无 wtmp 写入） | 未验证 | ✅ wtmp SSH 登录 |
+| sensor TLS 证书元数据（跨段重组 + x509 解析） | —（sensor 仅 Linux） | ✅ lo 抓自签 TLS1.2 握手，`tls.cert` 全字段入库并触发自签证书告警 | — | 未验证 |
 
 注：Windows 上秒退进程（如 `reg add`）的 cmdline 靠 ETW 事件触发后回读，
 进程已退场则读不到（cmd_line 为空）——已知竞态，注册表/文件类事件不受影响。
@@ -52,6 +53,8 @@ where ts > now() - interval '15 minutes' group by 1;
   （wmic /node:）、Service Installed、Autostart Entry Deleted、Run Key Persistence
 - Linux（WSL2）：Sensitive File Modified、Systemd Service Unit File、
   Suspicious Outbound（eBPF 捕获 4444 出站）
+- sensor（WSL2 lo 抓包）：TLS Self-Signed Certificate（自签 TLS1.2 握手，
+  证书跨段重组解析 → `tls.cert` 入库 → 告警，2026-08-09）
 - 良性对照零误报：`tasklist|findstr lsass`、`sh -c 'echo hello'`、`tar czf /tmp/build.tar.gz`
 
 ## 回放抓到的真实缺陷（全部当天修复）

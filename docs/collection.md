@@ -9,7 +9,7 @@ syslog 接入的服务端行为见 [detection.md](detection.md)。
 | 数据源 | 部署位置 | 产出 | 传输 |
 |---|---|---|---|
 | agent（Rust） | 每台被监控主机（Linux / Windows） | 进程（启动+退出）、文件、认证、网络、注册表五类事件 | gRPC 双向流 :8081 |
-| sensor（Rust） | 核心交换机镜像口（仅 Linux） | 会话元数据（DNS 查询/应答、TLS SNI、JA3/JA3S、HTTP），不存 PCAP | gRPC 客户端流 :8081 |
+| sensor（Rust） | 核心交换机镜像口（仅 Linux） | 会话元数据（DNS 查询/应答、TLS SNI/JA3/JA3S/证书元数据、HTTP），不存 PCAP | gRPC 客户端流 :8081 |
 | syslog | 任意网络设备/主机 | 非结构化日志 | UDP+TCP 同端口（默认不启用） |
 
 agent 事件的 OCSF 归一化在 **agent 侧**完成（raw_json 已是 OCSF 风格 JSON，
@@ -268,13 +268,20 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
 | 协议 | 触发 | 提取字段 | 不解析 |
 |---|---|---|---|
 | DNS | sport/dport=53，按报文 QR 位区分查询/应答 | 查询名、**rcode、A/AAAA 应答 IP（至多 4 个）**；域名解析支持 RFC 1035 压缩指针（限跳 16 次防循环，越界即畸形） | TXT 等其他记录类型 |
-| TLS | record 0x16；ClientHello（0x01）与 ServerHello（0x02）**各探一次** | SNI、JA3（客户端）、**JA3S（服务端）**，均为 md5 且 GREASE 按 RFC 8701 剔除 | 证书细节 |
+| TLS | record 0x16；ClientHello（0x01）与 ServerHello（0x02）**各探一次** | SNI、JA3（客户端）、**JA3S（服务端）**，均为 md5 且 GREASE 按 RFC 8701 剔除；**证书元数据**：叶证书 subject/issuer CN、自签标志（subject/issuer 原始 DER 相等的启发式，非签名验证）、有效期（unix 秒） | TLS 1.3 证书（加密传输，协议上不可见）、证书链与签名验证 |
 | HTTP | HTTP/1.x 请求行（9 种方法白名单） | URI、Host、User-Agent（首包前 4KB，无跨包重组） | 方法/状态码不进上报结构 |
 
-证据：`sensor/src/proto_id.rs:72`（`read_name`）、`:130`（`parse_dns_response`）、
-`:258`（`parse_server_hello`）。其他协议（SSH/SMTP/ICMP 等）无实现。
-DNS/JA3S 字段经 proto `FlowRecord` 的 `dns_rcode=19` / `dns_answers=20` /
-`ja3s=21` 上报（`proto/sensor.proto:40-42`）。
+TLS 证书跨 TCP 分段是常态（叶证书+链一般 1.5–4KB），服务端方向做**有界重组**：
+每条流一个握手缓冲（上限 16KB），按 record → handshake 增量解析，不完整等下一个包；
+ServerHello 扩展 supported_versions=0x0304 判定 TLS 1.3 后立即停止等证书，
+看到应用数据 record（0x17）或缓冲超限同样停止。X.509 解析是自研迷你 DER walker
+（`sensor/src/x509.rs`），不引新 crate，畸形一律返回 None。
+
+证据：`sensor/src/proto_id.rs`（`read_name`、`parse_dns_response`、`parse_server_hello`、
+握手重组与 Certificate 提取）、`sensor/src/x509.rs`（DER/有效期/CN 解析）。
+其他协议（SSH/SMTP/ICMP 等）无实现。
+DNS/JA3S/证书字段经 proto `FlowRecord` 的 `dns_rcode=19` / `dns_answers=20` /
+`ja3s=21` / `tls_cert_*=22-26` 上报（`proto/sensor.proto`）。
 
 ### 流聚合与上报
 

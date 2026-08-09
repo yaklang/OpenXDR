@@ -137,5 +137,5 @@ AI 不能直接改检测面。详见 [detection.md](detection.md)。
 | `agent/src/collector` | 端点采集（平台差异封死在模块内，对外一个 channel） |
 | `agent/src/respond` | 响应指令执行（结束进程/主机隔离） |
 | `sensor/src/capture` | 抓包后端（AF_PACKET v3 / AF_XDP） |
-| `sensor/src/proto_id.rs` | 应用层协议识别与元数据提取（DNS 含应答/rcode、TLS、HTTP、JA3/JA3S） |
+| `sensor/src/proto_id.rs` | 应用层协议识别与元数据提取（DNS 含应答/rcode、TLS 含证书元数据、HTTP、JA3/JA3S） |
 | `sensor/src/flow.rs` | 五元组流聚合与老化 |

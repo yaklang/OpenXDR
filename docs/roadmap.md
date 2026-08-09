@@ -10,8 +10,8 @@
   持久化点目录（systemd unit / cron / .ssh）、登录（wtmp/btmp）；Windows 进程启停
   （ETW + Win7 PEB cmdline 兜底 + exe SHA-256）、文件监控（RDCW）、持久化点
   （注册表 Run/Startup/服务/计划任务，删除带旧值）、登录（4624/4625 含失败原因码）；
-  全流量探针（DNS 含应答与 rcode、TLS、HTTP 元数据 + JA3/JA3S）；syslog
-- **检测**：Sigma 引擎（热重载）40 条规则、三类 IOC 情报碰撞（IP/域名/哈希；
+  全流量探针（DNS 含应答与 rcode、TLS、HTTP 元数据 + JA3/JA3S + 证书元数据，仅 TLS ≤1.2）；syslog
+- **检测**：Sigma 引擎（热重载）41 条规则、三类 IOC 情报碰撞（IP/域名/哈希；
   TLS 指纹 JA3/JA3S 走哈希通道）
 - **降噪**：去重 → 抑制 → 关联（血缘/时间窗/横向移动）→ AI 研判 → 通知阈值
 - **响应**：结束进程、主机隔离（mTLS + 按主机绑定证书）
@@ -230,6 +230,16 @@ WMI 订阅/安全服务停止/内核模块/shell rc/at 任务），detectcheck 8
   现在用 socket 地址跨状态关联 PID，ESTABLISHED/CLOSE 上报真实五元组。
 - `openxdr-lab` 每小时落一次吞吐、告警、incident、活跃资产与存储指标。
   先积累七天数据，再决定 events 时间分区和下一轮降噪，不凭空扩架构。
+### 增强池第 1 项：sensor TLS 证书元数据 ✅（2026-08-09 第四轮）
+
+被动解析 TLS 握手 Certificate 消息：服务端方向有界重组（16KB 上限）应对证书跨
+TCP 分段；自研迷你 X.509 DER 解析器（`sensor/src/x509.rs`，不加新 crate），
+提取叶证书 subject/issuer CN、自签标志（subject/issuer 原始 DER 相等启发式）、
+有效期。ServerHello supported_versions=0x0304 识别 TLS 1.3 后停止等证书
+（1.3 证书加密传输，协议上不可见——这是放弃 1.3 的依据，不是遗漏）。
+proto `FlowRecord` 加 `tls_cert_*=22-26`，server 归一化进 `tls.cert`，
+配规则 `net_tls_self_signed_cert.yml`（T1573.002，low）与 detectcheck 语料
+（90 用例 0 意外，技术 41/41）。
 
 ### 维持"不做"的判断
 
