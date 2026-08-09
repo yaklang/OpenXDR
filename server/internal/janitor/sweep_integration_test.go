@@ -3,6 +3,7 @@
 package janitor
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -88,4 +89,46 @@ func contains(ids []uuid.UUID, id uuid.UUID) bool {
 		}
 	}
 	return false
+}
+
+// Run 每轮除了清过期事件，还会顺手清过期会话——认证早已拒它们，行留着是纯垃圾。
+func TestJanitorCleansExpiredSessions(t *testing.T) {
+	ctx, client := testdb.New(t)
+	now := time.Now()
+
+	expired, err := client.Session.Create().
+		SetTokenHash("tok-expired").SetUserID(uuid.New()).
+		SetExpiresAt(now.Add(-time.Hour)).Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := client.Session.Create().
+		SetTokenHash("tok-fresh").SetUserID(uuid.New()).
+		SetExpiresAt(now.Add(time.Hour)).Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctxRun, cancel := context.WithCancel(ctx)
+	j := &Janitor{DB: client, Retention: 0, Interval: 20 * time.Millisecond} // retention 0：不碰事件，仍清会话
+	go func() { j.Run(ctxRun); cancel() }()
+
+	// 轮询等待过期会话被清掉。
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		_, err := client.Session.Get(ctx, expired.ID)
+		if err != nil {
+			break // 已被清理
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("过期会话未被清理")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// 未过期会话必须仍在。
+	if _, err := client.Session.Get(ctx, fresh.ID); err != nil {
+		t.Errorf("未过期会话应保留: %v", err)
+	}
+	cancel()
 }
