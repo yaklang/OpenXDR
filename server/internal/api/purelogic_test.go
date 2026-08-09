@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"openxdr/server/ent"
+	entintel "openxdr/server/ent/intel"
 )
 
 func TestEscapeLike(t *testing.T) {
@@ -82,6 +83,27 @@ func TestToRow(t *testing.T) {
 		t.Errorf("dry-run/issuer 映射错误: %+v", r)
 	}
 	if r.IncidentID != &inc || r.Detail != &detail || r.CompletedAt != &now {
+		t.Errorf("指针字段映射错误: %+v", r)
+	}
+}
+
+func TestToIntelRow(t *testing.T) {
+	id := uuid.New()
+	note := "存疑"
+	exp := time.Now()
+	i := &ent.Intel{
+		ID: id, CreatedAt: exp, Kind: entintel.KindIP, Value: "1.2.3.4",
+		Source: "manual", Severity: 4, Note: &note, ExpiresAt: &exp,
+		MatchedCount: 7, LastMatchedAt: &exp,
+	}
+	r := toIntelRow(i)
+	if r.ID != id || r.Kind != string(entintel.KindIP) || r.Value != "1.2.3.4" {
+		t.Errorf("基础字段映射错误: %+v", r)
+	}
+	if r.Severity != 4 || r.MatchedCount != 7 || r.Source != "manual" {
+		t.Errorf("数值字段映射错误: %+v", r)
+	}
+	if r.Note != &note || r.ExpiresAt != &exp || r.LastMatchedAt != &exp {
 		t.Errorf("指针字段映射错误: %+v", r)
 	}
 }
