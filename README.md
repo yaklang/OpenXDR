@@ -52,7 +52,7 @@
 ## 快速开始
 
 ```bash
-# 启动 Postgres + server + web
+# 启动 JetStream + Postgres + server + web
 docker compose up -d
 # 界面: http://localhost:5173   API: http://localhost:8080   gRPC 接入: 8081
 ```
@@ -307,6 +307,13 @@ server 全部通过环境变量配置，均有默认值：
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `DATABASE_URL` | `postgres://openxdr:openxdr@localhost:5432/openxdr?sslmode=disable` | 数据库连接串 |
+| `NATS_URL` | 空（单机直连） | NATS 地址；配置后启用 JetStream 持久队列，多个地址用逗号分隔 |
+| `QUEUE_SHARDS` | `32` | 事件一致性分片数；同一资产保持有序 |
+| `QUEUE_REPLICAS` | `1` | JetStream stream 副本数；三节点生产集群设为 3 |
+| `QUEUE_MAX_BYTES_GB` | `20` | 事件 stream 最大磁盘占用 |
+| `QUEUE_MAX_AGE_HOURS` | `168` | 未处理消息最长保留时间 |
+| `LOG_FORMAT` | 空（text） | 设为 `json` 输出结构化日志 |
+| `LOG_LEVEL` | `info` | debug / info / warn / error |
 | `RULES_PATH` | `../rules` | Sigma 规则目录 |
 | `RULES_RELOAD_SECONDS` | `30` | 规则目录变更检测周期，变更自动热重载；0 关闭 |
 | `HTTP_ADDR` / `GRPC_ADDR` | `:8080` / `:8081` | 监听地址 |
@@ -332,7 +339,8 @@ server 全部通过环境变量配置，均有默认值：
 
 - **Agent**: Rust（eBPF / ETW）
 - **Sensor**: Rust（AF_PACKET v3 / AF_XDP 双后端）
-- **Server**: Go + Ent
+- **Server**: Go + Ent，支持多节点 gateway/worker 集群
 - **Web**: React + TypeScript (Vite)
-- **存储**: PostgreSQL（大规模部署建议启用 TimescaleDB 扩展）
+- **队列**: NATS JetStream（按资产分片、持久化、重投）
+- **存储**: PostgreSQL（生产集群应接高可用 PostgreSQL）
 - **AI**: 兼容 OpenAI API 的任意 LLM，支持 Ollama 本地模型

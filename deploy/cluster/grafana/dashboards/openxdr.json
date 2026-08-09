@@ -1,0 +1,19 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "panels": [
+    {"type":"timeseries","title":"事件发布速率","gridPos":{"h":8,"w":12,"x":0,"y":0},"targets":[{"expr":"sum by (source) (rate(openxdr_events_published_total[5m]))","legendFormat":"{{source}}"}]},
+    {"type":"timeseries","title":"事件处理速率","gridPos":{"h":8,"w":12,"x":12,"y":0},"targets":[{"expr":"sum by (source) (rate(openxdr_events_processed_total{duplicate=\"false\"}[5m]))","legendFormat":"{{source}}"}]},
+    {"type":"timeseries","title":"队列分片积压","gridPos":{"h":8,"w":12,"x":0,"y":8},"targets":[{"expr":"max by (shard) (openxdr_queue_pending_messages)","legendFormat":"shard {{shard}}"}]},
+    {"type":"timeseries","title":"处理耗时 P95","gridPos":{"h":8,"w":12,"x":12,"y":8},"targets":[{"expr":"histogram_quantile(0.95, sum by (le,source) (rate(openxdr_event_processing_seconds_bucket[5m])))","legendFormat":"{{source}}"}]},
+    {"type":"timeseries","title":"失败速率","gridPos":{"h":8,"w":12,"x":0,"y":16},"targets":[{"expr":"sum by (stage) (rate(openxdr_pipeline_failures_total[5m]))","legendFormat":"{{stage}}"}]},
+    {"type":"timeseries","title":"新告警速率","gridPos":{"h":8,"w":12,"x":12,"y":16},"targets":[{"expr":"sum by (source) (rate(openxdr_alerts_created_total[5m]))","legendFormat":"{{source}}"}]}
+  ],
+  "schemaVersion": 41,
+  "tags": ["openxdr", "jetstream"],
+  "templating": {"list": []},
+  "time": {"from":"now-6h","to":"now"},
+  "title": "OpenXDR 集群处理链",
+  "uid": "openxdr-cluster",
+  "version": 1
+}

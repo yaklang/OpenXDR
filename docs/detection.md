@@ -6,18 +6,21 @@
 
 ## 处理链总览
 
-每条事件**同步**执行（三条接入路径 agent/sensor/syslog 共用一套逻辑，
-`server/internal/grpcsvc/agent.go:195-278`）：
+三条接入路径先生成统一版本化信封；启用 JetStream 时持久入队，单机直连时直接
+调用同一个 `ingest.Processor`：
 
 ```
-事件落库攒批（500 条或 2 秒 flush）
+稳定 event_id + partition_key（按资产分片）
+  → JetStream durable consumer（处理成功才 ACK）
+  → 事件主键幂等落库
   → ① sigma 规则求值 + 情报碰撞（合并成同一命中序列）
   → ② 抑制检查（被压掉的命中不占去重槽位）
   → ③ 去重（窗口内同指纹只留一行，count 累加）
   → ④ 告警落库
 ```
 
-之后是各自独立的**异步**后台循环：
+之后是集群单活的**异步**后台循环；PostgreSQL advisory lease 保证同名任务
+只有一个节点执行，leader 失联后其他节点接管：
 
 ```
 correlate：未归属告警 → incident（10s 一批）
@@ -66,7 +69,7 @@ sensor 与 syslog 路径结构相同，仅去重指纹与资产归属不同
 | dns_query / dns | 4003 | ✅ sensor |
 | authentication | 3002 | ✅ agent |
 | application / antivirus | 100001 | ✅ syslog |
-| image_load / driver_load | 1005 | ❌ 无采集来源 |
+| image_load / driver_load | 1005 | ✅ Linux 内核模块快照 diff |
 | proxy / webserver | 4002 | ❌ 无采集来源 |
 
 `fieldMap`（`engine.go:31-74`）把 Sigma 标准字段名映射到 OCSF dot path；
@@ -79,7 +82,7 @@ sensor 与 syslog 路径结构相同，仅去重指纹与资产归属不同
   资产上求值）；资产 OS 未知（空串）时不过滤（`engine.go:466-486`）
 - **规则索引**：按 class_uid 分桶 + anyClass 桶（`engine.go:325-337`）
 - **热重载**：周期扫描（`RULES_RELOAD_SECONDS` 默认 30s，0 关闭），指纹=
-  全部 yml 文件的路径+mtime+大小，变化则整体重载、`atomic.Pointer` 原子
+  全部 yml 文件的路径+内容 SHA-256，变化则整体重载、`atomic.Pointer` 原子
   切换；编译失败的规则只跳过该条，不影响旧规则集（`engine.go:399-439`）
 - **严重度**：informational1/low2/medium3/high4/critical5，默认 3
   （`engine.go:130-132`）
@@ -115,19 +118,21 @@ sensor 与 syslog 路径结构相同，仅去重指纹与资产归属不同
 - **导入**：`detectKind` 自动识别——IP 字面量→ip；32/40/64 位十六进制
   →hash；其余→domain；重复条目跳过（`api/intel.go:205-214`）
 
-## 去重（`server/internal/dedup`）
+## 持久去重（`server/internal/ingest`）
 
-- 纯内存 `map[fingerprint]entry`，每条接入流一个实例（`dedup.go:16-26`）
+- 状态表 `alert_dedup_state(fingerprint, alert_id, first_ts, last_ts)` 由所有
+  worker 共享；不再随 agent 重连或 server 重启丢失。
 - 窗口 `ALERT_DEDUP_WINDOW_MINUTES` 默认 5 分钟，以**首条命中时间**为锚，
-  窗口不滑动续期（`dedup.go:33-43`）
+  窗口不滑动续期。
 - **指纹构成**（按接入路径不同）：
   - agent：`ruleID`；文件事件（1001）追加 `|file.path`；爆破合成告警
     `xdr:bruteforce-success|username`（`agent.go:218-232,257`）
   - sensor：`ruleID|assetID`，无资产时 `ruleID|srcIP`（`sensor.go:104-106`）
   - syslog：`ruleID|origin`（`syslog/server.go:203`）
-- 窗内重复：不建告警，`pending++` 并更新 lastTs；flush 时对原告警
-  `AddCount(pending) + SetLastTs`——告警列表里一行就是一个窗口
-  （`dedup.go:33-64`）
+- 同一 fingerprint 先取得 PostgreSQL transaction advisory lock；窗内重复
+  原子 `count+1` 并推进 `last_ts`，新窗口新建告警并替换状态指针。
+- 事件插入、规则/情报告警和去重状态在同一事务提交。队列重投先被事件主键
+  拦住，不会重复增加告警计数。
 
 ## 抑制（`server/internal/suppress`）
 
@@ -331,6 +336,11 @@ POST /api/commands → Hub.Issue 落 command 行并发往 agent 指令通道
 | 变量 | 默认值 | 用途 |
 |---|---|---|
 | `DATABASE_URL` | `postgres://openxdr:openxdr@localhost:5432/openxdr?sslmode=disable` | Postgres 连接 |
+| `NATS_URL` | 空（单机直连） | NATS 集群地址；配置后启用 JetStream |
+| `QUEUE_SHARDS` | `32` | 按 partition_key 一致性分片数 |
+| `QUEUE_REPLICAS` | `1` | JetStream stream 副本数 |
+| `QUEUE_MAX_BYTES_GB` / `QUEUE_MAX_AGE_HOURS` | `20` / `168` | 队列容量与未处理消息保留上限 |
+| `LOG_FORMAT` / `LOG_LEVEL` | text / info | 结构化日志格式与等级 |
 | `HTTP_ADDR` / `GRPC_ADDR` | `:8080` / `:8081` | REST / gRPC 监听 |
 | `TLS_CA_FILE` / `TLS_CERT_FILE` / `TLS_KEY_FILE` | 空 | gRPC mTLS，三者必须同配否则启动报错；全空=明文（仅本机调试） |
 | `ADMIN_PASSWORD` | 空（随机生成打印一次） | 初始 admin 密码 |

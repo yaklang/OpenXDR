@@ -101,8 +101,8 @@ proc connector 没有网络事件，为它单开轮询不值。
 
 - **多租户 / SaaS 化**——目标用户是自建 SOC 的团队，租户隔离用"每客户一套"解决。
   为不存在的 SaaS 生意把每张表加 tenant_id，是给所有查询上税。
-- **微服务拆分 / server 水平扩展**——单机 Go + Postgres 能撑到远超目标规模；
-  dedup/correlate 状态外置换来的是分布式债。垂直扩容 + 读写分离足够。
+- **按业务包拆成独立微服务仓库**——server 已能作为多节点 gateway/worker
+  水平扩展；继续把每个包拆成独立部署只会增加版本与网络债，当前没有收益。
 - **存 PCAP 全包**——磁盘无底洞，会话元数据 + 按需取证是行业共识。
 - **自研规则 DSL**——Sigma 生态就是护城河，兼容它而不是发明方言。
 
@@ -240,6 +240,17 @@ TCP 分段；自研迷你 X.509 DER 解析器（`sensor/src/x509.rs`，不加新
 proto `FlowRecord` 加 `tls_cert_*=22-26`，server 归一化进 `tls.cert`，
 配规则 `net_tls_self_signed_cert.yml`（T1573.002，low）与 detectcheck 语料
 （90 用例 0 意外，技术 41/41）。
+
+### 队列、集群与可观测性（2026-08-09 第四轮）
+
+- 统一版本化事件信封，agent/sensor/syslog 使用稳定事件 ID 和资产分区键。
+- NATS JetStream WorkQueue 持久投递，分片 durable consumer 保序；处理成功才 ACK。
+- PostgreSQL 主键幂等与持久告警去重替代连接内存状态，重投、重连、节点切换
+  不再制造重复事件或重置去重窗口。
+- server 可多节点承接 HTTP/gRPC；后台任务用 advisory lease 单活，响应指令
+  通过 NATS 路由到实际持有 agent 长连接的节点。
+- `/healthz`、`/readyz`、Prometheus 指标、积压/失败/延迟告警与 Grafana 面板
+  已随三节点 Compose 固化，故障验收见 [cluster.md](cluster.md)。
 
 ### 维持"不做"的判断
 

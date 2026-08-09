@@ -1,0 +1,144 @@
+x-server: &server
+  build:
+    context: .
+    dockerfile: server/Dockerfile
+    args:
+      GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    nats1:
+      condition: service_started
+    nats2:
+      condition: service_started
+    nats3:
+      condition: service_started
+  environment: &server-env
+    DATABASE_URL: postgres://openxdr:${POSTGRES_PASSWORD:-openxdr}@postgres:5432/openxdr?sslmode=disable
+    NATS_URL: nats://nats1:4222,nats://nats2:4222,nats://nats3:4222
+    QUEUE_SHARDS: ${QUEUE_SHARDS:-32}
+    QUEUE_REPLICAS: 3
+    LOG_FORMAT: json
+    RULES_PATH: /rules
+    ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}
+    RESPONSE_ENABLED: ${RESPONSE_ENABLED:-false}
+    TLS_CA_FILE: ${TLS_CA_FILE:-}
+    TLS_CERT_FILE: ${TLS_CERT_FILE:-}
+    TLS_KEY_FILE: ${TLS_KEY_FILE:-}
+    AI_BASE_URL: ${AI_BASE_URL:-http://host.docker.internal:11434/v1}
+    AI_MODEL: ${AI_MODEL:-}
+    AI_API_KEY: ${AI_API_KEY:-}
+    WEBHOOK_URL: ${WEBHOOK_URL:-}
+    WEBHOOK_FORMAT: ${WEBHOOK_FORMAT:-generic}
+    SYSLOG_ADDR: ""
+  volumes:
+    - ./rules:/rules:ro
+    - ./certs:/certs:ro
+  extra_hosts:
+    - host.docker.internal:host-gateway
+
+x-nats: &nats
+  image: nats:2.11-alpine
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: openxdr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openxdr}
+      POSTGRES_DB: openxdr
+    volumes:
+      - cluster-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U openxdr]
+      interval: 5s
+      retries: 20
+
+  nats1:
+    <<: *nats
+    command: [--jetstream, --store_dir, /data, --server_name, nats1, --cluster_name, openxdr, --cluster, nats://0.0.0.0:6222, --routes, "nats://nats2:6222,nats://nats3:6222", --http_port, "8222"]
+    volumes: [nats1:/data]
+  nats2:
+    <<: *nats
+    command: [--jetstream, --store_dir, /data, --server_name, nats2, --cluster_name, openxdr, --cluster, nats://0.0.0.0:6222, --routes, "nats://nats1:6222,nats://nats3:6222", --http_port, "8222"]
+    volumes: [nats2:/data]
+  nats3:
+    <<: *nats
+    command: [--jetstream, --store_dir, /data, --server_name, nats3, --cluster_name, openxdr, --cluster, nats://0.0.0.0:6222, --routes, "nats://nats1:6222,nats://nats2:6222", --http_port, "8222"]
+    volumes: [nats3:/data]
+
+  server1:
+    <<: *server
+    environment:
+      <<: *server-env
+      SYSLOG_ADDR: :5514
+    ports:
+      - "5514:5514/tcp"
+      - "5514:5514/udp"
+  server2:
+    <<: *server
+  server3:
+    <<: *server
+
+  haproxy:
+    image: haproxy:3.2-alpine
+    restart: unless-stopped
+    depends_on: [server1, server2, server3]
+    volumes:
+      - ./deploy/cluster/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    networks:
+      default:
+        aliases: [server]
+
+  web:
+    build:
+      context: ./web
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+    restart: unless-stopped
+    depends_on: [haproxy]
+    ports:
+      - "5173:80"
+
+  nats-exporter:
+    image: natsio/prometheus-nats-exporter:0.17.3
+    restart: unless-stopped
+    depends_on: [nats1]
+    command: [-varz, -jsz=all, http://nats1:8222]
+
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    restart: unless-stopped
+    volumes:
+      - ./deploy/cluster/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/cluster/openxdr-alerts.yml:/etc/prometheus/openxdr-alerts.yml:ro
+      - prometheus:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:12.2.1
+    restart: unless-stopped
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
+    volumes:
+      - ./deploy/cluster/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/cluster/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana:/var/lib/grafana
+    ports:
+      - "3000:3000"
+
+volumes:
+  cluster-pgdata:
+  nats1:
+  nats2:
+  nats3:
+  prometheus:
+  grafana:

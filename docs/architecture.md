@@ -12,12 +12,13 @@
 |---|---|---|---|
 | agent | Rust | 不监听（主动连出） | 端点采集（Linux/Windows）+ 响应执行 |
 | sensor | Rust | 不监听（主动连出） | 全流量会话元数据（仅 Linux） |
-| server | Go 1.25 + Ent | `:8080` REST（cookie 会话认证）、`:8081` gRPC（采集接入 + 指令信道）、syslog UDP+TCP（`SYSLOG_ADDR`，默认关） | 单体后端：接入、检测、关联、研判、响应 |
+| server | Go 1.25 + Ent | `:8080` REST/健康/指标、`:8081` gRPC、syslog UDP+TCP（可选） | 可横向扩展的 gateway + worker；接入、检测、关联、研判、响应 |
 | web | React 19 + Vite | nginx `:5173→80` | 管理控制台 |
-| PostgreSQL | — | `:5432` | 唯一存储；server 启动时自动建表，无手动迁移 |
+| NATS JetStream | — | `:4222`，监控 `:8222` | 持久事件队列、按资产分片、故障重投、跨节点指令路由 |
+| PostgreSQL | — | `:5432` | 事实存储、持久去重状态、后台任务租约 |
 
-部署形态：`docker compose up -d`（postgres + server + web），agent/sensor
-各自构建部署到被监控主机。
+单机形态：`docker compose up -d`（JetStream + PostgreSQL + server + web）。
+三节点形态见 [cluster.md](cluster.md) 与 `docker-compose.cluster.yml`。
 
 ## 数据流
 
@@ -27,19 +28,22 @@ agent (Rust)                    sensor (Rust)          syslog
 （agent 侧完成 OCSF 归一化）                            │ UDP/TCP（默认关）
      │ gRPC stream                │ gRPC stream        │
      ▼                            ▼                    ▼
-┌──────────────────── server (Go) ───────────────────────────┐
+┌────────────── gateway server（可多节点）─────────────────────┐
 │ 归一化（仅 sensor / syslog 两路在 server 侧做）：            │
 │   统一成 OCSF 风格 JSON，实体对齐                            │
 │   (主机 → asset，进程 → process_guid，会话 → 五元组)         │
-│        │                                                   │
-│        ▼  每条事件同步执行（三条接入路径共用一套逻辑）         │
+│   稳定 event_id + partition_key → JetStream                │
+└──────────────────────────┬─────────────────────────────────┘
+                           ▼
+┌────────────── ingest worker（durable consumer）─────────────┐
+│ 每分片顺序消费，处理成功才 ACK；重投由 event_id 幂等          │
 │ ① sigma 规则求值 + 威胁情报碰撞  →  合成同一命中序列          │
 │ ② 抑制检查（分析师标记的噪声源，命中计数可见）                 │
-│ ③ 去重（窗口内同指纹只留一行，count 累加）                    │
+│ ③ PostgreSQL 持久去重（跨节点/重启窗口不丢）                  │
 │ ④ 告警落库                                                  │
 │   合成告警源：xdr:bruteforce-success（爆破得手，ingest 侧）   │
 │        │                                                   │
-│        ▼  异步循环（各自独立的后台 goroutine）                │
+│        ▼  集群单活后台任务（PostgreSQL advisory lease）       │
 │ correlate: 未归属告警 → incident                             │
 │   血缘优先 → 同资产时间窗 → 横向移动（跨主机网络会话）          │
 │ ueba: 新进程首次出现 → 合成 low 告警 xdr:new-process 进管线   │
@@ -73,11 +77,12 @@ web (React): 概览漏斗 / 事件列表+图 / 检索 / 情报 / 审计
 形式的 rule_id，与 sigma 告警共用去重、抑制、关联、研判全链路——没有第二套
 告警逻辑，抑制规则也能压情报误报。
 
-**热路径不查库。** 抑制规则与情报库整表进内存索引，周期 reload（写操作后立即
-reload 一次）；命中计数在内存攒批回写。每秒上万事件的匹配开销是纯内存查表。
+**匹配热路径在内存，幂等和去重在数据库事务。** 抑制规则、情报和 Sigma 在各
+worker 内存求值；事件主键与告警指纹必须经过共享 PostgreSQL，才能保证节点切换、
+重投和重连不改变语义。这里宁可支付一次事务成本，也不拿安全事件正确性换吞吐。
 
-**内存索引 + 定期 reload 优于消息通知。** server 单体，30 秒的生效延迟对这两类
-数据无关紧要，换来的是零分布式状态。
+**规则与情报允许最终一致，事件处理不允许。** 各节点周期 reload 规则、抑制与
+情报；事件ID、告警去重和后台任务租约使用共享强一致状态。
 
 **关联优先级：血缘 > 同资产时间窗 > 横向移动。** 进程血缘是最强信号（能跨时间窗）；
 横向移动只在本机没有归属故事时才查（时间窗内对端主机连过来且对端有 open incident），
@@ -121,6 +126,10 @@ AI 不能直接改检测面。详见 [detection.md](detection.md)。
 | 路径 | 职责 |
 |---|---|
 | `server/internal/grpcsvc` | agent/sensor 接入，证书身份校验，指令下发，爆破得手升级检测 |
+| `server/internal/ingest` | 稳定事件信封、数据库幂等、持久告警去重、统一检测处理器 |
+| `server/internal/eventbus` | 单机直连 / JetStream 发布、分片 durable consumer、积压采集 |
+| `server/internal/cluster` | PostgreSQL advisory lock 后台任务租约与迁移锁 |
+| `server/internal/telemetry` | Prometheus 处理链指标 |
 | `server/internal/syslog` | RFC3164/5424 解析与接入 |
 | `server/internal/sigma` | Sigma 规则编译与求值（dot path 取值，class 分桶，热重载） |
 | `server/internal/intel` | 威胁情报内存索引与碰撞 |

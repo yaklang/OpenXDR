@@ -1,0 +1,27 @@
+groups:
+  - name: openxdr
+    rules:
+      - alert: OpenXDRNodeDown
+        expr: up{job="openxdr"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: OpenXDR server 节点不可用
+      - alert: OpenXDRQueueBacklog
+        expr: max by (shard) (openxdr_queue_pending_messages) > 10000
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: JetStream 分片积压超过 10000 条
+      - alert: OpenXDRPipelineFailures
+        expr: sum(rate(openxdr_pipeline_failures_total[5m])) > 0
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: OpenXDR 事件处理持续失败
+      - alert: OpenXDRProcessingLatency
+        expr: histogram_quantile(0.95, sum by (le) (rate(openxdr_event_processing_seconds_bucket[5m]))) > 1
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: OpenXDR 事件处理 P95 超过 1 秒

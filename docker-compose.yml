@@ -1,4 +1,12 @@
 services:
+  nats:
+    image: nats:2.11-alpine
+    command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
+    volumes:
+      - natsdata:/data
+    ports:
+      - "8222:8222"
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -21,8 +29,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      nats:
+        condition: service_started
     environment:
       DATABASE_URL: postgres://openxdr:${POSTGRES_PASSWORD:-openxdr}@postgres:5432/openxdr?sslmode=disable
+      NATS_URL: nats://nats:4222
+      QUEUE_SHARDS: ${QUEUE_SHARDS:-32}
+      QUEUE_REPLICAS: 1
       RULES_PATH: /rules
       # AI 研判：留空则不启用。接本地 Ollama 时用 host.docker.internal
       AI_BASE_URL: ${AI_BASE_URL:-http://host.docker.internal:11434/v1}
@@ -73,3 +86,4 @@ services:
 
 volumes:
   pgdata:
+  natsdata:

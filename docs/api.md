@@ -66,7 +66,7 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 |---|---|---|
 | GET | `/api/assets` | 资产清单 |
 | GET | `/api/assets/{id}/config` | 该主机的采集配置 |
-| PUT | `/api/assets/{id}/config` | 设置采集配置：`{"fileWatchDirs":[...],"collectFiles":true,"collectAuth":true,"collectPersist":true,"collectNetwork":true}`。随 agent 下次注册（重连或重启）生效。各开关的平台适用范围见 [collection.md](collection.md)（注意 `collectNetwork` 在 Windows 侧无消费者） |
+| PUT | `/api/assets/{id}/config` | 设置采集配置：`{"fileWatchDirs":[...],"collectFiles":true,"collectAuth":true,"collectPersist":true,"collectNetwork":true}`。随 agent 下次注册（重连或重启）生效；`collectNetwork` 在 Linux eBPF 与 Windows ETW 路径生效 |
 | GET | `/api/users` | 用户列表（admin） |
 | POST | `/api/users` | 建号：`{"username","password","role"}`（admin） |
 | POST | `/api/users/{id}/password` | 重置密码（admin） |

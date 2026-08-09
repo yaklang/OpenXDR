@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
 	"openxdr/server/internal/dedup"
+	"openxdr/server/internal/eventbus"
+	"openxdr/server/internal/ingest"
 	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
@@ -37,6 +40,7 @@ type SensorServer struct {
 	DedupWindow time.Duration
 	Suppress    *suppress.Store
 	Intel       *intel.Store
+	Events      eventbus.Bus
 }
 
 func (s *SensorServer) ReportFlows(stream pb.SensorService_ReportFlowsServer) error {
@@ -57,11 +61,46 @@ func (s *SensorServer) ReportFlows(stream pb.SensorService_ReportFlowsServer) er
 		if batch.DroppedPackets > 0 {
 			slog.Warn("探针丢包", "sensor", batch.SensorId, "dropped", batch.DroppedPackets)
 		}
-		if err := s.ingest(ctx, batch, deduper); err != nil {
-			return err
+		var ingestErr error
+		if s.Events != nil {
+			ingestErr = s.enqueue(ctx, batch)
+		} else {
+			ingestErr = s.ingest(ctx, batch, deduper)
+		}
+		if ingestErr != nil {
+			return ingestErr
 		}
 		received += uint64(len(batch.Flows))
 	}
+}
+
+func (s *SensorServer) enqueue(ctx context.Context, batch *pb.FlowBatch) error {
+	assetByIP, osByIP, err := s.assetIPIndex(ctx)
+	if err != nil {
+		return err
+	}
+	for _, f := range batch.Flows {
+		classUID := classNetworkActivity
+		if f.DnsQuery != "" {
+			classUID = classDNSActivity
+		}
+		raw := flowRaw(f)
+		assetID := assetByIP[f.SrcIp]
+		partitionKey := f.SrcIp
+		if assetID != nil {
+			partitionKey = assetID.String()
+		}
+		id := ingest.StableID(batch.SensorId, strconv.FormatInt(f.StartUnixNs, 10),
+			strconv.FormatInt(f.EndUnixNs, 10), connTuple(f), string(raw))
+		if err := s.Events.Publish(ctx, ingest.Envelope{
+			Version: ingest.EnvelopeVersion, ID: id, PartitionKey: partitionKey,
+			Timestamp: time.Unix(0, f.StartUnixNs), ClassUID: classUID, Source: "sensor",
+			AssetID: assetID, AssetOS: osByIP[f.SrcIp], ConnTuple: connTuple(f), Raw: raw,
+		}); err != nil {
+			return fmt.Errorf("流事件入队: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, deduper *dedup.Deduper) error {

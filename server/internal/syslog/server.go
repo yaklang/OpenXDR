@@ -14,6 +14,8 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
 	"openxdr/server/internal/dedup"
+	"openxdr/server/internal/eventbus"
+	"openxdr/server/internal/ingest"
 	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
@@ -40,6 +42,7 @@ type Server struct {
 	DedupWindow time.Duration
 	Suppress    *suppress.Store
 	Intel       *intel.Store
+	Events      eventbus.Bus
 }
 
 // 从网络收上来的一条报文，带来源地址用于归属资产
@@ -150,6 +153,12 @@ func (s *Server) consume(ctx context.Context, queue <-chan incoming) {
 		case <-ticker.C:
 			flush()
 		case in := <-queue:
+			if s.Events != nil {
+				if err := s.enqueue(ctx, in); err != nil {
+					slog.Error("Syslog 事件入队失败", "err", err)
+				}
+				continue
+			}
 			e, a := s.build(ctx, in, deduper)
 			events = append(events, e)
 			alerts = append(alerts, a...)
@@ -158,6 +167,31 @@ func (s *Server) consume(ctx context.Context, queue <-chan incoming) {
 			}
 		}
 	}
+}
+
+func (s *Server) enqueue(ctx context.Context, in incoming) error {
+	msg := Parse(in.line, time.Now())
+	assetID, assetOS := s.resolveAsset(ctx, msg.Hostname, in.from)
+	raw, _ := json.Marshal(map[string]any{
+		"activity_id": 1, "severity_id": msg.Severity, "message": msg.Content,
+		"metadata": map[string]any{"product": map[string]any{"name": msg.AppName}, "log_name": msg.MsgID},
+		"actor":    map[string]any{"process": map[string]any{"pid": msg.ProcID}},
+		"device":   map[string]any{"hostname": msg.Hostname}, "facility": msg.Facility,
+	})
+	origin := msg.Hostname
+	if origin == "" && in.from != nil {
+		origin = in.from.String()
+	}
+	partitionKey := origin
+	if assetID != nil {
+		partitionKey = assetID.String()
+	}
+	id := ingest.StableID("syslog", origin, msg.Ts.UTC().Format(time.RFC3339Nano), msg.AppName, msg.ProcID, msg.Content)
+	return s.Events.Publish(ctx, ingest.Envelope{
+		Version: ingest.EnvelopeVersion, ID: id, PartitionKey: partitionKey,
+		Timestamp: msg.Ts, ClassUID: ClassApplicationActivity, Source: "syslog",
+		AssetID: assetID, AssetOS: assetOS, Raw: raw,
+	})
 }
 
 func (s *Server) build(ctx context.Context, in incoming, deduper *dedup.Deduper) (*ent.EventCreate, []*ent.AlertCreate) {

@@ -28,7 +28,9 @@
   双抓包后端：AF_PACKET v3（默认）与 AF_XDP（`--features xdp`，需驱动支持，仅入向）。
   协议解析：DNS 查询/应答、TLS SNI/JA3/JA3S 与证书元数据（仅 TLS ≤1.2，
   有界重组 16KB，`x509.rs` 迷你 DER 解析）、HTTP 头。
-- **server/**（Go 1.25，module `openxdr/server`）：单体后端。Ent ORM + PostgreSQL；
+- **server/**（Go 1.25，module `openxdr/server`）：可单机或多节点运行。Ent ORM + PostgreSQL；
+  NATS JetStream 提供按资产分片的持久事件队列，PostgreSQL 提供幂等、持久去重
+  与后台任务租约，跨节点响应指令走 NATS request/reply；
   HTTP REST（:8080，会话 cookie 认证）与 gRPC（:8081，agent/sensor 接入 + 控制信道）。
   启动时自动建表（`client.Schema.Create`），无手动迁移。
 - **web/**（React 19 + TypeScript + Vite）：管理控制台。nginx 容器部署，端口 5173→80。

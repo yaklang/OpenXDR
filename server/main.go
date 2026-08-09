@@ -3,24 +3,31 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 
 	"openxdr/server/ent"
 	"openxdr/server/internal/api"
 	"openxdr/server/internal/auth"
+	"openxdr/server/internal/cluster"
 	"openxdr/server/internal/correlate"
+	"openxdr/server/internal/eventbus"
 	"openxdr/server/internal/grpcsvc"
+	"openxdr/server/internal/ingest"
 	"openxdr/server/internal/intel"
 	"openxdr/server/internal/janitor"
 	"openxdr/server/internal/notify"
@@ -28,13 +35,16 @@ import (
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/syslog"
+	"openxdr/server/internal/telemetry"
 	"openxdr/server/internal/triage"
 	"openxdr/server/internal/ueba"
 	"openxdr/server/pb"
 )
 
 func main() {
-	ctx := context.Background()
+	configureLogging()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	db, err := sql.Open("pgx", getenv("DATABASE_URL",
 		"postgres://openxdr:openxdr@localhost:5432/openxdr?sslmode=disable"))
@@ -44,11 +54,16 @@ func main() {
 	}
 	client := ent.NewClient(ent.Driver(entsql.OpenDB(dialect.Postgres, db)))
 	defer client.Close()
-	if err := client.Schema.Create(ctx); err != nil {
-		slog.Error("schema 迁移失败", "err", err)
+	if err := cluster.WithLock(ctx, db, "schema", func() error {
+		if err := client.Schema.Create(ctx); err != nil {
+			return err
+		}
+		ensureSearchIndex(ctx, db)
+		return ingest.EnsureSchema(ctx, db)
+	}); err != nil {
+		slog.Error("集群处理状态初始化失败", "err", err)
 		os.Exit(1)
 	}
-	ensureSearchIndex(ctx, db)
 
 	suppressions := suppress.New(client, time.Duration(getenvInt("SUPPRESSION_RELOAD_SECONDS", 30))*time.Second)
 	go suppressions.Run(ctx)
@@ -62,27 +77,30 @@ func main() {
 		go rules.Watch(ctx, rulesPath, time.Duration(sec)*time.Second)
 	}
 
-	go (&correlate.Engine{
+	correlator := &correlate.Engine{
 		DB:            client,
 		Rules:         rules,
 		Window:        time.Duration(getenvInt("CORRELATE_WINDOW_MINUTES", 30)) * time.Minute,
 		Interval:      time.Duration(getenvInt("CORRELATE_INTERVAL_SECONDS", 10)) * time.Second,
 		MaxGraphNodes: getenvInt("CORRELATE_MAX_GRAPH_NODES", 500),
-	}).Run(ctx)
+	}
+	go cluster.RunLeader(ctx, db, "correlate", correlator.Run)
 
 	// UEBA 首次出现：先学习后告警，学习期按资产从首次观测起算
-	go (&ueba.Engine{
+	uebaEngine := &ueba.Engine{
 		DB:             client,
 		Suppress:       suppressions,
 		LearningPeriod: time.Duration(getenvInt("UEBA_LEARNING_DAYS", 7)) * 24 * time.Hour,
 		Interval:       time.Duration(getenvInt("UEBA_INTERVAL_SECONDS", 30)) * time.Second,
-	}).Run(ctx)
+	}
+	go cluster.RunLeader(ctx, db, "ueba", uebaEngine.Run)
 
-	go (&janitor.Janitor{
+	janitorEngine := &janitor.Janitor{
 		DB:        client,
 		Retention: time.Duration(getenvInt("RETENTION_DAYS", 30)) * 24 * time.Hour,
 		Interval:  time.Duration(getenvInt("RETENTION_INTERVAL_MINUTES", 60)) * time.Minute,
-	}).Run(ctx)
+	}
+	go cluster.RunLeader(ctx, db, "janitor", janitorEngine.Run)
 
 	hub := response.NewHub(client, os.Getenv("RESPONSE_ENABLED") == "true")
 	allowlist := isolationAllowlist()
@@ -109,9 +127,11 @@ func main() {
 			AllowEndpoints: allowlist,
 		}).React
 	}
-	go triageEngine.Run(ctx)
+	if triageEngine.LLM.Enabled() {
+		go cluster.RunLeader(ctx, db, "triage", triageEngine.Run)
+	}
 
-	go (&notify.Notifier{
+	notifier := &notify.Notifier{
 		DB:          client,
 		URL:         os.Getenv("WEBHOOK_URL"),
 		Format:      getenv("WEBHOOK_FORMAT", "generic"),
@@ -119,9 +139,44 @@ func main() {
 		WaitTriage:  os.Getenv("AI_MODEL") != "",
 		LinkBase:    os.Getenv("WEBHOOK_LINK_BASE"),
 		MinSeverity: int16(getenvInt("WEBHOOK_MIN_SEVERITY", 0)),
-	}).Run(ctx)
+	}
+	if notifier.URL != "" {
+		go cluster.RunLeader(ctx, db, "notify", notifier.Run)
+	}
 
 	dedupWindow := time.Duration(getenvInt("ALERT_DEDUP_WINDOW_MINUTES", 5)) * time.Minute
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	metrics := telemetry.New(registry)
+	processor := &ingest.Processor{
+		DB: db, Rules: rules, Suppress: suppressions, Intel: intelStore,
+		DedupWindow: dedupWindow, Metrics: metrics,
+	}
+	var events eventbus.Bus = eventbus.NewDirect(processor, metrics)
+	hostname, _ := os.Hostname()
+	instance := eventbus.InstanceName(hostname, os.Getpid())
+	if natsURL := os.Getenv("NATS_URL"); natsURL != "" {
+		queued, err := eventbus.NewJetStream(natsURL,
+			instance, getenvInt("QUEUE_SHARDS", 32), getenvInt("QUEUE_REPLICAS", 1),
+			int64(getenvInt("QUEUE_MAX_BYTES_GB", 20))*1024*1024*1024,
+			time.Duration(getenvInt("QUEUE_MAX_AGE_HOURS", 168))*time.Hour, processor, metrics)
+		if err != nil {
+			slog.Error("JetStream 初始化失败", "err", err)
+			os.Exit(1)
+		}
+		events = queued
+		router, routeErr := response.NewNATSRouter(natsURL, instance)
+		if routeErr != nil {
+			slog.Error("跨节点指令路由初始化失败", "err", routeErr)
+			os.Exit(1)
+		}
+		hub.Router = router
+		defer router.Close()
+		slog.Info("事件队列已启用", "url", natsURL, "shards", getenvInt("QUEUE_SHARDS", 32))
+	} else {
+		slog.Warn("NATS_URL 未配置，事件使用单机直连模式")
+	}
+	defer events.Close()
 
 	go (&syslog.Server{
 		DB:          client,
@@ -130,6 +185,7 @@ func main() {
 		DedupWindow: dedupWindow,
 		Suppress:    suppressions,
 		Intel:       intelStore,
+		Events:      events,
 	}).Run(ctx)
 
 	grpcAddr := getenv("GRPC_ADDR", ":8081")
@@ -154,6 +210,7 @@ func main() {
 		Hub:         hub,
 		Suppress:    suppressions,
 		Intel:       intelStore,
+		Events:      events,
 	})
 	pb.RegisterSensorServiceServer(grpcServer, &grpcsvc.SensorServer{
 		DB:          client,
@@ -161,6 +218,7 @@ func main() {
 		DedupWindow: dedupWindow,
 		Suppress:    suppressions,
 		Intel:       intelStore,
+		Events:      events,
 	})
 	go func() {
 		slog.Info("gRPC 启动", "addr", grpcAddr)
@@ -170,18 +228,65 @@ func main() {
 		}
 	}()
 
-	if err := auth.Bootstrap(ctx, client); err != nil {
+	if err := cluster.WithLock(ctx, db, "bootstrap", func() error { return auth.Bootstrap(ctx, client) }); err != nil {
 		slog.Error("初始化 admin 账号失败", "err", err)
 		os.Exit(1)
 	}
 
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	slog.Info("HTTP 启动", "addr", httpAddr)
-	handler := auth.Middleware(client, api.Handler(client, rules, rulesPath, hub, suppressions, intelStore, triageEngine, allowlist))
-	if err := http.ListenAndServe(httpAddr, handler); err != nil {
-		slog.Error("HTTP 退出", "err", err)
-		os.Exit(1)
+	app := auth.Middleware(client, api.Handler(client, rules, rulesPath, hub, suppressions, intelStore, triageEngine, allowlist))
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", telemetry.Handler(registry))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if err := db.PingContext(r.Context()); err != nil || !events.Ready() {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("ready\n"))
+	})
+	mux.Handle("/", app)
+	httpServer := &http.Server{Addr: httpAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	httpErr := make(chan error, 1)
+	go func() { httpErr <- httpServer.ListenAndServe() }()
+	select {
+	case err := <-httpErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("HTTP 退出", "err", err)
+			os.Exit(1)
+		}
+	case <-ctx.Done():
+		slog.Info("收到退出信号，开始排空连接")
 	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_ = httpServer.Shutdown(shutdownCtx)
+	grpcDone := make(chan struct{})
+	go func() { grpcServer.GracefulStop(); close(grpcDone) }()
+	select {
+	case <-grpcDone:
+	case <-shutdownCtx.Done():
+		grpcServer.Stop()
+	}
+}
+
+func configureLogging() {
+	level := slog.LevelInfo
+	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
+	opts := &slog.HandlerOptions{Level: level}
+	if os.Getenv("LOG_FORMAT") == "json" {
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, opts)))
+		return
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, opts)))
 }
 
 // ensureSearchIndex 事件全文检索的 trgm 索引。没有它，关键词检索在大表上

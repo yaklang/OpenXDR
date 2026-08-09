@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
 	"openxdr/server/internal/dedup"
+	"openxdr/server/internal/eventbus"
+	"openxdr/server/internal/ingest"
 	"openxdr/server/internal/intel"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
@@ -32,6 +35,7 @@ type Server struct {
 	Hub         *response.Hub
 	Suppress    *suppress.Store
 	Intel       *intel.Store
+	Events      eventbus.Bus
 }
 
 func (s *Server) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
@@ -190,8 +194,43 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 			rawMap = map[string]any{}
 		}
 
-		eventID := uuid.Must(uuid.NewV7())
 		ts := time.Unix(0, ev.TsUnixNs)
+		eventID := uuid.Must(uuid.NewV7())
+		if s.Events != nil {
+			partitionKey := ev.AgentId
+			if assetID != nil {
+				partitionKey = assetID.String()
+			}
+			var processGUID, parentGUID *uuid.UUID
+			if id, parseErr := uuid.Parse(ev.ProcessGuid); parseErr == nil {
+				processGUID = &id
+			}
+			if id, parseErr := uuid.Parse(ev.ParentProcessGuid); parseErr == nil {
+				parentGUID = &id
+			}
+			fpSuffix := ""
+			if ev.ClassUid == 1001 {
+				if f, ok := rawMap["file"].(map[string]any); ok {
+					if path, ok := f["path"].(string); ok {
+						fpSuffix = "|" + path
+					}
+				}
+			}
+			eventID = ingest.StableID(ev.AgentId, strconv.FormatInt(ev.TsUnixNs, 10),
+				strconv.FormatUint(uint64(ev.ClassUid), 10), ev.ProcessGuid, ev.ParentProcessGuid,
+				ev.ConnTuple, string(raw))
+			if err := s.Events.Publish(ctx, ingest.Envelope{
+				Version: ingest.EnvelopeVersion, ID: eventID, PartitionKey: partitionKey,
+				Timestamp: ts, ClassUID: int(ev.ClassUid), Source: "agent", AssetID: assetID,
+				AssetOS: assetOS, ProcessGUID: processGUID, ParentProcessGUID: parentGUID,
+				Username: ev.Username, ConnTuple: ev.ConnTuple, FingerprintSuffix: fpSuffix,
+				Raw: sanitizeRawJSON(raw),
+			}); err != nil {
+				return status.Errorf(codes.Unavailable, "事件入队失败: %v", err)
+			}
+			received++
+			continue
+		}
 		ec := s.DB.Event.Create().
 			SetID(eventID).
 			SetTs(ts).

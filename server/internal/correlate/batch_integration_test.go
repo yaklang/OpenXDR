@@ -87,8 +87,7 @@ func TestCorrelateBatchGroupsByAsset(t *testing.T) {
 	}
 }
 
-// 批次内 byAsset 缓存：同批同资产直接命中内存 incident，不复查时间窗（见 batch 注释，
-// 这是防风暴的刻意取舍）。因此这里应是：asset A 两条合并 + asset B 独立 = 2 个 incident。
+// 同一批次也必须遵守时间窗；批次边界不能改变关联语义。
 func TestCorrelateBatchSeparates(t *testing.T) {
 	ctx, client := testdb.New(t)
 	now := time.Now()
@@ -113,7 +112,7 @@ func TestCorrelateBatchSeparates(t *testing.T) {
 	}
 
 	a1 := mk(now, "r-a", &assetA.ID, uuid.New())
-	a3 := mk(now.Add(time.Hour), "r-a2", &assetA.ID, uuid.New()) // 同资产、超窗 → 批内仍合并
+	a3 := mk(now.Add(time.Hour), "r-a2", &assetA.ID, uuid.New()) // 同资产但超窗 → 独立
 	b1 := mk(now, "r-b", &assetB.ID, uuid.New())                 // 不同资产 → 独立
 
 	eng := &Engine{
@@ -130,11 +129,11 @@ func TestCorrelateBatchSeparates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(incs) != 2 {
-		t.Fatalf("期待 2 个 incident（asset A 合并 + asset B），实际 %d", len(incs))
+	if len(incs) != 3 {
+		t.Fatalf("期待 3 个 incident（asset A 超窗拆分 + asset B），实际 %d", len(incs))
 	}
 
-	// asset A 的两条归同一个 incident；asset B 独立
+	// asset A 超窗拆开；asset B 也独立
 	getInc := func(id uuid.UUID) *uuid.UUID {
 		al, err := client.Alert.Get(ctx, id)
 		if err != nil {
@@ -145,8 +144,8 @@ func TestCorrelateBatchSeparates(t *testing.T) {
 	ia := getInc(a1.ID)
 	ia3 := getInc(a3.ID)
 	ib := getInc(b1.ID)
-	if ia == nil || *ia != *ia3 {
-		t.Errorf("asset A 两条告警应归同一 incident，ia=%v ia3=%v", ia, ia3)
+	if ia == nil || ia3 == nil || *ia == *ia3 {
+		t.Errorf("asset A 超窗告警必须拆分，ia=%v ia3=%v", ia, ia3)
 	}
 	if ib == nil || *ib == *ia {
 		t.Errorf("asset B 应独立于 asset A，ib=%v ia=%v", ib, ia)
@@ -178,7 +177,19 @@ func TestCorrelateBatchLineage(t *testing.T) {
 		SetEventID(evtA.ID).SetNillableAssetID(&asset.ID).Save(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// B：进程 B 的父是 A，现在（与 A 差 2 小时，超窗口）
+	eng := &Engine{
+		DB:            client,
+		Rules:         &sigma.Engine{},
+		Window:        30 * time.Minute,
+		MaxGraphNodes: 50,
+	}
+	// 首批：A 归入 incident1
+	if err := eng.batch(ctx); err != nil {
+		t.Fatalf("batch1 失败: %v", err)
+	}
+
+	// B：进程 B 的父是 A，现在（与 A 差 2 小时，超窗口）。A 已经在上一批
+	// 归属 incident，B 才能通过持久化的进程血缘找到它。
 	evtB, err := client.Event.Create().
 		SetTs(now).SetClassUID(1007).SetSource("agent").
 		SetProcessGUID(guidB).SetParentProcessGUID(guidA).
@@ -193,16 +204,6 @@ func TestCorrelateBatchLineage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eng := &Engine{
-		DB:            client,
-		Rules:         &sigma.Engine{},
-		Window:        30 * time.Minute,
-		MaxGraphNodes: 50,
-	}
-	// 首批：A 归入 incident1
-	if err := eng.batch(ctx); err != nil {
-		t.Fatalf("batch1 失败: %v", err)
-	}
 	// 次批：B 经血缘归入同 incident
 	if err := eng.batch(ctx); err != nil {
 		t.Fatalf("batch2 失败: %v", err)

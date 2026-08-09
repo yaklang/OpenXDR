@@ -27,24 +27,31 @@ const pendingPerAgent = 32
 type Hub struct {
 	DB      *ent.Client
 	Enabled bool
+	Router  Router
 
-	mu    sync.RWMutex
-	conns map[uuid.UUID]chan *pb.Command // agent_id -> 指令通道
+	mu          sync.RWMutex
+	conns       map[uuid.UUID]chan *pb.Command // agent_id -> 指令通道
+	routeDetach map[uuid.UUID]func()
 }
 
 func NewHub(db *ent.Client, enabled bool) *Hub {
 	if !enabled {
 		slog.Warn("响应能力未启用：RESPONSE_ENABLED 为 false，指令一律拒绝下发")
 	}
-	return &Hub{DB: db, Enabled: enabled, conns: map[uuid.UUID]chan *pb.Command{}}
+	return &Hub{DB: db, Enabled: enabled, conns: map[uuid.UUID]chan *pb.Command{}, routeDetach: map[uuid.UUID]func(){}}
 }
 
 // Online 报告某个 agent 当前是否挂着指令通道。
 func (h *Hub) Online(agentID uuid.UUID) bool {
 	h.mu.RLock()
-	defer h.mu.RUnlock()
 	_, ok := h.conns[agentID]
-	return ok
+	h.mu.RUnlock()
+	if ok || h.Router == nil {
+		return ok
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	return h.Router.Online(ctx, agentID)
 }
 
 // Attach 认领一个 agent 的指令通道。
@@ -55,7 +62,20 @@ func (h *Hub) Attach(agentID uuid.UUID) chan *pb.Command {
 	if old, ok := h.conns[agentID]; ok {
 		close(old)
 	}
+	if detach := h.routeDetach[agentID]; detach != nil {
+		detach()
+	}
 	h.conns[agentID] = ch
+	if h.Router != nil {
+		h.routeDetach[agentID] = h.Router.Attach(agentID, func(cmd *pb.Command) error {
+			select {
+			case ch <- cmd:
+				return nil
+			default:
+				return fmt.Errorf("agent 指令队列已满")
+			}
+		})
+	}
 	h.mu.Unlock()
 	return ch
 }
@@ -65,6 +85,10 @@ func (h *Hub) Detach(agentID uuid.UUID, ch chan *pb.Command) {
 	h.mu.Lock()
 	if cur, ok := h.conns[agentID]; ok && cur == ch {
 		delete(h.conns, agentID)
+		if detach := h.routeDetach[agentID]; detach != nil {
+			detach()
+			delete(h.routeDetach, agentID)
+		}
 	}
 	h.mu.Unlock()
 }
@@ -99,7 +123,13 @@ func (h *Hub) Issue(ctx context.Context, req Request) (*ent.Command, error) {
 	ch, online := h.conns[*a.AgentID]
 	h.mu.RUnlock()
 	if !online {
-		return h.finish(ctx, cmd.ID, "failed", "agent 未连接指令通道")
+		if h.Router == nil {
+			return h.finish(ctx, cmd.ID, "failed", "agent 未连接指令通道")
+		}
+		if err := h.Router.Deliver(ctx, *a.AgentID, req.toProto(cmd.ID)); err != nil {
+			return h.finish(ctx, cmd.ID, "failed", err.Error())
+		}
+		return h.mark(ctx, cmd.ID, "sent")
 	}
 
 	select {

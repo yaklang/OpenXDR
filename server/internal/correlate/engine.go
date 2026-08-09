@@ -62,8 +62,12 @@ func (e *Engine) batch(ctx context.Context) error {
 		return err
 	}
 
-	// 批内同资产的告警直接命中内存里的 incident，不用回查数据库
-	byAsset := map[uuid.UUID]*ent.Incident{}
+	// 批内同资产且仍在时间窗内的告警命中缓存；批次边界不能改变关联语义。
+	type cachedIncident struct {
+		incident *ent.Incident
+		lastTs   time.Time
+	}
+	byAsset := map[uuid.UUID]cachedIncident{}
 	graphs := map[uuid.UUID]*Graph{}
 	assign := map[uuid.UUID][]uuid.UUID{}
 	reopen := map[uuid.UUID]bool{}
@@ -84,8 +88,9 @@ func (e *Engine) batch(ctx context.Context) error {
 		var lateralFrom *ent.Asset
 		if found, err := e.findByLineage(ctx, al); err == nil {
 			inc = found
-		} else if cached, ok := byAsset[bucket]; ok {
-			inc = cached
+		} else if cached, ok := byAsset[bucket]; ok &&
+			!al.Ts.Before(cached.lastTs) && al.Ts.Sub(cached.lastTs) <= e.Window {
+			inc = cached.incident
 		} else if found, err := e.findOpen(ctx, al.AssetID, al.Ts.Add(-e.Window)); err == nil {
 			inc = found
 		} else if found, src, err := e.findByLateral(ctx, al); err == nil {
@@ -106,7 +111,7 @@ func (e *Engine) batch(ctx context.Context) error {
 				return err
 			}
 		}
-		byAsset[bucket] = inc
+		byAsset[bucket] = cachedIncident{incident: inc, lastTs: al.Ts}
 		// 已研判的 incident 收到新证据：重开，研判引擎会带新证据重新定性
 		if inc.Status == "triaged" {
 			reopen[inc.ID] = true
