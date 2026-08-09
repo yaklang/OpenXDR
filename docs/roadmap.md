@@ -3,11 +3,16 @@
 原则先行：**解决真实存在的问题，不为臆想的需求写代码。**
 每一项都要回答"谁会因为没有它而受伤"。回答不了的，进"不做"清单。
 
-## 现状快照（2026-08）
+## 现状快照（2026-08-09 更新）
 
-- **采集**：Linux 进程（eBPF/netlink/轮询三级降级 + exe SHA-256）、敏感文件
-  （inotify）；Windows 进程（ETW）；全流量探针（DNS/TLS/HTTP 元数据 + JA3）；syslog
-- **检测**：Sigma 引擎（热重载）16 条规则、四类 IOC 情报碰撞
+- **采集**：Linux 进程启停（eBPF/netlink/轮询三级降级 + username + exe SHA-256）、
+  敏感文件（fanotify FID 优先 / inotify 递归兜底，fanotify 路径带进程上下文）、
+  持久化点目录（systemd unit / cron / .ssh）、登录（wtmp/btmp）；Windows 进程启停
+  （ETW + Win7 PEB cmdline 兜底 + exe SHA-256）、文件监控（RDCW）、持久化点
+  （注册表 Run/Startup/服务/计划任务，删除带旧值）、登录（4624/4625 含失败原因码）；
+  全流量探针（DNS 含应答与 rcode、TLS、HTTP 元数据 + JA3/JA3S）；syslog
+- **检测**：Sigma 引擎（热重载）29 条规则、三类 IOC 情报碰撞（IP/域名/哈希；
+  TLS 指纹 JA3/JA3S 走哈希通道）
 - **降噪**：去重 → 抑制 → 关联（血缘/时间窗/横向移动）→ AI 研判 → 通知阈值
 - **响应**：结束进程、主机隔离（mTLS + 按主机绑定证书）
 - **运营**：概览漏斗、事件检索、规则/情报/抑制/资产/审计页、三角色 RBAC
@@ -15,7 +20,7 @@
 ## P0 —— 下一步就做
 
 **1. ~~Windows 采集对称性~~ ✅ 已完成。** 注册表 Run/RunOnce/Winlogon 与
-Startup 目录快照 diff。仍缺：服务与计划任务持久化点。
+Startup 目录快照 diff。~~仍缺：服务与计划任务持久化点~~ ✅ 已补齐（见附录 P1-6）。
 
 **2. ~~登录事件采集~~ ✅ 已完成。** Linux：wtmp/btmp 增量读；Windows：
 Security 日志 4624/4625 订阅（Security-Auditing 的 ETW provider 是受保护
@@ -103,6 +108,91 @@ proc connector 没有网络事件，为它单开轮询不值。
 
 ## 工程债（随手清）
 
-- sensor 侧尚无 JA3S / 服务端指纹
-- Windows ETW 采集无文件哈希（进程事件里补 exe SHA-256 需处理镜像路径转换）
+- ~~sensor 侧尚无 JA3S / 服务端指纹~~ ✅ 已完成（ServerHello→JA3S，入情报碰撞）
+- ~~Windows ETW 采集无文件哈希~~ ✅ 已完成（设备路径→Win32 路径转换后哈希生效）
 - 前端无移动端适配（SOC 大屏优先，低优）
+
+---
+
+## 附：后续工作详细规划（2026-08 代码核实版）
+
+以下规划基于对采集端与 server 全量代码的逐项核实（结论与证据见
+[docs/collection.md](collection.md) 与 [docs/events.md](events.md)），
+按"缺口严重度 × 工程成本"排序。**P0 与 P1 已全部完成**（2026-08-09，
+验证：cargo fmt/clippy/test、go build/vet/test、sigmacheck、detectcheck 全过）。
+
+### P0 —— 修正确性缺陷 ✅ 全部完成
+
+1. ~~补 Linux 进程事件 username~~ ✅ `mod.rs:185` `username_of`：/proc status
+   读 uid → /etc/passwd 解析（带缓存），eBPF/netlink 路径已接入。
+2. ~~修 eBPF 降级链~~ ✅ eBPF 失败 → netlink → 轮询逐级回落
+   （`linux.rs:39-51`）；`agent/Cargo.toml` 错误注释已修正。
+3. ~~Windows ETW 哈希路径转换~~ ✅ `windows.rs:95` `to_win32_path`
+   （QueryDosDeviceW 映射），exe SHA-256 真正生效。
+4. ~~persistwatch 删除告警~~ ✅ 注册表值与 Startup 文件删除均上报，
+   删除事件带旧值内容。
+5. ~~文档对齐代码~~ ✅ docs 文档系统重建（见 docs/README.md）。
+
+### P1 —— 补采集面缺口 ✅ 全部完成
+
+6. ~~Windows 服务与计划任务持久化点~~ ✅ `persistwatch.rs:130,179`：
+   服务快照（ImagePath+启动类型）与 Tasks 目录递归快照，增/改/删全报。
+7. ~~进程退出事件（双平台）~~ ✅ netlink `PROC_EVENT_EXIT`（含 exit_code）、
+   ETW Stop（ID 2）、轮询消失 pid、eBPF `sched_process_exit`；退出事件
+   复用启动 GUID（`mod.rs:230-251`）。
+8. ~~Windows 文件监控~~ ✅ 新模块 `fswatch_win.rs`（ReadDirectoryChangesW），
+   与 Linux fswatch 事件格式对齐，`collectFiles`/`fileWatchDirs` 在
+   Windows 侧有了消费者。
+9. ~~4625 字段补全~~ ✅ `authwatch_win.rs` 解析 Status/SubStatus →
+   `status_code`/`status_detail`。
+10. ~~sensor DNS 应答解析 + JA3S~~ ✅ `proto_id.rs`：压缩指针安全解析、
+    rcode、A/AAAA 应答（至多 4 个）、ServerHello→JA3S；proto 新增
+    `dns_rcode/dns_answers/ja3s`；应答 IP 与 JA3S 自动入情报碰撞。
+
+### P2 —— 结构性增强
+
+11. ~~Linux 持久化点扩展~~ ✅ fswatch 默认目录增加
+    `/etc/systemd/system`、`/var/spool/cron`、各用户 `.ssh`；inotify
+    递归化（限深 4 层，运行中动态补挂）。
+12. ~~文件事件带进程上下文~~ ✅ fanotify（FID 模式）优先路径：事件自带
+    pid → exe/comm/属主，无权限时干净回落 inotify（`fswatch.rs:70`）。
+13. **实机攻击验证环境（部分完成）**。2026-08-09 已在 Windows 开发机上
+    完成首轮实机冒烟（便携 PostgreSQL + server + release agent 全链路）：
+    进程启动/退出（含 cmdline、DOMAIN\user、sha256、退出复用启动 GUID）、
+    RDCW 文件增删改、Run 键/服务/计划任务的增删（删除带旧值）、4625
+    失败登录（status_code/status_detail）均按预期上事件，且 5 条新规则
+    在真实数据流上全部命中。**仍待做**：Linux 实机（fanotify/netlink EXIT/
+    eBPF 全路径）、Win7/2008R2 实机（PEB cmdline 兜底）、Atomic Red Team
+    脚本化回放为可重复的端到端验证。
+
+### 兼容性备忘（本轮顺带解决/确认）
+
+- Win7/2008R2：ETW cmdline 信息类要求 Win 8.1+，已加 PEB 读取兜底
+  （`windows.rs:235`）；Rust  MSVC 目标对 Win7 的运行支持需实机确认。
+- musl/32 位 Linux：authwatch 解析的 utmp 字段（type/line/user/host）偏移
+  在时间字段之前，musl 与 32 位布局相同，实际兼容（此前"会解析错误"的
+  担心不成立）。
+- CentOS 7 级老内核（3.10）：无 inet_sock_set_state（eBPF 网络采集降级）、
+  无 nftables（主机隔离失败）——维持现状，不为过老内核写兼容层。
+
+### 当前迭代收尾计划（2026-08-09 起，按序执行）
+
+P0/P1/P2 代码改动共 43 个文件尚未提交，收尾顺序：
+
+1. **Linux 编译验证（进行中）**：本轮 Linux-only 改动（netlink EXIT、
+   fswatch 804 行重写、linux.rs 降级链、eBPF exit 程序）尚未过编译器。
+   在 WSL2 Ubuntu 中装 Rust 工具链，跑 agent/sensor 的
+   `cargo build --locked && clippy -D warnings && test`，sensor 整 crate
+   一并验证（此前只跑过脚手架 crate）。
+2. **粗粒度分组提交 + CI 全绿**：按"proto+pb / 采集端 / server / 规则+语料 /
+   文档"粗分组提交（不拆碎）。CI 重点盯：Linux 构建、eBPF/xdp 特性构建、
+   Windows 交叉编译 clippy、集成测试。
+3. **实机验证收尾**：Linux 实机冒烟（fanotify 进程上下文 / netlink EXIT /
+   eBPF 全路径，断言清单对齐 Windows 冒烟）；Win7/2008R2 实机（PEB cmdline
+   兜底 + MSVC 二进制兼容性）；Atomic Red Team 脚本化回放（把 validation/
+   语料对应技术实机执行，验证采集可见性——detectcheck 只验证规则层）。
+
+### 维持"不做"的判断
+
+macOS agent（无 Mac 开发/CI 环境，写了也守不住编译）、Windows 端点网络采集
+（sensor 已覆盖，避免重复建设）、多租户、微服务拆分、存 PCAP、自研规则 DSL。

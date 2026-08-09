@@ -27,9 +27,11 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | POST | `/api/hunt` | 自然语言狩猎：`{"question"}` → `{answer, steps}`。模型用只读调查工具查证后作答，`steps` 是调用过的工具与参数，供复核。未配置 `AI_MODEL` 返回 503 |
 
 `GET /api/events` 参数：`from`/`to`（RFC3339，默认近 24h）、`assetId`、
-`classUid`（1007 进程 / 4001 网络 / 4003 DNS / 100001 日志）、
+`classUid`（1001 文件 / 1007 进程 / 3002 认证 / 4001 网络 / 4003 DNS /
+201002 注册表 / 100001 日志）、
 `source`（agent/sensor/syslog）、`q`（对事件体子串匹配，通配符按字面量处理）、
-`limit`（≤200，默认 100）。
+`limit`（≤200，默认 100）。各类事件的字段 schema 见
+[events.md](events.md)。
 
 ## 威胁情报
 
@@ -53,7 +55,7 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/commands?incidentId=` | 指令历史 |
-| POST | `/api/commands` | `{"kind":"kill_process\|isolate\|unisolate","assetId","incidentId","pid","dryRun"}` |
+| POST | `/api/commands` | `{"kind":"kill_process\|isolate_host\|unisolate_host","assetId","incidentId","pid","dryRun"}` |
 
 需 server 配置 `RESPONSE_ENABLED=true`；隔离要求 `ISOLATION_ALLOW` 包含 server
 的 gRPC 端点，否则 agent 拒绝执行。
@@ -64,7 +66,7 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 |---|---|---|
 | GET | `/api/assets` | 资产清单 |
 | GET | `/api/assets/{id}/config` | 该主机的采集配置 |
-| PUT | `/api/assets/{id}/config` | 设置采集配置：`{"fileWatchDirs":[...],"collectFiles":true,"collectAuth":true,"collectPersist":true}`。随 agent 下次注册（重连或重启）生效 |
+| PUT | `/api/assets/{id}/config` | 设置采集配置：`{"fileWatchDirs":[...],"collectFiles":true,"collectAuth":true,"collectPersist":true,"collectNetwork":true}`。随 agent 下次注册（重连或重启）生效。各开关的平台适用范围见 [collection.md](collection.md)（注意 `collectNetwork` 在 Windows 侧无消费者） |
 | GET | `/api/users` | 用户列表（admin） |
 | POST | `/api/users` | 建号：`{"username","password","role"}`（admin） |
 | POST | `/api/users/{id}/password` | 重置密码（admin） |

@@ -46,7 +46,7 @@
 | `schema/` | 统一事件 schema（基于 OCSF）与数据库 DDL |
 | `rules/` | 检测规则（Sigma 兼容） |
 | `validation/` | [检测验证语料](validation/README.md)：真实攻击命令回放过规则引擎，守住检测能力 |
-| `docs/` | 设计文档：[架构](docs/architecture.md) / [API 参考](docs/api.md) / [路线图](docs/roadmap.md) |
+| `docs/` | 设计文档：[文档索引](docs/README.md)（架构 / 采集端 / 事件模型 / 检测链路 / API / 路线图） |
 
 ## 快速开始
 
@@ -145,13 +145,15 @@ curl -X PUT http://localhost:8080/api/assets/<asset-id>/config \
 
 | 层次 | 方式 | 覆盖 | 前提 |
 |---|---|---|---|
-| 零环（可选） | Linux eBPF tracepoint | 全部 exec，内核直接给出路径 | `--features ebpf` + root |
-| 三环（默认） | Linux netlink proc connector | 全部 exec 通知，信息从 /proc 现补 | CAP_NET_ADMIN + 初始 pid 命名空间 |
-| 三环 | Windows ETW | 进程启动事件 | 管理员 |
+| 零环（可选） | Linux eBPF tracepoint | 全部 exec/exit，内核直接给出路径；TCP 出站连接 | `--features ebpf` + root |
+| 三环（默认） | Linux netlink proc connector | 全部 exec/exit 通知，信息从 /proc 现补 | CAP_NET_ADMIN + 初始 pid 命名空间 |
+| 三环 | Windows ETW | 进程启动与退出事件 | 管理员 |
 | 三环（兜底） | 进程表轮询 | 每秒快照，漏短命进程 | 无 |
-| 三环（并行） | Linux inotify | 敏感文件变更（cron、sudoers、SSH 密钥、预加载库等） | 无 |
-| 三环（并行） | Windows 快照 diff | 注册表自启动键（Run/RunOnce/Winlogon）与 Startup 目录 | 无 |
+| 三环（并行） | Linux fanotify / inotify | 敏感文件变更（cron、sudoers、SSH 密钥、systemd 单元等），fanotify 路径带进程上下文 | 无（fanotify 需 CAP_SYS_ADMIN，不足自动退 inotify） |
+| 三环（并行） | Windows ReadDirectoryChangesW | 敏感目录文件变更（drivers/etc、config 等） | 无 |
+| 三环（并行） | Windows 快照 diff | 注册表自启动键（Run/RunOnce/Winlogon）、Startup 目录、服务与计划任务 | 无 |
 | 三环（并行） | Linux wtmp/btmp | 登录成功与失败事件，认证可见性不依赖 syslog | 可读 /var/log/btmp |
+| 三环（并行） | Windows Security 日志 | 4624/4625 登录成功与失败（含状态码） | 管理员或 Event Log Readers |
 
 netlink 在**容器或 WSL2 里不可用**：proc connector 报的是初始 pid 命名空间的
 pid，在嵌套命名空间中对不上本地 /proc，采出来全是错 pid、空进程名的垃圾。
@@ -168,7 +170,7 @@ cargo build --release --features ebpf   # agent：Linux eBPF 采集
 cargo build --release --features xdp    # sensor：AF_XDP 后端
 ```
 
-不开这两个特性时，agent 走轮询采集、sensor 走 AF_PACKET，功能完整只是精度和吞吐低一些。
+不开这两个特性时，agent 走 netlink proc connector（失败再退轮询）、sensor 走 AF_PACKET，功能完整只是精度和吞吐低一些。
 
 ## 日志接入
 
