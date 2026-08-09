@@ -47,6 +47,16 @@ cases:
           path: "C:\\Windows\\System32\\wbem\\WMIC.exe"
         cmd_line: "wmic /node:10.0.0.8 process call create \"cmd.exe /c evil.exe\""
 
+  - name: wmic 远程创建进程（实机 ETW 带引号全路径形态）
+    technique: T1047
+    source: 实机回放 2026-08-09
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: WMIC.exe
+        cmd_line: '"C:\Windows\System32\wbem\WMIC.exe" /node:10.0.0.8 process call create "cmd.exe /c evil.exe"'
+
   - name: schtasks 远程建计划任务
     technique: T1053.005
     source: atomic T1053.005
@@ -58,6 +68,16 @@ cases:
         file:
           path: "C:\\Windows\\System32\\schtasks.exe"
         cmd_line: "schtasks /create /s 10.0.0.8 /tn atomic /tr C:\\evil.exe /sc onstart"
+
+  - name: schtasks 远程建计划任务（实机 ETW 带引号全路径形态）
+    technique: T1053.005
+    source: 实机回放 2026-08-09
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: schtasks.exe
+        cmd_line: '"C:\Windows\System32\schtasks.exe" /create /s 10.0.0.8 /tn atomic /tr C:\evil.exe /sc onstart'
 
   - name: 直接写计划任务文件（不落 schtasks 命令行）
     technique: T1053.005

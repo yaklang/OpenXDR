@@ -18,10 +18,17 @@ detection:
       - 'psexec'
       - 'psexesvc'
   wmic_remote:
-    CommandLine|contains: 'wmic /node:'
+    CommandLine|contains:
+      - 'wmic /node:'
+      # 实机 ETW 命令行是带引号全路径（"C:\...\WMIC.exe" /node:...），
+      # 裸名字匹配不到；/node: 是 wmic 远程的专有开关
+      - '/node:'
   remote_flag:
     CommandLine|contains:
       - 'schtasks /create /s '
-      - 'sc \\\\'
+      # 同上：带引号全路径形态按动作匹配
+      - '/create /s '
+      - 'sc \\'
+      - 'sc.exe" \\'
   condition: psexec or wmic_remote or remote_flag
 level: high

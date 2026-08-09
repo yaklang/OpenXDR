@@ -35,6 +35,16 @@ cases:
           path: "C:\\Windows\\System32\\reg.exe"
         cmd_line: 'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Atomic /t REG_SZ /d "C:\evil.exe" /f'
 
+  - name: reg.exe 写 Run 键（实机 ETW 带引号全路径形态）
+    technique: T1547.001
+    source: 实机回放 2026-08-09
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: reg.exe
+        cmd_line: '"C:\Windows\System32\reg.exe" add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Atomic /t REG_SZ /d "C:\evil.exe" /f'
+
   - name: 新服务安装（服务快照 diff 出的新增）
     technique: T1543.001
     source: atomic T1543.001
