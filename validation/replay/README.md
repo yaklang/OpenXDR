@@ -71,6 +71,35 @@ where ts > now() - interval '15 minutes' group by 1;
    （`win_remote_exec_lateral`、`win_reg_add_autostart`），语料补实机形态用例。
    教训与 vssadmin 一脉相承：**规则里写动作，别写命令名**。
 
+## 第二轮：AB 档采集扩充实机回放（2026-08-09）
+
+A/B 档 15 个采集项全部实机回放，验证环境同上（Win11 本机 + WSL2 Ubuntu）。
+
+**实机验证通过**：账户管理（4720/4726/4732）、审计策略变更（4719）、
+PowerShell 4104 脚本块（FromBase64String 内容进 cmd_line）、IFEO 劫持
+（建/删）、COM 劫持（建/删）、WMI 订阅持久化（建/删/系统项改）、ETW
+Kernel-Network 网络进程归属（curl 出站 4001 带 GUID）、at 任务文件、
+shell rc 文件、内核模块加载/卸载（1005）。
+
+**实机命中规则（8 条）**：At Job Persistence、IFEO Debugger Hijack、
+Shell RC File Persistence、WMI Event Subscription Persistence、Linux Kernel
+Module Loaded、Windows Service Installed or Tampered、Windows Account
+Management、Suspicious PowerShell Script Block。
+
+**本机不可触发（环境限制，非代码问题）**：4648 显式凭据（本机 Server 服务
+未运行，net use 到不了认证层）、1102 日志清空（破坏性，不在开发机做）、
+Defender 排除项（第三方杀毒在管，Defender 未运行，Add-MpPreference 不落
+注册表）、EventLog 服务停止（受保护服务）。
+
+**这轮回放的三条教训**：
+1. Remove-WmiObject 没有 -Filter 参数——删除要写
+   `Get-WmiObject ... | Remove-WmiObject`，回放脚本里写错会留下残留实例
+   污染后续快照基线。
+2. 快照类采集（persistwatch 30s / kmodwatch 30s）回放时建删之间必须留
+   ≥35s，否则中间态被跳过（与第一轮 persistwatch 教训同型）。
+3. 监控目录在 agent 启动后新建的（如 /var/spool/at），当前不会被补盯
+   ——已知边界，回放时先建目录再起 agent。
+
 ## 已知边界
 
 - agent 异常退出会泄漏 ETW 会话（`logman query -ets` 里的 `n4r1b-trace-*`），

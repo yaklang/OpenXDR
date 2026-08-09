@@ -62,3 +62,26 @@ rm -f /etc/systemd/system/atomic.service /etc/cron.d/atomic-persist /etc/ld.so.p
 rm -f /root/.ssh/authorized_keys /home/user/.ssh/authorized_keys
 
 mark '回放完成'
+
+# ---- AB 档新采集项（2026-08-09 第二轮）----
+# 注意：/var/spool/at 若不存在要先建目录并重启 agent（启动后新建的目录不会被补盯）；
+#       kmodwatch 是 30s 快照 diff，模块要保持加载 35s 以上
+
+mark 'T1053.001 at 任务文件'
+mkdir -p /var/spool/at
+echo '/bin/evil' > /var/spool/at/atomic.at
+sleep 3
+rm -f /var/spool/at/atomic.at
+
+mark 'T1546.004 shell rc 追加'
+echo 'alias ll="ls -la" # atomic-test' >> /root/.bashrc
+sleep 2
+sed -i '/atomic-test/d' /root/.bashrc
+
+mark 'T1547.006 内核模块加载（保持 35s）/卸载'
+modprobe dummy 2>/dev/null || echo 'modprobe dummy 不可用，跳过'
+sleep 35
+modprobe -r dummy 2>/dev/null
+sleep 35
+
+mark 'AB 档回放完成'
