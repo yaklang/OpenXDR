@@ -177,6 +177,18 @@ func kindToProto(kind string) pb.CommandKind {
 	return Kinds[kind]
 }
 
+// resultStatus 把上报的 proto 状态归一成库里的取值；未知状态一律按 failed 处理。
+func resultStatus(st pb.CommandResult_Status) string {
+	if s, ok := map[pb.CommandResult_Status]string{
+		pb.CommandResult_SUCCEEDED:   "succeeded",
+		pb.CommandResult_FAILED:      "failed",
+		pb.CommandResult_UNSUPPORTED: "unsupported",
+	}[st]; ok {
+		return s
+	}
+	return "failed"
+}
+
 func (h *Hub) mark(ctx context.Context, id uuid.UUID, status string) (*ent.Command, error) {
 	return h.DB.Command.UpdateOneID(id).SetStatus(status).Save(ctx)
 }
@@ -212,14 +224,7 @@ func (h *Hub) Complete(ctx context.Context, res *pb.CommandResult) {
 	if err != nil {
 		return
 	}
-	status := map[pb.CommandResult_Status]string{
-		pb.CommandResult_SUCCEEDED:   "succeeded",
-		pb.CommandResult_FAILED:      "failed",
-		pb.CommandResult_UNSUPPORTED: "unsupported",
-	}[res.Status]
-	if status == "" {
-		status = "failed"
-	}
+	status := resultStatus(res.Status)
 	if _, err := h.finish(ctx, id, status, res.Detail); err != nil {
 		slog.Warn("回写指令结果失败", "command", id, "err", err)
 	} else {

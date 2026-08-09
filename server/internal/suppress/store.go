@@ -87,11 +87,18 @@ func (s *Store) Suppressed(ruleID string, assetID *uuid.UUID, now time.Time) boo
 	s.mu.RLock()
 	entries := s.byRule[ruleID]
 	s.mu.RUnlock()
-	if len(entries) == 0 {
-		return false
+	if id := matchRule(entries, assetID, now); id != nil {
+		s.hit(*id, now)
+		return true
 	}
+	return false
+}
 
-	for _, e := range entries {
+// matchRule 返回 entries 里第一条对给定资产/时间有效的抑制规则 id；
+// 过期或资产不匹配的条目跳过，全部不成立则返回 nil。
+func matchRule(entries []entry, assetID *uuid.UUID, now time.Time) *uuid.UUID {
+	for i := range entries {
+		e := &entries[i]
 		if e.expires != nil && now.After(*e.expires) {
 			continue
 		}
@@ -99,10 +106,9 @@ func (s *Store) Suppressed(ruleID string, assetID *uuid.UUID, now time.Time) boo
 		if e.assetID != nil && (assetID == nil || *e.assetID != *assetID) {
 			continue
 		}
-		s.hit(e.id, now)
-		return true
+		return &e.id
 	}
-	return false
+	return nil
 }
 
 func (s *Store) hit(id uuid.UUID, now time.Time) {
