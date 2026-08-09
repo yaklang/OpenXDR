@@ -197,7 +197,11 @@ mod inspect {
     /// 先走 ProcessCommandLineInformation（Win 8.1+，一步到位）；
     /// 老系统（Win7/2008R2）该信息类直接报错，回落到 PEB 路径。
     fn command_line(handle: HANDLE) -> Option<String> {
-        command_line_nt(handle).or_else(|| command_line_peb(handle))
+        // 两条路径拿到的 UNICODE_STRING 长度都可能计入结尾 NUL，
+        // 带着 \u0000 的 JSON 会被 Postgres jsonb 拒收（22P05），剥掉
+        command_line_nt(handle)
+            .or_else(|| command_line_peb(handle))
+            .map(|s| s.trim_end_matches('\0').to_string())
     }
 
     /// NtQueryInformationProcess 直接返回命令行，不必手动摸 PEB。

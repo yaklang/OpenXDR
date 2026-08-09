@@ -198,7 +198,7 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 			SetClassUID(int(ev.ClassUid)).
 			SetSource("agent").
 			SetNillableAssetID(assetID).
-			SetRaw(raw)
+			SetRaw(sanitizeRawJSON(raw))
 		if pg, err := uuid.Parse(ev.ProcessGuid); err == nil {
 			ec.SetProcessGUID(pg)
 		}

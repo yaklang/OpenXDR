@@ -94,7 +94,7 @@ func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, deduper 
 			SetSource("sensor").
 			SetNillableAssetID(assetID).
 			SetConnTuple(connTuple(f)).
-			SetRaw(raw)
+			SetRaw(sanitizeRawJSON(raw))
 		eventCreates = append(eventCreates, ec)
 
 		for _, h := range intel.Detections(s.Rules.Evaluate(classUID, osByIP[f.SrcIp], rawMap), s.Intel.Match(rawMap, ts)) {

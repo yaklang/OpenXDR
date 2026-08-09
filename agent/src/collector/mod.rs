@@ -103,7 +103,8 @@ pub fn spawn(agent_id: String, cfg: Config) -> mpsc::Receiver<AgentEvent> {
     #[cfg(target_os = "linux")]
     if cfg.collect_files {
         match fswatch::spawn(agent_id_fs, sink_fs, &cfg.file_watch_dirs) {
-            Ok(n) => eprintln!("文件监控: inotify 盯 {n} 个敏感目录"),
+            // 具体走 fanotify 还是 inotify 由 fswatch 内部日志说明
+            Ok(_) => {}
             Err(e) => eprintln!("文件监控不可用（{e}）"),
         }
     }

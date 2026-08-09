@@ -355,7 +355,15 @@ fn fa_parse(buf: &[u8]) -> Vec<FaEvent<'_>> {
             }
             // fanotify_event_info_fid：hdr(4) + fsid(8) + handle_bytes(4)
             // + handle_type(4) + f_handle[handle_bytes] + name（可选，\0 结尾）
-            if info_type == libc::FAN_EVENT_INFO_TYPE_FID && len >= 20 {
+            // FID / DFID / DFID_NAME 三种 info_type 共用此布局，统一解析；
+            // 涉名事件（建/删/移动）内核发的是 DFID(_NAME)，句柄是父目录的。
+            // libc 尚未暴露后两个常量，按 linux/fanotify.h 的值定义
+            const FAN_EVENT_INFO_TYPE_DFID: u8 = 2;
+            const FAN_EVENT_INFO_TYPE_DFID_NAME: u8 = 3;
+            let is_fid_family = info_type == libc::FAN_EVENT_INFO_TYPE_FID
+                || info_type == FAN_EVENT_INFO_TYPE_DFID
+                || info_type == FAN_EVENT_INFO_TYPE_DFID_NAME;
+            if is_fid_family && len >= 20 {
                 let rec = &buf[ioff..ioff + len];
                 let fsid = (
                     i32::from_ne_bytes(rec[4..8].try_into().unwrap()),
@@ -394,7 +402,9 @@ fn fa_activity(mask: u64) -> u8 {
 }
 
 /// 按 fsid 找挂载点 fd：遍历 /proc/self/mountinfo，用 statfs 的 f_fsid 与
-/// 事件 fsid 对拍（man fanotify 示例的做法），命中后 O_PATH 打开并缓存。
+/// 事件 fsid 对拍（man fanotify 示例的做法），命中后打开并缓存。
+/// 注意必须 O_RDONLY：实测 WSL2 6.18 内核对 O_PATH 挂载 fd 的
+/// open_by_handle_at 一律 EBADF，O_RDONLY 则正常，且 O_RDONLY 全平台通用。
 fn mount_fd_for(mounts: &mut HashMap<(i32, i32), RawFd>, fsid: (i32, i32)) -> Option<RawFd> {
     if let Some(&fd) = mounts.get(&fsid) {
         return Some(fd);
@@ -424,7 +434,7 @@ fn mount_fd_for(mounts: &mut HashMap<(i32, i32), RawFd>, fsid: (i32, i32)) -> Op
         if (val[0], val[1]) != fsid {
             continue;
         }
-        let fd = unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+        let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
         if fd >= 0 {
             mounts.insert(fsid, fd);
             return Some(fd);
@@ -718,7 +728,8 @@ mod tests {
     }
 
     /// 按 fanotify_event_metadata + FID 信息记录的真实布局构造一条语料。
-    fn build_fid_event(
+    fn build_fid_event_typed(
+        info_type: u8,
         mask: u64,
         pid: i32,
         fsid: (i32, i32),
@@ -736,7 +747,7 @@ mod tests {
         b.extend_from_slice(&mask.to_ne_bytes());
         b.extend_from_slice(&(-1i32).to_ne_bytes()); // fd = FAN_NOFD
         b.extend_from_slice(&pid.to_ne_bytes());
-        b.push(libc::FAN_EVENT_INFO_TYPE_FID);
+        b.push(info_type);
         b.push(0); // pad
         b.extend_from_slice(&(info_len as u16).to_ne_bytes());
         b.extend_from_slice(&fsid.0.to_ne_bytes());
@@ -746,6 +757,28 @@ mod tests {
         b.extend_from_slice(handle);
         b.extend_from_slice(name_z.as_bytes());
         b
+    }
+
+    fn build_fid_event(
+        mask: u64,
+        pid: i32,
+        fsid: (i32, i32),
+        handle: &[u8],
+        name: &str,
+    ) -> Vec<u8> {
+        build_fid_event_typed(libc::FAN_EVENT_INFO_TYPE_FID, mask, pid, fsid, handle, name)
+    }
+
+    #[test]
+    fn fa_parse_accepts_dfid_and_dfid_name() {
+        // 涉名事件（建/删/移动）内核发 DFID_NAME：句柄是父目录的，name 是目录项名
+        for t in [2u8, 3u8] {
+            let buf = build_fid_event_typed(t, libc::FAN_CREATE, 7, (8, 1), &[1, 2], "x.sh");
+            let events = fa_parse(&buf);
+            assert_eq!(events.len(), 1, "info_type={t} 应解析出事件");
+            let fid = events[0].fid.as_ref().expect("DFID 家族应解析出句柄记录");
+            assert_eq!(fid.name, "x.sh");
+        }
     }
 
     #[test]
