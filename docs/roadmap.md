@@ -220,16 +220,14 @@ WMI 订阅/安全服务停止/内核模块/shell rc/at 任务），detectcheck 8
 归属（sensor 覆盖）、sudo 审计（进程 exec 已覆盖八成）、4672/5140/5145
 （噪声与优先级）、PCAP/浏览器历史/软件清单。
 
-### 可靠性与长期试运行（2026-08-09 第三轮）
+### 可靠性验证（2026-08-09 第三轮）
 
 - fanotify/inotify 每 5 秒补扫启动时不存在或删除后重建的目标根，
   `/var/spool/at` 真 Linux 实测建/改/删完整。
 - Sigma 热重载改用规则内容 SHA-256 指纹，并消除 watcher 启动竞态；等大小、
   等 mtime 覆盖写的真实漏重载形态已有回归测试。
-- pve1/pve2 的 eBPF 网络采集已长期接入独立 pilot；修复 SYN_SENT 源端口恒为 0，
-  现在用 socket 地址跨状态关联 PID，ESTABLISHED/CLOSE 上报真实五元组。
-- `openxdr-lab` 每小时落一次吞吐、告警、incident、活跃资产与存储指标。
-  先积累七天数据，再决定 events 时间分区和下一轮降噪，不凭空扩架构。
+- eBPF 网络采集修复 SYN_SENT 源端口恒为 0：现在用 socket 地址跨状态关联 PID，
+  ESTABLISHED/CLOSE 上报真实五元组。
 ### 增强池第 1 项：sensor TLS 证书元数据 ✅（2026-08-09 第四轮）
 
 被动解析 TLS 握手 Certificate 消息：服务端方向有界重组（16KB 上限）应对证书跨

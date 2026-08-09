@@ -119,20 +119,6 @@ Defender 排除项（第三方杀毒在管，Defender 未运行，Add-MpPreferen
   1005 事件和 Linux Kernel Module Loaded 规则均命中。
 - 回放结束后 agent/server/数据库、测试文件和内核模块全部撤销，无常驻产物。
 
-## 第四轮：eBPF 双机长期试运行（2026-08-09）
-
-在 pve2 创建独立 `openxdr-lab`（`192.0.2.10`），server 强制 mTLS，pve1/pve2
-使用按主机绑定证书常驻接入。两台均成功加载 eBPF 进程与
-`inet_sock_set_state` 网络采集。
-
-首轮实测发现 SYN_SENT tracepoint 的 `sport` 在 PVE 7.0 内核确实为 0。内核侧
-改为用 `skaddr` 暂存 SYN_SENT 的发起 PID，在 ESTABLISHED/CLOSE 再读取真实端口
-并上报；复测得到完整 `src_ip:ephemeral_port > dst_ip:port` 和进程 GUID。启动后
-创建 `/var/spool/at`，5 秒补扫后文件建/改/删均被 fanotify 捕获。
-
-pilot 每小时记录事件、告警、incident、活跃资产和数据库体积，作为是否需要时间
-分区及降噪效果的真实依据，详见 [pilot.md](../../docs/pilot.md)。
-
 ## 已知边界
 
 - agent 异常退出会泄漏 ETW 会话（`logman query -ets` 里的 `n4r1b-trace-*`），
