@@ -31,7 +31,8 @@
   启动时自动建表（`client.Schema.Create`），无手动迁移。
 - **web/**（React 19 + TypeScript + Vite）：管理控制台。nginx 容器部署，端口 5173→80。
 - **pages/**（React + Vite + Tailwind）：项目主页，仅由 `.github/workflows/pages.yml`
-  部署到 GitHub Pages，与产品代码无关，改产品时不要动它。
+  部署到 GitHub Pages，与产品代码无关，改产品时不要动它。主页中英文自动切换约定见
+  `pages/README.md`；改可见文案或无障碍文案时必须同时维护两种语言。
 - **proto/**：`agent.proto` / `sensor.proto`，gRPC 契约。Go 侧生成代码已提交在
   `server/pb/`；Rust 侧由 build.rs 在构建时用 `protoc-bin-vendored` 生成（无需装 protoc）。
 - **rules/**：Sigma 兼容检测规则（YAML）。Sigma `tags` 解析成 ATT&CK 战术/技术。

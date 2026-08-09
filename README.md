@@ -43,6 +43,7 @@
 | `sensor/` | Rust 全流量探针，部署在核心交换机镜像口。AF_PACKET v3 零拷贝抓包 + FANOUT 多核并行，出会话元数据（不存 PCAP） |
 | `server/` | Go 后端（Ent + PostgreSQL）：接入、规则引擎、关联引擎、AI 研判 |
 | `web/` | React 前端 |
+| `pages/` | [项目主页](pages/README.md)：React + Vite + Tailwind，支持按浏览器语言自动切换中英文，由 GitHub Pages 独立部署 |
 | `schema/` | 统一事件 schema（基于 OCSF）与数据库 DDL |
 | `rules/` | 检测规则（Sigma 兼容） |
 | `validation/` | [检测验证语料](validation/README.md)：真实攻击命令回放过规则引擎，守住检测能力 |
