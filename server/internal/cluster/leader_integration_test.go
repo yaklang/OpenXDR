@@ -5,6 +5,7 @@ package cluster
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -95,4 +96,81 @@ func TestRunLeaderSingleActive(t *testing.T) {
 	// 收尾：B 退出并释放锁。
 	cancelB()
 	<-doneB
+}
+
+// WithLock 用 advisory lock 包住一段短事务：fn 执行、错误传播、锁名隔离。
+func TestWithLockRunsAndPropagatesError(t *testing.T) {
+	db := openDB(t)
+	ctx := context.Background()
+
+	ran := false
+	err := WithLock(ctx, db, "test-tx", func() error {
+		ran = true
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ran {
+		t.Error("fn 应被执行")
+	}
+
+	// 错误传播
+	sentinel := errors.New("boom")
+	if err := WithLock(ctx, db, "test-tx", func() error { return sentinel }); err != sentinel {
+		t.Errorf("错误应原样传播，得到 %v", err)
+	}
+
+	// 不同锁名互不阻塞，可交错进入
+	seq := make(chan string, 2)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = WithLock(ctx, db, "lock-a", func() error { seq <- "a"; return nil })
+	}()
+	_ = WithLock(ctx, db, "lock-b", func() error { seq <- "b"; return nil })
+	<-done
+	if got := <-seq; got != "b" {
+		t.Errorf("不同锁名应并发执行，期望 b 先返回，实际 %s", got)
+	}
+}
+
+// 两个 WithLock 同名时串行：一个完成前另一个不能进入。
+func TestWithLockSerializesSameName(t *testing.T) {
+	db := openDB(t)
+	ctx := context.Background()
+
+	inside := make(chan struct{})
+	release := make(chan struct{})
+	blocked := make(chan struct{})
+
+	go func() {
+		_ = WithLock(ctx, db, "serial", func() error {
+			close(inside)
+			<-release // 持锁等待
+			return nil
+		})
+	}()
+
+	<-inside // 第一个已持锁
+	entered := false
+	go func() {
+		_ = WithLock(ctx, db, "serial", func() error {
+			entered = true
+			close(blocked)
+			return nil
+		})
+	}()
+
+	// 第二个不应进入（被阻塞），给一点时间确认
+	select {
+	case <-blocked:
+		t.Error("同名锁未串行：第一个持锁时第二个不该进入")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	<-blocked // 释放后第二个进入并完成
+	if !entered {
+		t.Error("释放后第二个应能进入")
+	}
 }
