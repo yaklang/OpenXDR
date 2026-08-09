@@ -1,0 +1,8 @@
+[Unit]
+Description=采集 OpenXDR 试运行指标
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/openxdr/deploy/pilot/collect-metrics.sh

@@ -1,0 +1,10 @@
+[Unit]
+Description=每小时采集 OpenXDR 试运行指标
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

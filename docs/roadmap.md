@@ -35,7 +35,7 @@ Security 日志 4624/4625 订阅（Security-Auditing 的 ETW provider 是受保�
 
 **4. 检测面对拍验证 —— 合成回放 ✅ 已完成，实机待环境。**
 
-`validation/` 语料 + `cmd/detectcheck`：50 个用例取自 Atomic Red Team 的真实
+`validation/` 语料 + `cmd/detectcheck`：88 个用例取自 Atomic Red Team 的真实
 命令行，回放过引擎，判定标准是"命中的规则必须标了该技术"。已进 CI。
 
 第一次跑出 14 个问题，全部修完，其中值得记住的三类：
@@ -51,7 +51,7 @@ Security 日志 4624/4625 订阅（Security-Auditing 的 ETW provider 是受保�
 
 ## P1 —— 看得见的价值
 
-**5. ~~MITRE ATT&CK 映射~~ ✅ 已完成。** 引擎解析 Sigma tags，21 条规则
+**5. ~~MITRE ATT&CK 映射~~ ✅ 已完成。** 引擎解析 Sigma tags，40 条规则
 全部打标，`/api/attack` 出覆盖矩阵（含"有规则但无数据源"的差额）。
 
 矩阵第一次跑出来就暴露了缺口，已补三条（删卷影 T1490、远程执行 T1021.002、
@@ -177,20 +177,20 @@ proc connector 没有网络事件，为它单开轮询不值。
 - CentOS 7 级老内核（3.10）：无 inet_sock_set_state（eBPF 网络采集降级）、
   无 nftables（主机隔离失败）——维持现状，不为过老内核写兼容层。
 
-### 当前迭代收尾计划（2026-08-09 起，按序执行）
+### 当前迭代收尾记录（2026-08-09）
 
-P0/P1/P2 代码改动共 43 个文件尚未提交，收尾顺序：
+P0/P1/P2 代码改动按以下顺序完成收口：
 
 1. ~~**Linux 编译验证**~~ ✅ 已完成（WSL2 Ubuntu 26.04）：agent/sensor 默认
    特性 build+clippy(-D warnings)+test 全绿（37+46 测试），ebpf/xdp 特性
-   构建通过。43 文件已按 5 组粗粒度提交（本地，待仓库权限后推 origin）。
+   构建通过，相关改动已分组提交并推送。
 2. ~~**双平台实机回放**~~ ✅ 首轮完成：抓到 4 个真缺陷并修复
    （见上条与 [validation/replay](../validation/replay/README.md)），
    回放脚本与验证矩阵已固化进仓库。
 3. **实机验证收尾**：~~真 Linux 机器（netlink EXIT、fanotify 在真内核复测、
    进程类规则实机命中）~~ ✅ 已在两台 PVE 7.0 内核宿主机完成；仍需
-   Win7/2008R2 实机（PEB cmdline 兜底 + MSVC 二进制兼容性）；回放矩阵按
-   新环境持续补格子。
+   Win7/2008R2 实机（PEB cmdline 兜底 + MSVC 二进制兼容性）；当前无环境，
+   不纳入本轮完成条件，后续有机器时再补。
 
 ### 采集缺口综合规划（2026-08-09 第二轮，A/B 档全量完成）
 
@@ -219,6 +219,17 @@ WMI 订阅/安全服务停止/内核模块/shell rc/at 任务），detectcheck 8
 **C 档（已知缺口，明确不做）**：进程注入（T1055，需 PPL/驱动）、端点 DNS
 归属（sensor 覆盖）、sudo 审计（进程 exec 已覆盖八成）、4672/5140/5145
 （噪声与优先级）、PCAP/浏览器历史/软件清单。
+
+### 可靠性与长期试运行（2026-08-09 第三轮）
+
+- fanotify/inotify 每 5 秒补扫启动时不存在或删除后重建的目标根，
+  `/var/spool/at` 真 Linux 实测建/改/删完整。
+- Sigma 热重载改用规则内容 SHA-256 指纹，并消除 watcher 启动竞态；等大小、
+  等 mtime 覆盖写的真实漏重载形态已有回归测试。
+- pve1/pve2 的 eBPF 网络采集已长期接入独立 pilot；修复 SYN_SENT 源端口恒为 0，
+  现在用 socket 地址跨状态关联 PID，ESTABLISHED/CLOSE 上报真实五元组。
+- `openxdr-lab` 每小时落一次吞吐、告警、incident、活跃资产与存储指标。
+  先积累七天数据，再决定 events 时间分区和下一轮降噪，不凭空扩架构。
 
 ### 维持"不做"的判断
 

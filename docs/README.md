@@ -18,6 +18,7 @@
 | [detection.md](detection.md) | 检测与降噪链路：Sigma 引擎、情报、去重、抑制、爆破升级、关联、UEBA、AI 研判、响应处置、通知、清理 | 改 `server/internal/` 任何检测相关包 |
 | [api.md](api.md) | REST API 参考：端点、参数、权限约定、对接示例 | 对接外部系统；改 `server/internal/api` |
 | [roadmap.md](roadmap.md) | 路线图：现状快照、已完成项的教训、后续工作详细规划（P0/P1/P2）、不做清单 | 决定"接下来做什么"之前 |
+| [pilot.md](pilot.md) | 内网长期试运行部署、验收与指标口径 | 验证真实事件量、降噪效果和存储增长时 |
 
 ## 推荐阅读顺序
 

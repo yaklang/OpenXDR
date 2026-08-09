@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenXDR endpoint agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/openxdr/agent.env
+ExecStart=/usr/local/bin/openxdr-agent
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -3,7 +3,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: openxdr
-      POSTGRES_PASSWORD: openxdr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openxdr}
       POSTGRES_DB: openxdr
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -16,11 +16,13 @@ services:
     build:
       context: .
       dockerfile: server/Dockerfile
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://openxdr:openxdr@postgres:5432/openxdr?sslmode=disable
+      DATABASE_URL: postgres://openxdr:${POSTGRES_PASSWORD:-openxdr}@postgres:5432/openxdr?sslmode=disable
       RULES_PATH: /rules
       # AI 研判：留空则不启用。接本地 Ollama 时用 host.docker.internal
       AI_BASE_URL: ${AI_BASE_URL:-http://host.docker.internal:11434/v1}
@@ -46,8 +48,13 @@ services:
       AUTO_RESPONSE_EXEMPT: ${AUTO_RESPONSE_EXEMPT:-}
       # 原始事件保留天数
       RETENTION_DAYS: ${RETENTION_DAYS:-30}
+      # 生产采集端必须使用 mTLS；三项同时设置才启用
+      TLS_CA_FILE: ${TLS_CA_FILE:-}
+      TLS_CERT_FILE: ${TLS_CERT_FILE:-}
+      TLS_KEY_FILE: ${TLS_KEY_FILE:-}
     volumes:
       - ./rules:/rules:ro
+      - ./certs:/certs:ro
     ports:
       - "8080:8080"   # REST API
       - "8081:8081"   # gRPC：agent / sensor 接入
@@ -55,7 +62,10 @@ services:
       - "host.docker.internal:host-gateway"
 
   web:
-    build: ./web
+    build:
+      context: ./web
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     depends_on:
       - server
     ports:
