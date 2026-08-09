@@ -156,14 +156,15 @@ proc connector 没有网络事件，为它单开轮询不值。
     递归化（限深 4 层，运行中动态补挂）。
 12. ~~文件事件带进程上下文~~ ✅ fanotify（FID 模式）优先路径：事件自带
     pid → exe/comm/属主，无权限时干净回落 inotify（`fswatch.rs:70`）。
-13. **实机攻击验证环境（部分完成）**。2026-08-09 已在 Windows 开发机上
-    完成首轮实机冒烟（便携 PostgreSQL + server + release agent 全链路）：
-    进程启动/退出（含 cmdline、DOMAIN\user、sha256、退出复用启动 GUID）、
-    RDCW 文件增删改、Run 键/服务/计划任务的增删（删除带旧值）、4625
-    失败登录（status_code/status_detail）均按预期上事件，且 5 条新规则
-    在真实数据流上全部命中。**仍待做**：Linux 实机（fanotify/netlink EXIT/
-    eBPF 全路径）、Win7/2008R2 实机（PEB cmdline 兜底）、Atomic Red Team
-    脚本化回放为可重复的端到端验证。
+13. **实机攻击验证环境（双平台首轮完成）**。2026-08-09 Windows 冒烟 +
+    Windows/WSL2 双语料实机回放（脚本与验证矩阵固化在
+    [validation/replay/](../validation/replay/README.md)）。Windows：
+    进程启停带 cmdline、持久化点增删带旧值、8 条规则实机命中、良性对照
+    零误报。WSL2：fanotify 文件事件全生命周期带肇事进程、eBPF 出站捕获、
+    3 条规则实机命中。回放抓到 4 个合成对拍抓不到的真缺陷，全部当天修复
+    （fanotify O_PATH/DFID、NUL 事件毒化管道、规则裸名匹配不到实机
+    带引号全路径 cmdline）。**仍待做**：真 Linux 机器（netlink EXIT、
+    进程类规则实机命中——WSL2 轮询兜底验证不了）、Win7/2008R2 实机。
 
 ### 兼容性备忘（本轮顺带解决/确认）
 
@@ -179,18 +180,15 @@ proc connector 没有网络事件，为它单开轮询不值。
 
 P0/P1/P2 代码改动共 43 个文件尚未提交，收尾顺序：
 
-1. **Linux 编译验证（进行中）**：本轮 Linux-only 改动（netlink EXIT、
-   fswatch 804 行重写、linux.rs 降级链、eBPF exit 程序）尚未过编译器。
-   在 WSL2 Ubuntu 中装 Rust 工具链，跑 agent/sensor 的
-   `cargo build --locked && clippy -D warnings && test`，sensor 整 crate
-   一并验证（此前只跑过脚手架 crate）。
-2. **粗粒度分组提交 + CI 全绿**：按"proto+pb / 采集端 / server / 规则+语料 /
-   文档"粗分组提交（不拆碎）。CI 重点盯：Linux 构建、eBPF/xdp 特性构建、
-   Windows 交叉编译 clippy、集成测试。
-3. **实机验证收尾**：Linux 实机冒烟（fanotify 进程上下文 / netlink EXIT /
-   eBPF 全路径，断言清单对齐 Windows 冒烟）；Win7/2008R2 实机（PEB cmdline
-   兜底 + MSVC 二进制兼容性）；Atomic Red Team 脚本化回放（把 validation/
-   语料对应技术实机执行，验证采集可见性——detectcheck 只验证规则层）。
+1. ~~**Linux 编译验证**~~ ✅ 已完成（WSL2 Ubuntu 26.04）：agent/sensor 默认
+   特性 build+clippy(-D warnings)+test 全绿（37+46 测试），ebpf/xdp 特性
+   构建通过。43 文件已按 5 组粗粒度提交（本地，待仓库权限后推 origin）。
+2. ~~**双平台实机回放**~~ ✅ 首轮完成：抓到 4 个真缺陷并修复
+   （见上条与 [validation/replay](../validation/replay/README.md)），
+   回放脚本与验证矩阵已固化进仓库。
+3. **实机验证收尾**：真 Linux 机器（netlink EXIT、fanotify 在真内核复测、
+   进程类规则实机命中）；Win7/2008R2 实机（PEB cmdline 兜底 + MSVC
+   二进制兼容性）；回放矩阵按新环境持续补格子。
 
 ### 维持"不做"的判断
 

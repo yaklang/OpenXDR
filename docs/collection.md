@@ -80,7 +80,9 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
   也不产假数据（`netlink.rs:32-58`）。eBPF 路径**无**此检测
 - **短命进程**：eBPF/netlink 在事件路径上从 /proc 补全 cmdline/ppid，进程已退场
   就只报 pid、字段留空，事件本身不丢（`linux.rs`、`netlink.rs:148-167`）；
-  轮询路径明确会漏 1 秒内启动又退出的进程（`poll.rs`）
+  轮询路径明确会漏 1 秒内启动又退出的进程（`poll.rs`），且 WSL2 实测
+  捕到的短命进程多为空 cmdline"鬼影"（扫描间隔内进程已退场，/proc 读不到）——
+  轮询兜底下进程类规则基本无法命中，这是环境性降级，不是规则问题
 - **进程退出事件**（activity_id=2 Terminate）：netlink 解析 `PROC_EVENT_EXIT`
   （含 exit_code，`netlink.rs:24,139`）；轮询 diff 消失的 pid；eBPF 挂
   `sched_process_exit`。退出事件复用启动时的进程 GUID（见上节）
@@ -94,7 +96,12 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
   （`FAN_REPORT_FID|FAN_REPORT_DIR_FID|FAN_REPORT_NAME`）递归打标，
   覆盖建/删/改/移动；**事件自带 pid**——读 `/proc/<pid>/exe`、`/proc/<pid>/comm`
   与 `username_of(pid)`，文件事件带进程上下文（"谁改的"）。路径经
-  mountinfo + `open_by_handle_at` 解析（`fswatch.rs:70` `spawn`）
+  mountinfo + `open_by_handle_at` 解析（`fswatch.rs:70` `spawn`）。
+  两个实机勘定（2026-08-09 WSL2 回放）：挂载 fd 必须 O_RDONLY 打开
+  （O_PATH 在 WSL2 6.18 内核下 open_by_handle_at 一律 EBADF，
+  `fswatch.rs` `mount_fd_for`）；建/删/移动事件内核发的是
+  DFID/DFID_NAME 信息记录（父目录句柄+目录项名），与 FID 同布局，
+  `fa_parse` 三种类型统一解析
 - **inotify 路径**（fanotify 不可用时干净回落）：启动时递归 add_watch
   （限深 `MAX_DEPTH=4`，防大目录 watch 爆炸），运行中 `IN_CREATE|IN_ISDIR`
   动态补挂新子目录；无进程上下文（inotify 不提供）（`fswatch.rs:31,164`）

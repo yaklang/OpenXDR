@@ -132,7 +132,8 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
 - Web：无单测，靠 `tsc` 类型检查 + oxlint + 构建把关。
 - 检测能力回归：`validation/` 语料 + `cmd/detectcheck` 是核心防线——验证规则
   能抓住 Atomic Red Team 实际执行的命令，且命中规则的 ATT&CK 标注必须与技术一致。
-  它不验证采集端可见性（那要实机跑 Atomic Red Team）。
+  它不验证采集端可见性——那是 `validation/replay/` 的实机回放（双语料脚本 +
+  各系统×采集路径验证矩阵），改采集端或规则后应按矩阵补验对应格子。
 
 ## 安全注意事项
 
