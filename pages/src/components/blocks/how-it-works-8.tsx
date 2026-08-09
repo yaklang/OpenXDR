@@ -2,13 +2,14 @@
 
 import { Check, MoveRight } from "lucide-react";
 import { motion, useReducedMotion, type Variants } from "motion/react";
+import { useLocale } from "@/i18n";
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
 const sources = [
-  { code: "ED", name: "Endpoint", meta: "process + file", state: "Streaming" },
-  { code: "NW", name: "Network", meta: "flow + protocol", state: "Streaming" },
-  { code: "LG", name: "Logs", meta: "identity + cloud", state: "Streaming" },
+  { code: "ED", en: ["Endpoint", "process + file"], zh: ["端点", "进程 + 文件"] },
+  { code: "NW", en: ["Network", "flow + protocol"], zh: ["网络", "流量 + 协议"] },
+  { code: "LG", en: ["Logs", "identity + cloud"], zh: ["日志", "身份 + 云"] },
 ];
 
 const mappings = [
@@ -17,16 +18,16 @@ const mappings = [
   ["user", "actor.user.name"],
 ];
 
-const syncStats = [
-  ["Evidence joined", "process + flow + identity"],
-  ["Noise gates", "dedupe → suppress → correlate"],
-  ["Agent handoff", "incident graph"],
-];
-
 function SourcesVisual() {
+  const locale = useLocale();
+  const streaming = locale === "zh-CN" ? "采集中" : "Streaming";
+  const localizedSources = sources.map((source) => {
+    const [name, meta] = locale === "zh-CN" ? source.zh : source.en;
+    return { ...source, name, meta };
+  });
   return (
     <div className="flex h-full flex-col justify-center gap-2.5">
-      {sources.map((source) => (
+      {localizedSources.map((source) => (
         <div
           key={source.code}
           className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-3.5 py-2.5 dark:border-neutral-800 dark:bg-neutral-950"
@@ -45,7 +46,7 @@ function SourcesVisual() {
           </span>
           <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-neutral-100 px-2.5 py-1 text-[11px] font-medium text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
             <Check className="h-3 w-3" />
-            {source.state}
+            {streaming}
           </span>
         </div>
       ))}
@@ -75,16 +76,29 @@ function MappingVisual() {
 }
 
 function SyncVisual() {
+  const locale = useLocale();
   const reduce = useReducedMotion();
+  const syncStats =
+    locale === "zh-CN"
+      ? [
+          ["证据汇聚", "进程 + 流量 + 身份"],
+          ["降噪关卡", "去重 → 抑制 → 关联"],
+          ["Agent 交接", "事件图"],
+        ]
+      : [
+          ["Evidence joined", "process + flow + identity"],
+          ["Noise gates", "dedupe → suppress → correlate"],
+          ["Agent handoff", "incident graph"],
+        ];
   return (
     <div className="flex h-full flex-col justify-center gap-3">
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium text-neutral-900 dark:text-white">
-          Correlation loop
+          {locale === "zh-CN" ? "关联循环" : "Correlation loop"}
         </span>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 py-1 text-[11px] font-medium text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
-          Live
+          {locale === "zh-CN" ? "实时" : "Live"}
         </span>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
@@ -113,26 +127,55 @@ function SyncVisual() {
   );
 }
 
-const steps = [
-  {
-    title: "Collect without blocking",
-    copy: "Bulk telemetry can queue and recover through the data channel. Heartbeats, policy, and response commands stay on a separate low-latency control path.",
-    visual: SourcesVisual,
-  },
-  {
-    title: "Normalize at the boundary",
-    copy: "Collectors keep native detail while the server aligns assets, users, processes, files, and network endpoints into a shared OCSF-style model.",
-    visual: MappingVisual,
-  },
-  {
-    title: "Correlate before AI",
-    copy: "Rules, intelligence, suppression, and entity correlation reduce the stream first. AI investigates the surviving incident with its evidence attached.",
-    visual: SyncVisual,
-  },
-];
-
 export function HowItWorks8() {
+  const locale = useLocale();
   const reduce = useReducedMotion();
+  const copy =
+    locale === "zh-CN"
+      ? {
+          heading: "从原始遥测到可解释事件。",
+          description:
+            "核心处理链是确定且可检查的。证据完成归一化、去重与关联后，AI 才会介入。",
+          steps: [
+            {
+              title: "采集不阻塞",
+              copy: "大批量遥测数据可在数据通道中排队与恢复。心跳、策略和响应命令使用独立的低延迟控制通道。",
+              visual: SourcesVisual,
+            },
+            {
+              title: "在边界完成归一化",
+              copy: "采集器保留原生细节，服务端则将资产、用户、进程、文件和网络端点对齐到共享的 OCSF 风格模型。",
+              visual: MappingVisual,
+            },
+            {
+              title: "先关联，再交给 AI",
+              copy: "规则、情报、抑制与实体关联先压缩数据流。AI 只调查携带完整证据的剩余事件。",
+              visual: SyncVisual,
+            },
+          ],
+        }
+      : {
+          heading: "From raw telemetry to an explainable incident.",
+          description:
+            "The hot path is deterministic and inspectable. AI enters only after evidence has been normalized, deduplicated, and linked.",
+          steps: [
+            {
+              title: "Collect without blocking",
+              copy: "Bulk telemetry can queue and recover through the data channel. Heartbeats, policy, and response commands stay on a separate low-latency control path.",
+              visual: SourcesVisual,
+            },
+            {
+              title: "Normalize at the boundary",
+              copy: "Collectors keep native detail while the server aligns assets, users, processes, files, and network endpoints into a shared OCSF-style model.",
+              visual: MappingVisual,
+            },
+            {
+              title: "Correlate before AI",
+              copy: "Rules, intelligence, suppression, and entity correlation reduce the stream first. AI investigates the surviving incident with its evidence attached.",
+              visual: SyncVisual,
+            },
+          ],
+        };
 
   const container: Variants = {
     hidden: {},
@@ -166,11 +209,10 @@ export function HowItWorks8() {
             id="hiw8-heading"
             className="text-3xl font-medium leading-[1.1] tracking-tight text-neutral-900 text-balance dark:text-white sm:text-4xl lg:text-5xl"
           >
-            From raw telemetry to an explainable incident.
+            {copy.heading}
           </h2>
           <p className="mx-auto mt-5 max-w-xl text-base leading-relaxed text-neutral-600 dark:text-neutral-400 sm:text-lg">
-            The hot path is deterministic and inspectable. AI enters only after
-            evidence has been normalized, deduplicated, and linked.
+            {copy.description}
           </p>
         </motion.div>
 
@@ -181,12 +223,12 @@ export function HowItWorks8() {
           viewport={{ once: true, margin: "-80px" }}
           className="mt-14 grid list-none grid-cols-1 gap-12 sm:mt-16 lg:mt-20 lg:grid-cols-3 lg:gap-x-12"
         >
-          {steps.map((step, index) => {
+          {copy.steps.map((step, index) => {
             const Visual = step.visual;
             const segment =
               index === 0
                 ? "left-0 -right-6"
-                : index === steps.length - 1
+                : index === copy.steps.length - 1
                   ? "-left-6 right-0"
                   : "-left-6 -right-6";
             return (

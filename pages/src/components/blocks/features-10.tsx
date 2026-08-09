@@ -12,14 +12,15 @@ import {
   Terminal,
   Users,
 } from "lucide-react";
+import { useLocale } from "@/i18n";
 
 const nodes = [
-  { name: "Endpoint agent", icon: Terminal, x: 50, y: 10 },
-  { name: "Network sensor", icon: Network, x: 84.6, y: 30 },
-  { name: "Cloud workloads", icon: Cloud, x: 84.6, y: 70 },
-  { name: "Identity & auth", icon: Users, x: 50, y: 90 },
-  { name: "Syslog & SaaS", icon: FileText, x: 15.4, y: 70 },
-  { name: "Threat intel", icon: ShieldCheck, x: 15.4, y: 30 },
+  { en: "Endpoint agent", zh: "端点 Agent", icon: Terminal, x: 50, y: 10 },
+  { en: "Network sensor", zh: "网络 Sensor", icon: Network, x: 84.6, y: 30 },
+  { en: "Cloud workloads", zh: "云工作负载", icon: Cloud, x: 84.6, y: 70 },
+  { en: "Identity & auth", zh: "身份与认证", icon: Users, x: 50, y: 90 },
+  { en: "Syslog & SaaS", zh: "Syslog 与 SaaS", icon: FileText, x: 15.4, y: 70 },
+  { en: "Threat intel", zh: "威胁情报", icon: ShieldCheck, x: 15.4, y: 30 },
 ];
 
 const scatter = [
@@ -76,7 +77,30 @@ const orchestra: Variants = {
 };
 
 export function Features10() {
+  const locale = useLocale();
   const reduce = useReducedMotion();
+  const copy =
+    locale === "zh-CN"
+      ? {
+          eyebrow: "信号织网",
+          heading: "所有信号，汇成一幅全局图",
+          description:
+            "端点活动、网络会话、认证、云事件与日志通过专用采集器进入，最终汇聚到同一组实体、时间线与证据图中。",
+          cta: "查看处理链路",
+          schema: "3 个接入平面 · 1 套模式",
+          mapLabel:
+            "信号图：端点、网络、云、身份、日志和威胁情报连接到 OpenXDR",
+        }
+      : {
+          eyebrow: "Signal fabric",
+          heading: "Every signal, one operating picture",
+          description:
+            "Endpoint activity, network sessions, authentication, cloud events, and logs arrive through purpose-built collectors, then converge on the same entities, timeline, and evidence graph.",
+          cta: "Trace the pipeline",
+          schema: "3 ingest planes · one schema",
+          mapLabel:
+            "Signal map showing endpoint, network, cloud, identity, logs, and threat intelligence connected to OpenXDR",
+        };
 
   return (
     <section
@@ -96,23 +120,21 @@ export function Features10() {
             className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.2em] text-neutral-500 dark:text-neutral-400"
           >
             <GitBranch className="h-3.5 w-3.5" />
-            Signal fabric
+            {copy.eyebrow}
           </motion.span>
 
           <motion.h2
             variants={fadeUp}
             className="mt-5 max-w-xl text-3xl font-semibold leading-[1.1] tracking-tight text-neutral-900 dark:text-white sm:text-4xl md:text-5xl"
           >
-            Every signal, one operating picture
+            {copy.heading}
           </motion.h2>
 
           <motion.p
             variants={fadeUp}
             className="mt-5 max-w-md text-base leading-relaxed text-neutral-600 dark:text-neutral-400 sm:text-lg"
           >
-            Endpoint activity, network sessions, authentication, cloud events,
-            and logs arrive through purpose-built collectors, then converge on
-            the same entities, timeline, and evidence graph.
+            {copy.description}
           </motion.p>
 
           <motion.div
@@ -123,7 +145,7 @@ export function Features10() {
               href="#pipeline"
               className="w-full cursor-pointer rounded-full bg-black px-6 py-3 text-center text-sm font-medium text-white transition-colors duration-200 hover:bg-neutral-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-2 dark:bg-white dark:text-black dark:hover:bg-neutral-200 dark:focus-visible:ring-white dark:focus-visible:ring-offset-neutral-950 sm:w-auto sm:px-8 sm:py-3.5 sm:text-base"
             >
-              Trace the pipeline
+              {copy.cta}
             </a>
             <div className="inline-flex items-center justify-center gap-2.5 rounded-full border border-neutral-200 bg-white px-5 py-3 text-sm text-neutral-600 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-400 sm:py-3.5">
               <span className="relative flex h-2 w-2">
@@ -140,7 +162,7 @@ export function Features10() {
                 )}
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500 dark:bg-emerald-400" />
               </span>
-              3 ingest planes · one schema
+              {copy.schema}
             </div>
           </motion.div>
         </motion.div>
@@ -151,7 +173,7 @@ export function Features10() {
           whileInView="show"
           viewport={{ once: true, margin: "-80px" }}
           role="img"
-          aria-label="Signal map showing endpoint, network, cloud, identity, logs, and threat intelligence connected to OpenXDR"
+          aria-label={copy.mapLabel}
           className="relative mx-auto mb-8 aspect-square w-full max-w-[520px]"
         >
           <div
@@ -199,7 +221,7 @@ export function Features10() {
             />
             {nodes.map((node) => (
               <motion.line
-                key={node.name}
+                key={node.en}
                 variants={draw}
                 x1="50"
                 y1="50"
@@ -244,7 +266,7 @@ export function Features10() {
             const Icon = node.icon;
             return (
               <motion.div
-                key={node.name}
+                key={node.en}
                 variants={pop}
                 style={{ left: `${node.x}%`, top: `${node.y}%` }}
                 className="absolute z-20 -translate-x-1/2 -translate-y-1/2"
@@ -273,7 +295,7 @@ export function Features10() {
                     />
                   </motion.div>
                   <span className="absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap rounded-full bg-white px-1.5 text-[11px] font-medium text-neutral-500 dark:bg-neutral-950 dark:text-neutral-400">
-                    {node.name}
+                    {locale === "zh-CN" ? node.zh : node.en}
                   </span>
                 </motion.div>
               </motion.div>

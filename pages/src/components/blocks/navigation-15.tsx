@@ -8,24 +8,53 @@ import {
   type Variants,
 } from "motion/react";
 import { ArrowUpRight, Menu, X } from "lucide-react";
+import { useLocale } from "@/i18n";
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
-
-const links = [
-  { label: "Signals", href: "#signals" },
-  { label: "Pipeline", href: "#pipeline" },
-  { label: "Principles", href: "#principles" },
-  { label: "Repository", href: "https://github.com/yaklang/OpenXDR" },
-];
 
 const focusRing =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-white dark:focus-visible:ring-offset-neutral-950";
 
 export default function Navigation15() {
+  const locale = useLocale();
   const [hovered, setHovered] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const shouldReduceMotion = useReducedMotion();
-  const current = hovered ?? "Signals";
+  const copy =
+    locale === "zh-CN"
+      ? {
+          links: [
+            { label: "信号", href: "#signals" },
+            { label: "处理链路", href: "#pipeline" },
+            { label: "设计原则", href: "#principles" },
+            { label: "代码仓库", href: "https://github.com/yaklang/OpenXDR" },
+          ],
+          primary: "主导航",
+          build: "构建状态",
+          source: "查看源码",
+          open: "打开菜单",
+          close: "关闭菜单",
+          menu: "菜单",
+          menuLinks: "菜单链接",
+          openSource: "开源 XDR",
+        }
+      : {
+          links: [
+            { label: "Signals", href: "#signals" },
+            { label: "Pipeline", href: "#pipeline" },
+            { label: "Principles", href: "#principles" },
+            { label: "Repository", href: "https://github.com/yaklang/OpenXDR" },
+          ],
+          primary: "Primary",
+          build: "Build status",
+          source: "View source",
+          open: "Open menu",
+          close: "Close menu",
+          menu: "Menu",
+          menuLinks: "Menu links",
+          openSource: "Open source XDR",
+        };
+  const current = hovered ?? copy.links[0].label;
 
   useEffect(() => {
     if (!open) return;
@@ -73,7 +102,7 @@ export default function Navigation15() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, ease: EASE }}
           className="border-b border-white/10 bg-neutral-950/45 backdrop-blur-xl"
-          aria-label="Primary"
+          aria-label={copy.primary}
         >
           <div className="mx-auto flex w-full max-w-[1400px] items-center justify-between gap-4 px-4 py-5 sm:px-6 lg:px-8">
           <a
@@ -90,7 +119,7 @@ export default function Navigation15() {
             className="hidden items-center gap-8 md:flex"
             onMouseLeave={() => setHovered(null)}
           >
-            {links.map((link) => (
+            {copy.links.map((link) => (
               <a
                 key={link.label}
                 href={link.href}
@@ -124,7 +153,7 @@ export default function Navigation15() {
               rel="noreferrer"
               className={`rounded-sm text-sm font-medium text-neutral-500 transition-colors duration-200 hover:text-neutral-950 dark:text-neutral-400 dark:hover:text-white ${focusRing}`}
             >
-              Build status
+              {copy.build}
             </a>
             <a
               href="https://github.com/yaklang/OpenXDR"
@@ -132,7 +161,7 @@ export default function Navigation15() {
               rel="noreferrer"
               className={`inline-flex items-center gap-1.5 rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-950 transition-colors duration-200 hover:bg-neutral-950 hover:text-white dark:border-neutral-700 dark:text-white dark:hover:bg-white dark:hover:text-neutral-950 ${focusRing}`}
             >
-              View source
+              {copy.source}
               <ArrowUpRight className="h-4 w-4" />
             </a>
           </div>
@@ -142,7 +171,7 @@ export default function Navigation15() {
             onClick={() => setOpen(true)}
             aria-expanded={open}
             aria-controls="nav15-drawer"
-            aria-label="Open menu"
+            aria-label={copy.open}
             className={`flex h-11 w-11 cursor-pointer items-center justify-center rounded-full border border-neutral-200 text-neutral-950 transition-colors duration-200 hover:bg-neutral-50 dark:border-neutral-800 dark:text-white dark:hover:bg-neutral-900 md:hidden ${focusRing}`}
           >
             <Menu className="h-5 w-5" />
@@ -166,7 +195,7 @@ export default function Navigation15() {
                 id="nav15-drawer"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Menu"
+                aria-label={copy.menu}
                 initial={
                   shouldReduceMotion ? { opacity: 0 } : { x: "100%" }
                 }
@@ -188,7 +217,7 @@ export default function Navigation15() {
                   <button
                     type="button"
                     onClick={() => setOpen(false)}
-                    aria-label="Close menu"
+                    aria-label={copy.close}
                     className={`flex h-11 w-11 cursor-pointer items-center justify-center rounded-full border border-neutral-200 text-neutral-950 transition-colors duration-200 hover:bg-neutral-50 dark:border-neutral-800 dark:text-white dark:hover:bg-neutral-900 ${focusRing}`}
                   >
                     <X className="h-5 w-5" />
@@ -200,15 +229,15 @@ export default function Navigation15() {
                   animate="visible"
                   variants={drawerStagger}
                   className="mt-8 flex flex-col"
-                  aria-label="Menu links"
+                  aria-label={copy.menuLinks}
                 >
                   <motion.p
                     variants={drawerItem}
                     className="text-xs font-medium uppercase tracking-[0.2em] text-neutral-500"
                   >
-                    Menu
+                    {copy.menu}
                   </motion.p>
-                  {links.map((link) => (
+                  {copy.links.map((link) => (
                     <motion.a
                       key={link.label}
                       href={link.href}
@@ -237,7 +266,7 @@ export default function Navigation15() {
                   className="mt-auto pt-10"
                 >
                   <p className="text-xs font-medium uppercase tracking-[0.2em] text-neutral-500">
-                    Open source XDR
+                    {copy.openSource}
                   </p>
                   <a
                     href="https://github.com/yaklang/OpenXDR"
@@ -254,7 +283,7 @@ export default function Navigation15() {
                       rel="noreferrer"
                       className={`rounded-full border border-neutral-300 px-5 py-3 text-center text-sm font-medium text-neutral-950 transition-colors duration-200 hover:bg-neutral-50 dark:border-neutral-700 dark:text-white dark:hover:bg-neutral-900 ${focusRing}`}
                     >
-                      Build status
+                      {copy.build}
                     </a>
                     <a
                       href="https://github.com/yaklang/OpenXDR"
@@ -262,7 +291,7 @@ export default function Navigation15() {
                       rel="noreferrer"
                       className={`inline-flex items-center justify-center gap-1.5 rounded-full bg-black px-5 py-3 text-sm font-medium text-white transition-colors duration-200 hover:bg-neutral-800 dark:bg-white dark:text-black dark:hover:bg-neutral-200 ${focusRing}`}
                     >
-                      View source
+                      {copy.source}
                       <ArrowUpRight className="h-4 w-4" />
                     </a>
                   </div>

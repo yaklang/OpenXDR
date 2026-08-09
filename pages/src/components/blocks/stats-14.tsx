@@ -7,6 +7,7 @@ import {
   useReducedMotion,
   type Variants,
 } from "motion/react";
+import { useLocale } from "@/i18n";
 
 const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 const CHART_W = 240;
@@ -25,35 +26,11 @@ function buildChart(series: number[]) {
   return { line, area, last: points[points.length - 1] };
 }
 
-const metrics = [
-  {
-    label: "Ingest planes",
-    value: 3,
-    decimals: 0,
-    unit: "",
-    tag: "OCSF-style",
-    caption: "Endpoint · network · logs",
-    series: [1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3],
-  },
-  {
-    label: "Noise-reduction gates",
-    value: 4,
-    decimals: 0,
-    unit: "",
-    tag: "before AI",
-    caption: "Dedupe · suppress · correlate · triage",
-    series: [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4],
-  },
-  {
-    label: "Incident view",
-    value: 1,
-    decimals: 0,
-    unit: "",
-    tag: "evidence first",
-    caption: "One graph across the attack story",
-    series: [0, 1, 0, 1, 1, 2, 1, 2, 2, 3, 2, 3],
-  },
-].map((metric) => ({ ...metric, chart: buildChart(metric.series) }));
+const metricSeries = [
+  [1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3],
+  [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4],
+  [0, 1, 0, 1, 1, 2, 1, 2, 2, 3, 2, 3],
+];
 
 const gridVariants: Variants = {
   hidden: {},
@@ -105,10 +82,42 @@ function CountUp({ value, decimals = 0 }: { value: number; decimals?: number }) 
 }
 
 export default function Stats14() {
+  const locale = useLocale();
   const shouldReduceMotion = useReducedMotion();
   const lineAnim = shouldReduceMotion ? undefined : lineVariants;
   const areaAnim = shouldReduceMotion ? undefined : areaVariants;
   const dotAnim = shouldReduceMotion ? undefined : dotVariants;
+  const copy =
+    locale === "zh-CN"
+      ? {
+          heading: "真实运行原则，不做仪表盘表演。",
+          description:
+            "架构分离采集与控制，在调用模型前完成降噪，并保留端到端可检查的证据链。",
+          metrics: [
+            ["接入平面", "OCSF 风格", "端点 · 网络 · 日志"],
+            ["降噪关卡", "AI 之前", "去重 · 抑制 · 关联 · 研判"],
+            ["事件视图", "证据优先", "一张图串起完整攻击链"],
+          ],
+        }
+      : {
+          heading: "Operational truths, not dashboard theater.",
+          description:
+            "The architecture separates collection from control, reduces noise before model calls, and keeps the evidence trail inspectable end to end.",
+          metrics: [
+            ["Ingest planes", "OCSF-style", "Endpoint · network · logs"],
+            ["Noise-reduction gates", "before AI", "Dedupe · suppress · correlate · triage"],
+            ["Incident view", "evidence first", "One graph across the attack story"],
+          ],
+        };
+  const metrics = copy.metrics.map(([label, tag, caption], index) => ({
+    label,
+    tag,
+    caption,
+    value: [3, 4, 1][index],
+    decimals: 0,
+    unit: "",
+    chart: buildChart(metricSeries[index]),
+  }));
 
   return (
     <section
@@ -124,10 +133,10 @@ export default function Stats14() {
           className="max-w-2xl"
         >
           <h2 className="text-3xl sm:text-4xl md:text-5xl font-medium tracking-tight leading-tight text-neutral-900 dark:text-white">
-            Operational truths, not dashboard theater.
+            {copy.heading}
           </h2>
           <p className="mt-5 text-base sm:text-lg leading-relaxed text-neutral-600 dark:text-neutral-400">
-            The architecture separates collection from control, reduces noise before model calls, and keeps the evidence trail inspectable end to end.
+            {copy.description}
           </p>
         </motion.div>
 

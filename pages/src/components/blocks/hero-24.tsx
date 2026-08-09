@@ -4,6 +4,7 @@ import { ArrowRight } from "lucide-react";
 import { motion, useReducedMotion, type Variants } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import BlackHole from "@/components/react-bits/black-hole";
+import { useLocale } from "@/i18n";
 
 const container: Variants = {
   hidden: {},
@@ -29,12 +30,35 @@ const headline: Variants = {
   },
 };
 
-const partners = ["ENDPOINT", "NETWORK", "IDENTITY", "CLOUD", "LOGS"];
-
 export function Hero24() {
+  const locale = useLocale();
   const reduceMotion = useReducedMotion();
   const sectionRef = useRef<HTMLElement>(null);
   const [isVisible, setIsVisible] = useState(true);
+  const copy =
+    locale === "zh-CN"
+      ? {
+          badge: "开源 · EDR + NDR + SIEM",
+          headline: "一万条告警进来。",
+          headlineAccent: "三个真实事件出来。",
+          description:
+            "OpenXDR 将端点、全流量、身份与日志证据汇聚成一条可解释的攻击链，再由 AI 调查通过关联筛选的事件。",
+          github: "在 GitHub 查看",
+          pipeline: "追踪信号路径",
+          evidence: "统一证据平面覆盖",
+          partners: ["端点", "网络", "身份", "云", "日志"],
+        }
+      : {
+          badge: "Open source · EDR + NDR + SIEM",
+          headline: "Ten thousand alerts in.",
+          headlineAccent: "Three incidents out.",
+          description:
+            "OpenXDR joins endpoint, full-traffic, identity, and log evidence into one explainable attack story, then lets AI investigate the incidents that survive correlation.",
+          github: "View on GitHub",
+          pipeline: "Follow the signal",
+          evidence: "One evidence plane across",
+          partners: ["ENDPOINT", "NETWORK", "IDENTITY", "CLOUD", "LOGS"],
+        };
 
   useEffect(() => {
     const section = sectionRef.current;
@@ -99,17 +123,17 @@ export function Hero24() {
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-300 opacity-70" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
             </span>
-            Open source · EDR + NDR + SIEM
+            {copy.badge}
           </motion.div>
 
           <motion.h1
             variants={headline}
             className="mt-7 text-4xl font-medium leading-[1.02] tracking-[-0.04em] text-white sm:text-6xl md:text-7xl"
           >
-            Ten thousand alerts in.
+            {copy.headline}
             <br />
             <span className="text-neutral-400">
-              Three incidents out.
+              {copy.headlineAccent}
             </span>
           </motion.h1>
 
@@ -117,9 +141,7 @@ export function Hero24() {
             variants={item}
             className="mt-6 max-w-lg text-base leading-relaxed text-neutral-300 sm:text-lg"
           >
-            OpenXDR joins endpoint, full-traffic, identity, and log evidence
-            into one explainable attack story — then lets AI investigate the
-            incidents that survive correlation.
+            {copy.description}
           </motion.p>
 
           <motion.div
@@ -132,23 +154,23 @@ export function Hero24() {
               rel="noreferrer"
               className="inline-flex w-full cursor-pointer items-center justify-center rounded-full bg-white px-6 py-3 text-sm font-medium text-neutral-950 transition-colors duration-200 hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950 sm:w-auto sm:px-8 sm:py-3.5 sm:text-base"
             >
-              View on GitHub
+              {copy.github}
               <ArrowRight className="ml-2 h-4 w-4" />
             </a>
             <a
               href="#pipeline"
               className="inline-flex w-full cursor-pointer items-center justify-center rounded-full border border-white/20 bg-white/5 px-6 py-3 text-sm font-medium text-white backdrop-blur transition-colors duration-200 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950 sm:w-auto sm:px-8 sm:py-3.5 sm:text-base"
             >
-              Follow the signal
+              {copy.pipeline}
             </a>
           </motion.div>
 
           <motion.div variants={item} className="mt-14 w-full">
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-neutral-500">
-              One evidence plane across
+              {copy.evidence}
             </p>
             <div className="mt-4 flex flex-wrap items-center gap-x-7 gap-y-3">
-              {partners.map((name) => (
+              {copy.partners.map((name) => (
                 <span
                   key={name}
                   className="text-sm font-semibold tracking-tight text-neutral-600 transition-colors duration-200 hover:text-neutral-300"
