@@ -191,15 +191,27 @@ func flowRaw(f *pb.FlowRecord) json.RawMessage {
 		},
 	}
 	if f.DnsQuery != "" {
-		body["query"] = map[string]any{"hostname": f.DnsQuery}
+		// rcode_id 为 0 可能是 NOERROR，也可能是没抓到应答（proto3 uint32 无零值区分）
+		body["query"] = map[string]any{"hostname": f.DnsQuery, "rcode_id": f.DnsRcode}
+		if len(f.DnsAnswers) > 0 {
+			// 应答 IP 用键名 ip，情报碰撞按键名递归收集时自动生效
+			answers := make([]map[string]any, 0, len(f.DnsAnswers))
+			for _, ip := range f.DnsAnswers {
+				answers = append(answers, map[string]any{"ip": ip})
+			}
+			body["answers"] = answers
+		}
 	}
-	if f.TlsSni != "" || f.Ja3 != "" {
+	if f.TlsSni != "" || f.Ja3 != "" || f.Ja3S != "" {
 		tls := map[string]any{}
 		if f.TlsSni != "" {
 			tls["sni"] = f.TlsSni
 		}
 		if f.Ja3 != "" {
 			tls["ja3_hash"] = f.Ja3
+		}
+		if f.Ja3S != "" {
+			tls["ja3s_hash"] = f.Ja3S
 		}
 		body["tls"] = tls
 	}

@@ -56,6 +56,29 @@ func TestMatchJA3(t *testing.T) {
 	}
 }
 
+func TestMatchJA3S(t *testing.T) {
+	const ja3s = "a4e5f0e0b0a4e5f0e0b0a4e5f0e0b0a4"
+	s := storeWith(map[string]entry{"hash:" + ja3s: e(4, nil)})
+	raw := map[string]any{"tls": map[string]any{"ja3s_hash": ja3s}}
+	hits := s.Match(raw, time.Now())
+	if len(hits) != 1 || hits[0].RuleID != "intel:hash:"+ja3s {
+		t.Fatalf("JA3S 服务端指纹应作为 hash 情报命中：%v", hits)
+	}
+}
+
+func TestMatchDNSAnswerIP(t *testing.T) {
+	// sensor 的 DNS 应答写成 "answers":[{"ip":...}]，靠键名 ip 撞上情报
+	s := storeWith(map[string]entry{"ip:93.184.216.34": e(5, nil)})
+	raw := map[string]any{
+		"query":   map[string]any{"hostname": "cdn.example.com", "rcode_id": 0},
+		"answers": []any{map[string]any{"ip": "93.184.216.34"}},
+	}
+	hits := s.Match(raw, time.Now())
+	if len(hits) != 1 || hits[0].RuleID != "intel:ip:93.184.216.34" {
+		t.Fatalf("DNS 应答 IP 应命中 IP 情报：%v", hits)
+	}
+}
+
 func TestMatchExpiredAndMiss(t *testing.T) {
 	past := time.Now().Add(-time.Hour)
 	s := storeWith(map[string]entry{
