@@ -55,3 +55,34 @@ cases:
       dst_endpoint:
         ip: "10.0.0.1"
         port: 4444
+
+  - name: 自签证书 TLS 会话
+    technique: T1573.002
+    source: 合成（sensor 证书元数据）
+    class: 4001
+    event:
+      dst_endpoint:
+        ip: "203.0.113.9"
+        port: 443
+      tls:
+        sni: "cdn-sync.example"
+        cert:
+          subject: "cdn-sync.example"
+          issuer: "cdn-sync.example"
+          self_signed: true
+
+  - name: CA 签发证书（良性对照）
+    technique: T1573.002
+    source: 良性对照
+    class: 4001
+    expect: undetected
+    event:
+      dst_endpoint:
+        ip: "93.184.216.34"
+        port: 443
+      tls:
+        sni: "example.com"
+        cert:
+          subject: "example.com"
+          issuer: "DigiCert TLS RSA SHA256 2020 CA1"
+          self_signed: false

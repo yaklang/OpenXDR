@@ -1,0 +1,16 @@
+title: TLS Self-Signed Certificate
+id: 3c9a1e74-5f28-4b62-9d03-7e5c2a1f8b46
+status: experimental
+description: 检测 TLS 会话中的自签证书（subject 与 issuer 相同），常见于 C2 与钓鱼基础设施。
+  仅 TLS ≤1.2 可见——TLS 1.3 的 Certificate 消息加密传输，被动嗅探拿不到证书。
+  内网自签服务（测试环境、设备管理面）会产生命中，按资产抑制即可。
+tags:
+  - attack.command_and_control
+  - attack.t1573.002
+logsource:
+  category: network_connection
+detection:
+  selection:
+    tls.cert.self_signed: true
+  condition: selection
+level: low
