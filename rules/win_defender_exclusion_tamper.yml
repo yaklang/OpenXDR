@@ -1,0 +1,18 @@
+title: Windows Defender Exclusion Tampered
+id: e6b01661-1679-454d-acb4-35790bb9b724
+status: experimental
+description: |
+  检测 Defender 排除项（路径/扩展名/进程等）的增改删——恶意软件落地前
+  先加排除项是标配动作，合法运维改动极少。采集端快照 diff 覆盖注册表
+  Exclusions 整棵子树，Set-MpPreference 与直接写注册表都看得见。
+tags:
+  - attack.defense_evasion
+  - attack.t1562.001
+logsource:
+  category: registry_set
+  product: windows
+detection:
+  selection:
+    TargetObject|contains: '\SOFTWARE\Microsoft\Windows Defender\Exclusions\'
+  condition: selection
+level: high

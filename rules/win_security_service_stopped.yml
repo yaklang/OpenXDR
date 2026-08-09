@@ -1,0 +1,25 @@
+title: Security Service Stopped
+id: 2aa9ab3d-5d5f-44a3-8921-29d68bf8a24a
+status: experimental
+description: |
+  检测 EventLog / WinDefend / Sense / WdNisSvc 等安全相关服务被停止——
+  服务快照 diff 出 State 由 Running 翻成 Stopped。停 EventLog 断日志、
+  停 Defender 关防护，是动手前典型的"瞎眼"动作。与服务配置变更规则
+  （win_service_installed）互补：那条看 ImagePath/启动类型，这条专盯运行态。
+tags:
+  - attack.defense_evasion
+  - attack.t1562.001
+logsource:
+  category: registry_set
+  product: windows
+detection:
+  services:
+    TargetObject|endswith:
+      - '\Services\EventLog'
+      - '\Services\WinDefend'
+      - '\Services\Sense'
+      - '\Services\WdNisSvc'
+  stopped:
+    Details|contains: 'State=Stopped'
+  condition: services and stopped
+level: high

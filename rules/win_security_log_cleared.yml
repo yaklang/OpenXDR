@@ -1,0 +1,17 @@
+title: Windows Security Log Cleared
+id: 1e884603-f017-4ccb-9331-c523668b8b46
+status: experimental
+description: 检测 Security 审计日志被清空（Security 1102）。清空审计日志是攻击者
+  擦除痕迹的标准动作，正常运维几乎不会触发，直接给 critical
+tags:
+  - attack.defense_evasion
+  - attack.t1070.001
+logsource:
+  category: authentication
+  product: windows
+detection:
+  selection:
+    # 平台自定义活动取值：13=Security 日志被清空（1102）
+    activity_id: 13
+  condition: selection
+level: critical

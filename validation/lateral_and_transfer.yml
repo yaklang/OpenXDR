@@ -89,6 +89,22 @@ cases:
       file:
         path: "C:\\Windows\\System32\\Tasks\\atomic"
 
+  - name: net use 带口令连接（4648 显式凭据事件）
+    technique: T1550
+    source: "atomic T1021.002（net use /user: 带口令触发 4648）"
+    class: 3002
+    os: windows
+    event:
+      activity_id: 14
+      status_id: 1
+      user:
+        name: admin
+      actor_user: attacker
+      src_endpoint:
+        ip: "10.0.0.5"
+      target_server: WIN-DC01
+      process_name: "C:\\Windows\\System32\\net.exe"
+
   - name: 计划任务文件被修改
     technique: T1053.005
     source: atomic T1053.005

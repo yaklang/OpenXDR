@@ -1,0 +1,21 @@
+title: IFEO Debugger Hijack
+id: 2a8ca8de-1f9e-42b7-8346-fc9d5c6103ee
+status: experimental
+description: |
+  检测 Image File Execution Options 子键写入 Debugger 值——目标程序一启动
+  就先执行所谓的"调试器"，是经典的持久化/劫持手法，正常软件几乎不设此值。
+  采集端快照 diff 覆盖 IFEO 整棵子树，增改删都上报。
+tags:
+  - attack.persistence
+  - attack.privilege_escalation
+  - attack.t1546.012
+logsource:
+  category: registry_set
+  product: windows
+detection:
+  ifeo:
+    TargetObject|contains: '\Image File Execution Options\'
+  debugger:
+    TargetObject|endswith: '\Debugger'
+  condition: ifeo and debugger
+level: high

@@ -68,3 +68,27 @@ cases:
         path: "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WaaSMedicSvc"
       reg_value:
         data: "ImagePath=C:\\Users\\Public\\evil.exe; Start=2"
+
+  - name: IFEO Debugger 劫持（快照 diff 注册表事件）
+    technique: T1546.012
+    source: atomic T1546.012
+    class: 201002
+    os: windows
+    event:
+      activity_id: 1
+      reg_key:
+        path: "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\notepad.exe\\Debugger"
+      reg_value:
+        data: "C:\\Users\\Public\\evil.exe"
+
+  - name: WMI 永久事件订阅（CommandLineEventConsumer，伪路径文件事件）
+    technique: T1546.003
+    source: atomic T1546.003
+    class: 1001
+    os: windows
+    event:
+      activity_id: 1
+      file:
+        path: "wmi:root\\subscription\\__EventConsumer.EvilConsumer"
+      wmi:
+        data: '{"CommandLineTemplate":"C:\\Users\\Public\\evil.exe","Name":"EvilConsumer"}'

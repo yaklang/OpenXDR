@@ -1,0 +1,20 @@
+title: Linux Kernel Module Loaded
+id: 826979a8-708d-4cc9-853d-ffee75a4b31b
+status: experimental
+description: 检测内核模块加载——rootkit 与内核级持久化的落地动作（agent /proc/modules diff 采集）
+tags:
+  - attack.persistence
+  - attack.defense_evasion
+  - attack.t1547.006
+logsource:
+  category: driver_load
+  product: linux
+detection:
+  # 路径解析成功：/lib/modules/<kver>/ 下的 .ko（含压缩形态）
+  selection_path:
+    ImageLoaded|contains: '.ko'
+  # 路径解析失败：事件只带模块名（module.file.name 非空即命中）
+  selection_name:
+    module.file.name: '*'
+  condition: 1 of selection*
+level: high

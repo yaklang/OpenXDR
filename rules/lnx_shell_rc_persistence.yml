@@ -1,0 +1,20 @@
+title: Shell RC File Persistence
+id: 43320393-2d94-4db9-8211-7c31ba7f2ee7
+status: experimental
+description: 检测 shell 启动文件（.bashrc/.profile 等）被写入或篡改——登录即触发的持久化手法
+tags:
+  - attack.persistence
+  - attack.t1546.004
+logsource:
+  category: file_event
+  product: linux
+detection:
+  selection:
+    TargetFilename|contains:
+      - '/.bashrc'
+      - 'bash.bashrc'
+      - '/.bash_profile'
+      - '/.profile'
+      - '/etc/profile'
+  condition: selection
+level: high

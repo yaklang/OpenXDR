@@ -1,0 +1,68 @@
+technique: T1136.001
+name: Create Account
+cases:
+  - name: net user 创建本地账号（4720 账户创建事件）
+    source: atomic T1136.001
+    class: 3002
+    os: windows
+    event:
+      activity_id: 10
+      status_id: 1
+      user:
+        name: atomic_user
+      actor_user: Administrator
+      target_domain: WIN-TEST01
+
+  - name: 删除本地账号（4726 账户删除事件）
+    technique: T1098
+    source: atomic T1136.001 反向操作
+    class: 3002
+    os: windows
+    event:
+      activity_id: 11
+      status_id: 1
+      user:
+        name: atomic_user
+      actor_user: Administrator
+      target_domain: WIN-TEST01
+
+  - name: net localgroup 加入 Administrators（4732 组变更事件）
+    technique: T1098
+    source: atomic T1136.001
+    class: 3002
+    os: windows
+    event:
+      activity_id: 12
+      status_id: 1
+      user:
+        name: atomic_user
+      actor_user: Administrator
+      group_name: Administrators
+
+  - name: 加入普通本地组 Users（良性对照，非管理员组不告警）
+    technique: T1098
+    source: 良性对照
+    class: 3002
+    os: windows
+    expect: undetected
+    event:
+      activity_id: 12
+      status_id: 1
+      user:
+        name: bob
+      actor_user: Administrator
+      group_name: Users
+
+  - name: 普通登录成功（良性对照，4720 相邻事件不串扰）
+    technique: T1136.001
+    source: 良性对照
+    class: 3002
+    os: windows
+    expect: undetected
+    event:
+      activity_id: 1
+      status_id: 1
+      user:
+        name: alice
+      src_endpoint:
+        ip: "10.0.0.7"

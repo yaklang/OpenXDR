@@ -78,3 +78,67 @@ cases:
       activity_id: 4
       file:
         path: "/etc/systemd/system/atomic.service"
+
+  - name: at 任务落盘
+    technique: T1053.001
+    source: atomic T1053.001
+    class: 1001
+    os: linux
+    event:
+      activity_id: 1
+      file:
+        path: "/var/spool/at/a0000b0123abcd"
+
+  - name: .bashrc 追加持久化命令
+    technique: T1546.004
+    source: atomic T1546.004
+    class: 1001
+    os: linux
+    event:
+      activity_id: 3
+      file:
+        path: "/home/user/.bashrc"
+
+  - name: /etc/profile 写入全局持久化
+    technique: T1546.004
+    source: atomic T1546.004
+    class: 1001
+    os: linux
+    event:
+      activity_id: 3
+      file:
+        path: "/etc/profile"
+
+  - name: 恶意内核模块加载（路径已解析）
+    technique: T1547.006
+    source: rootkit 通用手法（insmod）
+    class: 1005
+    os: linux
+    event:
+      activity_id: 1
+      module:
+        file:
+          path: "/lib/modules/6.8.0-49-generic/kernel/drivers/net/diamorphine.ko"
+          name: "diamorphine.ko"
+
+  - name: 恶意内核模块加载（out-of-tree，只报名字）
+    technique: T1547.006
+    source: rootkit 通用手法（insmod 后源文件已删）
+    class: 1005
+    os: linux
+    event:
+      activity_id: 1
+      module:
+        file:
+          name: "diamorphine"
+
+  - name: 内核模块卸载（rootkit 收摊）
+    technique: T1547.006
+    source: rmmod 对照
+    class: 1005
+    os: linux
+    event:
+      activity_id: 4
+      module:
+        file:
+          name: "diamorphine"

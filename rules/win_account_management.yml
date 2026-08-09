@@ -1,0 +1,25 @@
+title: Windows Account Management
+id: e690012e-1771-4a0b-9680-7e8cd00f86e4
+status: experimental
+description: 检测本地账户的创建、删除与加入本地管理员组（Security 4720/4726/4732）。
+  攻击者落地后常建后门账号并提权进 Administrators 组维持访问
+tags:
+  - attack.persistence
+  - attack.privilege_escalation
+  - attack.t1136.001
+  - attack.t1098
+logsource:
+  category: authentication
+  product: windows
+detection:
+  user_mgmt:
+    # 平台自定义活动取值：10=创建用户（4720），11=删除用户（4726）
+    activity_id:
+      - 10
+      - 11
+  admin_group:
+    # 12=成员加入本地组（4732），组名在事件的 group_name 字段
+    activity_id: 12
+    group_name|contains: 'administrators'
+  condition: user_mgmt or admin_group
+level: high

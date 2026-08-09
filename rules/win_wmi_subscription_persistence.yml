@@ -1,0 +1,19 @@
+title: WMI Event Subscription Persistence
+id: 650d028c-5c3c-4ec2-ab3c-5f0c4d6d6fb8
+status: experimental
+description: |
+  检测 root\subscription 命名空间下 __EventFilter / __EventConsumer 实例的
+  增改删——WMI 永久事件订阅是隐蔽的无文件持久化，合法使用极少。
+  采集端每 30 秒快照一次，以 wmi: 伪路径的文件事件上报，
+  删除事件带被删实例的属性（wmi.data）。
+tags:
+  - attack.persistence
+  - attack.t1546.003
+logsource:
+  category: file_event
+  product: windows
+detection:
+  selection:
+    TargetFilename|startswith: 'wmi:root\subscription\'
+  condition: selection
+level: high

@@ -1,0 +1,16 @@
+title: At Job Persistence
+id: 079f272c-a04f-4394-9600-7122c34b053d
+status: experimental
+description: 检测 /var/spool/at 下的任务文件落盘——at 任务是易被忽视的本地定时持久化通道
+tags:
+  - attack.persistence
+  - attack.execution
+  - attack.t1053.001
+logsource:
+  category: file_event
+  product: linux
+detection:
+  selection:
+    TargetFilename|contains: '/var/spool/at'
+  condition: selection
+level: high

