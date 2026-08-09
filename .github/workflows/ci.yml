@@ -28,8 +28,8 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
           cache-dependency-path: server/go.sum
@@ -63,8 +63,8 @@ jobs:
     name: Web (React)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
@@ -83,7 +83,7 @@ jobs:
       matrix:
         crate: [agent, sensor]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -116,7 +116,7 @@ jobs:
           - crate: sensor
             feature: xdp
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: 安装 nightly 与 rust-src
         run: rustup toolchain install nightly --component rust-src
@@ -135,7 +135,7 @@ jobs:
     name: Agent (Windows 目标)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # ring 的构建脚本要 mingw 交叉编译器
       - name: 安装 mingw
         run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
@@ -154,7 +154,7 @@ jobs:
     name: 容器镜像
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: 构建 server 镜像
         run: docker build -f server/Dockerfile -t openxdr-server:ci .
       - name: 构建 web 镜像
