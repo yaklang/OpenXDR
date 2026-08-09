@@ -17,8 +17,13 @@
   `--features ebpf`）→ netlink proc connector → ETW（Windows）→ 进程表轮询
   （兜底），另有并行的文件监控（Linux fanotify 优先 / inotify 递归兜底、
   Windows ReadDirectoryChangesW）、持久化点快照（注册表自启动 / 服务 /
-  计划任务）与登录采集（wtmp-btmp / Security 4624-4625）。容器或 WSL2 中
-  netlink 不可用，agent 会主动退回轮询——宁可弱采集也不产假数据。
+  计划任务 / Defender Exclusions / IFEO / AppInit_DLLs / CLSID COM 劫持 /
+  WMI 事件订阅）、登录/安全日志采集（wtmp-btmp / Security 4624-4625 登录、
+  4720/4726/4732 账户管理、1102 日志清空、4648 显式凭据、4719 审计策略，
+  以及 PowerShell Operational 4104 脚本块）、网络出站采集（Linux eBPF /
+  Windows ETW Kernel-Network TcpConnect，进程归属，与 sensor 同构 conn_tuple）
+  与内核模块加载监控（Linux /proc/modules diff，class_uid=1005）。
+  容器或 WSL2 中 netlink 不可用，agent 会主动退回轮询——宁可弱采集也不产假数据。
 - **sensor/**（Rust，crate 名 `openxdr-sensor`）：全流量探针，只出会话元数据不存 PCAP。
   双抓包后端：AF_PACKET v3（默认）与 AF_XDP（`--features xdp`，需驱动支持，仅入向）。
 - **server/**（Go 1.25，module `openxdr/server`）：单体后端。Ent ORM + PostgreSQL；

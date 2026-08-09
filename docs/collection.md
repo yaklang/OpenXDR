@@ -109,8 +109,14 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
   `file.path`；fanotify 路径额外带 `process.*` 与 `username`
 - 默认目录（`fswatch.rs:93` `default_targets`）：`/etc`、`/etc/cron.d`、
   `/etc/cron.daily`、`/etc/sudoers.d`、`/etc/ssh`、`/root/.ssh`、
-  `/etc/systemd/system`、`/var/spool/cron`，以及启动时枚举 `/home` 一层
-  补进各用户 `.ssh`。server 下发 `fileWatchDirs` 非空时**整体覆盖**默认清单
+  `/etc/systemd/system`、`/var/spool/cron`、`/var/spool/at`，以及启动时枚举
+  `/home` 一层补进各用户 `.ssh`。server 下发 `fileWatchDirs` 非空时
+  **整体覆盖**默认清单
+- **单文件目标**：除目录外还支持盯单个文件——用户 shell rc
+  （`/etc/profile`、`/etc/bash.bashrc` + /root 与 /home 各用户存在的
+  `.bashrc`/`.bash_profile`/`.profile`，T1546.004）。inotify 用
+  `IN_DELETE_SELF/IN_MOVE_SELF` 系掩码，fanotify 不带目录专属标记；
+  已被目录 watch 覆盖的文件自动去重，不会双报
 - 启动日志标明实际走哪条路：`fanotify 递归盯 N 个目录（含进程上下文）` 或
   `fanotify 不可用（原因），回落 inotify 递归监控`
 
@@ -139,6 +145,13 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
 - 默认构建（netlink 模式）**无网络采集**——proc connector 没有网络事件，
   `collect_network` 开关在非 eBPF 构建下无任何效果
 
+### 内核模块监控（kmodwatch）
+
+- 每 30s 读 /proc/modules 做 diff：新模块报加载（class_uid=1005，
+  activity_id=1）、消失报卸载（4）；首轮基线静默（`kmodwatch.rs`）
+- 路径按 /lib/modules/$(uname -r)/ 解析，解析失败只报名字不编造路径；
+  /proc/modules 拿不到加载者——进程与 username 留空（那是 audit/eBPF 的领域）
+
 ## Windows 采集路径
 
 ### 进程采集（ETW）
@@ -159,17 +172,32 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
 - 需要管理员权限；失败回落**轮询**（`windows.rs:5`）。轮询路径下
   username 是 SID 字符串而非用户名（`poll.rs`）
 
+### 网络采集（netwatch_win，ETW Kernel-Network）
+
+- 订阅 `Microsoft-Windows-Kernel-Network`（GUID `7dd42a49-...`），只取
+  **event ID 12（TcpConnect）**——本机主动 connect 才触发；端口字段是网络
+  字节序，已换算（`netwatch_win.rs`，实机勘定）
+- 归一化与 Linux eBPF 路径完全同构：共用 `netwatch::conn_event` 组装
+  （class_uid=4001、conn_tuple 同格式、60s 同目标采样去重、loopback/
+  未指定地址不报）；UDP 不做（该 provider 的 UDP 只有逐报文事件，无连接语义）
+- **与进程采集共享同一张 GUID 注册表**——网络事件的 process_guid 与进程
+  血缘严格一致（`mod.rs` 把 Arc<Mutex<ProcessRegistry>> 同时交给
+  netwatch_win 与 windows::run）
+- 独立 trace session，订阅失败只打日志降级，不影响进程采集主路
+
 ### 持久化点快照（persistwatch）
 
-四类持久化点，30 秒一轮快照 diff，各自独立基线、首轮静默、单类读取失败
-只跳过自己这一轮（`persistwatch.rs:39-90`）：
+七类持久化点，30 秒一轮快照 diff，各自独立基线、首轮静默、单类读取失败
+只跳过自己这一轮（`persistwatch.rs`）：
 
 | 监控对象 | 事件类别 | 说明 |
 |---|---|---|
 | 注册表 Run/RunOnce/Winlogon（HKLM+HKCU） | 201002 | 增(1)/改(3)/删(4)，删除带旧值内容 |
 | Startup 目录（全局+每用户） | 1001 | 增(1)/删(4)，修改不报 |
-| **Windows 服务**（`HKLM\SYSTEM\CurrentControlSet\Services`） | 201002 | `services_snapshot`（`persistwatch.rs:130`）：RegEnumKeyExW 枚举子键，快照 ImagePath+Start 启动类型，增/改/删全报 |
-| **计划任务**（`C:\Windows\System32\Tasks` 递归） | 1001 | `tasks_snapshot`（`persistwatch.rs:179`）：快照 路径→(mtime,size)，增/改/删全报 |
+| **Windows 服务**（`HKLM\SYSTEM\CurrentControlSet\Services`） | 201002 | `services_snapshot`：ImagePath+启动类型+**运行状态**（SCM 枚举，EventLog 等安全服务被停止产生 Modify；枚举失败整轮跳过防误报） |
+| **计划任务**（`C:\Windows\System32\Tasks` 递归） | 1001 | `tasks_snapshot`：快照 路径→(mtime,size)，增/改/删全报 |
+| **Defender Exclusions / AppInit_DLLs / IFEO Debugger / HKCU CLSID** | 201002 | `WATCH_TREES` 递归枚举（键不存在静默跳过）：T1562.001 排除项篡改、T1546.010/012、T1546.015 COM 劫持 |
+| **WMI 事件订阅**（`root\subscription` 的 __EventFilter/__EventConsumer） | 1001 | powershell 子进程查询快照（30s），file.path 用 `wmi:...` 伪路径；T1546.003 |
 
 - 事件无进程上下文（快照 diff 不知道谁写的），设计上不用注册表通知
   （`persistwatch.rs:3-6`）
@@ -186,16 +214,27 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
 - 缓冲溢出（`ERROR_NOTIFY_ENUM_DIR`）打日志继续；事件格式与 Linux 侧完全一致
   （1001 + activity_id + `file.path`，无进程上下文——RDCW 不提供）
 
-### 登录事件（authwatch_win）
+### 登录与安全日志事件（authwatch_win）
 
-- `EvtSubscribe` 订阅 Security 日志 **4624（成功）/4625（失败）**，
-  只订未来事件（`authwatch_win.rs:37-50`）
-- 过滤：机器账号（`$` 结尾）、SYSTEM、空用户丢弃；成功事件额外丢弃
+- `EvtSubscribe` 订阅 Security 日志，只订未来事件：
+  **4624/4625**（登录成功/失败）、**4720/4726**（创建/删除用户）、
+  **4732**（成员加入本地组）、**1102**（Security 日志被清空）、
+  **4648**（显式凭据登录）、**4719**（审计策略变更），统一归一化成 OCSF 3002
+- 4624/4625 过滤：机器账号（`$` 结尾）、SYSTEM、空用户丢弃；成功事件额外丢弃
   LogonType 0/5；失败事件保留所有类型
-- 解析字段：`TargetUserName`、`LogonType`、`IpAddress`、`Status`、
+- 4624/4625 解析字段：`TargetUserName`、`LogonType`、`IpAddress`、`Status`、
   `SubStatus`——后两个有值才写成 `status_code`/`status_detail`
   （4625 可区分"密码错"0xC000006A 与"账号锁定"0xC0000234 等）
-  （`authwatch_win.rs:166,180`）
+- 新事件类型用平台自定义 `activity_id`（OCSF 3002 未定义，从 10 起）：
+  10=创建用户、11=删除用户、12=加入本地组（组名在 `group_name`，
+  是否管理员组由规则判定）、13=日志清空（另带 `log_cleared: true` 显式标记）、
+  14=显式凭据登录、15=审计策略变更；机器账号同样过滤
+- 另订阅 `Microsoft-Windows-PowerShell/Operational` 的 **4104**（Script Block
+  Logging），归一化成 OCSF 1007 进程事件：`process.name=powershell.exe`、
+  pid 取事件 Execution ProcessID、脚本体放 `process.cmd_line`（Sigma 的
+  CommandLine 匹配因此直接作用于脚本内容）。分片不拼接：单片直接发，
+  分片各发一条并标注 `message_number`/`message_total`。4104 依赖组策略开启，
+  订阅失败只打日志，不影响 Security 主路
 - 需要管理员或 Event Log Readers 权限；订阅失败只告警不影响其他采集
 
 ## 采集配置开关全表

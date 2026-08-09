@@ -9,9 +9,10 @@ OpenXDR 采用 OCSF 风格事件模型。本文列出所有事件类别、字段
 |---|---|---|---|
 | 1001 | 文件活动（File System Activity） | agent | Linux fswatch（fanotify/inotify）、Windows fswatch_win、persistwatch 文件/计划任务部分 |
 | 1007 | 进程活动（Process Activity） | agent | Linux eBPF/netlink/轮询、Windows ETW/轮询（启动+退出） |
-| 3002 | 认证（Authentication） | agent | Linux wtmp/btmp、Windows Security 4624/4625 |
-| 4001 | 网络活动（Network Activity） | agent（仅 eBPF）/ sensor | agent netwatch 出站连接；sensor 非 DNS 会话 |
+| 3002 | 认证（Authentication） | agent | Linux wtmp/btmp；Windows Security 4624/4625/4720/4726/4732/1102/4648/4719 |
+| 4001 | 网络活动（Network Activity） | agent / sensor | agent netwatch 出站连接（Linux eBPF / Windows ETW Kernel-Network）；sensor 非 DNS 会话 |
 | 4003 | DNS 活动（DNS Activity） | sensor | 会话带 dns_query 时判定 |
+| 1005 | 模块活动（Module Activity） | agent | Linux kmodwatch（/proc/modules diff） |
 | 201002 | 注册表值活动（Registry Value Activity） | agent | Windows persistwatch 注册表键/服务快照 |
 | 100001 | 应用日志（OCSF 私有段） | syslog | server syslog 接入 |
 
@@ -96,11 +97,39 @@ Linux（`authwatch.rs:122-128`）与 Windows（`authwatch_win.rs`）同构：
 - 认证成功事件会触发 server 侧"爆破得手"跨事件检测，见
   [detection.md](detection.md)
 
+### Windows 安全日志扩展事件（activity_id 10-15，平台自定义段）
+
+OCSF 3002 未覆盖这些语义，activity_id 从 10 起自定义（`authwatch_win.rs` 注释
+逐条说明），`status_id` 恒为 1：
+
+| activity_id | 事件 ID | 含义 | 关键字段 |
+|---|---|---|---|
+| 10 | 4720 | 创建用户 | user.name=新账号、actor_user=操作者 |
+| 11 | 4726 | 删除用户 | 同上 |
+| 12 | 4732 | 加入本地组 | user.name=成员、group_name=组名 |
+| 13 | 1102 | Security 日志被清空 | user.name=操作者、log_cleared=true |
+| 14 | 4648 | 显式凭据登录 | user.name、src_endpoint.ip、target_server、process_name |
+| 15 | 4719 | 审计策略变更 | policy_category/subcategory/changes |
+
+### PowerShell 脚本块（4104 → 1007）
+
+订阅 `Microsoft-Windows-PowerShell/Operational` 的 4104 事件，以进程类事件
+发出（`authwatch_win.rs`）：process.name="powershell.exe"、process.pid 取事件
+的 Execution ProcessID、**cmd_line 放 ScriptBlockText**——Sigma 规则的
+CommandLine 匹配因此可以直接作用于脚本内容。分片（MessageTotal>1）按片
+各发一条并标注 message_number/message_total，不做跨片重组；有脚本路径时
+加 script_path。该通道依赖组策略开启 Script Block Logging，订阅失败只打
+日志不影响 4624/4625 主路。
+
 ## 4001 网络活动
 
 两个来源，字段不同：
 
-**agent netwatch**（仅 eBPF 构建，`netwatch.rs:57-81`）——带进程血缘：
+**agent netwatch**（Linux eBPF 构建 `netwatch.rs:57-81`；Windows ETW
+Kernel-Network `netwatch_win.rs`，订阅 TcpConnect 事件 12，端口为网络字节序
+已换算）——两路归一化完全同构（共用 `netwatch::conn_event` 组装与 60s
+同目标采样去重），带进程血缘。Windows 侧与进程采集共享同一张 GUID 注册表，
+网络事件的 process_guid 与进程血缘一致；loopback/未指定地址不报，UDP 不做：
 
 ```json
 {
@@ -151,6 +180,21 @@ sensor 会话中 `dns_query` 非空时判定为 4003（`sensor.go:24-28,79-82`�
 - `answers`：A/AAAA 应答 IP（至多 4 个），键名 `ip` 使应答地址**自动参与
   IP 情报碰撞**；无应答则不写该键
 
+## 1005 模块活动
+
+Linux kmodwatch（`kmodwatch.rs`）：每 30s 读 /proc/modules 做 diff，
+新出现的模块报加载（activity_id=1）、消失的报卸载（4）；首次快照为基线
+不报存量。/proc/modules 拿不到加载者，进程与 username 字段留空
+（那是 audit/eBPF 的领域）：
+
+```json
+{ "activity_id": 1, "module": { "file": { "path": "/lib/modules/.../e1000e.ko.xz", "name": "e1000e.ko.xz" } } }
+```
+
+路径按 /lib/modules/$(uname -r)/ 解析，解析失败只有 name 不编造 path。
+`module.file.path` 与 Sigma 引擎的 ImageLoaded 字段映射对齐
+（`server/internal/sigma/engine.go:50`）。
+
 ## 201002 注册表值活动
 
 Windows persistwatch（`persistwatch.rs`）：
@@ -164,8 +208,11 @@ Windows persistwatch（`persistwatch.rs`）：
 ```
 
 - activity_id：1=Create、3=Modify、4=Delete（删除事件带旧值内容）
-- 覆盖：Run/RunOnce/Winlogon 自启动键（HKLM+HKCU）+ **Windows 服务快照**
-  （`HKLM\SYSTEM\CurrentControlSet\Services`，值为 ImagePath+启动类型）
+- 覆盖：Run/RunOnce/Winlogon 自启动键（HKLM+HKCU）、**Windows 服务快照**
+  （`HKLM\SYSTEM\CurrentControlSet\Services`，值为 ImagePath+启动类型+运行状态，
+  EventLog 等安全服务被停止会产生 Modify）、`CurrentVersion\Windows`
+  （AppInit_DLLs）、Defender Exclusions、IFEO 各子键 Debugger 值、
+  `HKCU\Software\Classes\CLSID`（InprocServer32/LocalServer32）
 - 无进程上下文
 
 ## 100001 应用日志（syslog）

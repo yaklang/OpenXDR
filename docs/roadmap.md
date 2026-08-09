@@ -11,7 +11,7 @@
   （ETW + Win7 PEB cmdline 兜底 + exe SHA-256）、文件监控（RDCW）、持久化点
   （注册表 Run/Startup/服务/计划任务，删除带旧值）、登录（4624/4625 含失败原因码）；
   全流量探针（DNS 含应答与 rcode、TLS、HTTP 元数据 + JA3/JA3S）；syslog
-- **检测**：Sigma 引擎（热重载）29 条规则、三类 IOC 情报碰撞（IP/域名/哈希；
+- **检测**：Sigma 引擎（热重载）40 条规则、三类 IOC 情报碰撞（IP/域名/哈希；
   TLS 指纹 JA3/JA3S 走哈希通道）
 - **降噪**：去重 → 抑制 → 关联（血缘/时间窗/横向移动）→ AI 研判 → 通知阈值
 - **响应**：结束进程、主机隔离（mTLS + 按主机绑定证书）
@@ -190,7 +190,35 @@ P0/P1/P2 代码改动共 43 个文件尚未提交，收尾顺序：
    进程类规则实机命中）；Win7/2008R2 实机（PEB cmdline 兜底 + MSVC
    二进制兼容性）；回放矩阵按新环境持续补格子。
 
+### 采集缺口综合规划（2026-08-09 第二轮，A/B 档全量完成）
+
+经两轮全量缺口扫描（详见当日会话记录），采集面补齐以下项目，全部实机验证：
+
+**A 档（配置级扩充）**：Security 日志 4720/4726/4732（账户管理）、1102
+（日志清空）、4648（显式凭据）、4719（审计策略变更）；persistwatch 注册表
+扩充（Defender Exclusions、IFEO Debugger、AppInit_DLLs、HKCU CLSID COM
+劫持）+ 服务运行状态（EventLog 被停可见）；fswatch 扩充（/var/spool/at、
+用户 shell rc 单文件目标）。
+
+**B 档（新采集能力）**：
+- **Windows 端点网络采集**——推翻了此前"不做（sensor 已覆盖）"的判断：
+  sensor 只能回答"哪台机器连了谁"，给不了进程归属。ETW Kernel-Network
+  TcpConnect（无驱动）与 Linux eBPF 路径完全对称，共用归一化与 GUID 注册表
+  （`netwatch_win.rs`）。
+- **WMI 事件订阅持久化**（T1546.003，persistwatch WMI 快照 diff）。
+- **Linux 内核模块加载**（kmodwatch，class_uid=1005，引擎类别早已备好）。
+- **PowerShell 4104 脚本块**（cmd_line 承载 ScriptBlockText，规则直接作用于
+  脚本内容；依赖组策略开启）。
+
+配套新增 11 条规则（账户管理/日志清空/显式凭据/脚本块/Defender 篡改/IFEO/
+WMI 订阅/安全服务停止/内核模块/shell rc/at 任务），detectcheck 88 用例
+0 意外，覆盖技术 40/40。
+
+**C 档（已知缺口，明确不做）**：进程注入（T1055，需 PPL/驱动）、端点 DNS
+归属（sensor 覆盖）、sudo 审计（进程 exec 已覆盖八成）、4672/5140/5145
+（噪声与优先级）、PCAP/浏览器历史/软件清单。
+
 ### 维持"不做"的判断
 
-macOS agent（无 Mac 开发/CI 环境，写了也守不住编译）、Windows 端点网络采集
-（sensor 已覆盖，避免重复建设）、多租户、微服务拆分、存 PCAP、自研规则 DSL。
+macOS agent（无 Mac 开发/CI 环境，写了也守不住编译）、多租户、微服务拆分、
+存 PCAP、自研规则 DSL。
