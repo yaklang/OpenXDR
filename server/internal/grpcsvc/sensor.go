@@ -202,7 +202,7 @@ func flowRaw(f *pb.FlowRecord) json.RawMessage {
 			body["answers"] = answers
 		}
 	}
-	if f.TlsSni != "" || f.Ja3 != "" || f.Ja3S != "" {
+	if f.TlsSni != "" || f.Ja3 != "" || f.Ja3S != "" || f.TlsCertSubject != "" {
 		tls := map[string]any{}
 		if f.TlsSni != "" {
 			tls["sni"] = f.TlsSni
@@ -212,6 +212,16 @@ func flowRaw(f *pb.FlowRecord) json.RawMessage {
 		}
 		if f.Ja3S != "" {
 			tls["ja3s_hash"] = f.Ja3S
+		}
+		if f.TlsCertSubject != "" {
+			// 仅 TLS ≤1.2 可见；self_signed 是 subject/issuer 相等的启发式，非签名验证
+			tls["cert"] = map[string]any{
+				"subject":     f.TlsCertSubject,
+				"issuer":      f.TlsCertIssuer,
+				"self_signed": f.TlsCertSelfSigned,
+				"not_before":  f.TlsCertNotBefore,
+				"not_after":   f.TlsCertNotAfter,
+			}
 		}
 		body["tls"] = tls
 	}

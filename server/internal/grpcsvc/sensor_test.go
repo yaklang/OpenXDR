@@ -93,3 +93,44 @@ func TestFlowRawJA3SAlone(t *testing.T) {
 		t.Fatalf("无 SNI 不应写 sni 键：%v", tls)
 	}
 }
+
+func TestFlowRawTLSCert(t *testing.T) {
+	m := rawToMap(t, &pb.FlowRecord{
+		Protocol:          6,
+		TlsSni:            "c2.example",
+		TlsCertSubject:    "evil.selfsigned",
+		TlsCertIssuer:     "evil.selfsigned",
+		TlsCertSelfSigned: true,
+		TlsCertNotBefore:  1754000000,
+		TlsCertNotAfter:   1786000000,
+	})
+	tls, ok := m["tls"].(map[string]any)
+	if !ok {
+		t.Fatalf("应有 tls 对象：%v", m)
+	}
+	cert, ok := tls["cert"].(map[string]any)
+	if !ok {
+		t.Fatalf("应有 tls.cert 对象：%v", tls)
+	}
+	if cert["subject"] != "evil.selfsigned" || cert["issuer"] != "evil.selfsigned" {
+		t.Fatalf("cert subject/issuer 不对：%v", cert)
+	}
+	if cert["self_signed"] != true {
+		t.Fatalf("cert self_signed 应为 true：%v", cert)
+	}
+	if cert["not_before"] != float64(1754000000) || cert["not_after"] != float64(1786000000) {
+		t.Fatalf("cert 有效期不对：%v", cert)
+	}
+}
+
+func TestFlowRawNoCertNoCertKey(t *testing.T) {
+	// 证书字段为空（TLS 1.3 或没抓到 Certificate）时不应写 tls.cert
+	m := rawToMap(t, &pb.FlowRecord{Protocol: 6, TlsSni: "a.example"})
+	tls, ok := m["tls"].(map[string]any)
+	if !ok {
+		t.Fatalf("应有 tls 对象：%v", m)
+	}
+	if _, ok := tls["cert"]; ok {
+		t.Fatalf("无证书不应写 cert 键：%v", tls)
+	}
+}
