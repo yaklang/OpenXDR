@@ -53,8 +53,28 @@ cases:
     source: atomic T1543.002
     class: 1001
     os: linux
-    expect: undetected
     event:
       activity_id: 1
+      file:
+        path: "/etc/systemd/system/atomic.service"
+
+  - name: systemd 单元文件被修改
+    technique: T1543.002
+    source: atomic T1543.002
+    class: 1001
+    os: linux
+    event:
+      activity_id: 3
+      file:
+        path: "/etc/systemd/system/atomic.service"
+
+  - name: systemd 单元文件删除（落盘规则只报增/改）
+    technique: T1543.002
+    source: activity 过滤对照
+    class: 1001
+    os: linux
+    expect: undetected
+    event:
+      activity_id: 4
       file:
         path: "/etc/systemd/system/atomic.service"

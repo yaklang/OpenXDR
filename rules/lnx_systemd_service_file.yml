@@ -1,0 +1,24 @@
+title: Systemd Service Unit File Installed or Modified
+id: 3f7a9c2e-6b1d-4e8a-9c3f-2d5b7a9e1c04
+status: experimental
+description: |
+  检测 /etc/systemd/system 下 .service 单元文件的新建与修改——systemd 服务
+  是 Linux 上最常见的持久化方式之一。良性噪声已知：包管理器装软件同样写
+  这个目录，所以定 low，靠关联与研判看上下文（fanotify 采集路径带进程
+  上下文，"谁写的"可直接定性）。只报增(1)/改(3)，删除不算落盘。
+tags:
+  - attack.persistence
+  - attack.t1543.002
+logsource:
+  category: file_event
+  product: linux
+detection:
+  unit_path:
+    TargetFilename|startswith: '/etc/systemd/system/'
+    TargetFilename|endswith: '.service'
+  write_op:
+    activity_id:
+      - 1
+      - 3
+  condition: unit_path and write_op
+level: low

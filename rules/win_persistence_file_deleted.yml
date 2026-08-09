@@ -1,0 +1,23 @@
+title: Persistence File Deleted (Startup Folder or Scheduled Task)
+id: 2e6c9a3d-7b4e-4f1a-8d5c-3b9e6a1f7c28
+status: experimental
+description: |
+  检测 Startup 目录项与计划任务文件的删除（activity_id=4）——与注册表侧
+  的 "Autostart Registry Entry or Service Deleted" 同属持久化痕迹清理
+  （T1070）。卸载程序偶尔会清自己的 Startup 项，单发未必是攻击，但配合
+  同主机其他告警就是典型的擦痕迹动作。
+tags:
+  - attack.defense_evasion
+  - attack.t1070
+logsource:
+  category: file_delete
+  product: windows
+detection:
+  startup_dir:
+    TargetFilename|contains: '\Start Menu\Programs\Startup'
+  task_dir:
+    TargetFilename|startswith: 'C:\Windows\System32\Tasks\'
+  deleted:
+    activity_id: 4
+  condition: (startup_dir or task_dir) and deleted
+level: high

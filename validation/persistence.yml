@@ -34,3 +34,27 @@ cases:
         file:
           path: "C:\\Windows\\System32\\reg.exe"
         cmd_line: 'reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Atomic /t REG_SZ /d "C:\evil.exe" /f'
+
+  - name: 新服务安装（服务快照 diff 出的新增）
+    technique: T1543.001
+    source: atomic T1543.001
+    class: 201002
+    os: windows
+    event:
+      activity_id: 1
+      reg_key:
+        path: "HKLM\\SYSTEM\\CurrentControlSet\\Services\\atomic"
+      reg_value:
+        data: "ImagePath=C:\\Users\\Public\\evil.exe; Start=2"
+
+  - name: 已有服务 ImagePath 被篡改
+    technique: T1543.001
+    source: atomic T1543.001
+    class: 201002
+    os: windows
+    event:
+      activity_id: 3
+      reg_key:
+        path: "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WaaSMedicSvc"
+      reg_value:
+        data: "ImagePath=C:\\Users\\Public\\evil.exe; Start=2"

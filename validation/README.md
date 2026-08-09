@@ -42,7 +42,7 @@ cases:
     expect: detected      # 默认 detected；undetected = 已知缺口，显式记录
 ```
 
-`expect: undetected` 有两个用途：记录尚未覆盖的手法（如 systemd 服务持久化），
+`expect: undetected` 有两个用途：记录尚未覆盖的手法，
 以及**良性对照**——`sh -c 'echo hello'` 这类正常命令必须不告警，
 它变成"命中"同样是回归。
 

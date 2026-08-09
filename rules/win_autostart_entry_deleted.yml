@@ -1,0 +1,25 @@
+title: Autostart Registry Entry or Service Deleted
+id: 5d1b8e4c-9a2f-4c7d-b3e6-7f1a4c8e2b95
+status: experimental
+description: |
+  检测自启动持久化点的删除：Run/RunOnce/Winlogon 键值、Windows 服务被删
+  （注册表快照 diff 出的 activity_id=4，删除事件带旧值内容）。正常软件
+  很少清理自启动项，攻击者收尾擦痕迹才这么干——高价值信号，定 high。
+  文件侧的 Startup 目录 / 计划任务删除由姊妹规则
+  "Persistence File Deleted (Startup Folder or Scheduled Task)" 覆盖。
+tags:
+  - attack.defense_evasion
+  - attack.t1070
+logsource:
+  category: registry_delete
+  product: windows
+detection:
+  autostart:
+    TargetObject|contains:
+      - '\CurrentVersion\Run'
+      - '\Winlogon\'
+      - '\CurrentControlSet\Services\'
+  deleted:
+    activity_id: 4
+  condition: autostart and deleted
+level: high

