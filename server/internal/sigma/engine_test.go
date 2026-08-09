@@ -241,8 +241,8 @@ func TestIngestedClass(t *testing.T) {
 	if _, ok := IngestedClass(1001); !ok {
 		t.Error("1001 文件事件应有采集来源（agent inotify）")
 	}
-	if _, ok := IngestedClass(1005); ok {
-		t.Error("1005 模块加载当前无采集来源")
+	if _, ok := IngestedClass(1005); !ok {
+		t.Error("1005 模块加载应有采集来源（agent /proc/modules diff）")
 	}
 }
 

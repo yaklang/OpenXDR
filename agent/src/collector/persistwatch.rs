@@ -1,4 +1,6 @@
-//! Windows 持久化点监控：注册表自启动键、Startup 目录、Windows 服务、计划任务。
+//! Windows 持久化点监控：注册表自启动与篡改点（Run 键、Winlogon、AppInit、
+//! IFEO 调试器劫持、Defender 排除项、COM 劫持）、Startup 目录、Windows 服务、
+//! 计划任务、WMI 永久事件订阅。
 //!
 //! 统一用快照 diff 轮询——不上 ReadDirectoryChangesW 和注册表通知两套机制。
 //! 持久化检测不需要毫秒级延迟，30 秒轮询换来实现的简单可靠，
@@ -6,6 +8,7 @@
 //! 增、改、删都上报：清理持久化痕迹与写入痕迹同样是攻击信号。
 
 use std::collections::HashMap;
+use std::os::windows::process::CommandExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::pb::AgentEvent;
@@ -18,12 +21,34 @@ const CLASS_FILE: u32 = 1001;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(30);
 
-/// 监控的自启动键（HKLM 与 HKCU 各查一遍）。
+/// 监控的注册表键（HKLM 与 HKCU 各查一遍），直接枚举键下的值。
 /// 值的增改就是持久化动作本身，事件天然高信噪比。
+/// CurrentVersion\Windows 盯的是 AppInit_DLLs 一系值。
 const WATCH_KEYS: &[&str] = &[
     r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
     r"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce",
     r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+    r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows",
+];
+
+/// 树形监控点（hive, 键, 子键枚举深度）：键本身是容器，威胁写在子键的值里，
+/// 整棵子树按深度纳入快照，子键值与其增删都可见。
+/// - Defender 排除项：Paths/Extensions/Processes 子键下的值即排除清单，落地前常见动作
+/// - IFEO：每个可执行文件一个子键，Debugger 值即调试器劫持
+/// - COM 劫持：HKCU 的 CLSID 子键下 InprocServer32/LocalServer32 默认值（无需管理员；
+///   HKCU\Software\Classes 是合并视图，HKLM 侧的系统级注册也一并纳入）
+const WATCH_TREES: &[(winreg::Hive, &str, u32)] = &[
+    (
+        winreg::Hive::LocalMachine,
+        r"SOFTWARE\Microsoft\Windows Defender\Exclusions",
+        1,
+    ),
+    (
+        winreg::Hive::LocalMachine,
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options",
+        1,
+    ),
+    (winreg::Hive::CurrentUser, r"Software\Classes\CLSID", 2),
 ];
 
 /// 服务清单所在的注册表键（仅 HKLM，服务不挂在 HKCU 下）。
@@ -32,23 +57,28 @@ const SERVICES_KEY: &str = r"SYSTEM\CurrentControlSet\Services";
 /// 计划任务文件目录：任务是无扩展名的 XML，按子目录组织。
 const TASKS_DIR: &str = r"C:\Windows\System32\Tasks";
 
+/// WMI 永久事件订阅监控（T1546.003）：命名空间与要盯的类。
+const WMI_NAMESPACE: &str = r"root\subscription";
+const WMI_CLASSES: &[&str] = &["__EventFilter", "__EventConsumer"];
+
 pub fn spawn(agent_id: String, sink: EventSink) {
     std::thread::spawn(move || run(&agent_id, &sink));
 }
 
 fn run(agent_id: &str, sink: &EventSink) {
     // 首轮只建立基线不发事件：agent 重启不该把存量自启动项全报一遍。
-    // 服务与计划任务基线是 Option——首轮读取失败（权限等）时留空，
+    // 服务/计划任务/WMI 基线是 Option——首轮读取失败（权限等）时留空，
     // 等首次读取成功再静默建立基线，避免把失败轮的空快照当成"全量删除"。
     let mut reg_seen = registry_snapshot();
     let mut file_seen = startup_snapshot();
     let mut svc_seen = services_snapshot();
     let mut task_seen = tasks_snapshot();
+    let mut wmi_seen = wmi_snapshot();
 
     loop {
         std::thread::sleep(POLL_INTERVAL);
 
-        // 四类快照各自独立 diff，一类读取失败只跳过自己这一轮
+        // 五类快照各自独立 diff，一类读取失败只跳过自己这一轮
         let reg_now = registry_snapshot();
         for (path, data, activity) in diff(&reg_seen, &reg_now) {
             if !sink.send(registry_event(agent_id, path, data, activity)) {
@@ -86,6 +116,17 @@ fn run(agent_id: &str, sink: &EventSink) {
             }
             task_seen = Some(task_now);
         }
+
+        if let Some(wmi_now) = wmi_snapshot() {
+            if let Some(seen) = &wmi_seen {
+                for (path, data, activity) in diff(seen, &wmi_now) {
+                    if !sink.send(wmi_event(agent_id, path, data, activity)) {
+                        return;
+                    }
+                }
+            }
+            wmi_seen = Some(wmi_now);
+        }
     }
 }
 
@@ -121,14 +162,44 @@ fn registry_snapshot() -> HashMap<String, String> {
             }
         }
     }
+    // 树形键各自绑定 hive，不走上面的双 hive 循环
+    for (hive, key, depth) in WATCH_TREES {
+        snapshot_tree(&mut snap, hive.name(), *hive, key, *depth);
+    }
     snap
 }
 
-/// Windows 服务快照：完整键路径 -> ImagePath + 启动类型。
-/// 服务有几百个，每轮全量枚举注册表比走 SCM/WMI 简单，也不依赖服务控制权限。
-/// 返回 None 表示连 Services 键都打不开（权限等），本轮整体跳过。
+/// 递归枚举键的值与子键（限深度），全部纳入快照。
+/// 键打不开（不存在/权限）静默跳过——IFEO、排除项这类键默认不存在是正常的。
+fn snapshot_tree(
+    snap: &mut HashMap<String, String>,
+    hive_name: &str,
+    hive: winreg::Hive,
+    key: &str,
+    depth: u32,
+) {
+    for (name, data) in winreg::values(hive, key) {
+        snap.insert(format!("{hive_name}\\{key}\\{name}"), data);
+    }
+    if depth == 0 {
+        return;
+    }
+    if let Some(subkeys) = winreg::subkeys(hive, key) {
+        for sub in subkeys {
+            snapshot_tree(snap, hive_name, hive, &format!("{key}\\{sub}"), depth - 1);
+        }
+    }
+}
+
+/// Windows 服务快照：完整键路径 -> ImagePath + 启动类型 + 运行状态。
+/// 服务清单走注册表（有几百个，全量枚举比逐个 OpenService 简单），
+/// 运行状态走 SCM 一次性枚举——注册表拿不到 Running/Stopped，
+/// 而"停掉 EventLog 瞎眼"恰恰是最关键的信号。
+/// 返回 None 表示连 Services 键都打不开或 SCM 枚举失败（权限等），本轮整体跳过：
+/// 拿着缺 State 字段的半份快照去 diff，会把全量服务误报成"修改"。
 fn services_snapshot() -> Option<HashMap<String, String>> {
     let names = winreg::subkeys(winreg::Hive::LocalMachine, SERVICES_KEY)?;
+    let states = service_states()?;
     let mut snap = HashMap::new();
     for name in names {
         let key = format!(r"{SERVICES_KEY}\{name}");
@@ -140,12 +211,120 @@ fn services_snapshot() -> Option<HashMap<String, String>> {
         let start = winreg::dword(winreg::Hive::LocalMachine, &key, "Start")
             .map(|v| v.to_string())
             .unwrap_or_else(|| "?".to_string());
+        // 注册表里有键但 SCM 没有对应服务（卸载残留等）时状态记 "?"
+        let state = states.get(&name.to_lowercase()).copied().unwrap_or("?");
         snap.insert(
             format!(r"HKLM\{SERVICES_KEY}\{name}"),
-            format!("ImagePath={image_path}; Start={start}"),
+            format!("ImagePath={image_path}; Start={start}; State={state}"),
         );
     }
     Some(snap)
+}
+
+/// 服务运行状态：服务名（小写）-> 状态串。
+/// EnumServicesStatusEx 一次枚举全部服务（含驱动），比逐服务 QueryServiceStatus 便宜。
+/// 失败返回 None，调用方整轮跳过服务快照。
+fn service_states() -> Option<HashMap<String, &'static str>> {
+    use windows_sys::Win32::System::Services::{
+        CloseServiceHandle, ENUM_SERVICE_STATUS_PROCESSW, EnumServicesStatusExW, OpenSCManagerW,
+        SC_ENUM_PROCESS_INFO, SC_MANAGER_ENUMERATE_SERVICE, SERVICE_DRIVER, SERVICE_STATE_ALL,
+        SERVICE_WIN32,
+    };
+
+    let scm = unsafe {
+        OpenSCManagerW(
+            std::ptr::null(),
+            std::ptr::null(),
+            SC_MANAGER_ENUMERATE_SERVICE,
+        )
+    };
+    if scm.is_null() {
+        return None;
+    }
+    // 先空调用拿缓冲区大小（必然失败并报 ERROR_MORE_DATA，bytes_needed 为所需大小）
+    let mut bytes_needed = 0u32;
+    let mut count = 0u32;
+    let mut resume = 0u32;
+    unsafe {
+        EnumServicesStatusExW(
+            scm,
+            SC_ENUM_PROCESS_INFO,
+            SERVICE_WIN32 | SERVICE_DRIVER,
+            SERVICE_STATE_ALL,
+            std::ptr::null_mut(),
+            0,
+            &mut bytes_needed,
+            &mut count,
+            &mut resume,
+            std::ptr::null(),
+        );
+    }
+    // 用 u64 缓冲保证对齐：ENUM_SERVICE_STATUS_PROCESSW 含指针字段，
+    // Vec<u8> 不保证 8 字节对齐
+    let mut buf = vec![0u64; (bytes_needed as usize).div_ceil(8)];
+    let ok = unsafe {
+        EnumServicesStatusExW(
+            scm,
+            SC_ENUM_PROCESS_INFO,
+            SERVICE_WIN32 | SERVICE_DRIVER,
+            SERVICE_STATE_ALL,
+            buf.as_mut_ptr() as *mut u8,
+            bytes_needed,
+            &mut bytes_needed,
+            &mut count,
+            &mut resume,
+            std::ptr::null(),
+        )
+    };
+    unsafe { CloseServiceHandle(scm) };
+    if ok == 0 {
+        return None;
+    }
+    let entries = unsafe {
+        std::slice::from_raw_parts(
+            buf.as_ptr() as *const ENUM_SERVICE_STATUS_PROCESSW,
+            count as usize,
+        )
+    };
+    let mut out = HashMap::new();
+    for e in entries {
+        let name = unsafe { wide_str(e.lpServiceName) };
+        out.insert(
+            name.to_lowercase(),
+            service_state_name(e.ServiceStatusProcess.dwCurrentState),
+        );
+    }
+    Some(out)
+}
+
+/// SERVICE_STATUS_PROCESS.dwCurrentState 数值 -> 状态串。
+fn service_state_name(state: u32) -> &'static str {
+    use windows_sys::Win32::System::Services::{
+        SERVICE_CONTINUE_PENDING, SERVICE_PAUSE_PENDING, SERVICE_PAUSED, SERVICE_RUNNING,
+        SERVICE_START_PENDING, SERVICE_STOP_PENDING, SERVICE_STOPPED,
+    };
+    match state {
+        SERVICE_STOPPED => "Stopped",
+        SERVICE_START_PENDING => "StartPending",
+        SERVICE_STOP_PENDING => "StopPending",
+        SERVICE_RUNNING => "Running",
+        SERVICE_CONTINUE_PENDING => "ContinuePending",
+        SERVICE_PAUSE_PENDING => "PausePending",
+        SERVICE_PAUSED => "Paused",
+        _ => "Unknown",
+    }
+}
+
+/// 从 Win32 API 返回的宽字符指针构造 String，空指针给空串。
+unsafe fn wide_str(p: *mut u16) -> String {
+    if p.is_null() {
+        return String::new();
+    }
+    let mut len = 0;
+    while unsafe { *p.add(len) } != 0 {
+        len += 1;
+    }
+    String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(p, len) })
 }
 
 /// Startup 目录快照：全局一个 + 每用户一个。
@@ -200,6 +379,71 @@ fn tasks_snapshot() -> Option<HashMap<String, (u64, u64)>> {
     Some(snap)
 }
 
+/// WMI 永久事件订阅快照：伪路径 -> 实例属性（规范化 JSON 串）。
+/// 没有引 wmi crate（重依赖），30 秒一次走 powershell 子进程拿 JSON 再解析，
+/// 对这个频率来说足够。查询失败（权限/WMI 服务异常）返回 None，本轮静默跳过，
+/// 不影响其他快照；查询成功但没有实例是合法的空快照（输出为空，退出码 0）。
+fn wmi_snapshot() -> Option<HashMap<String, String>> {
+    let mut snap = HashMap::new();
+    for class in WMI_CLASSES {
+        let out = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &wmi_query(class),
+            ])
+            // agent 作为服务运行没有控制台，禁止子进程弹窗
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        for (name, props) in parse_wmi_json(&text) {
+            snap.insert(format!(r"wmi:{WMI_NAMESPACE}\{class}.{name}"), props);
+        }
+    }
+    Some(snap)
+}
+
+/// agent 作为服务运行没有控制台，powershell 子进程不应尝试创建窗口。
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// 单类的 WMI 查询：ConvertTo-Json 输出整个实例（含各类专有属性），
+/// -ErrorAction Stop 让命名空间/权限错误变成非零退出码而不是半截输出。
+fn wmi_query(class: &str) -> String {
+    format!(
+        "Get-WmiObject -Namespace '{WMI_NAMESPACE}' -Class '{class}' -ErrorAction Stop | ConvertTo-Json -Compress -Depth 4"
+    )
+}
+
+/// 解析 ConvertTo-Json 输出，返回 (实例名, 规范化属性串)。
+/// 只有一个实例时 ConvertTo-Json 输出对象而不是数组，两种形态都要接。
+/// serde_json 默认 BTreeMap 按键排序，重新序列化即得顺序稳定的 diff 载荷。
+fn parse_wmi_json(json: &str) -> Vec<(String, String)> {
+    let text = json.trim();
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    let items = match value {
+        serde_json::Value::Array(items) => items,
+        obj @ serde_json::Value::Object(_) => vec![obj],
+        _ => return Vec::new(),
+    };
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let name = item.get("Name")?.as_str()?.to_string();
+            Some((name, item.to_string()))
+        })
+        .collect()
+}
+
 fn registry_event(agent_id: &str, path: &str, data: &str, activity: u8) -> AgentEvent {
     let raw = serde_json::json!({
         "activity_id": activity,
@@ -213,6 +457,17 @@ fn file_event(agent_id: &str, path: &str, activity: u8) -> AgentEvent {
     let raw = serde_json::json!({
         "activity_id": activity,
         "file": { "path": path },
+    });
+    event(agent_id, CLASS_FILE, raw)
+}
+
+/// WMI 订阅事件：class_uid 用文件事件，伪路径落在 file.path 便于规则匹配，
+/// 实例属性放在 wmi.data——删除事件带的是被删实例的旧属性。
+fn wmi_event(agent_id: &str, path: &str, data: &str, activity: u8) -> AgentEvent {
+    let raw = serde_json::json!({
+        "activity_id": activity,
+        "file": { "path": path },
+        "wmi": { "data": data },
     });
     event(agent_id, CLASS_FILE, raw)
 }
@@ -259,6 +514,14 @@ mod winreg {
             match self {
                 Hive::LocalMachine => HKEY_LOCAL_MACHINE,
                 Hive::CurrentUser => HKEY_CURRENT_USER,
+            }
+        }
+
+        /// 事件路径里的 hive 前缀。
+        pub fn name(self) -> &'static str {
+            match self {
+                Hive::LocalMachine => "HKLM",
+                Hive::CurrentUser => "HKCU",
             }
         }
     }
@@ -432,5 +695,80 @@ mod tests {
         let d = diff(&seen, &now);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].2, 3);
+    }
+
+    #[test]
+    fn service_state_flip_is_modify() {
+        // EventLog 被停止：ImagePath/Start 都没变，只有 State 翻转，必须报 Modify
+        let path = r"HKLM\SYSTEM\CurrentControlSet\Services\EventLog";
+        let seen = snap(&[(
+            path,
+            "ImagePath=C:\\Windows\\System32\\svchost.exe; Start=2; State=Running",
+        )]);
+        let now = snap(&[(
+            path,
+            "ImagePath=C:\\Windows\\System32\\svchost.exe; Start=2; State=Stopped",
+        )]);
+        let d = diff(&seen, &now);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].2, 3, "State 翻转应报 Modify(3)");
+        assert!(d[0].1.contains("State=Stopped"), "内容应为新值");
+    }
+
+    #[test]
+    fn service_state_same_is_quiet() {
+        let path = r"HKLM\SYSTEM\CurrentControlSet\Services\EventLog";
+        let seen = snap(&[(
+            path,
+            "ImagePath=C:\\Windows\\System32\\svchost.exe; Start=2; State=Running",
+        )]);
+        let now = seen.clone();
+        assert!(diff(&seen, &now).is_empty());
+    }
+
+    #[test]
+    fn parse_wmi_json_single_object_not_array() {
+        // 只有一个实例时 ConvertTo-Json 输出对象而不是数组
+        let json = r#"{"Name":"EvilFilter","Query":"SELECT * FROM __InstanceCreationEvent"}"#;
+        let items = parse_wmi_json(json);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].0, "EvilFilter");
+        // 键排序稳定，同一对象永远序列化成同一串，diff 不会误报
+        assert_eq!(
+            items[0].1,
+            r#"{"Name":"EvilFilter","Query":"SELECT * FROM __InstanceCreationEvent"}"#
+        );
+    }
+
+    #[test]
+    fn parse_wmi_json_array() {
+        let json = r#"[{"Name":"a","Query":"q1"},{"Name":"b","CommandLineTemplate":"evil.exe"}]"#;
+        let items = parse_wmi_json(json);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].0, "a");
+        assert_eq!(items[1].0, "b");
+    }
+
+    #[test]
+    fn parse_wmi_json_empty_and_garbage() {
+        // 无实例（空输出）与查询异常输出都不该产生快照条目
+        assert!(parse_wmi_json("").is_empty());
+        assert!(parse_wmi_json("  \r\n ").is_empty());
+        assert!(parse_wmi_json("not json").is_empty());
+        // 没有 Name 属性的实例无法定位伪路径，跳过
+        assert!(parse_wmi_json(r#"[{"Query":"q"}]"#).is_empty());
+    }
+
+    #[test]
+    fn wmi_diff_delete_carries_old_properties() {
+        let seen = snap(&[(
+            r"wmi:root\subscription\__EventConsumer.EvilConsumer",
+            r#"{"CommandLineTemplate":"evil.exe","Name":"EvilConsumer"}"#,
+        )]);
+        let now = HashMap::new();
+        let d = diff(&seen, &now);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].2, 4, "删除应报 Delete(4)");
+        assert!(d[0].1.contains("evil.exe"), "删除事件应带被删实例的旧属性");
     }
 }

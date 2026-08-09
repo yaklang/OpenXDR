@@ -13,16 +13,16 @@ use ferrisetw::parser::Parser;
 use ferrisetw::provider::Provider;
 use ferrisetw::schema_locator::SchemaLocator;
 use ferrisetw::trace::UserTrace;
+use std::sync::{Arc, Mutex};
 
 const KERNEL_PROCESS_GUID: &str = "22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716";
 const EVENT_PROCESS_START: u16 = 1;
 const EVENT_PROCESS_STOP: u16 = 2;
 
-pub async fn run(agent_id: String, tx: EventSink) {
+pub async fn run(agent_id: String, tx: EventSink, registry: Arc<Mutex<ProcessRegistry>>) {
     let cb_agent_id = agent_id.clone();
     let cb_tx = tx.clone();
-    // ETW 回调是 Fn，注册表用 Mutex 包起来共享
-    let registry = std::sync::Mutex::new(seeded_registry());
+    // ETW 回调是 Fn，注册表（与网络采集共享）经 Arc 移进回调加锁使用
 
     let provider = Provider::by_guid(KERNEL_PROCESS_GUID)
         .add_callback(move |record: &EventRecord, locator: &SchemaLocator| {
@@ -131,7 +131,8 @@ fn to_win32_path(image: &str) -> String {
 }
 
 /// 用进程表快照预登记现有进程，之后派生的子进程才能找到父。
-fn seeded_registry() -> ProcessRegistry {
+/// 由 mod.rs 调起：进程采集与网络采集共享同一张注册表。
+pub(crate) fn seeded_registry() -> ProcessRegistry {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 
     let mut sys = System::new();

