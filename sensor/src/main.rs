@@ -9,6 +9,7 @@ mod flow;
 mod proto_id;
 mod report;
 mod tls;
+mod x509;
 
 pub mod pb {
     tonic::include_proto!("openxdr.sensor.v1");

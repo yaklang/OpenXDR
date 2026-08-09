@@ -54,6 +54,16 @@ pub struct Metadata {
     pub http_host: Option<String>,
     pub http_uri: Option<String>,
     pub http_user_agent: Option<String>,
+    /// 叶证书 subject CN（仅 TLS ≤1.2 可见，1.3 证书加密传输）
+    pub cert_subject: Option<String>,
+    /// 叶证书 issuer CN
+    pub cert_issuer: Option<String>,
+    /// subject 与 issuer 原始 DER 相等（自签启发式，不做签名验证）
+    pub cert_self_signed: bool,
+    /// 证书有效期起（unix 秒），无则 0
+    pub cert_not_before: i64,
+    /// 证书有效期止（unix 秒），无则 0
+    pub cert_not_after: i64,
 }
 
 pub struct Flow {
@@ -74,6 +84,9 @@ pub struct Flow {
     /// a 侧是否为客户端。五元组按大小归一化会丢掉方向，
     /// 而"谁是服务端"是网络检测的基本前提，必须单独记住。
     pub client_is_a: bool,
+    /// TLS 服务端 handshake 重组缓冲：证书常跨 TCP 分段，攒到有界上限再解析。
+    /// 默认空 Vec 无堆分配，只有 TLS 流才会 push。
+    pub tls_hs_buf: Vec<u8>,
 }
 
 impl Flow {
@@ -154,6 +167,7 @@ impl FlowTable {
             probed: false,
             probed_server: false,
             client_is_a,
+            tls_hs_buf: Vec::new(),
         });
 
         flow.last_ns = ts_ns;

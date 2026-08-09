@@ -70,6 +70,11 @@ pub fn to_record(flow: &Flow) -> pb::FlowRecord {
         http_host: flow.meta.http_host.clone().unwrap_or_default(),
         http_uri: flow.meta.http_uri.clone().unwrap_or_default(),
         http_user_agent: flow.meta.http_user_agent.clone().unwrap_or_default(),
+        tls_cert_subject: flow.meta.cert_subject.clone().unwrap_or_default(),
+        tls_cert_issuer: flow.meta.cert_issuer.clone().unwrap_or_default(),
+        tls_cert_self_signed: flow.meta.cert_self_signed,
+        tls_cert_not_before: flow.meta.cert_not_before,
+        tls_cert_not_after: flow.meta.cert_not_after,
     }
 }
 
@@ -153,10 +158,16 @@ mod tests {
                 http_host: Some("h.example".to_string()),
                 http_uri: Some("/x".to_string()),
                 http_user_agent: Some("ua".to_string()),
+                cert_subject: Some("leaf.example".to_string()),
+                cert_issuer: Some("Test CA".to_string()),
+                cert_self_signed: false,
+                cert_not_before: 1_700_000_000,
+                cert_not_after: 1_800_000_000,
             },
             probed: true,
             probed_server: true,
             client_is_a,
+            tls_hs_buf: Vec::new(),
         }
     }
 
@@ -203,5 +214,10 @@ mod tests {
         assert_eq!(r.tls_sni, "");
         assert_eq!(r.ja3, "");
         assert_eq!(r.ja3s, "ja3s-hash");
+        assert_eq!(r.tls_cert_subject, "leaf.example");
+        assert_eq!(r.tls_cert_issuer, "Test CA");
+        assert!(!r.tls_cert_self_signed);
+        assert_eq!(r.tls_cert_not_before, 1_700_000_000);
+        assert_eq!(r.tls_cert_not_after, 1_800_000_000);
     }
 }

@@ -6,7 +6,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use md5::{Digest, Md5};
 
 use crate::decode::Packet;
-use crate::flow::Flow;
+use crate::flow::{Flow, Metadata};
+use crate::x509;
 
 const DNS_PORT: u16 = 53;
 const MAX_NAME_LEN: usize = 253;
@@ -16,6 +17,9 @@ const MAX_PTR_JUMPS: usize = 16;
 const MAX_DNS_ANSWERS: usize = 4;
 /// HTTP 头部字段长度上限，防止畸形请求撑爆内存
 const MAX_HEADER_LEN: usize = 512;
+/// TLS 服务端 handshake 重组缓冲上限：证书链再大也不会超过这个量级，
+/// 超限视为异常流，直接放弃等待而不是无限攒内存
+const MAX_TLS_HS_BUF: usize = 16 * 1024;
 
 pub fn probe(flow: &mut Flow, pkt: &Packet) {
     if pkt.payload.is_empty() {
@@ -56,14 +60,136 @@ pub fn probe(flow: &mut Flow, pkt: &Packet) {
             return;
         }
     }
-    // ServerHello 在服务端方向，与 ClientHello 互不干扰：handshake type 不同，
-    // 同一条流两个方向各探一次
-    if !flow.probed_server
-        && let Some(ja3s) = parse_server_hello(pkt.payload)
-    {
-        flow.meta.ja3s = Some(ja3s);
-        flow.probed_server = true;
+    // 服务端方向：TLS handshake 重组后提取 JA3S 与证书元数据。
+    // 与 ClientHello 互不干扰：handshake type 不同，同一条流两个方向各探一次
+    if !flow.probed_server {
+        probe_tls_server(flow, pkt.payload);
     }
+}
+
+/// TLS 服务端方向探测：把 handshake record 攒进 tls_hs_buf 做有界重组，
+/// 增量解析 ServerHello（JA3S、TLS1.3 判定）与 Certificate（证书元数据）。
+/// 完成条件：拿到 JA3S 且证书已见（或判定 TLS1.3 等不到证书）；
+/// 或看到应用数据 record（0x17）；或缓冲超限。完成后置 probed_server。
+fn probe_tls_server(flow: &mut Flow, payload: &[u8]) {
+    if flow.tls_hs_buf.is_empty() {
+        // 缓冲为空时，0x17 应用数据说明握手窗口已过（TLS1.3、会话复用等），不等了
+        if payload.first() == Some(&0x17) {
+            flow.probed_server = true;
+            return;
+        }
+        // 只有以 handshake record 开头、且首个 handshake 消息是
+        // ServerHello(2)/Certificate(11) 的 payload 才启动重组——
+        // ClientHello(1) 在客户端方向，绝不能进这个缓冲
+        let starts_hs =
+            payload.first() == Some(&0x16) && matches!(payload.get(5), Some(&2) | Some(&11));
+        if !starts_hs {
+            return;
+        }
+    }
+    flow.tls_hs_buf.extend_from_slice(payload);
+    if flow.tls_hs_buf.len() > MAX_TLS_HS_BUF {
+        flow.tls_hs_buf.clear();
+        flow.probed_server = true;
+        return;
+    }
+
+    // 拿出缓冲再扫描，避免与 meta 的可变借用冲突；扫完只留未消费的不完整尾巴
+    let buf = std::mem::take(&mut flow.tls_hs_buf);
+    let (consumed, done) = scan_server_records(&buf, &mut flow.meta);
+    if done {
+        flow.probed_server = true; // buf 随 take 丢弃，缓冲即清空
+    } else {
+        flow.tls_hs_buf = buf[consumed..].to_vec();
+    }
+}
+
+/// 在重组缓冲上增量扫描完整 record。返回（已消费前缀长度, 是否完成探测）。
+/// record 不完整就停，等下一个包再续。
+fn scan_server_records(buf: &[u8], meta: &mut Metadata) -> (usize, bool) {
+    let mut pos = 0;
+    loop {
+        let rec = &buf[pos..];
+        if rec.len() < 5 {
+            break;
+        }
+        let rlen = be16(rec, 3).map_or(0, |l| l as usize);
+        if rec.len() < 5 + rlen {
+            break; // record 没攒齐，等下一段
+        }
+        let rtype = rec[0];
+        let body = &rec[5..5 + rlen];
+        pos += 5 + rlen;
+        match rtype {
+            // handshake record：扫其中完整的 handshake 消息
+            0x16 if scan_handshakes(body, meta) => return (pos, true),
+            // 应用数据出现 → 握手窗口已过
+            0x17 => return (pos, true),
+            // CCS/alert 等不关注，跳过
+            _ => {}
+        }
+    }
+    (pos, false)
+}
+
+/// 扫一个 handshake record 里完整的 handshake 消息（跨 record 的残缺尾巴丢弃）。
+/// 返回 true 表示探测完成。
+fn scan_handshakes(body: &[u8], meta: &mut Metadata) -> bool {
+    let mut pos = 0;
+    while pos + 4 <= body.len() {
+        let htype = body[pos];
+        let hlen = be24(body, pos + 1).map_or(0, |l| l as usize);
+        let Some(hs) = body.get(pos..pos + 4 + hlen) else {
+            break;
+        };
+        match htype {
+            // ServerHello：JA3S 只填一次；supported_versions 选 0x0304 → TLS1.3，
+            // 证书加密传输等不到，JA3S 在手即完成；证书先见过的也同样完成
+            0x02 if meta.ja3s.is_none() => {
+                if let Some(sh) = parse_server_hello_hs(hs) {
+                    meta.ja3s = Some(sh.ja3s);
+                    if sh.tls13 || meta.cert_not_after != 0 || meta.cert_subject.is_some() {
+                        return true;
+                    }
+                }
+            }
+            // Certificate：取第一张叶证书解析；见过证书且 JA3S 在手即完成
+            0x0b if meta.cert_not_after == 0 && meta.cert_subject.is_none() => {
+                if let Some(der) = first_certificate(&hs[4..])
+                    && let Some(info) = x509::parse_certificate(der)
+                {
+                    meta.cert_subject = info.subject_cn;
+                    meta.cert_issuer = info.issuer_cn;
+                    meta.cert_self_signed = info.self_signed;
+                    meta.cert_not_before = info.not_before;
+                    meta.cert_not_after = info.not_after;
+                }
+                if meta.ja3s.is_some() {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        pos += 4 + hlen;
+    }
+    false
+}
+
+/// Certificate 消息体：certificate_list = 3字节总长 + 重复(3字节证书长度 + DER)，
+/// 只取第一张（叶证书）。
+fn first_certificate(body: &[u8]) -> Option<&[u8]> {
+    let _list_len = be24(body, 0)?;
+    let cert_len = be24(body, 3)? as usize;
+    body.get(6..6 + cert_len)
+}
+
+fn be24(buf: &[u8], pos: usize) -> Option<u32> {
+    Some(u32::from_be_bytes([
+        0,
+        *buf.get(pos)?,
+        *buf.get(pos + 1)?,
+        *buf.get(pos + 2)?,
+    ]))
 }
 
 /// 解析域名（RFC 1035 压缩指针）。返回域名与线性流上下一个位置
@@ -253,14 +379,27 @@ fn parse_client_hello(payload: &[u8]) -> Option<ClientHello> {
     })
 }
 
-/// TLS ServerHello：提取 JA3S 服务端指纹。
+/// TLS ServerHello（单 record payload 形式）：提取 JA3S 服务端指纹。
+/// 重组路径走 parse_server_hello_hs；这个包装只留给出参更简单的单测。
 /// JA3S = md5(版本,密码套件,扩展)，GREASE 扩展按规范剔除。
+#[cfg(test)]
 fn parse_server_hello(payload: &[u8]) -> Option<String> {
     // TLS record: type(1) version(2) length(2)；0x16 = handshake
     if *payload.first()? != 0x16 {
         return None;
     }
-    let hs = payload.get(5..)?;
+    parse_server_hello_hs(payload.get(5..)?).map(|sh| sh.ja3s)
+}
+
+struct ServerHelloInfo {
+    ja3s: String,
+    /// supported_versions(0x002b) 选了 0x0304 → TLS1.3，证书加密传输
+    tls13: bool,
+}
+
+/// 作用于 handshake 消息切片（type 字节 + 3字节长度开头）的 ServerHello 解析，
+/// 重组缓冲里的 ServerHello 与单 record 场景共用。
+fn parse_server_hello_hs(hs: &[u8]) -> Option<ServerHelloInfo> {
     // handshake: type(1) length(3) version(2) random(32)；0x02 = ServerHello
     if *hs.first()? != 0x02 {
         return None;
@@ -276,6 +415,7 @@ fn parse_server_hello(payload: &[u8]) -> Option<String> {
 
     // 扩展块可选：老服务端的 ServerHello 可能没有
     let mut extensions = Vec::new();
+    let mut tls13 = false;
     if hs.get(pos).is_some() {
         let ext_total = be16(hs, pos)? as usize;
         pos += 2;
@@ -287,16 +427,18 @@ fn parse_server_hello(payload: &[u8]) -> Option<String> {
             if !is_grease(ext_type) {
                 extensions.push(ext_type);
             }
+            // ServerHello 的 supported_versions 扩展体即选中的版本号
+            if ext_type == 0x002b && be16(hs, pos) == Some(0x0304) {
+                tls13 = true;
+            }
             pos += ext_len;
         }
     }
 
-    Some(md5_hex(&format!(
-        "{},{},{}",
-        version,
-        cipher,
-        join_u16(&extensions)
-    )))
+    Some(ServerHelloInfo {
+        ja3s: md5_hex(&format!("{},{},{}", version, cipher, join_u16(&extensions))),
+        tls13,
+    })
 }
 
 /// md5 摘要转小写十六进制，JA3/JA3S 共用。
@@ -423,6 +565,7 @@ mod tests {
             probed: false,
             probed_server: false,
             client_is_a: true,
+            tls_hs_buf: Vec::new(),
         }
     }
 
@@ -725,8 +868,16 @@ mod tests {
         assert!(!flow.probed_server, "ClientHello 不应占用服务端探测位");
     }
 
-    /// 构造 ServerHello：version TLS1.2 + 指定密码套件 + 扩展列表（可含 GREASE）。
+    /// 构造 ServerHello：version TLS1.2 + 指定密码套件 + 扩展列表（可含 GREASE，空扩展体）。
     fn server_hello(cipher: u16, extensions: &[u16]) -> Vec<u8> {
+        server_hello_exts(
+            cipher,
+            &extensions.iter().map(|e| (*e, &[][..])).collect::<Vec<_>>(),
+        )
+    }
+
+    /// 构造带扩展体的 ServerHello（TLS1.3 的 supported_versions 需要非空扩展体）。
+    fn server_hello_exts(cipher: u16, extensions: &[(u16, &[u8])]) -> Vec<u8> {
         let mut hs = Vec::new();
         hs.push(0x02); // handshake type ServerHello
         hs.extend_from_slice(&[0, 0, 0]); // length 占位
@@ -737,12 +888,17 @@ mod tests {
         hs.push(0); // compression = null
 
         let mut exts = Vec::new();
-        for ext in extensions {
+        for (ext, body) in extensions {
             exts.extend_from_slice(&ext.to_be_bytes());
-            exts.extend_from_slice(&0u16.to_be_bytes()); // 空扩展体
+            exts.extend_from_slice(&(body.len() as u16).to_be_bytes());
+            exts.extend_from_slice(body);
         }
         hs.extend_from_slice(&(exts.len() as u16).to_be_bytes());
         hs.extend_from_slice(&exts);
+
+        // 回填 handshake 3 字节长度（type 之后）
+        let hs_len = (hs.len() - 4) as u32;
+        hs[1..4].copy_from_slice(&hs_len.to_be_bytes()[1..]);
 
         let mut record = Vec::new();
         record.push(0x16);
@@ -795,12 +951,112 @@ mod tests {
         assert!(flow.probed);
         assert!(!flow.probed_server);
 
+        // TLS1.2 的 ServerHello 之后还要等 Certificate，先不置 probed_server
         probe(&mut flow, &pkt(443, 52000, &server_hello(0x1301, &[])));
-        assert!(flow.probed_server);
+        assert!(!flow.probed_server);
         assert_eq!(
             flow.meta.ja3s.as_deref(),
             Some(md5_hex("771,4865,").as_str())
         );
+
+        // 应用数据出现 → 握手窗口已过，探测完成
+        let app = [0x17, 0x03, 0x03, 0x00, 0x01, 0x00];
+        probe(&mut flow, &pkt(443, 52000, &app));
+        assert!(flow.probed_server);
+    }
+
+    /// 构造 Certificate handshake record：certificate_list 只放一张 DER。
+    fn certificate_record(der: &[u8]) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&((3 + der.len()) as u32).to_be_bytes()[1..]); // list 总长
+        body.extend_from_slice(&(der.len() as u32).to_be_bytes()[1..]); // 证书长度
+        body.extend_from_slice(der);
+
+        let mut hs = vec![0x0b]; // handshake type Certificate
+        hs.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
+        hs.extend_from_slice(&body);
+
+        let mut record = Vec::new();
+        record.push(0x16);
+        record.extend_from_slice(&[0x03, 0x03]);
+        record.extend_from_slice(&(hs.len() as u16).to_be_bytes());
+        record.extend_from_slice(&hs);
+        record
+    }
+
+    use crate::x509::tests::{LEAF_DER, SELF_DER};
+
+    #[test]
+    fn probe_tls_cert_cross_packet_reassembly() {
+        // ServerHello 与 Certificate 各自完整，但 Certificate record 跨 3 个 TCP 段
+        let mut flow = default_flow();
+        probe(&mut flow, &pkt(443, 52000, &server_hello(0x1301, &[])));
+        assert!(flow.meta.ja3s.is_some());
+        assert!(!flow.probed_server);
+
+        let cert = certificate_record(SELF_DER);
+        let third = cert.len() / 3;
+        for chunk in [&cert[..third], &cert[third..2 * third], &cert[2 * third..]] {
+            probe(&mut flow, &pkt(443, 52000, chunk));
+        }
+        assert!(flow.probed_server, "证书解析完成应置 probed_server");
+        assert_eq!(flow.meta.cert_subject.as_deref(), Some("evil.selfsigned"));
+        assert_eq!(flow.meta.cert_issuer.as_deref(), Some("evil.selfsigned"));
+        assert!(flow.meta.cert_self_signed);
+        assert_eq!(flow.meta.cert_not_before, 1_786_286_565);
+        assert_eq!(flow.meta.cert_not_after, 1_817_822_565);
+    }
+
+    #[test]
+    fn probe_tls_serverhello_and_cert_same_packet() {
+        // ServerHello + Certificate 两个 record 塞同一个包，批量解析
+        let mut flow = default_flow();
+        let mut payload = server_hello(0x1301, &[]);
+        payload.extend_from_slice(&certificate_record(LEAF_DER));
+        probe(&mut flow, &pkt(443, 52000, &payload));
+        assert!(flow.probed_server);
+        assert!(flow.meta.ja3s.is_some());
+        assert_eq!(flow.meta.cert_subject.as_deref(), Some("leaf.example"));
+        assert_eq!(flow.meta.cert_issuer.as_deref(), Some("Test CA"));
+        assert!(!flow.meta.cert_self_signed);
+    }
+
+    #[test]
+    fn probe_tls13_stops_without_cert() {
+        // TLS1.3：supported_versions 选 0x0304，证书永远等不到 → JA3S 到手即完成
+        let mut flow = default_flow();
+        let sh = server_hello_exts(0x1301, &[(0x002b, &[0x03, 0x04])]);
+        probe(&mut flow, &pkt(443, 52000, &sh));
+        assert!(flow.probed_server, "TLS1.3 不应等证书");
+        assert!(flow.meta.ja3s.is_some());
+        assert!(flow.tls_hs_buf.is_empty());
+        assert!(flow.meta.cert_subject.is_none());
+    }
+
+    #[test]
+    fn probe_tls_buffer_cap_stops() {
+        // 声明一个永远攒不齐的大 record，缓冲超过 16KB 上限 → 放弃等待
+        let mut flow = default_flow();
+        let mut junk = vec![0x16, 0x03, 0x03, 0x3f, 0xff, 0x0b]; // len=16383，type Certificate
+        junk.extend_from_slice(&[0xAA; 8192]);
+        probe(&mut flow, &pkt(443, 52000, &junk));
+        assert!(!flow.probed_server);
+        // 第二段把缓冲推过上限
+        let more = vec![0xBB; 9000];
+        probe(&mut flow, &pkt(443, 52000, &more));
+        assert!(flow.probed_server, "缓冲超限应停止");
+        assert!(flow.tls_hs_buf.is_empty(), "超限后缓冲应清空");
+    }
+
+    #[test]
+    fn probe_tls_appdata_stops_immediately() {
+        // 服务端第一个包就是应用数据（会话复用等）→ 直接完成，不进缓冲
+        let mut flow = default_flow();
+        let app = [0x17, 0x03, 0x03, 0x00, 0x10, 0x00];
+        probe(&mut flow, &pkt(443, 52000, &app));
+        assert!(flow.probed_server);
+        assert!(flow.tls_hs_buf.is_empty());
+        assert!(flow.meta.ja3s.is_none());
     }
 
     #[test]
