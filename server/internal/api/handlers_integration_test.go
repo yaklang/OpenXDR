@@ -9,6 +9,15 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"openxdr/server/internal/intel"
+	"openxdr/server/internal/response"
+	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/suppress"
+	"openxdr/server/internal/testdb"
 )
 
 // suppress 规则：GET 空列表；POST 建一条并立即生效；缺规则 ID 拒绝；DELETE 撤下。
@@ -168,6 +177,32 @@ func TestAPIUsers(t *testing.T) {
 	_, ab := get(t, ts, "/api/audit")
 	if !strings.Contains(string(ab), "user_created") {
 		t.Errorf("审计应记录 user_created: %s", ab)
+	}
+}
+
+// 指令下发：非法 kind 拒绝、响应未启用时下发失败（但拒绝而非 500）。
+func TestAPICommandIssue(t *testing.T) {
+	ctx, client := testdb.New(t)
+	asset, err := client.Asset.Create().SetHostname("web01").SetAgentID(uuid.New()).Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := sigma.LoadDir(t.TempDir())
+	ts := httptest.NewServer(Handler(client, rules, t.TempDir(), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil, nil))
+	t.Cleanup(ts.Close)
+
+	// 非法 kind → 400
+	r, _ := postJSON(ts, "/api/commands", `{"kind":"format_disk","assetId":"`+asset.ID.String()+`"}`)
+	r.Body.Close()
+	if r.StatusCode != 400 {
+		t.Errorf("非法 kind 应 400，得到 %d", r.StatusCode)
+	}
+
+	// 响应未启用 → 冲突（能力关闭，非 500）
+	r2, _ := postJSON(ts, "/api/commands", `{"kind":"kill_process","assetId":"`+asset.ID.String()+`"}`)
+	r2.Body.Close()
+	if r2.StatusCode != 409 {
+		t.Errorf("响应未启用应 409，得到 %d", r2.StatusCode)
 	}
 }
 
