@@ -40,6 +40,11 @@ message FlowRecord {
   uint32 dns_rcode = 19;          // DNS 应答码（NOERROR=0，无应答时也是 0），无则 0
   repeated string dns_answers = 20; // A/AAAA 应答 IP（至多 4 个）
   string ja3s = 21;               // TLS 服务端指纹，无则空
+  string tls_cert_subject = 22;      // 叶证书 subject CN，无则空（仅 TLS ≤1.2 可见）
+  string tls_cert_issuer = 23;       // 叶证书 issuer CN，无则空
+  bool tls_cert_self_signed = 24;    // subject DN 与 issuer DN 原始 DER 相等（启发式）
+  int64 tls_cert_not_before = 25;    // 有效期起，unix 秒，无则 0
+  int64 tls_cert_not_after = 26;     // 有效期止，unix 秒，无则 0
 }
 
 message FlowAck {

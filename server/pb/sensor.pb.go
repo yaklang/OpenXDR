@@ -86,30 +86,35 @@ func (x *FlowBatch) GetDroppedPackets() uint64 {
 }
 
 type FlowRecord struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	StartUnixNs   int64                  `protobuf:"varint,1,opt,name=start_unix_ns,json=startUnixNs,proto3" json:"start_unix_ns,omitempty"`
-	EndUnixNs     int64                  `protobuf:"varint,2,opt,name=end_unix_ns,json=endUnixNs,proto3" json:"end_unix_ns,omitempty"`
-	SrcIp         string                 `protobuf:"bytes,3,opt,name=src_ip,json=srcIp,proto3" json:"src_ip,omitempty"` // 规范化五元组的 a 侧
-	DstIp         string                 `protobuf:"bytes,4,opt,name=dst_ip,json=dstIp,proto3" json:"dst_ip,omitempty"` // b 侧
-	SrcPort       uint32                 `protobuf:"varint,5,opt,name=src_port,json=srcPort,proto3" json:"src_port,omitempty"`
-	DstPort       uint32                 `protobuf:"varint,6,opt,name=dst_port,json=dstPort,proto3" json:"dst_port,omitempty"`
-	Protocol      uint32                 `protobuf:"varint,7,opt,name=protocol,proto3" json:"protocol,omitempty"` // IANA 协议号：6=TCP, 17=UDP
-	SrcPackets    uint64                 `protobuf:"varint,8,opt,name=src_packets,json=srcPackets,proto3" json:"src_packets,omitempty"`
-	SrcBytes      uint64                 `protobuf:"varint,9,opt,name=src_bytes,json=srcBytes,proto3" json:"src_bytes,omitempty"`
-	DstPackets    uint64                 `protobuf:"varint,10,opt,name=dst_packets,json=dstPackets,proto3" json:"dst_packets,omitempty"`
-	DstBytes      uint64                 `protobuf:"varint,11,opt,name=dst_bytes,json=dstBytes,proto3" json:"dst_bytes,omitempty"`
-	TcpFlags      uint32                 `protobuf:"varint,12,opt,name=tcp_flags,json=tcpFlags,proto3" json:"tcp_flags,omitempty"` // 会话期间出现过的 TCP 标志位并集
-	DnsQuery      string                 `protobuf:"bytes,13,opt,name=dns_query,json=dnsQuery,proto3" json:"dns_query,omitempty"`  // 无则空
-	TlsSni        string                 `protobuf:"bytes,14,opt,name=tls_sni,json=tlsSni,proto3" json:"tls_sni,omitempty"`        // 无则空
-	Ja3           string                 `protobuf:"bytes,15,opt,name=ja3,proto3" json:"ja3,omitempty"`                            // TLS 客户端指纹，无则空
-	HttpHost      string                 `protobuf:"bytes,16,opt,name=http_host,json=httpHost,proto3" json:"http_host,omitempty"`
-	HttpUri       string                 `protobuf:"bytes,17,opt,name=http_uri,json=httpUri,proto3" json:"http_uri,omitempty"`
-	HttpUserAgent string                 `protobuf:"bytes,18,opt,name=http_user_agent,json=httpUserAgent,proto3" json:"http_user_agent,omitempty"`
-	DnsRcode      uint32                 `protobuf:"varint,19,opt,name=dns_rcode,json=dnsRcode,proto3" json:"dns_rcode,omitempty"`      // DNS 应答码（NOERROR=0，无应答时也是 0），无则 0
-	DnsAnswers    []string               `protobuf:"bytes,20,rep,name=dns_answers,json=dnsAnswers,proto3" json:"dns_answers,omitempty"` // A/AAAA 应答 IP（至多 4 个）
-	Ja3S          string                 `protobuf:"bytes,21,opt,name=ja3s,proto3" json:"ja3s,omitempty"`                               // TLS 服务端指纹，无则空
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	StartUnixNs       int64                  `protobuf:"varint,1,opt,name=start_unix_ns,json=startUnixNs,proto3" json:"start_unix_ns,omitempty"`
+	EndUnixNs         int64                  `protobuf:"varint,2,opt,name=end_unix_ns,json=endUnixNs,proto3" json:"end_unix_ns,omitempty"`
+	SrcIp             string                 `protobuf:"bytes,3,opt,name=src_ip,json=srcIp,proto3" json:"src_ip,omitempty"` // 规范化五元组的 a 侧
+	DstIp             string                 `protobuf:"bytes,4,opt,name=dst_ip,json=dstIp,proto3" json:"dst_ip,omitempty"` // b 侧
+	SrcPort           uint32                 `protobuf:"varint,5,opt,name=src_port,json=srcPort,proto3" json:"src_port,omitempty"`
+	DstPort           uint32                 `protobuf:"varint,6,opt,name=dst_port,json=dstPort,proto3" json:"dst_port,omitempty"`
+	Protocol          uint32                 `protobuf:"varint,7,opt,name=protocol,proto3" json:"protocol,omitempty"` // IANA 协议号：6=TCP, 17=UDP
+	SrcPackets        uint64                 `protobuf:"varint,8,opt,name=src_packets,json=srcPackets,proto3" json:"src_packets,omitempty"`
+	SrcBytes          uint64                 `protobuf:"varint,9,opt,name=src_bytes,json=srcBytes,proto3" json:"src_bytes,omitempty"`
+	DstPackets        uint64                 `protobuf:"varint,10,opt,name=dst_packets,json=dstPackets,proto3" json:"dst_packets,omitempty"`
+	DstBytes          uint64                 `protobuf:"varint,11,opt,name=dst_bytes,json=dstBytes,proto3" json:"dst_bytes,omitempty"`
+	TcpFlags          uint32                 `protobuf:"varint,12,opt,name=tcp_flags,json=tcpFlags,proto3" json:"tcp_flags,omitempty"` // 会话期间出现过的 TCP 标志位并集
+	DnsQuery          string                 `protobuf:"bytes,13,opt,name=dns_query,json=dnsQuery,proto3" json:"dns_query,omitempty"`  // 无则空
+	TlsSni            string                 `protobuf:"bytes,14,opt,name=tls_sni,json=tlsSni,proto3" json:"tls_sni,omitempty"`        // 无则空
+	Ja3               string                 `protobuf:"bytes,15,opt,name=ja3,proto3" json:"ja3,omitempty"`                            // TLS 客户端指纹，无则空
+	HttpHost          string                 `protobuf:"bytes,16,opt,name=http_host,json=httpHost,proto3" json:"http_host,omitempty"`
+	HttpUri           string                 `protobuf:"bytes,17,opt,name=http_uri,json=httpUri,proto3" json:"http_uri,omitempty"`
+	HttpUserAgent     string                 `protobuf:"bytes,18,opt,name=http_user_agent,json=httpUserAgent,proto3" json:"http_user_agent,omitempty"`
+	DnsRcode          uint32                 `protobuf:"varint,19,opt,name=dns_rcode,json=dnsRcode,proto3" json:"dns_rcode,omitempty"`                                // DNS 应答码（NOERROR=0，无应答时也是 0），无则 0
+	DnsAnswers        []string               `protobuf:"bytes,20,rep,name=dns_answers,json=dnsAnswers,proto3" json:"dns_answers,omitempty"`                           // A/AAAA 应答 IP（至多 4 个）
+	Ja3S              string                 `protobuf:"bytes,21,opt,name=ja3s,proto3" json:"ja3s,omitempty"`                                                         // TLS 服务端指纹，无则空
+	TlsCertSubject    string                 `protobuf:"bytes,22,opt,name=tls_cert_subject,json=tlsCertSubject,proto3" json:"tls_cert_subject,omitempty"`             // 叶证书 subject CN，无则空（仅 TLS ≤1.2 可见）
+	TlsCertIssuer     string                 `protobuf:"bytes,23,opt,name=tls_cert_issuer,json=tlsCertIssuer,proto3" json:"tls_cert_issuer,omitempty"`                // 叶证书 issuer CN，无则空
+	TlsCertSelfSigned bool                   `protobuf:"varint,24,opt,name=tls_cert_self_signed,json=tlsCertSelfSigned,proto3" json:"tls_cert_self_signed,omitempty"` // subject DN 与 issuer DN 原始 DER 相等（启发式）
+	TlsCertNotBefore  int64                  `protobuf:"varint,25,opt,name=tls_cert_not_before,json=tlsCertNotBefore,proto3" json:"tls_cert_not_before,omitempty"`    // 有效期起，unix 秒，无则 0
+	TlsCertNotAfter   int64                  `protobuf:"varint,26,opt,name=tls_cert_not_after,json=tlsCertNotAfter,proto3" json:"tls_cert_not_after,omitempty"`       // 有效期止，unix 秒，无则 0
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *FlowRecord) Reset() {
@@ -289,6 +294,41 @@ func (x *FlowRecord) GetJa3S() string {
 	return ""
 }
 
+func (x *FlowRecord) GetTlsCertSubject() string {
+	if x != nil {
+		return x.TlsCertSubject
+	}
+	return ""
+}
+
+func (x *FlowRecord) GetTlsCertIssuer() string {
+	if x != nil {
+		return x.TlsCertIssuer
+	}
+	return ""
+}
+
+func (x *FlowRecord) GetTlsCertSelfSigned() bool {
+	if x != nil {
+		return x.TlsCertSelfSigned
+	}
+	return false
+}
+
+func (x *FlowRecord) GetTlsCertNotBefore() int64 {
+	if x != nil {
+		return x.TlsCertNotBefore
+	}
+	return 0
+}
+
+func (x *FlowRecord) GetTlsCertNotAfter() int64 {
+	if x != nil {
+		return x.TlsCertNotAfter
+	}
+	return 0
+}
+
 type FlowAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Received      uint64                 `protobuf:"varint,1,opt,name=received,proto3" json:"received,omitempty"`
@@ -341,7 +381,7 @@ const file_sensor_proto_rawDesc = "" +
 	"\tFlowBatch\x12\x1b\n" +
 	"\tsensor_id\x18\x01 \x01(\tR\bsensorId\x123\n" +
 	"\x05flows\x18\x02 \x03(\v2\x1d.openxdr.sensor.v1.FlowRecordR\x05flows\x12'\n" +
-	"\x0fdropped_packets\x18\x03 \x01(\x04R\x0edroppedPackets\"\xe3\x04\n" +
+	"\x0fdropped_packets\x18\x03 \x01(\x04R\x0edroppedPackets\"\xc2\x06\n" +
 	"\n" +
 	"FlowRecord\x12\"\n" +
 	"\rstart_unix_ns\x18\x01 \x01(\x03R\vstartUnixNs\x12\x1e\n" +
@@ -368,7 +408,12 @@ const file_sensor_proto_rawDesc = "" +
 	"\tdns_rcode\x18\x13 \x01(\rR\bdnsRcode\x12\x1f\n" +
 	"\vdns_answers\x18\x14 \x03(\tR\n" +
 	"dnsAnswers\x12\x12\n" +
-	"\x04ja3s\x18\x15 \x01(\tR\x04ja3s\"%\n" +
+	"\x04ja3s\x18\x15 \x01(\tR\x04ja3s\x12(\n" +
+	"\x10tls_cert_subject\x18\x16 \x01(\tR\x0etlsCertSubject\x12&\n" +
+	"\x0ftls_cert_issuer\x18\x17 \x01(\tR\rtlsCertIssuer\x12/\n" +
+	"\x14tls_cert_self_signed\x18\x18 \x01(\bR\x11tlsCertSelfSigned\x12-\n" +
+	"\x13tls_cert_not_before\x18\x19 \x01(\x03R\x10tlsCertNotBefore\x12+\n" +
+	"\x12tls_cert_not_after\x18\x1a \x01(\x03R\x0ftlsCertNotAfter\"%\n" +
 	"\aFlowAck\x12\x1a\n" +
 	"\breceived\x18\x01 \x01(\x04R\breceived2Z\n" +
 	"\rSensorService\x12I\n" +
