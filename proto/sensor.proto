@@ -37,6 +37,9 @@ message FlowRecord {
   string http_host = 16;
   string http_uri = 17;
   string http_user_agent = 18;
+  uint32 dns_rcode = 19;          // DNS 应答码（NOERROR=0，无应答时也是 0），无则 0
+  repeated string dns_answers = 20; // A/AAAA 应答 IP（至多 4 个）
+  string ja3s = 21;               // TLS 服务端指纹，无则空
 }
 
 message FlowAck {

@@ -105,6 +105,9 @@ type FlowRecord struct {
 	HttpHost      string                 `protobuf:"bytes,16,opt,name=http_host,json=httpHost,proto3" json:"http_host,omitempty"`
 	HttpUri       string                 `protobuf:"bytes,17,opt,name=http_uri,json=httpUri,proto3" json:"http_uri,omitempty"`
 	HttpUserAgent string                 `protobuf:"bytes,18,opt,name=http_user_agent,json=httpUserAgent,proto3" json:"http_user_agent,omitempty"`
+	DnsRcode      uint32                 `protobuf:"varint,19,opt,name=dns_rcode,json=dnsRcode,proto3" json:"dns_rcode,omitempty"`      // DNS 应答码（NOERROR=0，无应答时也是 0），无则 0
+	DnsAnswers    []string               `protobuf:"bytes,20,rep,name=dns_answers,json=dnsAnswers,proto3" json:"dns_answers,omitempty"` // A/AAAA 应答 IP（至多 4 个）
+	Ja3S          string                 `protobuf:"bytes,21,opt,name=ja3s,proto3" json:"ja3s,omitempty"`                               // TLS 服务端指纹，无则空
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -265,6 +268,27 @@ func (x *FlowRecord) GetHttpUserAgent() string {
 	return ""
 }
 
+func (x *FlowRecord) GetDnsRcode() uint32 {
+	if x != nil {
+		return x.DnsRcode
+	}
+	return 0
+}
+
+func (x *FlowRecord) GetDnsAnswers() []string {
+	if x != nil {
+		return x.DnsAnswers
+	}
+	return nil
+}
+
+func (x *FlowRecord) GetJa3S() string {
+	if x != nil {
+		return x.Ja3S
+	}
+	return ""
+}
+
 type FlowAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Received      uint64                 `protobuf:"varint,1,opt,name=received,proto3" json:"received,omitempty"`
@@ -317,7 +341,7 @@ const file_sensor_proto_rawDesc = "" +
 	"\tFlowBatch\x12\x1b\n" +
 	"\tsensor_id\x18\x01 \x01(\tR\bsensorId\x123\n" +
 	"\x05flows\x18\x02 \x03(\v2\x1d.openxdr.sensor.v1.FlowRecordR\x05flows\x12'\n" +
-	"\x0fdropped_packets\x18\x03 \x01(\x04R\x0edroppedPackets\"\x91\x04\n" +
+	"\x0fdropped_packets\x18\x03 \x01(\x04R\x0edroppedPackets\"\xe3\x04\n" +
 	"\n" +
 	"FlowRecord\x12\"\n" +
 	"\rstart_unix_ns\x18\x01 \x01(\x03R\vstartUnixNs\x12\x1e\n" +
@@ -340,7 +364,11 @@ const file_sensor_proto_rawDesc = "" +
 	"\x03ja3\x18\x0f \x01(\tR\x03ja3\x12\x1b\n" +
 	"\thttp_host\x18\x10 \x01(\tR\bhttpHost\x12\x19\n" +
 	"\bhttp_uri\x18\x11 \x01(\tR\ahttpUri\x12&\n" +
-	"\x0fhttp_user_agent\x18\x12 \x01(\tR\rhttpUserAgent\"%\n" +
+	"\x0fhttp_user_agent\x18\x12 \x01(\tR\rhttpUserAgent\x12\x1b\n" +
+	"\tdns_rcode\x18\x13 \x01(\rR\bdnsRcode\x12\x1f\n" +
+	"\vdns_answers\x18\x14 \x03(\tR\n" +
+	"dnsAnswers\x12\x12\n" +
+	"\x04ja3s\x18\x15 \x01(\tR\x04ja3s\"%\n" +
 	"\aFlowAck\x12\x1a\n" +
 	"\breceived\x18\x01 \x01(\x04R\breceived2Z\n" +
 	"\rSensorService\x12I\n" +
