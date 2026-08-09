@@ -125,6 +125,10 @@ struct LoginRecord {
     ip: String,
     logon_type: String,
     failure: bool,
+    /// 4625 的失败原因码（NTSTATUS，如 0xC000006A）；4624 通常为空
+    status: String,
+    /// 更细的子状态码，区分"用户不存在"与"口令错误"等场景
+    sub_status: String,
 }
 
 /// 取 <Data Name='X'>value</Data> 的值。wevtapi 渲染用单引号属性。
@@ -158,17 +162,26 @@ fn parse_security_xml(xml: &str) -> Option<LoginRecord> {
         ip: xml_data(xml, "IpAddress").unwrap_or_default().to_string(),
         logon_type: logon_type.to_string(),
         failure,
+        status: xml_data(xml, "Status").unwrap_or_default().to_string(),
+        sub_status: xml_data(xml, "SubStatus").unwrap_or_default().to_string(),
     })
 }
 
 fn auth_event(agent_id: &str, rec: &LoginRecord) -> AgentEvent {
-    let raw = serde_json::json!({
+    let mut raw = serde_json::json!({
         "activity_id": 1, // OCSF: Logon
         "status_id": if rec.failure { 2 } else { 1 },
         "user": { "name": rec.user },
         "src_endpoint": { "ip": rec.ip },
         "service": { "name": format!("logon-type-{}", rec.logon_type) },
     });
+    // 失败原因码有值才写：4624 的 Status 恒为成功码，没有研判价值
+    if !rec.status.is_empty() {
+        raw["status_code"] = rec.status.clone().into();
+    }
+    if !rec.sub_status.is_empty() {
+        raw["status_detail"] = rec.sub_status.clone().into();
+    }
     AgentEvent {
         agent_id: agent_id.to_string(),
         ts_unix_ns: SystemTime::now()
@@ -195,6 +208,19 @@ mod tests {
              <Data Name='TargetUserName'>{user}</Data>\
              <Data Name='LogonType'>{logon_type}</Data>\
              <Data Name='IpAddress'>{ip}</Data>\
+             </EventData></Event>"
+        )
+    }
+
+    /// 带失败原因码的完整事件（4625 的真实形态）
+    fn xml_with_status(user: &str, logon_type: &str, ip: &str, status: &str, sub: &str) -> String {
+        format!(
+            "<Event><System><EventID>4625</EventID></System><EventData>\
+             <Data Name='TargetUserName'>{user}</Data>\
+             <Data Name='LogonType'>{logon_type}</Data>\
+             <Data Name='IpAddress'>{ip}</Data>\
+             <Data Name='Status'>{status}</Data>\
+             <Data Name='SubStatus'>{sub}</Data>\
              </EventData></Event>"
         )
     }
@@ -232,5 +258,35 @@ mod tests {
             parse_security_xml(&xml(4688, "x", "2", "-")).is_none(),
             "无关事件应跳过"
         );
+    }
+
+    #[test]
+    fn parses_failure_status_codes() {
+        // 口令错误：Status=0xC000006A，SubStatus 同值
+        let rec = parse_security_xml(&xml_with_status(
+            "admin",
+            "3",
+            "10.0.0.9",
+            "0xC000006A",
+            "0xC000006A",
+        ))
+        .expect("应解析");
+        assert!(rec.failure);
+        assert_eq!(rec.status, "0xC000006A");
+        assert_eq!(rec.sub_status, "0xC000006A");
+
+        let ev = auth_event("agent-t", &rec);
+        let v: serde_json::Value = serde_json::from_str(&ev.raw_json).unwrap();
+        assert_eq!(v["status_code"], "0xC000006A");
+        assert_eq!(v["status_detail"], "0xC000006A");
+    }
+
+    #[test]
+    fn success_event_omits_status_codes() {
+        let rec = parse_security_xml(&xml(4624, "alice", "10", "10.0.0.7")).expect("应解析");
+        let ev = auth_event("agent-t", &rec);
+        let v: serde_json::Value = serde_json::from_str(&ev.raw_json).unwrap();
+        assert!(v.get("status_code").is_none(), "无值时不写 status_code");
+        assert!(v.get("status_detail").is_none(), "无值时不写 status_detail");
     }
 }

@@ -1,5 +1,7 @@
-//! 协议识别与元数据提取：DNS 查询、TLS SNI/JA3、HTTP 请求头。
-//! 每条流只探测一次，命中或明确不是就置 probed，避免对大流反复解析。
+//! 协议识别与元数据提取：DNS 查询/应答、TLS SNI/JA3/JA3S、HTTP 请求头。
+//! 每条流每个方向只探测一次，命中或明确不是就置 probed，避免对大流反复解析。
+
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use md5::{Digest, Md5};
 
@@ -8,48 +10,89 @@ use crate::flow::Flow;
 
 const DNS_PORT: u16 = 53;
 const MAX_NAME_LEN: usize = 253;
+/// 压缩指针跳转上限：防恶意循环指针把解析拖进死循环
+const MAX_PTR_JUMPS: usize = 16;
+/// DNS 应答 IP 收集上限，够做情报碰撞即可，不囤全量
+const MAX_DNS_ANSWERS: usize = 4;
 /// HTTP 头部字段长度上限，防止畸形请求撑爆内存
 const MAX_HEADER_LEN: usize = 512;
 
 pub fn probe(flow: &mut Flow, pkt: &Packet) {
-    if flow.probed || pkt.payload.is_empty() {
+    if pkt.payload.is_empty() {
         return;
     }
+    // DNS 查询与应答各探一次：靠报文 QR 位区分，不依赖方向判定
     if pkt.sport == DNS_PORT || pkt.dport == DNS_PORT {
-        flow.meta.dns_query = parse_dns_question(pkt.payload);
-        flow.probed = true;
+        let is_response = pkt.payload.get(2).is_some_and(|f| f & 0x80 != 0);
+        if is_response {
+            if !flow.probed_server {
+                if let Some(resp) = parse_dns_response(pkt.payload) {
+                    if flow.meta.dns_query.is_none() {
+                        flow.meta.dns_query = resp.query;
+                    }
+                    flow.meta.dns_rcode = Some(resp.rcode);
+                    flow.meta.dns_answers = resp.answers;
+                }
+                flow.probed_server = true;
+            }
+        } else if !flow.probed {
+            flow.meta.dns_query = parse_dns_question(pkt.payload);
+            flow.probed = true;
+        }
         return;
     }
-    if let Some(hello) = parse_client_hello(pkt.payload) {
-        flow.meta.tls_sni = hello.sni;
-        flow.meta.ja3 = Some(hello.ja3);
-        flow.probed = true;
-        return;
+    if !flow.probed {
+        if let Some(hello) = parse_client_hello(pkt.payload) {
+            flow.meta.tls_sni = hello.sni;
+            flow.meta.ja3 = Some(hello.ja3);
+            flow.probed = true;
+            return;
+        }
+        if let Some(http) = parse_http_request(pkt.payload) {
+            flow.meta.http_host = http.host;
+            flow.meta.http_uri = Some(http.uri);
+            flow.meta.http_user_agent = http.user_agent;
+            flow.probed = true;
+            return;
+        }
     }
-    if let Some(http) = parse_http_request(pkt.payload) {
-        flow.meta.http_host = http.host;
-        flow.meta.http_uri = Some(http.uri);
-        flow.meta.http_user_agent = http.user_agent;
-        flow.probed = true;
+    // ServerHello 在服务端方向，与 ClientHello 互不干扰：handshake type 不同，
+    // 同一条流两个方向各探一次
+    if !flow.probed_server
+        && let Some(ja3s) = parse_server_hello(pkt.payload)
+    {
+        flow.meta.ja3s = Some(ja3s);
+        flow.probed_server = true;
     }
 }
 
-/// DNS 报文首个 question 的域名。只看查询，响应报文的 question 也一样能取。
-fn parse_dns_question(payload: &[u8]) -> Option<String> {
-    let qdcount = u16::from_be_bytes([*payload.get(4)?, *payload.get(5)?]);
-    if qdcount == 0 {
-        return None;
-    }
-
+/// 解析域名（RFC 1035 压缩指针）。返回域名与线性流上下一个位置
+/// （跳过名字本体；跳过第一个指针的两字节）。
+/// 跳转次数与总长度双上限，越界即畸形。
+fn read_name(payload: &[u8], start: usize) -> Option<(String, usize)> {
     let mut name = String::new();
-    let mut pos = 12; // 跳过固定头
+    let mut pos = start;
+    let mut next = None; // 第一次跳指针后线性流的下一个位置
+    let mut jumps = 0;
     loop {
         let len = *payload.get(pos)? as usize;
-        match len {
-            0 => break,
-            // 指针压缩：question 段不应出现，出现即畸形
-            l if l & 0xc0 != 0 => return None,
-            _ => {
+        match len & 0xc0 {
+            0xc0 => {
+                // 压缩指针：14 位偏移
+                let lo = *payload.get(pos + 1)? as usize;
+                if next.is_none() {
+                    next = Some(pos + 2);
+                }
+                jumps += 1;
+                if jumps > MAX_PTR_JUMPS {
+                    return None;
+                }
+                pos = ((len & 0x3f) << 8) | lo;
+            }
+            0 => {
+                if len == 0 {
+                    return Some((name, next.unwrap_or(pos + 1)));
+                }
                 if name.len() + len > MAX_NAME_LEN {
                     return None;
                 }
@@ -60,9 +103,78 @@ fn parse_dns_question(payload: &[u8]) -> Option<String> {
                 name.push_str(&String::from_utf8_lossy(label));
                 pos += 1 + len;
             }
+            // 0x40/0x80 是保留标记，非法
+            _ => return None,
         }
     }
+}
+
+/// DNS 报文首个 question 的域名。只看查询，响应报文的 question 也一样能取。
+fn parse_dns_question(payload: &[u8]) -> Option<String> {
+    let qdcount = be16(payload, 4)?;
+    if qdcount == 0 {
+        return None;
+    }
+    let (name, _) = read_name(payload, 12)?;
     (!name.is_empty()).then_some(name)
+}
+
+pub struct DnsResponse {
+    pub query: Option<String>,
+    pub rcode: u32,
+    pub answers: Vec<String>,
+}
+
+/// DNS 应答：rcode + answer 段的 A/AAAA 地址（至多 4 个），question 域名顺带取出。
+/// 畸形/截断静默返回 None，绝不 panic。
+fn parse_dns_response(payload: &[u8]) -> Option<DnsResponse> {
+    let rcode = (*payload.get(3)? & 0x0f) as u32;
+    let qdcount = be16(payload, 4)? as usize;
+    let ancount = be16(payload, 6)? as usize;
+
+    // question 段：逐个跳过，首个名字留作域名
+    let mut pos = 12;
+    let mut query = None;
+    for i in 0..qdcount {
+        let (name, next) = read_name(payload, pos)?;
+        if i == 0 && !name.is_empty() {
+            query = Some(name);
+        }
+        pos = next.checked_add(4)?; // qtype + qclass
+        if pos > payload.len() {
+            return None;
+        }
+    }
+
+    // answer 段：只收 A/AAAA 的地址，其余类型跳过
+    let mut answers = Vec::new();
+    for _ in 0..ancount {
+        let (_, after_name) = read_name(payload, pos)?;
+        let rtype = be16(payload, after_name)?;
+        // type(2) class(2) ttl(4) 之后是 rdlength(2) + rdata
+        let rdlen = be16(payload, after_name + 8)? as usize;
+        let rdata = payload.get(after_name + 10..after_name + 10 + rdlen)?;
+        if answers.len() < MAX_DNS_ANSWERS {
+            match (rtype, rdlen) {
+                (1, 4) => {
+                    answers.push(Ipv4Addr::new(rdata[0], rdata[1], rdata[2], rdata[3]).to_string())
+                }
+                (28, 16) => {
+                    let mut octets = [0u8; 16];
+                    octets.copy_from_slice(rdata);
+                    answers.push(Ipv6Addr::from(octets).to_string());
+                }
+                _ => {}
+            }
+        }
+        pos = after_name + 10 + rdlen;
+    }
+
+    Some(DnsResponse {
+        query,
+        rcode,
+        answers,
+    })
 }
 
 pub struct ClientHello {
@@ -135,13 +247,66 @@ fn parse_client_hello(payload: &[u8]) -> Option<ClientHello> {
             .collect::<Vec<_>>()
             .join("-"),
     );
-    let digest = Md5::digest(ja3_str.as_bytes());
-    let ja3 = digest.iter().fold(String::with_capacity(32), |mut s, b| {
+    Some(ClientHello {
+        sni,
+        ja3: md5_hex(&ja3_str),
+    })
+}
+
+/// TLS ServerHello：提取 JA3S 服务端指纹。
+/// JA3S = md5(版本,密码套件,扩展)，GREASE 扩展按规范剔除。
+fn parse_server_hello(payload: &[u8]) -> Option<String> {
+    // TLS record: type(1) version(2) length(2)；0x16 = handshake
+    if *payload.first()? != 0x16 {
+        return None;
+    }
+    let hs = payload.get(5..)?;
+    // handshake: type(1) length(3) version(2) random(32)；0x02 = ServerHello
+    if *hs.first()? != 0x02 {
+        return None;
+    }
+    let version = be16(hs, 4)?;
+
+    let mut pos = 38;
+    pos += 1 + *hs.get(pos)? as usize; // session_id
+
+    let cipher = be16(hs, pos)?;
+    pos += 2;
+    pos += 1; // compression_method
+
+    // 扩展块可选：老服务端的 ServerHello 可能没有
+    let mut extensions = Vec::new();
+    if hs.get(pos).is_some() {
+        let ext_total = be16(hs, pos)? as usize;
+        pos += 2;
+        let end = (pos + ext_total).min(hs.len());
+        while pos + 4 <= end {
+            let ext_type = be16(hs, pos)?;
+            let ext_len = be16(hs, pos + 2)? as usize;
+            pos += 4;
+            if !is_grease(ext_type) {
+                extensions.push(ext_type);
+            }
+            pos += ext_len;
+        }
+    }
+
+    Some(md5_hex(&format!(
+        "{},{},{}",
+        version,
+        cipher,
+        join_u16(&extensions)
+    )))
+}
+
+/// md5 摘要转小写十六进制，JA3/JA3S 共用。
+fn md5_hex(s: &str) -> String {
+    let digest = Md5::digest(s.as_bytes());
+    digest.iter().fold(String::with_capacity(32), |mut out, b| {
         use std::fmt::Write;
-        let _ = write!(s, "{b:02x}");
-        s
-    });
-    Some(ClientHello { sni, ja3 })
+        let _ = write!(out, "{b:02x}");
+        out
+    })
 }
 
 fn parse_sni(body: &[u8]) -> Option<String> {
@@ -256,6 +421,7 @@ mod tests {
             tcp_flags: 0,
             meta: Metadata::default(),
             probed: false,
+            probed_server: false,
             client_is_a: true,
         }
     }
@@ -309,14 +475,153 @@ mod tests {
     }
 
     #[test]
-    fn dns_compression_pointer_none() {
-        // 构造 label 长度字节为 0xc0（指针标记）→ 应视为畸形
+    fn dns_name_follows_compression_pointer() {
+        // 合法指针：偏移 12 起是 "www.a"（标签 "a" 在偏移 16），
+        // 偏移 19 的名字是 "b" + 指针 0xC010 → 应解析出 "b.a"
+        let mut p = Vec::new();
+        p.extend_from_slice(&[0, 0, 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0]);
+        p.extend_from_slice(&[3, b'w', b'w', b'w', 1, b'a', 0]); // 偏移 12 起："www.a"
+        p.extend_from_slice(&[1, b'b', 0xc0, 0x10]); // "b" + 指针→偏移 16（"a"）
+        p.extend_from_slice(&[0, 1, 0, 1]);
+        let (name, _) = read_name(&p, 19).expect("指针应被跟随");
+        assert_eq!(name, "b.a");
+    }
+
+    #[test]
+    fn dns_name_rejects_pointer_loop() {
+        // 恶意自指指针：0x0c 指向自己，跳转上限兜住 → 畸形
         let mut p = Vec::new();
         p.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
         p.push(0xc0);
         p.push(0x0c);
         p.push(0);
+        assert_eq!(parse_dns_question(&p), None, "自指循环指针应判畸形");
+
+        // 双指针互指同样不允许
+        let mut q = Vec::new();
+        q.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+        q.extend_from_slice(&[0xc0, 0x0e, 0xc0, 0x0c]); // 12→14→12…
+        assert_eq!(parse_dns_question(&q), None, "互指循环指针应判畸形");
+    }
+
+    #[test]
+    fn dns_name_rejects_out_of_bounds_pointer() {
+        let mut p = dns_query("example.com");
+        // 把 question 名字换成指向报文外的指针
+        p.truncate(12);
+        p.extend_from_slice(&[0xc0, 0xff]);
         assert_eq!(parse_dns_question(&p), None);
+    }
+
+    /// 构造 DNS 应答：rcode + question + answers（(类型, rdata) 列表）。
+    /// answer 名字统一用指针 0xC00C 指向 question。
+    fn dns_response(name: &str, rcode: u8, answers: &[(u16, &[u8])]) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend_from_slice(&[0x12, 0x34]); // id
+        p.extend_from_slice(&[0x81, 0x80 | rcode]); // QR=1，标准查询应答
+        p.extend_from_slice(&[0, 1]); // qdcount
+        p.extend_from_slice(&(answers.len() as u16).to_be_bytes()); // ancount
+        p.extend_from_slice(&[0, 0, 0, 0]); // nscount arcount
+        for label in name.split('.') {
+            p.push(label.len() as u8);
+            p.extend_from_slice(label.as_bytes());
+        }
+        p.push(0);
+        p.extend_from_slice(&[0, 1, 0, 1]); // qtype A qclass IN
+        for (rtype, rdata) in answers {
+            p.extend_from_slice(&[0xc0, 0x0c]); // name → 指针指向 question
+            p.extend_from_slice(&rtype.to_be_bytes());
+            p.extend_from_slice(&[0, 1]); // class IN
+            p.extend_from_slice(&[0, 0, 0, 60]); // ttl
+            p.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+            p.extend_from_slice(rdata);
+        }
+        p
+    }
+
+    #[test]
+    fn dns_response_parses_rcode_and_answers() {
+        let a: &[u8] = &[93, 184, 216, 34];
+        let aaaa: &[u8] = &[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        // CNAME 应被跳过，只留 A/AAAA
+        let p = dns_response(
+            "cdn.example.com",
+            0,
+            &[(5, b"\x03www\x00"), (1, a), (28, aaaa)],
+        );
+        let resp = parse_dns_response(&p).expect("应解析出应答");
+        assert_eq!(resp.query.as_deref(), Some("cdn.example.com"));
+        assert_eq!(resp.rcode, 0);
+        assert_eq!(resp.answers, vec!["93.184.216.34", "2001:db8::1"]);
+    }
+
+    #[test]
+    fn dns_response_nxdomain_no_answers() {
+        let p = dns_response("nope.example", 3, &[]);
+        let resp = parse_dns_response(&p).expect("NXDOMAIN 也是合法应答");
+        assert_eq!(resp.rcode, 3);
+        assert!(resp.answers.is_empty());
+    }
+
+    #[test]
+    fn dns_response_answers_capped() {
+        let ips: Vec<[u8; 4]> = (0..6u8).map(|i| [10, 0, 0, i]).collect();
+        let answers: Vec<(u16, &[u8])> = ips.iter().map(|a| (1u16, a as &[u8])).collect();
+        let p = dns_response("many.example", 0, &answers);
+        let resp = parse_dns_response(&p).unwrap();
+        assert_eq!(resp.answers.len(), MAX_DNS_ANSWERS, "应答 IP 应有上限");
+        assert_eq!(resp.answers[0], "10.0.0.0");
+        assert_eq!(resp.answers[3], "10.0.0.3");
+    }
+
+    #[test]
+    fn dns_response_truncated_none() {
+        let p = dns_response("cdn.example.com", 0, &[(1, &[1, 2, 3, 4])]);
+        for cut in [13, 20, p.len() - 3] {
+            assert!(
+                parse_dns_response(&p[..cut]).is_none(),
+                "截断到 {cut} 字节应静默返回 None"
+            );
+        }
+    }
+
+    #[test]
+    fn dns_response_malformed_answer_name_none() {
+        let mut p = dns_response("x.example", 0, &[(1, &[1, 2, 3, 4])]);
+        // answer 共 16 字节（指针2 + 固定10 + rdata4），起始处的名字指针改成指到报文外
+        let idx = p.len() - 16;
+        assert_eq!(p[idx], 0xc0);
+        p[idx + 1] = 0xfe;
+        assert!(parse_dns_response(&p).is_none());
+    }
+
+    #[test]
+    fn probe_dns_query_then_response() {
+        let mut flow = default_flow();
+        let q = dns_query("pwn.example");
+        probe(&mut flow, &pkt(54321, DNS_PORT, &q));
+        assert_eq!(flow.meta.dns_query.as_deref(), Some("pwn.example"));
+        assert!(flow.probed);
+        assert!(!flow.probed_server, "查询不应占用服务端探测位");
+
+        let r = dns_response("pwn.example", 0, &[(1, &[6, 6, 6, 6])]);
+        probe(&mut flow, &pkt(DNS_PORT, 54321, &r));
+        assert!(flow.probed_server);
+        assert_eq!(flow.meta.dns_rcode, Some(0));
+        assert_eq!(flow.meta.dns_answers, vec!["6.6.6.6"]);
+        // 应答里的 question 不覆盖已有域名
+        assert_eq!(flow.meta.dns_query.as_deref(), Some("pwn.example"));
+    }
+
+    #[test]
+    fn probe_dns_response_only_fills_query() {
+        // 只抓到应答（漏了查询包）：域名也能从应答的 question 段补上
+        let mut flow = default_flow();
+        let r = dns_response("lone.example", 0, &[]);
+        probe(&mut flow, &pkt(DNS_PORT, 1234, &r));
+        assert_eq!(flow.meta.dns_query.as_deref(), Some("lone.example"));
+        assert!(flow.probed_server);
+        assert!(!flow.probed);
     }
 
     #[test]
@@ -417,6 +722,85 @@ mod tests {
         assert_eq!(flow.meta.tls_sni.as_deref(), Some("c2.example"));
         assert!(!flow.meta.ja3.as_deref().unwrap_or("").is_empty());
         assert!(flow.probed);
+        assert!(!flow.probed_server, "ClientHello 不应占用服务端探测位");
+    }
+
+    /// 构造 ServerHello：version TLS1.2 + 指定密码套件 + 扩展列表（可含 GREASE）。
+    fn server_hello(cipher: u16, extensions: &[u16]) -> Vec<u8> {
+        let mut hs = Vec::new();
+        hs.push(0x02); // handshake type ServerHello
+        hs.extend_from_slice(&[0, 0, 0]); // length 占位
+        hs.extend_from_slice(&[0x03, 0x03]); // version TLS1.2
+        hs.extend_from_slice(&[0xBB; 32]); // random
+        hs.push(0); // session_id len == 0
+        hs.extend_from_slice(&cipher.to_be_bytes());
+        hs.push(0); // compression = null
+
+        let mut exts = Vec::new();
+        for ext in extensions {
+            exts.extend_from_slice(&ext.to_be_bytes());
+            exts.extend_from_slice(&0u16.to_be_bytes()); // 空扩展体
+        }
+        hs.extend_from_slice(&(exts.len() as u16).to_be_bytes());
+        hs.extend_from_slice(&exts);
+
+        let mut record = Vec::new();
+        record.push(0x16);
+        record.extend_from_slice(&[0x03, 0x03]);
+        record.extend_from_slice(&(hs.len() as u16).to_be_bytes());
+        record.extend_from_slice(&hs);
+        record
+    }
+
+    #[test]
+    fn tls_server_hello_ja3s() {
+        let payload = server_hello(0x1301, &[0x0000, 0x0010]);
+        let ja3s = parse_server_hello(&payload).expect("应解析出 ServerHello");
+        // 771,4865,0-16 的 md5
+        assert_eq!(ja3s, md5_hex("771,4865,0-16"));
+    }
+
+    #[test]
+    fn tls_server_hello_no_extensions() {
+        // 没有扩展块的老服务端：JA3S 第三段为空
+        let mut payload = server_hello(0x002f, &[]);
+        // 砍掉扩展长度两字节，模拟真·无扩展块
+        payload.truncate(payload.len() - 2);
+        let ja3s = parse_server_hello(&payload).expect("无扩展块也应出指纹");
+        assert_eq!(ja3s, md5_hex("771,47,"));
+    }
+
+    #[test]
+    fn tls_server_hello_grease_removed() {
+        let a = parse_server_hello(&server_hello(0x1301, &[0x0000])).unwrap();
+        let b = parse_server_hello(&server_hello(0x1301, &[0x0a0a, 0x0000])).unwrap();
+        assert_eq!(a, b, "GREASE 扩展应被剔除，JA3S 不受其影响");
+    }
+
+    #[test]
+    fn tls_parse_rejects_non_serverhello() {
+        assert!(parse_server_hello(b"").is_none());
+        assert!(parse_server_hello(&client_hello("x.example", false)).is_none());
+        assert!(parse_server_hello(&[0x17, 0x03, 0x03, 0x00]).is_none()); // 应用数据
+    }
+
+    #[test]
+    fn probe_tls_both_directions() {
+        // 同一条流：ClientHello 与 ServerHello 各探一次
+        let mut flow = default_flow();
+        probe(
+            &mut flow,
+            &pkt(52000, 443, &client_hello("c2.example", false)),
+        );
+        assert!(flow.probed);
+        assert!(!flow.probed_server);
+
+        probe(&mut flow, &pkt(443, 52000, &server_hello(0x1301, &[])));
+        assert!(flow.probed_server);
+        assert_eq!(
+            flow.meta.ja3s.as_deref(),
+            Some(md5_hex("771,4865,").as_str())
+        );
     }
 
     #[test]

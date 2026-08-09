@@ -1,11 +1,15 @@
-//! Linux eBPF 采集：tracepoint sched_process_exec 抓进程，
-//! tracepoint sock:inet_sock_set_state 抓 TCP 出站连接。
-//! 捕获所有 execve（含短命进程），需要 root/CAP_BPF；失败回落轮询。
+//! Linux eBPF 采集：tracepoint sched_process_exec 抓进程启动，
+//! sched_process_exit 抓进程退出，tracepoint sock:inet_sock_set_state 抓 TCP 出站连接。
+//! 捕获所有 execve（含短命进程），需要 root/CAP_BPF；
+//! 失败按 netlink proc connector → 轮询逐级回落，不跳档。
 
 use std::net::IpAddr;
 
 use super::netwatch::{self, ConnInfo, ConnSampler};
-use super::{EventSink, ProcessInfo, ProcessRegistry, poll, process_event, seeded_registry};
+use super::{
+    ACTIVITY_LAUNCH, ACTIVITY_TERMINATE, EventSink, ProcessInfo, ProcessRegistry, netlink, poll,
+    process_event, seeded_registry, username_of,
+};
 use crate::pb::AgentEvent;
 
 // 与 ebpf/src/main.rs 中的定义保持一致
@@ -15,6 +19,13 @@ struct ExecEvent {
     pid: u32,
     comm: [u8; 16],
     filename: [u8; 256],
+}
+
+// 与 ebpf/src/main.rs 中的定义保持一致
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ExitEvent {
+    pid: u32,
 }
 
 // 与 ebpf/src/main.rs 中的定义保持一致
@@ -34,8 +45,15 @@ const AF_INET: u16 = 2;
 
 pub async fn run(agent_id: String, tx: EventSink, collect_network: bool) {
     if let Err(e) = run_ebpf(agent_id.clone(), tx.clone(), collect_network).await {
-        eprintln!("eBPF 采集不可用（{e}），回落到轮询采集");
-        poll::run(agent_id, tx).await;
+        eprintln!("eBPF 采集不可用（{e}），尝试 netlink proc connector");
+        // 与默认构建同一降级链：netlink 拿不到再退轮询，不直接从最强掉到最弱
+        match netlink::spawn(agent_id.clone(), tx.clone()) {
+            Ok(()) => eprintln!("采集方式: netlink proc connector（用户态，捕获全部 exec）"),
+            Err(e) => {
+                eprintln!("netlink 采集不可用（{e}），回落到轮询采集（会漏短命进程）");
+                poll::run(agent_id, tx).await;
+            }
+        }
     }
 }
 
@@ -60,10 +78,20 @@ async fn run_ebpf(
     program.load()?;
     program.attach("sched", "sched_process_exec")?;
 
+    let exit_program: &mut TracePoint = bpf
+        .program_mut("sched_process_exit")
+        .ok_or("eBPF 程序缺失")?
+        .try_into()?;
+    exit_program.load()?;
+    exit_program.attach("sched", "sched_process_exit")?;
+
     let mut events: AsyncPerfEventArray<_> = bpf
         .take_map("EVENTS")
         .ok_or("EVENTS map 缺失")?
         .try_into()?;
+
+    let mut exits: AsyncPerfEventArray<_> =
+        bpf.take_map("EXITS").ok_or("EXITS map 缺失")?.try_into()?;
 
     // exec 事件按 CPU 分发到多个任务，进程血缘是全局的，注册表要共享。
     // exec 频率远低于包速率，这把锁的争用可以忽略。
@@ -90,6 +118,36 @@ async fn run_ebpf(
                     let event = {
                         let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
                         to_agent_event(&agent_id, &mut reg, &ev)
+                    };
+                    if !tx.send(event) {
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    for cpu in online_cpus().map_err(|(_, e)| e)? {
+        let mut buf = exits.open(cpu, None)?;
+        let tx = tx.clone();
+        let agent_id = agent_id.clone();
+        let registry = registry.clone();
+        tokio::spawn(async move {
+            let mut bufs = (0..8)
+                .map(|_| bytes::BytesMut::with_capacity(256))
+                .collect::<Vec<_>>();
+            loop {
+                let Ok(batch) = buf.read_events(&mut bufs).await else {
+                    return;
+                };
+                for b in bufs.iter().take(batch.read) {
+                    if b.len() < size_of::<ExitEvent>() {
+                        continue;
+                    }
+                    let ev = unsafe { std::ptr::read_unaligned(b.as_ptr() as *const ExitEvent) };
+                    let event = {
+                        let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
+                        to_exit_event(&agent_id, &mut reg, &ev)
                     };
                     if !tx.send(event) {
                         return;
@@ -235,13 +293,29 @@ fn to_agent_event(agent_id: &str, registry: &mut ProcessRegistry, ev: &ExecEvent
     process_event(
         agent_id,
         registry,
+        ACTIVITY_LAUNCH,
         ProcessInfo {
             pid: ev.pid,
             name: &name,
             exe: Some(exe.as_ref()),
             cmd_line: cmd_line.as_deref(),
             ppid,
-            username: String::new(),
+            username: username_of(ev.pid),
+            ..Default::default()
+        },
+    )
+}
+
+/// 退出事件只有 pid 可查（tracepoint 触发时进程已在退出途中），
+/// 其余字段留空；GUID 走注册表复用启动时的映射。
+fn to_exit_event(agent_id: &str, registry: &mut ProcessRegistry, ev: &ExitEvent) -> AgentEvent {
+    process_event(
+        agent_id,
+        registry,
+        ACTIVITY_TERMINATE,
+        ProcessInfo {
+            pid: ev.pid,
+            ..Default::default()
         },
     )
 }

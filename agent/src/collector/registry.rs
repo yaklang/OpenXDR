@@ -42,8 +42,8 @@ impl ProcessRegistry {
         self.register(pid, None);
     }
 
-    /// 查 pid 当前的 GUID，未登记返回 None。网络事件靠它挂进进程血缘。
-    #[cfg(feature = "ebpf")]
+    /// 查 pid 当前的 GUID，未登记返回 None。网络事件靠它挂进进程血缘，
+    /// 退出事件靠它复用启动时的 GUID。
     pub fn guid_of(&self, pid: u32) -> Option<Uuid> {
         self.guids.get(&pid).map(|e| e.guid)
     }

@@ -1,5 +1,6 @@
 //! eBPF 内核侧：tracepoint sched_process_exec 捕获所有 execve（含短命进程）；
-//! tracepoint sock:inet_sock_set_state 捕获 TCP 出站连接发起（SYN_SENT）。
+//! tracepoint sched_process_exit 捕获进程退出；tracepoint sock:inet_sock_set_state
+//! 捕获 TCP 出站连接发起（SYN_SENT）。
 
 #![no_std]
 #![no_main]
@@ -54,6 +55,32 @@ fn try_exec(ctx: &TracePointContext) -> Result<(), i64> {
     }
 
     EVENTS.output(ctx, &event, 0);
+    Ok(())
+}
+
+// 与 userspace collector/linux.rs 中的定义保持一致
+#[repr(C)]
+pub struct ExitEvent {
+    pub pid: u32,
+}
+
+#[map]
+static EXITS: PerfEventArray<ExitEvent> = PerfEventArray::new(0);
+
+#[tracepoint]
+pub fn sched_process_exit(ctx: TracePointContext) -> u32 {
+    match try_exit(&ctx) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
+}
+
+fn try_exit(ctx: &TracePointContext) -> Result<(), i64> {
+    // 退出事件只需 pid：血缘与进程细节由用户态注册表补全
+    let event = ExitEvent {
+        pid: (bpf_get_current_pid_tgid() >> 32) as u32,
+    };
+    EXITS.output(ctx, &event, 0);
     Ok(())
 }
 

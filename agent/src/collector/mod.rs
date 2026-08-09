@@ -1,7 +1,8 @@
 //! 事件采集层。平台差异封死在本模块内部，对外只有一个 channel。
 //!
-//! Linux 优先 eBPF (tracepoint sched_process_exec)，Windows 优先 ETW (Kernel-Process)，
-//! 内核采集不可用时（无权限、内核不支持）自动回落到跨平台轮询。
+//! Linux 进程采集逐级降级：eBPF (tracepoint sched_process_exec) →
+//! netlink proc connector → 跨平台轮询；Windows 优先 ETW (Kernel-Process)，
+//! 不可用时（无权限、内核不支持）回落轮询。
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -39,6 +40,9 @@ mod netwatch;
 mod authwatch_win;
 
 #[cfg(target_os = "windows")]
+mod fswatch_win;
+
+#[cfg(target_os = "windows")]
 mod persistwatch;
 
 #[cfg(target_os = "windows")]
@@ -70,6 +74,15 @@ pub fn spawn(agent_id: String, cfg: Config) -> mpsc::Receiver<AgentEvent> {
     #[cfg(target_os = "windows")]
     if cfg.collect_auth {
         authwatch_win::spawn(agent_id.clone(), sink.clone());
+    }
+
+    // 敏感文件监控：ReadDirectoryChangesW 盯关键配置目录，与 Linux 侧对称
+    #[cfg(target_os = "windows")]
+    if cfg.collect_files {
+        match fswatch_win::spawn(agent_id.clone(), sink.clone(), &cfg.file_watch_dirs) {
+            Ok(n) => eprintln!("文件监控: ReadDirectoryChangesW 盯 {n} 个敏感目录"),
+            Err(e) => eprintln!("文件监控不可用（{e}）"),
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -130,6 +143,11 @@ impl EventSink {
     }
 }
 
+/// OCSF 1007 活动类型：进程启动
+pub const ACTIVITY_LAUNCH: u32 = 1;
+/// OCSF 1007 活动类型：进程退出
+pub const ACTIVITY_TERMINATE: u32 = 2;
+
 /// 一个进程的采集结果。用具名字段而非位置参数：
 /// exe 与 cmd_line 同为 Option<&str> 且相邻，位置传参很容易传反。
 #[derive(Default)]
@@ -140,6 +158,8 @@ pub struct ProcessInfo<'a> {
     pub cmd_line: Option<&'a str>,
     pub ppid: Option<u32>,
     pub username: String,
+    /// 退出码，仅退出事件（Terminate）可能拿到
+    pub exit_code: Option<u32>,
 }
 
 /// 用 /proc 快照预登记现有进程，之后派生的子进程才能找到父。
@@ -157,10 +177,63 @@ fn seeded_registry() -> ProcessRegistry {
     registry
 }
 
+/// Linux 进程采集路径共用：按 pid 解析进程属主。
+/// 先读 /proc/<pid>/status 的 real uid，再查 /etc/passwd 映射成用户名；
+/// passwd 里没有退化为 uid 数字串（与轮询路径一致），进程已退场则给空串。
+/// uid→用户名几乎不变，解析结果带缓存，不在事件路径上反复读 passwd。
+#[cfg(target_os = "linux")]
+fn username_of(pid: u32) -> String {
+    use std::sync::{Mutex, OnceLock};
+
+    fn uid_of(pid: u32) -> Option<u32> {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+        status.lines().find_map(|l| {
+            l.strip_prefix("Uid:")?
+                .split_whitespace()
+                .next()?
+                .parse()
+                .ok()
+        })
+    }
+
+    fn name_of(uid: u32) -> Option<String> {
+        static CACHE: OnceLock<Mutex<std::collections::HashMap<u32, Option<String>>>> =
+            OnceLock::new();
+        let cache = CACHE.get_or_init(Default::default);
+        if let Some(hit) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&uid) {
+            return hit.clone();
+        }
+        let name = std::fs::read_to_string("/etc/passwd")
+            .ok()
+            .and_then(|passwd| {
+                passwd.lines().find_map(|line| {
+                    let mut fields = line.split(':');
+                    let name = fields.next()?;
+                    fields.next()?; // 口令占位
+                    (fields.next()?.parse::<u32>().ok()? == uid).then(|| name.to_string())
+                })
+            });
+        cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(uid, name.clone());
+        name
+    }
+
+    match uid_of(pid) {
+        Some(uid) => name_of(uid).unwrap_or_else(|| uid.to_string()),
+        None => String::new(),
+    }
+}
+
 /// 采集器共用：组装一条进程活动事件（OCSF 1007），并在注册表里建立血缘。
+/// activity 取 ACTIVITY_LAUNCH / ACTIVITY_TERMINATE。退出事件的 GUID 优先
+/// 复用启动时登记的映射——血缘分析靠退出事件与启动事件共享 process_guid；
+/// 查不到（进程早于 agent 启动）再正常登记。
 fn process_event(
     agent_id: &str,
     registry: &mut ProcessRegistry,
+    activity: u32,
     info: ProcessInfo<'_>,
 ) -> AgentEvent {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -172,17 +245,26 @@ fn process_event(
         cmd_line,
         ppid,
         username,
+        exit_code,
     } = info;
 
-    let (guid, parent_guid) = registry.register(pid, ppid);
+    let (guid, parent_guid) = if activity == ACTIVITY_TERMINATE {
+        match registry.guid_of(pid) {
+            Some(g) => (g, ppid.and_then(|p| registry.guid_of(p))),
+            None => registry.register(pid, ppid),
+        }
+    } else {
+        registry.register(pid, ppid)
+    };
     let raw = serde_json::json!({
-        "activity_id": 1, // OCSF: Launch
+        "activity_id": activity,
         "process": {
             "pid": pid,
             "uid": guid.to_string(),
             "name": name,
             "file": { "path": exe, "sha256": exe.and_then(hash::exe_sha256) },
             "cmd_line": cmd_line,
+            "exit_code": exit_code,
             "parent_process": {
                 "pid": ppid,
                 "uid": parent_guid.map(|g| g.to_string()),
@@ -217,6 +299,7 @@ mod tests {
         let parent = process_event(
             "agent-1",
             &mut reg,
+            ACTIVITY_LAUNCH,
             ProcessInfo {
                 pid: 100,
                 name: "parent.exe",
@@ -224,11 +307,13 @@ mod tests {
                 cmd_line: Some("parent cmd"),
                 ppid: None,
                 username: "u".to_string(),
+                ..Default::default()
             },
         );
         let child = process_event(
             "agent-1",
             &mut reg,
+            ACTIVITY_LAUNCH,
             ProcessInfo {
                 pid: 200,
                 name: "child.exe",
@@ -236,6 +321,7 @@ mod tests {
                 cmd_line: Some("child cmd"),
                 ppid: Some(100),
                 username: "u".to_string(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -253,6 +339,7 @@ mod tests {
         let evt = process_event(
             "agent-1",
             &mut reg,
+            ACTIVITY_LAUNCH,
             ProcessInfo {
                 pid: 1,
                 name: "x",
@@ -260,6 +347,7 @@ mod tests {
                 cmd_line: Some("c"),
                 ppid: Some(999),
                 username: "u".to_string(),
+                ..Default::default()
             },
         );
         assert!(
@@ -282,6 +370,7 @@ mod tests {
         let evt = process_event(
             "agent-x",
             &mut reg,
+            ACTIVITY_LAUNCH,
             ProcessInfo {
                 pid: 42,
                 name: "bash",
@@ -289,6 +378,7 @@ mod tests {
                 cmd_line: Some("-c whoami"),
                 ppid: None,
                 username: "root".to_string(),
+                ..Default::default()
             },
         );
         let v: Value = serde_json::from_str(&evt.raw_json).unwrap();
@@ -299,5 +389,65 @@ mod tests {
         assert_eq!(evt.agent_id, "agent-x");
         assert_eq!(evt.username, "root");
         assert!(evt.ts_unix_ns > 0);
+    }
+
+    /// 退出事件：activity_id=2、带退出码，且 process_guid 复用启动时登记的
+    /// 映射——血缘分析靠首尾事件共享同一个 GUID。
+    #[test]
+    fn process_event_terminate_reuses_guid() {
+        let mut reg = ProcessRegistry::default();
+        let launch = process_event(
+            "agent-1",
+            &mut reg,
+            ACTIVITY_LAUNCH,
+            ProcessInfo {
+                pid: 300,
+                name: "worker",
+                exe: Some("/bin/worker"),
+                cmd_line: Some("worker -d"),
+                ppid: None,
+                username: "u".to_string(),
+                ..Default::default()
+            },
+        );
+        let exit = process_event(
+            "agent-1",
+            &mut reg,
+            ACTIVITY_TERMINATE,
+            ProcessInfo {
+                pid: 300,
+                name: "worker",
+                exit_code: Some(137),
+                ..Default::default()
+            },
+        );
+        assert_eq!(exit.process_guid, launch.process_guid);
+        let v: Value = serde_json::from_str(&exit.raw_json).unwrap();
+        assert_eq!(v["activity_id"], 2);
+        assert_eq!(v["process"]["pid"], 300);
+        assert_eq!(v["process"]["exit_code"], 137);
+        assert_eq!(v["process"]["uid"], launch.process_guid);
+    }
+
+    /// 进程早于 agent 启动时注册表里没有映射，退出事件退化为正常登记。
+    #[test]
+    fn process_event_terminate_unknown_pid() {
+        let mut reg = ProcessRegistry::default();
+        let exit = process_event(
+            "agent-1",
+            &mut reg,
+            ACTIVITY_TERMINATE,
+            ProcessInfo {
+                pid: 555,
+                ..Default::default()
+            },
+        );
+        assert!(!exit.process_guid.is_empty());
+        let v: Value = serde_json::from_str(&exit.raw_json).unwrap();
+        assert_eq!(v["activity_id"], 2);
+        assert!(
+            v["process"]["exit_code"].is_null(),
+            "拿不到退出码时应为 null"
+        );
     }
 }

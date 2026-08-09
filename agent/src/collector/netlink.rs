@@ -10,7 +10,9 @@
 use std::io;
 use std::os::fd::RawFd;
 
-use super::{EventSink, ProcessInfo, process_event};
+use super::{
+    ACTIVITY_LAUNCH, ACTIVITY_TERMINATE, EventSink, ProcessInfo, process_event, username_of,
+};
 
 const NETLINK_CONNECTOR: libc::c_int = 11;
 const CN_IDX_PROC: u32 = 1;
@@ -19,6 +21,7 @@ const PROC_CN_MCAST_LISTEN: u32 = 1;
 
 const PROC_EVENT_FORK: u32 = 0x0000_0001;
 const PROC_EVENT_EXEC: u32 = 0x0000_0002;
+const PROC_EVENT_EXIT: u32 = 0x8000_0000;
 
 /// nlmsghdr(16) + cn_msg(20)，之后才是 proc_event
 const NLMSG_HDR_LEN: usize = 16;
@@ -74,13 +77,15 @@ fn pump(sock: Socket, agent_id: String, tx: EventSink) {
             let event = process_event(
                 &agent_id,
                 &mut registry,
+                d.activity,
                 ProcessInfo {
                     pid: d.pid,
                     name: &d.name,
                     exe: d.exe.as_deref(),
                     cmd_line: d.cmd_line.as_deref(),
                     ppid: d.ppid,
-                    username: String::new(),
+                    username: username_of(d.pid),
+                    exit_code: d.exit_code,
                 },
             );
             if !tx.send(event) {
@@ -94,6 +99,7 @@ struct ProcEvent {
     what: u32,
     pid: u32,
     ppid: Option<u32>,
+    exit_code: Option<u32>,
 }
 
 /// 一个 netlink 数据报可能带多条消息，按 nlmsghdr 的长度逐条走。
@@ -120,12 +126,21 @@ fn parse_events(buf: &[u8]) -> Vec<ProcEvent> {
                 what,
                 pid: u32::from_ne_bytes(data[0..4].try_into().unwrap()),
                 ppid: None,
+                exit_code: None,
             }),
             // fork: parent_pid, parent_tgid, child_pid, child_tgid
             PROC_EVENT_FORK if data.len() >= 16 => events.push(ProcEvent {
                 what,
                 pid: u32::from_ne_bytes(data[8..12].try_into().unwrap()),
                 ppid: Some(u32::from_ne_bytes(data[0..4].try_into().unwrap())),
+                exit_code: None,
+            }),
+            // exit: process_pid, process_tgid, exit_code, exit_signal
+            PROC_EVENT_EXIT if data.len() >= 16 => events.push(ProcEvent {
+                what,
+                pid: u32::from_ne_bytes(data[0..4].try_into().unwrap()),
+                ppid: None,
+                exit_code: Some(u32::from_ne_bytes(data[8..12].try_into().unwrap())),
             }),
             _ => {}
         }
@@ -136,23 +151,28 @@ fn parse_events(buf: &[u8]) -> Vec<ProcEvent> {
     events
 }
 
-/// 一次 exec 的现场信息。字段持有所有权，避免为了凑生命周期而泄漏内存。
+/// 一次进程活动的现场信息。字段持有所有权，避免为了凑生命周期而泄漏内存。
 struct Described {
     pid: u32,
+    activity: u32,
     name: String,
     exe: Option<String>,
     cmd_line: Option<String>,
     ppid: Option<u32>,
+    exit_code: Option<u32>,
 }
 
 /// 从 /proc 补齐命令行、可执行路径和父进程。短命进程可能已经退场，
-/// 拿不到就只报 pid——事件本身不丢。
+/// 拿不到就只报 pid——事件本身不丢。退出事件到达时进程尚在退出途中，
+/// /proc 往往还读得到，同样尽力补。
 fn describe(event: &ProcEvent) -> Option<Described> {
     let pid = event.pid;
-    // fork 事件只用于维护血缘，真正产生事件的是 exec
-    if event.what != PROC_EVENT_EXEC {
-        return None;
-    }
+    // fork 事件只用于维护血缘，真正产生事件的是 exec/exit
+    let activity = match event.what {
+        PROC_EVENT_EXEC => ACTIVITY_LAUNCH,
+        PROC_EVENT_EXIT => ACTIVITY_TERMINATE,
+        _ => return None,
+    };
 
     let exe = std::fs::read_link(format!("/proc/{pid}/exe"))
         .ok()
@@ -168,10 +188,12 @@ fn describe(event: &ProcEvent) -> Option<Described> {
 
     Some(Described {
         pid,
+        activity,
         name: name.unwrap_or_default(),
         exe,
         cmd_line,
         ppid: ppid.or(event.ppid),
+        exit_code: event.exit_code,
     })
 }
 
@@ -265,5 +287,73 @@ impl Socket {
 impl Drop for Socket {
     fn drop(&mut self) {
         unsafe { libc::close(self.0) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 拼一条 proc connector 报文：nlmsghdr + cn_msg + proc_event 头 + 数据。
+    fn build_msg(what: u32, data: &[u8]) -> Vec<u8> {
+        let mut buf = vec![0u8; EVENT_DATA_OFFSET + data.len()];
+        let len = buf.len() as u32;
+        buf[0..4].copy_from_slice(&len.to_ne_bytes()); // nlmsg_len
+        buf[PROC_EVENT_OFFSET..PROC_EVENT_OFFSET + 4].copy_from_slice(&what.to_ne_bytes());
+        buf[EVENT_DATA_OFFSET..].copy_from_slice(data);
+        buf
+    }
+
+    /// exit: process_pid, process_tgid, exit_code, exit_signal 共 16 字节。
+    #[test]
+    fn parse_exit_event() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&1234u32.to_ne_bytes()); // process_pid
+        data.extend_from_slice(&1234u32.to_ne_bytes()); // process_tgid
+        data.extend_from_slice(&9u32.to_ne_bytes()); // exit_code
+        data.extend_from_slice(&0u32.to_ne_bytes()); // exit_signal
+
+        let events = parse_events(&build_msg(PROC_EVENT_EXIT, &data));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].what, PROC_EVENT_EXIT);
+        assert_eq!(events[0].pid, 1234);
+        assert_eq!(events[0].exit_code, Some(9));
+    }
+
+    /// exec 报文不带退出码，pid 取自 process_pid。
+    #[test]
+    fn parse_exec_event() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&777u32.to_ne_bytes()); // process_pid
+        data.extend_from_slice(&777u32.to_ne_bytes()); // process_tgid
+
+        let events = parse_events(&build_msg(PROC_EVENT_EXEC, &data));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].what, PROC_EVENT_EXEC);
+        assert_eq!(events[0].pid, 777);
+        assert_eq!(events[0].exit_code, None);
+    }
+
+    /// 截断的 exit 数据（不足 16 字节）直接丢弃，不产生错解析。
+    #[test]
+    fn parse_truncated_exit_dropped() {
+        let data = 1234u32.to_ne_bytes(); // 只有 process_pid
+        let events = parse_events(&build_msg(PROC_EVENT_EXIT, &data));
+        assert!(events.is_empty());
+    }
+
+    /// describe 把 exit 事件标成 Terminate，/proc 读不到时字段留空但事件不丢。
+    #[test]
+    fn describe_exit_is_terminate() {
+        let d = describe(&ProcEvent {
+            what: PROC_EVENT_EXIT,
+            pid: u32::MAX, // 不存在的 pid，/proc 必然读不到
+            ppid: None,
+            exit_code: Some(3),
+        })
+        .expect("exit 事件必须产生事件");
+        assert_eq!(d.activity, ACTIVITY_TERMINATE);
+        assert_eq!(d.exit_code, Some(3));
+        assert!(d.name.is_empty());
     }
 }

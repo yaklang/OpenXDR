@@ -62,8 +62,11 @@ pub fn to_record(flow: &Flow) -> pb::FlowRecord {
         dst_bytes,
         tcp_flags: flow.tcp_flags as u32,
         dns_query: flow.meta.dns_query.clone().unwrap_or_default(),
+        dns_rcode: flow.meta.dns_rcode.unwrap_or_default(),
+        dns_answers: flow.meta.dns_answers.clone(),
         tls_sni: flow.meta.tls_sni.clone().unwrap_or_default(),
         ja3: flow.meta.ja3.clone().unwrap_or_default(),
+        ja3s: flow.meta.ja3s.clone().unwrap_or_default(),
         http_host: flow.meta.http_host.clone().unwrap_or_default(),
         http_uri: flow.meta.http_uri.clone().unwrap_or_default(),
         http_user_agent: flow.meta.http_user_agent.clone().unwrap_or_default(),
@@ -142,13 +145,17 @@ mod tests {
             tcp_flags: 0,
             meta: Metadata {
                 dns_query: Some("example.com".to_string()),
+                dns_rcode: Some(0),
+                dns_answers: vec!["93.184.216.34".to_string()],
                 tls_sni: None,
                 ja3: None,
+                ja3s: Some("ja3s-hash".to_string()),
                 http_host: Some("h.example".to_string()),
                 http_uri: Some("/x".to_string()),
                 http_user_agent: Some("ua".to_string()),
             },
             probed: true,
+            probed_server: true,
             client_is_a,
         }
     }
@@ -188,10 +195,13 @@ mod tests {
         assert_eq!(r.end_unix_ns, 200);
         assert_eq!(r.protocol, 6);
         assert_eq!(r.dns_query, "example.com");
+        assert_eq!(r.dns_rcode, 0);
+        assert_eq!(r.dns_answers, vec!["93.184.216.34"]);
         assert_eq!(r.http_host, "h.example");
         assert_eq!(r.http_uri, "/x");
         assert_eq!(r.http_user_agent, "ua");
         assert_eq!(r.tls_sni, "");
         assert_eq!(r.ja3, "");
+        assert_eq!(r.ja3s, "ja3s-hash");
     }
 }

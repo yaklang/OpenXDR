@@ -9,7 +9,7 @@ default-members = ["."]
 
 [features]
 # eBPF 采集需要 nightly 工具链与 bpf-linker，按需开启；
-# 关闭时 Linux 侧走轮询采集，构建不依赖任何外部二进制
+# 关闭时 Linux 侧走 netlink proc connector（失败再退轮询），构建不依赖任何外部二进制
 default = []
 ebpf = ["dep:aya", "dep:bytes", "dep:aya-build"]
 
@@ -38,7 +38,10 @@ windows-sys = { version = "0.60", features = [
     "Wdk_System_Threading",
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
     "Win32_System_EventLog",
+    "Win32_System_IO",
     "Win32_System_Registry",
     "Win32_System_Threading",
 ] }

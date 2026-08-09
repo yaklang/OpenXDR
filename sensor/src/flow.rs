@@ -45,8 +45,12 @@ impl FlowKey {
 #[derive(Default, Clone)]
 pub struct Metadata {
     pub dns_query: Option<String>,
+    pub dns_rcode: Option<u32>,
+    /// A/AAAA 应答 IP（至多 4 个）
+    pub dns_answers: Vec<String>,
     pub tls_sni: Option<String>,
     pub ja3: Option<String>,
+    pub ja3s: Option<String>,
     pub http_host: Option<String>,
     pub http_uri: Option<String>,
     pub http_user_agent: Option<String>,
@@ -62,8 +66,11 @@ pub struct Flow {
     pub b_to_a_bytes: u64,
     pub tcp_flags: u8,
     pub meta: Metadata,
-    /// 已尝试过协议识别，不再重复解析
+    /// 已尝试过协议识别（DNS 查询 / ClientHello / HTTP），不再重复解析
     pub probed: bool,
+    /// 服务端方向已探测（DNS 应答 rcode/answers、ServerHello JA3S）。
+    /// 与 probed 分开：同一条流两个方向各探一次。
+    pub probed_server: bool,
     /// a 侧是否为客户端。五元组按大小归一化会丢掉方向，
     /// 而"谁是服务端"是网络检测的基本前提，必须单独记住。
     pub client_is_a: bool,
@@ -145,6 +152,7 @@ impl FlowTable {
             tcp_flags: 0,
             meta: Metadata::default(),
             probed: false,
+            probed_server: false,
             client_is_a,
         });
 
