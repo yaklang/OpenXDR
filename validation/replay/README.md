@@ -34,13 +34,13 @@ where ts > now() - interval '15 minutes' group by 1;
 
 | 采集路径 | Windows 11 本机 | WSL2 Ubuntu（6.18 内核） | Win7/2008R2 | 真 Linux |
 |---|---|---|---|---|
-| 进程启动（ETW / netlink / eBPF / 轮询） | ✅ ETW | ⚠️ 轮询兜底（命名空间设计降级） | 未验证（PEB 兜底） | 未验证 |
-| 进程退出 | ✅ ETW Stop，复用启动 GUID | ⚠️ 轮询消失检测 | 未验证 | 未验证 |
-| 短命进程 cmdline | ✅（极快进程有竞争，见下注） | ❌ 多为空（轮询固有） | 未验证 | 未验证 |
-| 文件监控（RDCW / fanotify / inotify） | ✅ RDCW 增改删 | ✅ fanotify 全生命周期+肇事进程 | — | 未验证 |
+| 进程启动（ETW / netlink / eBPF / 轮询） | ✅ ETW | ⚠️ 轮询兜底（命名空间设计降级） | 未验证（PEB 兜底） | ✅ netlink（PVE 7.0 内核） |
+| 进程退出 | ✅ ETW Stop，复用启动 GUID | ⚠️ 轮询消失检测 | 未验证 | ✅ netlink EXIT，复用启动 GUID |
+| 短命进程 cmdline | ✅（极快进程有竞争，见下注） | ❌ 多为空（轮询固有） | 未验证 | ✅ uname/whoami/cat/sh/timeout 完整 |
+| 文件监控（RDCW / fanotify / inotify） | ✅ RDCW 增改删 | ✅ fanotify 全生命周期+肇事进程 | — | ✅ fanotify 增改删+肇事进程 |
 | 持久化点（注册表/Startup/服务/计划任务） | ✅ 增删，删除带旧值 | ✅（经 fanotify 覆盖 systemd/cron/.ssh） | — | — |
 | 网络（eBPF 出站） | 不采集（设计：交给 sensor） | ✅ 捕获 10.0.0.1:4444 出站 | — | 未验证 |
-| 登录（4624/4625 / wtmp-btmp） | ✅ 4625 含失败原因码 | 不适用（WSL 无 wtmp 写入） | 未验证 | 未验证 |
+| 登录（4624/4625 / wtmp-btmp） | ✅ 4625 含失败原因码 | 不适用（WSL 无 wtmp 写入） | 未验证 | ✅ wtmp SSH 登录 |
 
 注：Windows 上秒退进程（如 `reg add`）的 cmdline 靠 ETW 事件触发后回读，
 进程已退场则读不到（cmd_line 为空）——已知竞态，注册表/文件类事件不受影响。
@@ -99,6 +99,22 @@ Defender 排除项（第三方杀毒在管，Defender 未运行，Add-MpPreferen
    ≥35s，否则中间态被跳过（与第一轮 persistwatch 教训同型）。
 3. 监控目录在 agent 启动后新建的（如 /var/spool/at），当前不会被补盯
    ——已知边界，回放时先建目录再起 agent。
+
+## 第三轮：真 Linux 双机回放（2026-08-09）
+
+环境：两台 Debian 13 / Proxmox VE 9.2.2 宿主机，内核均为
+`7.0.2-6-pve`。当前 HEAD 的默认特性 agent 同时接入临时隔离 server，响应处置
+保持关闭。
+
+- 两台均选择 netlink proc connector，未降级轮询；短命进程的 name/cmdline
+  完整，EXIT 事件复用启动 GUID 且带 `exit_code=0`。
+- 两台均选择 fanotify，systemd unit 与 cron 文件的建/改/删共 12 条事件全部
+  上报，带实际写入进程（bash/rm）。
+- 两次新 SSH 会话均由 wtmp 采集为 3002 登录事件，用户名与源 IP 正确。
+- 两台均实机命中 Credential Dumping、Linux Recon、Linux Reverse Shell、
+  Systemd Service Unit、Sensitive File Modified；pve2 额外验证 dummy 模块加载，
+  1005 事件和 Linux Kernel Module Loaded 规则均命中。
+- 回放结束后 agent/server/数据库、测试文件和内核模块全部撤销，无常驻产物。
 
 ## 已知边界
 

@@ -156,15 +156,16 @@ proc connector 没有网络事件，为它单开轮询不值。
     递归化（限深 4 层，运行中动态补挂）。
 12. ~~文件事件带进程上下文~~ ✅ fanotify（FID 模式）优先路径：事件自带
     pid → exe/comm/属主，无权限时干净回落 inotify（`fswatch.rs:70`）。
-13. **实机攻击验证环境（双平台首轮完成）**。2026-08-09 Windows 冒烟 +
+13. **实机攻击验证环境（主流平台完成，旧 Windows 待补）**。2026-08-09 Windows 冒烟 +
     Windows/WSL2 双语料实机回放（脚本与验证矩阵固化在
     [validation/replay/](../validation/replay/README.md)）。Windows：
     进程启停带 cmdline、持久化点增删带旧值、8 条规则实机命中、良性对照
     零误报。WSL2：fanotify 文件事件全生命周期带肇事进程、eBPF 出站捕获、
     3 条规则实机命中。回放抓到 4 个合成对拍抓不到的真缺陷，全部当天修复
     （fanotify O_PATH/DFID、NUL 事件毒化管道、规则裸名匹配不到实机
-    带引号全路径 cmdline）。**仍待做**：真 Linux 机器（netlink EXIT、
-    进程类规则实机命中——WSL2 轮询兜底验证不了）、Win7/2008R2 实机。
+    带引号全路径 cmdline）。同日已在两台 Debian 13 / PVE 9.2.2 真 Linux
+    宿主机完成 netlink 启停、短命进程 cmdline、fanotify 增改删、wtmp 登录、
+    内核模块及对应规则命中验证。**仍待做**：Win7/2008R2 实机。
 
 ### 兼容性备忘（本轮顺带解决/确认）
 
@@ -186,9 +187,10 @@ P0/P1/P2 代码改动共 43 个文件尚未提交，收尾顺序：
 2. ~~**双平台实机回放**~~ ✅ 首轮完成：抓到 4 个真缺陷并修复
    （见上条与 [validation/replay](../validation/replay/README.md)），
    回放脚本与验证矩阵已固化进仓库。
-3. **实机验证收尾**：真 Linux 机器（netlink EXIT、fanotify 在真内核复测、
-   进程类规则实机命中）；Win7/2008R2 实机（PEB cmdline 兜底 + MSVC
-   二进制兼容性）；回放矩阵按新环境持续补格子。
+3. **实机验证收尾**：~~真 Linux 机器（netlink EXIT、fanotify 在真内核复测、
+   进程类规则实机命中）~~ ✅ 已在两台 PVE 7.0 内核宿主机完成；仍需
+   Win7/2008R2 实机（PEB cmdline 兜底 + MSVC 二进制兼容性）；回放矩阵按
+   新环境持续补格子。
 
 ### 采集缺口综合规划（2026-08-09 第二轮，A/B 档全量完成）
 
