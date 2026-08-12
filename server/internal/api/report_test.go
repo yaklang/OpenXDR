@@ -91,3 +91,31 @@ func TestMdCellEscaping(t *testing.T) {
 		t.Errorf("超长内容未截断: %d 字节", len(long))
 	}
 }
+
+func TestMaxSeverity(t *testing.T) {
+	if got := maxSeverity(nil); got != 0 {
+		t.Errorf("空告警列表应为 0，实际 %d", got)
+	}
+	alerts := []reportAlert{
+		{Severity: 3},
+		{Severity: 1},
+		{Severity: 5},
+		{Severity: 2},
+	}
+	if got := maxSeverity(alerts); got != 5 {
+		t.Errorf("maxSeverity 应为 5，实际 %d", got)
+	}
+	if got := maxSeverity([]reportAlert{{Severity: 0}, {Severity: 0}}); got != 0 {
+		t.Errorf("全零告警应为 0，实际 %d", got)
+	}
+}
+
+func TestNameOr(t *testing.T) {
+	m := map[string]string{"viewer": "只读"}
+	if got := nameOr(m, "viewer"); got != "只读" {
+		t.Errorf("nameOr 命中应为映射值，实际 %q", got)
+	}
+	if got := nameOr(m, "analyst"); got != "analyst" {
+		t.Errorf("nameOr 未命中应回退键本身，实际 %q", got)
+	}
+}

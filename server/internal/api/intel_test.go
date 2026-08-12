@@ -21,3 +21,21 @@ func TestDetectKind(t *testing.T) {
 		}
 	}
 }
+
+func TestIsHex(t *testing.T) {
+	for _, s := range []string{"deadbeef", "0123456789abcdef", "a1b2c3"} {
+		if !isHex(s) {
+			t.Errorf("isHex(%q) 应为 true", s)
+		}
+	}
+	// isHex 只认小写：detectKind 在调用前已 ToLower，大写在这里本就该拒绝
+	for _, s := range []string{"ABCDEF", "deadx", "0x1f", "12G4", "abc def", "-ff"} {
+		if isHex(s) {
+			t.Errorf("isHex(%q) 应为 false", s)
+		}
+	}
+	// 空串无字符可否定：按实现返回 true，detectKind 靠长度限制不会走到这里
+	if !isHex("") {
+		t.Errorf("isHex 空串按实现应为 true")
+	}
+}
