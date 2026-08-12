@@ -134,3 +134,19 @@ func TestFlowRawNoCertNoCertKey(t *testing.T) {
 		t.Fatalf("无证书不应写 cert 键：%v", tls)
 	}
 }
+
+func TestConnTuple(t *testing.T) {
+	tcp := &pb.FlowRecord{Protocol: protoTCP, SrcIp: "1.2.3.4", SrcPort: 443, DstIp: "5.6.7.8", DstPort: 52432}
+	if got := connTuple(tcp); got != "tcp:1.2.3.4:443>5.6.7.8:52432" {
+		t.Errorf("tcp 连接元组 = %q，期望 tcp:1.2.3.4:443>5.6.7.8:52432", got)
+	}
+	udp := &pb.FlowRecord{Protocol: 17, SrcIp: "10.0.0.1", SrcPort: 53, DstIp: "10.0.0.2", DstPort: 5353}
+	if got := connTuple(udp); got != "udp:10.0.0.1:53>10.0.0.2:5353" {
+		t.Errorf("udp 连接元组 = %q，期望 udp:10.0.0.1:53>10.0.0.2:5353", got)
+	}
+	// 未知协议按 udp 处理，保证去重键不随协议字段漂移
+	other := &pb.FlowRecord{Protocol: 0, SrcIp: "1.1.1.1", SrcPort: 1, DstIp: "2.2.2.2", DstPort: 2}
+	if got := connTuple(other); got != "udp:1.1.1.1:1>2.2.2.2:2" {
+		t.Errorf("未知协议连接元组 = %q，期望按 udp 处理", got)
+	}
+}

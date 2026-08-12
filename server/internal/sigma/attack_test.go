@@ -35,3 +35,19 @@ func TestParseAttackTagsEmpty(t *testing.T) {
 		t.Error("非列表 tags 应安全忽略")
 	}
 }
+
+func TestTactics(t *testing.T) {
+	tactics := Tactics()
+	if len(tactics) != len(attackTactics) {
+		t.Fatalf("Tactics 长度 = %d, want %d", len(tactics), len(attackTactics))
+	}
+	// 杀伤链顺序：侦察打头，影响收尾
+	if tactics[0] != "reconnaissance" || tactics[len(tactics)-1] != "impact" {
+		t.Errorf("战术应按杀伤链顺序排列：%v", tactics)
+	}
+	for _, tt := range tactics {
+		if !tacticSet[tt] {
+			t.Errorf("战术 %q 不在集合中", tt)
+		}
+	}
+}
