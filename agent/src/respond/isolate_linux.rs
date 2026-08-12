@@ -130,3 +130,67 @@ fn run_nft(args: &[&str]) -> Result<String, String> {
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rules(allow: &[&str]) -> String {
+        let v: Vec<String> = allow.iter().map(|s| s.to_string()).collect();
+        build_ruleset(&v)
+    }
+
+    #[test]
+    fn ruleset_has_drop_by_default_and_keeps_control_plane() {
+        let s = rules(&["1.2.3.4:443"]);
+        // 独立表 + 双向 drop，不动主机原有规则
+        assert!(s.contains(&format!("add table inet {TABLE}")));
+        assert_eq!(
+            s.matches(&format!("add table inet {TABLE}")).count(),
+            1,
+            "规则应确定而非叠加"
+        );
+        assert!(s.contains("policy drop"));
+        // 回环与已建立连接必须放行，否则会把自己锁死在门外
+        assert!(s.contains("iif lo accept"));
+        assert!(s.contains("oif lo accept"));
+        assert!(s.contains("ct state established,related accept"));
+    }
+
+    #[test]
+    fn ruleset_ipv4_with_port() {
+        let s = rules(&["1.2.3.4:443"]);
+        assert!(s.contains("output ip daddr 1.2.3.4 tcp dport 443 accept"));
+        assert!(s.contains("input ip saddr 1.2.3.4 tcp sport 443 accept"));
+    }
+
+    #[test]
+    fn ruleset_ipv6_and_portless() {
+        let s = rules(&["[2001:db8::5]:8443", "10.0.0.9"]);
+        assert!(s.contains("output ip6 daddr 2001:db8::5 tcp dport 8443 accept"));
+        assert!(s.contains("input ip6 saddr 2001:db8::5 tcp sport 8443 accept"));
+        // 无端口：不带端口子句，整段地址放行
+        assert!(s.contains("output ip daddr 10.0.0.9 accept"));
+        assert!(!s.contains("10.0.0.9 tcp"));
+    }
+
+    #[test]
+    fn endpoint_split_ipv4_port() {
+        assert_eq!(split_endpoint("1.2.3.4:443"), ("1.2.3.4", Some("443")));
+        assert_eq!(split_endpoint("10.0.0.9"), ("10.0.0.9", None));
+    }
+
+    #[test]
+    fn endpoint_split_ipv6_bracket() {
+        assert_eq!(
+            split_endpoint("[2001:db8::1]:8443"),
+            ("2001:db8::1", Some("8443"))
+        );
+        // 裸 IPv6 不写端口：整体当 host，不拆开地址里的冒号
+        assert_eq!(split_endpoint("2001:db8::1"), ("2001:db8::1", None));
+        assert_eq!(split_endpoint("2001:db8::1:53"), ("2001:db8::1:53", None));
+        // 畸形方括号：整体当 host，不 panic
+        assert_eq!(split_endpoint("[1.2.3.4"), ("[1.2.3.4", None));
+        assert_eq!(split_endpoint("1.2.3.4]"), ("1.2.3.4]", None));
+    }
+}
