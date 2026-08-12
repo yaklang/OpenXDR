@@ -125,7 +125,9 @@ jobs:
           workspaces: ${{ matrix.crate }}
           key: ${{ matrix.feature }}
       - name: 安装 bpf-linker
-        run: cargo install bpf-linker --locked
+        # pin 版本：0.10.4 默认用 nightly 自带 LLVM（rust-llvm-22），不依赖 runner 预装 LLVM。
+        # 0.11 起默认改为 llvm-23，cargo install 不 pin 会被悄悄拉新打断构建。
+        run: cargo install bpf-linker --version 0.10.4 --locked
       - name: 构建
         working-directory: ${{ matrix.crate }}
         run: cargo build --features ${{ matrix.feature }}
