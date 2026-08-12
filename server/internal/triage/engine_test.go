@@ -1,6 +1,7 @@
 package triage
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -63,5 +64,20 @@ func TestParseVerdictTruncatesLongAnswer(t *testing.T) {
 	out := parseVerdict("inc-1", long)
 	if len(out) > 2100 {
 		t.Errorf("回退输出应截断到合理长度，实际 %d", len(out))
+	}
+}
+
+func TestExecToolUnknownTool(t *testing.T) {
+	e := &Engine{}
+	got := e.execTool(context.Background(), "no_such_tool", "{}")
+	var m map[string]any
+	if err := json.Unmarshal([]byte(got), &m); err != nil {
+		t.Fatalf("未知工具应返回 JSON 错误让模型继续，实际 %q", got)
+	}
+	if _, ok := m["error"]; !ok {
+		t.Fatalf("错误应含 error 键：%v", m)
+	}
+	if !strings.Contains(m["error"].(string), "未知工具 no_such_tool") {
+		t.Errorf("未知工具错误文本应明确，实际 %q", got)
 	}
 }

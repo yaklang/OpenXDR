@@ -2,6 +2,7 @@ package auth
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -58,5 +59,17 @@ func TestClientIP(t *testing.T) {
 		if got := clientIP(r); got != c.want {
 			t.Errorf("clientIP(RemoteAddr=%q) = %q, want %q", c.remote, got, c.want)
 		}
+	}
+}
+
+func TestAuthWriteJSON(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeJSON(rec, map[string]string{"hello": "世界"})
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	want := `{"hello":"世界"}` + "\n"
+	if rec.Body.String() != want {
+		t.Errorf("输出 = %q, want %q", rec.Body.String(), want)
 	}
 }
