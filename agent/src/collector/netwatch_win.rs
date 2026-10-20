@@ -20,10 +20,14 @@ use ferrisetw::EventRecord;
 use ferrisetw::parser::Parser;
 use ferrisetw::provider::Provider;
 use ferrisetw::schema_locator::SchemaLocator;
-use ferrisetw::trace::UserTrace;
+use ferrisetw::trace::{UserTrace, stop_trace_by_name};
 
 use super::netwatch::{self, ConnInfo, ConnSampler};
 use super::{EventSink, ProcessRegistry};
+
+// ETW 会话用固定名字：agent 被强杀或升级退出时会话不随进程消失，启动时先停掉同名旧会话；
+// 用随机名每次重启都漏一个，系统总共 64 个会话名额迟早占满，之后采集就起不来
+const SESSION: &str = "OpenXDR-Network";
 
 const KERNEL_NETWORK_GUID: &str = "7dd42a49-5329-4832-8dfd-43d979153a88";
 
@@ -105,7 +109,12 @@ fn run(agent_id: String, sink: EventSink, registry: Arc<Mutex<ProcessRegistry>>)
         })
         .build();
 
-    match UserTrace::new().enable(provider).start_and_process() {
+    let _ = stop_trace_by_name(SESSION);
+    match UserTrace::new()
+        .named(SESSION.to_string())
+        .enable(provider)
+        .start_and_process()
+    {
         Ok(_trace) => {
             health_sink.capability("network", "etw-tcp-out", "degraded");
             eprintln!("网络采集: ETW Kernel-Network TcpConnect（TCP 出站，60s 采样）");
