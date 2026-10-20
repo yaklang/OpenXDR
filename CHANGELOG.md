@@ -3,6 +3,16 @@
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 0.x 期间接口、配置与数据库结构仍可能不兼容变更，升级前请看对应条目。
 
+## [0.2.1] - 2026-10-20
+
+### 修复
+
+- Windows 进程采集会静默停止：ETW 会话随机命名，agent 被强杀或升级退出时会话泄漏，Kernel-Process 可挂的会话数用尽后
+  收不到任何进程事件，健康状态仍显示正常。会话改用固定名并在启动前停掉同名旧会话。
+  **升级后请重启一次 Windows 主机**（或 `logman stop n4r1b-trace-<…> -ets`）清掉旧版本漏下的会话。
+- 发版：多架构镜像的编译阶段改在构建机本架构上交叉编译。0.1.0 与 0.2.0 的发版流程都卡在 QEMU 里编 arm64 没有跑完，
+  本版是第一个带 GitHub Release 与 GHCR 镜像的版本，0.2.0 的变更一并包含。
+
 ## [0.2.0] - 2026-10-20
 
 ### 身份关联
@@ -134,5 +144,6 @@
 - 跨宿主机高可用部署（Patroni + 三节点 JetStream + Keepalived VIP）与滚动发布脚本。
 - Web 控制台：中英双语，AI 助手为主入口，命令面板。
 
+[0.2.1]: https://github.com/yaklang/OpenXDR/releases/tag/v0.2.1
 [0.2.0]: https://github.com/yaklang/OpenXDR/releases/tag/v0.2.0
 [0.1.0]: https://github.com/yaklang/OpenXDR/releases/tag/v0.1.0
