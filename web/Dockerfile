@@ -1,4 +1,5 @@
-FROM node:22.23.3-alpine3.23 AS build
+# 产物是静态文件，构建阶段跑在构建机本架构上，多架构发版不进 QEMU
+FROM --platform=$BUILDPLATFORM node:22.23.3-alpine3.23 AS build
 # 网络受限时可指向镜像源，例如 --build-arg NPM_REGISTRY=https://registry.npmmirror.com
 ARG NPM_REGISTRY=https://registry.npmjs.org
 WORKDIR /src
