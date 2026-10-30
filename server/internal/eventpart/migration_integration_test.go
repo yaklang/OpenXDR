@@ -14,6 +14,7 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/internal/eventpart"
+	"openxdr/server/internal/graphqueue"
 )
 
 type logWriter struct{ t *testing.T }
@@ -56,6 +57,20 @@ func legacySchema(t *testing.T, ctx context.Context, client *ent.Client, db *sql
 			t.Fatalf("%v\n%s", err, stmt)
 		}
 	}
+	// 与生产老库一致：资产图谱队列给普通表挂了自己的删除触发器
+	if err := graphqueue.EnsureSchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// assetmapTrigger 返回挂着资产图谱队列删除触发器的表名（没有则为空）。
+func assetmapTrigger(t *testing.T, db *sql.DB) string {
+	t.Helper()
+	var table string
+	if err := db.QueryRow(`SELECT coalesce(string_agg(tgrelid::regclass::text, ','), '') FROM pg_trigger WHERE tgname = 'openxdr_assetmap_release'`).Scan(&table); err != nil {
+		t.Fatal(err)
+	}
+	return table
 }
 
 // restoreSchema 不论测试停在哪一步，都把库恢复成 server 新建库的样子，免得影响后面的测试。
@@ -189,9 +204,15 @@ func TestOnlineMigrationFullFlow(t *testing.T) {
 	step(t, m, ctx, "verify")
 
 	total := count(t, db, `SELECT count(*) FROM events`)
+	if got := assetmapTrigger(t, db); got != "events" {
+		t.Fatalf("老表应挂着资产图谱队列触发器，实际 %q", got)
+	}
 	step(t, m, ctx, "switch")
 	if ok, _ := eventpart.Partitioned(ctx, db); !ok {
 		t.Fatal("切换后 events 应为分区表")
+	}
+	if got := assetmapTrigger(t, db); got != "events_old" {
+		t.Fatalf("资产图谱队列触发器应随老表改名，实际 %q", got)
 	}
 	if got := count(t, db, `SELECT count(*) FROM events`); got != total {
 		t.Fatalf("切换前后行数不一致: %d → %d", total, got)
@@ -225,6 +246,9 @@ func TestOnlineMigrationFullFlow(t *testing.T) {
 	if ok, _ := eventpart.Partitioned(ctx, db); ok {
 		t.Fatal("回滚后 events 应是老表")
 	}
+	if got := assetmapTrigger(t, db); got != "events" {
+		t.Fatalf("回滚后资产图谱队列触发器应回到老表，实际 %q", got)
+	}
 	if got := count(t, db, `SELECT count(*) FROM pg_constraint WHERE confrelid = 'events'::regclass AND convalidated`); got != 8 {
 		t.Fatalf("回滚应加回并校验 8 个外键，实际 %d", got)
 	}
@@ -237,6 +261,9 @@ func TestOnlineMigrationFullFlow(t *testing.T) {
 	if count(t, db, `SELECT count(*) FROM pg_class WHERE relname IN ('events_old', 'events_next')`) != 0 ||
 		count(t, db, `SELECT count(*) FROM pg_proc WHERE proname = 'openxdr_events_mirror'`) != 0 {
 		t.Fatal("finish 应删掉老表与镜像函数")
+	}
+	if got := assetmapTrigger(t, db); got != "" {
+		t.Fatalf("finish 后分区表不应再有资产图谱队列触发器（由 openxdr_events_release 接手），实际 %q", got)
 	}
 	if got := count(t, db, `SELECT count(*) FROM events`); got != total+1 {
 		t.Fatalf("最终行数应为切换前加切换后写入的一条: %d", got)

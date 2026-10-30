@@ -326,13 +326,17 @@ func preflight(ctx context.Context, q queryer) error {
 			return fmt.Errorf("索引名 %s 太长，加后缀会被截断", d.name)
 		}
 	}
+	// openxdr_assetmap_release 是资产图谱队列只给普通表挂的删除触发器（graphqueue.EnsureSchema）：
+	// 切换时随老表改名成 events_old、回滚时随它回来；分区表上同样的清理由 openxdr_events_release
+	// 与分区退役接手（见 schema.go 的 assetmap_queue），不需要迁移搬它。
 	var blockers string
 	if err := q.QueryRowContext(ctx, `SELECT coalesce(string_agg(x, ', '), '') FROM (
  SELECT 'materialized view ' || v.oid::regclass AS x FROM pg_depend d JOIN pg_rewrite r ON r.oid = d.objid JOIN pg_class v ON v.oid = r.ev_class
   WHERE d.classid = 'pg_rewrite'::regclass AND d.refobjid = 'events'::regclass AND v.relkind = 'm'
  UNION ALL SELECT 'publication ' || p.pubname FROM pg_publication_rel pr JOIN pg_publication p ON p.oid = pr.prpubid WHERE pr.prrelid = 'events'::regclass
  UNION ALL SELECT 'policy ' || polname FROM pg_policy WHERE polrelid = 'events'::regclass
- UNION ALL SELECT 'trigger ' || tgname FROM pg_trigger WHERE tgrelid = 'events'::regclass AND NOT tgisinternal) t`).Scan(&blockers); err != nil {
+ UNION ALL SELECT 'trigger ' || tgname FROM pg_trigger WHERE tgrelid = 'events'::regclass AND NOT tgisinternal
+  AND tgname <> 'openxdr_assetmap_release') t`).Scan(&blockers); err != nil {
 		return err
 	}
 	if blockers != "" {
