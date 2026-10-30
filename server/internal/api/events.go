@@ -65,27 +65,28 @@ func mapEvents(api *http.ServeMux, db *ent.Client) {
 		if source := p.Get("source"); source != "" {
 			preds = append(preds, entevent.SourceEQ(source))
 		}
-		if kw := p.Get("q"); kw != "" {
-			preds = append(preds, eventsearch.Keyword(kw))
-		}
 
 		limit := 100
 		if n, err := strconv.Atoi(p.Get("limit")); err == nil && n > 0 && n <= maxEventRows {
 			limit = n
 		}
 
-		rows, err := db.Event.Query().
-			Where(preds...).
-			Order(ent.Desc(entevent.FieldTs)).
-			Limit(limit).
-			All(r.Context())
+		query := func() *ent.EventQuery { return db.Event.Query().Where(preds...) }
+		var rows []*ent.Event
+		complete := true
+		var err error
+		if kw := p.Get("q"); kw != "" {
+			rows, complete, err = eventsearch.Search(r.Context(), query, eventsearch.Keyword(kw), limit)
+		} else {
+			rows, err = query().Order(ent.Desc(entevent.FieldTs)).Limit(limit).All(r.Context())
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// 取满上限说明可能还有更早的，提示前端收窄条件
-		if len(rows) == limit {
+		// 取满上限或关键词全量查询超时都说明可能还有更早的，提示前端收窄条件
+		if len(rows) == limit || !complete {
 			w.Header().Set("X-Truncated", "1")
 		}
 		ids := make([]uuid.UUID, len(rows))

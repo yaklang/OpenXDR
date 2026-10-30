@@ -87,6 +87,10 @@ ON events (process_guid) WHERE class_uid = 1007 AND process_guid IS NOT NULL;
 
 ### 关键词检索索引
 
+检索不直接把关键词条件交给规划器：它估不准子串命中率，会只走 trgm 索引、把时间范围当事后过滤，
+整个保留期的候选行都要重算检索函数。`eventsearch.Search` 按三档走：逐行过滤最近 1 万行 → trgm 索引限时 5 秒 →
+逐行过滤最近 20 万行，总时限 20 秒，没覆盖整个时间窗口时标为截断。按天分区后时间范围能裁掉分区，索引那档会快得多。
+
 控制台事件检索与研判工具 `query_events` 的关键词走 `events_search_trgm`：
 `gin (openxdr_event_search_text(raw) gin_trgm_ops)`。函数把事件里的标量值拼成一串，去掉 UUID 与
 32 位以上的十六进制串（进程 uid、文件哈希）。旧索引 `events_raw_trgm` 对整个 `raw::text` 切三元组，

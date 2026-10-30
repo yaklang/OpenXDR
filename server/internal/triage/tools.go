@@ -130,9 +130,9 @@ func (e *Engine) toolQueryEvents(ctx context.Context, args string) (any, error) 
 	if in.Mode != "indexed" && in.Mode != "raw" {
 		return nil, fmt.Errorf("mode 必须为 indexed 或 raw")
 	}
-	predicate := eventsearch.ValuesKeyword(in.Keyword)
+	match := eventsearch.ValuesKeyword(in.Keyword)
 	if in.Mode == "raw" {
-		predicate = eventsearch.RawKeyword(in.Keyword)
+		match = eventsearch.RawKeyword(in.Keyword)
 	}
 	scope, err := e.incidentAssetScope(ctx, e.investigationID)
 	if err != nil {
@@ -140,19 +140,14 @@ func (e *Engine) toolQueryEvents(ctx context.Context, args string) (any, error) 
 	}
 	until := time.Now().UTC()
 	since := until.Add(-time.Duration(in.Hours) * time.Hour)
-	rows, err := e.DB.Event.Query().
-		Where(
-			entevent.TsGTE(since), entevent.TsLTE(until), entevent.HasAssetWith(scope),
-			predicate,
-		).
-		Order(ent.Desc(entevent.FieldTs)).
-		WithAsset().
-		Limit(16).
-		All(ctx)
+	query := func() *ent.EventQuery {
+		return e.DB.Event.Query().Where(entevent.TsGTE(since), entevent.TsLTE(until), entevent.HasAssetWith(scope)).WithAsset()
+	}
+	rows, complete, err := eventsearch.Search(ctx, query, match, 16)
 	if err != nil {
 		return nil, err
 	}
-	truncated := len(rows) > 15
+	truncated := len(rows) > 15 || !complete
 	rows = rows[:min(len(rows), 15)]
 	hosts := make([]*ent.Asset, len(rows))
 	for i, ev := range rows {

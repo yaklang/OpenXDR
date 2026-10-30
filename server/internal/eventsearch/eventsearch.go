@@ -84,27 +84,39 @@ func validIndex(ctx context.Context, db *sql.DB, name string) (bool, error) {
 
 var hexish = regexp.MustCompile(`(?i)^[0-9a-f-]*[a-f-][0-9a-f-]*$`)
 
-// Keyword 关键词子串匹配，大小写不敏感。关键词是字面量，% _ \ 转义后不会变成通配符。
-func Keyword(kw string) predicate.Event {
-	return keyword(kw, byValue.Load() && !hexish.MatchString(kw))
+// Match 一个关键词条件。关键词是字面量，% _ \ 转义后不会变成通配符；大小写不敏感。
+type Match struct {
+	kw    string
+	value bool
 }
 
+// Keyword 一般关键词：有值索引时按字段值匹配，UUID / 哈希类关键词回退完整原文。
+func Keyword(kw string) Match { return Match{kw, byValue.Load() && !hexish.MatchString(kw)} }
+
 // ValuesKeyword 显式搜索索引字段值，不含被排除的 UUID / 长哈希；调用方必须告知覆盖范围。
-func ValuesKeyword(kw string) predicate.Event { return keyword(kw, byValue.Load()) }
+func ValuesKeyword(kw string) Match { return Match{kw, byValue.Load()} }
 
 // RawKeyword 显式搜索完整原文，调用方应限制时间与范围。
-func RawKeyword(kw string) predicate.Event { return keyword(kw, false) }
+func RawKeyword(kw string) Match { return Match{kw, false} }
 
-func keyword(kw string, value bool) predicate.Event {
-	pattern := "%" + escapeLike(kw) + "%"
+// Predicate 与索引表达式一致的写法，规划器可以走 trgm 索引。
+func (m Match) Predicate() predicate.Event { return m.where("") }
+
+// scan 结果与 Predicate 相同，但表达式和索引对不上，规划器只能逐行过滤；
+// 用在已按时间收窄的小范围里，免得它又去整表走 trgm 索引。
+func (m Match) scan() predicate.Event { return m.where(" || ''") }
+
+func (m Match) where(suffix string) predicate.Event {
+	pattern := "%" + escapeLike(m.kw) + "%"
 	return predicate.Event(func(s *entsql.Selector) {
 		s.Where(entsql.P(func(b *entsql.Builder) {
-			if value {
+			b.WriteString("(")
+			if m.value {
 				b.WriteString("openxdr_event_search_text(").WriteString(s.C(entevent.FieldRaw)).WriteString(")")
 			} else {
 				b.WriteString(s.C(entevent.FieldRaw)).WriteString("::text")
 			}
-			b.WriteString(" ILIKE ").Arg(pattern)
+			b.WriteString(suffix).WriteString(") ILIKE ").Arg(pattern)
 		}))
 	})
 }

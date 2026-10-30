@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func open(t *testing.T) (context.Context, *ent.Client, *sql.DB) {
 
 func hits(t *testing.T, ctx context.Context, client *ent.Client, kw string) int {
 	t.Helper()
-	n, err := client.Event.Query().Where(Keyword(kw)).Count(ctx)
+	n, err := client.Event.Query().Where(Keyword(kw).Predicate()).Count(ctx)
 	if err != nil {
 		t.Fatalf("检索 %q 失败: %v", kw, err)
 	}
@@ -130,16 +131,80 @@ func TestExplicitSearchModes(t *testing.T) {
 	ctx, client, db := open(t)
 	client.Event.Create().SetTs(time.Now()).SetClassUID(4003).SetSource("agent").SetRaw(json.RawMessage(`{"query":{"hostname":"1ecb6066da3755bd9nonce.example.test"},"hash":"43b8d2d049183e9ebc409c86b89150b5a4a68fa19fe1815b16bed5561921a9c3"}`)).SaveX(ctx)
 	Ensure(ctx, db)
-	if n := client.Event.Query().Where(ValuesKeyword("1ecb6066da3755bd9")).CountX(ctx); n != 1 {
+	if n := client.Event.Query().Where(ValuesKeyword("1ecb6066da3755bd9").Predicate()).CountX(ctx); n != 1 {
 		t.Fatal(n)
 	}
-	if n := client.Event.Query().Where(ValuesKeyword("43b8d2d049183e9e")).CountX(ctx); n != 0 {
+	if n := client.Event.Query().Where(ValuesKeyword("43b8d2d049183e9e").Predicate()).CountX(ctx); n != 0 {
 		t.Fatal(n)
 	}
-	if n := client.Event.Query().Where(RawKeyword("43b8d2d049183e9e")).CountX(ctx); n != 1 {
+	if n := client.Event.Query().Where(RawKeyword("43b8d2d049183e9e").Predicate()).CountX(ctx); n != 1 {
 		t.Fatal(n)
 	}
 	if n := hits(t, ctx, client, "43b8d2d049183e9e"); n != 1 {
 		t.Fatal("原有全局检索丢失哈希")
+	}
+}
+
+func seed(ctx context.Context, client *ent.Client, at time.Time, n int, cmd string) {
+	for i := range n {
+		raw := `{"process": {"cmd_line": "` + cmd + `"}, "activity_id": 1}`
+		client.Event.Create().SetTs(at.Add(time.Duration(i) * time.Second)).SetClassUID(1007).SetSource("agent").SetRaw(json.RawMessage(raw)).SaveX(ctx)
+	}
+}
+
+func searchFor(t *testing.T, ctx context.Context, client *ent.Client, kw string, limit int) ([]*ent.Event, bool) {
+	t.Helper()
+	rows, complete, err := Search(ctx, func() *ent.EventQuery { return client.Event.Query() }, Keyword(kw), limit)
+	if err != nil {
+		t.Fatalf("检索 %q 失败: %v", kw, err)
+	}
+	return rows, complete
+}
+
+// 最近的行里凑够就不查全量；不够再全量查到更早的匹配；不足 recentRows 行时第一步就是全量。结果都按时间倒序。
+func TestSearchRecentThenFull(t *testing.T) {
+	ctx, client, db := open(t)
+	Ensure(ctx, db)
+	defer func(n int) { recentRows = n }(recentRows)
+	recentRows = 5
+
+	now := time.Now().Add(-time.Hour)
+	seed(ctx, client, now.Add(-30*time.Minute), 1, "old needle")
+	seed(ctx, client, now, 10, "noise")
+	seed(ctx, client, now.Add(10*time.Minute), 3, "hot needle")
+
+	rows, complete := searchFor(t, ctx, client, "hot", 2)
+	if !complete || len(rows) != 2 || !rows[0].Ts.After(rows[1].Ts) {
+		t.Fatalf("高频词应在最近行里凑够、按时间倒序: complete=%v n=%d", complete, len(rows))
+	}
+	rows, complete = searchFor(t, ctx, client, "needle", 10)
+	if !complete || len(rows) != 4 || !strings.Contains(string(rows[3].Raw), "old needle") {
+		t.Fatalf("最近行里不够时应全量查到更早的匹配: complete=%v n=%d", complete, len(rows))
+	}
+	recentRows = 100
+	if rows, complete = searchFor(t, ctx, client, "needle", 10); !complete || len(rows) != 4 {
+		t.Fatalf("总行数不足 recentRows 时第一步即全量: complete=%v n=%d", complete, len(rows))
+	}
+}
+
+// 索引那档超时就逐行扫更大的窗口：窗口盖住全部数据算完整，盖不住只返回已找到的并标为不完整，不报错。
+func TestSearchIndexTimeoutFallsBackToWideScan(t *testing.T) {
+	ctx, client, db := open(t)
+	Ensure(ctx, db)
+	defer func(r, w int, d time.Duration) { recentRows, wideRows, indexBudget = r, w, d }(recentRows, wideRows, indexBudget)
+	recentRows, indexBudget = 5, time.Nanosecond
+
+	now := time.Now().Add(-time.Hour)
+	seed(ctx, client, now.Add(-30*time.Minute), 1, "old needle")
+	seed(ctx, client, now, 10, "noise")
+	seed(ctx, client, now.Add(10*time.Minute), 1, "hot needle")
+
+	wideRows = 100
+	if rows, complete := searchFor(t, ctx, client, "needle", 10); !complete || len(rows) != 2 {
+		t.Fatalf("大窗口盖住全部数据应完整: complete=%v n=%d", complete, len(rows))
+	}
+	wideRows = 8
+	if rows, complete := searchFor(t, ctx, client, "needle", 10); complete || len(rows) != 1 {
+		t.Fatalf("大窗口盖不住时应返回已找到的并标不完整: complete=%v n=%d", complete, len(rows))
 	}
 }
