@@ -3,6 +3,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tonic::codec::CompressionEncoding;
+
 use crate::flow::Flow;
 use crate::health::{Health, Stats};
 use crate::pb::{self, sensor_service_client::SensorServiceClient};
@@ -11,6 +13,28 @@ use crate::{enroll, tls, upgrade};
 /// 攒批阈值：达到条数或到时间就发一批
 const BATCH_SIZE: usize = 256;
 const BATCH_INTERVAL: Duration = Duration::from_secs(2);
+
+/// 上行压缩开关：只认 `SENSOR_GRPC_COMPRESSION=gzip`，其它值或未设置都不压。
+/// 默认关闭，清空该变量重启即回滚；只改线上字节，不改上报内容。
+fn send_compression() -> Option<CompressionEncoding> {
+    match std::env::var("SENSOR_GRPC_COMPRESSION").as_deref() {
+        Ok("gzip") => Some(CompressionEncoding::Gzip),
+        _ => None,
+    }
+}
+
+/// 两处连接共用同一套压缩设置，避免一边压一边不压。
+/// 开启时请求侧压、响应侧也登记 gzip：grpc-go 服务端默认用请求的编码压缩响应
+/// （FlowAck 很小，压它没收益），不接受就会在解压 FlowAck 时直接报错。
+fn new_client(
+    channel: tonic::transport::Channel,
+) -> SensorServiceClient<tonic::transport::Channel> {
+    let client = SensorServiceClient::new(channel);
+    match send_compression() {
+        Some(encoding) => client.send_compressed(encoding).accept_compressed(encoding),
+        None => client,
+    }
+}
 
 /// 上报时按客户端→服务端摆正方向：src 恒为发起方，dst 恒为服务端。
 /// 检测规则写 dst_endpoint.port 才有意义。
@@ -90,7 +114,7 @@ pub async fn run(
 ) -> bool {
     let hostname = enroll::hostname();
     loop {
-        match tls::connect(&server).await.map(SensorServiceClient::new) {
+        match tls::connect(&server).await.map(new_client) {
             Ok(mut client) => {
                 match register(&mut client, &hostname).await {
                     // 收尾阶段（队列已关）不再升级，推完就走
@@ -147,7 +171,7 @@ pub async fn flush(server: &str, rx: async_channel::Receiver<pb::FlowRecord>, st
     if rx.is_empty() {
         return;
     }
-    let result = match tls::connect(server).await.map(SensorServiceClient::new) {
+    let result = match tls::connect(server).await.map(new_client) {
         Ok(mut client) => client
             .report_flows(batches(rx, enroll::hostname(), stats))
             .await

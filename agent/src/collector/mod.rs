@@ -123,6 +123,7 @@ pub fn spawn(
         ),
     ]);
     periodic::set_enabled(cfg.collapse_periodic);
+    registry::set_suppress_trivial_exit(cfg.suppress_trivial_exit);
     let sink = EventSink {
         tx,
         dropped: health.dropped.clone(),
@@ -521,6 +522,10 @@ fn emit_process(
     let mut own = None;
     if activity == ACTIVITY_TERMINATE && registry.is_held(pid) {
         // 启动被折叠、也没补发过的进程，退出一并折叠
+        registry.forget(pid);
+    } else if activity == ACTIVITY_TERMINATE && registry.trivial_exit(pid, info.exit_code) {
+        // 平凡退出（成功、存活不到 2 秒）：退出事件不单独上报，但登记照删——
+        // pid 复用不能把后来的进程接到这条血缘上。补发与周期汇总在下面对外发
         registry.forget(pid);
     } else {
         // 折叠看父进程是谁：要在 process_event 登记新进程之前取。父进程未知的从不折叠
@@ -1156,6 +1161,261 @@ mod tests {
                 },
             );
             assert_eq!(out.len(), 1, "第 {pid} 个指令进程不应折叠");
+        }
+    }
+
+    // ---- 平凡退出抑制（见 registry::trivial_exit） ----
+
+    /// 抑制开关是进程级全局量（与采集配置同源）：改它的用例互斥执行，
+    /// 免得一边关掉、另一边正在断言「应被抑制」
+    static SUPPRESS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn suppress_lock() -> std::sync::MutexGuard<'static, ()> {
+        SUPPRESS_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 用例结束（含断言失败展开）时把开关恢复成默认的开启状态
+    struct SuppressRestored;
+
+    impl Drop for SuppressRestored {
+        fn drop(&mut self) {
+            super::registry::set_suppress_trivial_exit(true);
+        }
+    }
+
+    /// 走统一出口起一个进程。父进程未知 → 没有折叠样本，启动事件必定单独上报
+    fn launch_pid(reg: &mut ProcessRegistry, pid: u32) -> Vec<AgentEvent> {
+        emit_process(
+            "agent-1",
+            reg,
+            ACTIVITY_LAUNCH,
+            ProcessInfo {
+                pid,
+                name: "sh",
+                exe: Some("/bin/sh"),
+                cmd_line: Some("sh -c true"),
+                username: "root".to_string(),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// 走统一出口报一次退出
+    fn exit_pid(reg: &mut ProcessRegistry, pid: u32, exit_code: Option<u32>) -> Vec<AgentEvent> {
+        emit_process(
+            "agent-1",
+            reg,
+            ACTIVITY_TERMINATE,
+            ProcessInfo {
+                pid,
+                exit_code,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// 把登记的启动时间往前挪：真实路径上它来自启动事件或 /proc 的 starttime，
+    /// 这里用它模拟「已经跑了这么久」的进程
+    fn backdate(reg: &mut ProcessRegistry, pid: u32, age: std::time::Duration) {
+        reg.annotate(pid, Some(std::time::SystemTime::now() - age), None, None);
+    }
+
+    /// 平凡退出（成功、存活不到 2 秒）不单独上报：一个 exec 只留下启动事件
+    #[test]
+    fn trivial_exit_is_suppressed() {
+        let _guard = suppress_lock();
+        let mut reg = ProcessRegistry::default();
+        assert_eq!(launch_pid(&mut reg, 500).len(), 1);
+        backdate(&mut reg, 500, std::time::Duration::from_millis(50));
+        assert!(
+            exit_pid(&mut reg, 500, Some(0)).is_empty(),
+            "成功退出的短命进程不再单独上报退出"
+        );
+    }
+
+    /// 非零退出码本身是结论：照常上报，activity_id=2 且带退出码
+    #[test]
+    fn nonzero_exit_is_reported() {
+        let _guard = suppress_lock();
+        let mut reg = ProcessRegistry::default();
+        launch_pid(&mut reg, 501);
+        backdate(&mut reg, 501, std::time::Duration::from_millis(50));
+        let out = exit_pid(&mut reg, 501, Some(1));
+        assert_eq!(out.len(), 1, "非零退出码必须上报");
+        let v: Value = serde_json::from_str(&out[0].raw_json).unwrap();
+        assert_eq!(v["activity_id"], 2);
+        assert_eq!(v["process"]["exit_code"], 1);
+    }
+
+    /// 退出码未知（被信号杀掉、内核/ETW 拿不到）一律按「有信号」处理：照常上报
+    #[test]
+    fn unknown_exit_code_is_reported() {
+        let mut reg = ProcessRegistry::default();
+        launch_pid(&mut reg, 502);
+        backdate(&mut reg, 502, std::time::Duration::from_millis(50));
+        let out = exit_pid(&mut reg, 502, None);
+        assert_eq!(out.len(), 1, "退出码未知不能当成平凡退出");
+        let v: Value = serde_json::from_str(&out[0].raw_json).unwrap();
+        assert!(v["process"]["exit_code"].is_null());
+    }
+
+    /// 存活够久（≥ 2 秒）的进程退出照常上报，哪怕退出码是 0
+    #[test]
+    fn long_lived_exit_is_reported() {
+        let mut reg = ProcessRegistry::default();
+        reg.seed(503, "nginx", Some("/usr/sbin/nginx"));
+        backdate(&mut reg, 503, std::time::Duration::from_secs(60));
+        let out = exit_pid(&mut reg, 503, Some(0));
+        assert_eq!(out.len(), 1, "长命进程的退出要上报");
+        let v: Value = serde_json::from_str(&out[0].raw_json).unwrap();
+        assert_eq!(v["process"]["exit_code"], 0);
+        assert!(v["duration_ms"].as_u64().unwrap() >= 60_000);
+    }
+
+    /// 启动时间读不到（启动快照里没有）算不出存活时长：照常上报
+    #[test]
+    fn unknown_start_time_is_reported() {
+        let mut reg = ProcessRegistry::default();
+        // seed 只登记名字与路径，不设启动时间
+        reg.seed(504, "cron", Some("/usr/sbin/cron"));
+        assert!(reg.known(504).is_some_and(|k| k.started.is_none()));
+        assert_eq!(exit_pid(&mut reg, 504, Some(0)).len(), 1);
+    }
+
+    /// 注册表里没有的 pid 退出：不 panic、不产生事件（与 process_event 既有的 None 语义一致）
+    #[test]
+    fn unknown_pid_exit_emits_nothing() {
+        let mut reg = ProcessRegistry::default();
+        assert!(!reg.trivial_exit(505, Some(0)), "没登记就判不出平凡退出");
+        assert!(exit_pid(&mut reg, 505, Some(0)).is_empty());
+    }
+
+    /// 抑制掉的退出同样要删登记：否则 pid 复用会把后来的进程接到上一条血缘
+    #[test]
+    fn suppressed_exit_forgets_registration() {
+        let _guard = suppress_lock();
+        let mut reg = ProcessRegistry::default();
+        launch_pid(&mut reg, 506);
+        backdate(&mut reg, 506, std::time::Duration::from_millis(10));
+        assert!(reg.known(506).is_some());
+        assert!(exit_pid(&mut reg, 506, Some(0)).is_empty());
+        assert!(reg.known(506).is_none(), "抑制后登记必须清掉");
+        // pid 紧接着被复用：新进程拿到的是自己的血缘，不指向上一条
+        let reused = launch_pid(&mut reg, 506);
+        assert_eq!(reused.len(), 1);
+        assert!(reused[0].parent_process_guid.is_empty());
+    }
+
+    /// 关掉开关即恢复逐条上报
+    #[test]
+    fn trivial_exit_reported_when_switch_off() {
+        let _guard = suppress_lock();
+        let _restore = SuppressRestored;
+        super::registry::set_suppress_trivial_exit(false);
+        let mut reg = ProcessRegistry::default();
+        launch_pid(&mut reg, 507);
+        backdate(&mut reg, 507, std::time::Duration::from_millis(10));
+        assert_eq!(
+            exit_pid(&mut reg, 507, Some(0)).len(),
+            1,
+            "关掉开关照常上报"
+        );
+    }
+
+    /// 抑制这次退出时仍要把压着的补发事件带出去：不能因为这次不发就把别人的血缘卡住
+    #[test]
+    fn suppressed_exit_still_flushes_outbox() {
+        let _guard = suppress_lock();
+        let mut reg = ProcessRegistry::default();
+        reg.seed(10, "pve-firewall", Some("/usr/bin/perl"));
+        reg.set_cmd_line(10, Some("pve-firewall"));
+        let launch = |reg: &mut ProcessRegistry, pid: u32| {
+            emit_process(
+                "agent-1",
+                reg,
+                ACTIVITY_LAUNCH,
+                ProcessInfo {
+                    pid,
+                    name: "sh",
+                    exe: Some("/bin/sh"),
+                    cmd_line: Some("sh -c ebtables-save"),
+                    ppid: Some(10),
+                    ..Default::default()
+                },
+            )
+        };
+        // 认定周期行为之前逐条上报
+        for pid in 100..120 {
+            assert_eq!(launch(&mut reg, pid).len(), 1);
+        }
+        // 认定之后启动被折叠，压在注册表里
+        assert!(launch(&mut reg, 200).is_empty());
+        assert!(reg.is_held(200));
+        // 它发起网络连接（网络采集会把压着的启动事件移进待发）
+        reg.reveal(200);
+        // 另一个短命进程平凡退出：补发事件必须搭这次返回值出去
+        reg.seed(201, "true", Some("/bin/true"));
+        backdate(&mut reg, 201, std::time::Duration::from_millis(5));
+        let out = exit_pid(&mut reg, 201, Some(0));
+        assert_eq!(out.len(), 1, "补发事件不能因这次退出被抑制而卡住");
+        let v: Value = serde_json::from_str(&out[0].raw_json).unwrap();
+        assert_eq!(v["process"]["pid"], 200, "带出去的是被折叠进程的启动事件");
+        assert!(reg.take_outbox().is_empty(), "待发队列应已清空");
+    }
+
+    /// 一条典型工作负载：200 次 exec，其中 150 次短命成功（存活 50ms、exit 0）、
+    /// 30 次短命失败（存活 50ms、exit 1）、20 次长命（存活 60s、exit 0）。
+    /// 每次 exec 都产生启动事件，退出事件按开关决定是否上报。返回上报条数
+    fn workload_events(suppress: bool) -> usize {
+        super::registry::set_suppress_trivial_exit(suppress);
+        let mut reg = ProcessRegistry::default();
+        let mut total = 0;
+        for pid in 1..=200u32 {
+            let (age, code) = match pid {
+                1..=150 => (std::time::Duration::from_millis(50), Some(0)),
+                151..=180 => (std::time::Duration::from_millis(50), Some(1)),
+                _ => (std::time::Duration::from_secs(60), Some(0)),
+            };
+            total += launch_pid(&mut reg, pid).len();
+            backdate(&mut reg, pid, age);
+            total += exit_pid(&mut reg, pid, code).len();
+        }
+        total
+    }
+
+    /// 减行测量：同一条工作负载在抑制前后的上报条数，以及按各主机画像的进程占比外推。
+    /// 比例来自这个模拟（不是生产实测），外推只做乘法
+    #[test]
+    fn trivial_exit_line_reduction() {
+        let _guard = suppress_lock();
+        let before = workload_events(false);
+        let after = workload_events(true);
+        // 200 次 exec 各一条启动 + 一条退出；抑制后只剩启动 + 30 条失败退出 + 20 条长命退出
+        assert_eq!(before, 400, "抑制前每条 exec 两条");
+        assert_eq!(after, 250, "抑制后只省掉 150 条短命成功退出");
+        let ratio = (before - after) as f64 / before as f64;
+        println!("平凡退出抑制 · 模拟工作负载（200 次 exec）");
+        println!(
+            "  抑制前 {before} 条，抑制后 {after} 条：减 {} 条",
+            before - after
+        );
+        println!("  该场景减行比例 {:.1}%", ratio * 100.0);
+        // (画像, 每天行数, 进程事件占比) —— 占比来自生产画像统计，行数按同一比例外推
+        let profiles = [
+            ("典型业务机", 88_527.0, 0.68),
+            ("忙 PVE/跳板", 643_709.0, 0.47),
+            ("公网直连", 2_975_807.0, 0.02),
+        ];
+        println!("  外推（假设该场景比例适用于全部进程事件，不是生产实测）：");
+        for (name, lines, share) in profiles {
+            let process_lines = lines * share;
+            let saved = process_lines * ratio;
+            println!(
+                "    {name}：每天 {lines:.0} 行，进程占 {:.0}%（{process_lines:.0} 行），\
+                 可减约 {saved:.0} 行（总行数 {:.1}%）",
+                share * 100.0,
+                saved / lines * 100.0
+            );
         }
     }
 }

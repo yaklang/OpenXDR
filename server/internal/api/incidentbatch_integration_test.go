@@ -54,7 +54,7 @@ func TestAPIIncidentGroupsAndBatchResolve(t *testing.T) {
 	ip2 := mk("benign", now.Add(-time.Hour), web, "intel:ip:1.2.3.4")
 	foreign := mk("", now, other, "r1")
 
-	h := Handler(db, loadRules(t), response.NewHub(db, false), suppress.New(db, time.Hour), intel.New(db, time.Hour), nil)
+	h := Handler(db, nil, loadRules(t), response.NewHub(db, false), suppress.New(db, time.Hour), intel.New(db, time.Hour), nil)
 	admin := httptest.NewServer(asAdmin(h))
 	t.Cleanup(admin.Close)
 

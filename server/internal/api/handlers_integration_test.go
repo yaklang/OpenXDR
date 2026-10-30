@@ -196,7 +196,7 @@ func TestAPICommandIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules := sigma.LoadDir(t.TempDir())
-	ts := httptest.NewServer(asAdmin(Handler(client, rules, response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)))
+	ts := httptest.NewServer(asAdmin(Handler(client, nil, rules, response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)))
 	t.Cleanup(ts.Close)
 
 	// 非法 kind → 400

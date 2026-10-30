@@ -20,6 +20,8 @@ pub struct Config {
     pub collect_inventory: bool,
     /// 周期行为折叠：同一父进程反复执行同一条命令时改为按窗口汇总（见 periodic）
     pub collapse_periodic: bool,
+    /// 平凡进程退出抑制：成功退出且存活不到两秒的进程不再单独上报退出（见 registry::trivial_exit）
+    pub suppress_trivial_exit: bool,
 }
 
 impl Default for Config {
@@ -32,6 +34,7 @@ impl Default for Config {
             collect_network: true,
             collect_inventory: true,
             collapse_periodic: true,
+            suppress_trivial_exit: true,
         }
     }
 }
@@ -82,6 +85,15 @@ mod tests {
     fn collapse_switch() {
         assert!(Config::parse("").collapse_periodic, "默认开启");
         assert!(!Config::parse(r#"{"collapsePeriodic": false}"#).collapse_periodic);
+    }
+
+    /// 平凡退出抑制默认开启（与 collapsePeriodic 同一取向：默认就降噪），显式关掉要生效
+    #[test]
+    fn suppress_trivial_exit_switch() {
+        assert!(Config::parse("").suppress_trivial_exit, "默认开启");
+        let c = Config::parse(r#"{"suppressTrivialExit": false}"#);
+        assert!(!c.suppress_trivial_exit, "显式关掉的要生效");
+        assert!(c.collapse_periodic, "没提到的保持默认开启");
     }
 
     #[test]

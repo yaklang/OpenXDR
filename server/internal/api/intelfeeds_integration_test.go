@@ -74,7 +74,7 @@ func TestIntelFeedsAPI(t *testing.T) {
 		t.Errorf("全部关掉后应只剩手工情报，实际 %d 条", n)
 	}
 
-	list := httptest.NewServer(asAdmin(Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)))
+	list := httptest.NewServer(asAdmin(Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)))
 	t.Cleanup(list.Close)
 	client.Intel.Create().SetKind("ip").SetValue("3.3.3.3").SetSource("feed:threatfox").SaveX(ctx)
 	var rows []struct{ Value string }

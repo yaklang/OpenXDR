@@ -132,7 +132,8 @@ sudo env SENSOR_IFACE=eth0 OPENXDR_SERVER=http://<server>:8081 ./target/release/
 | `afxdp` | 绕过协议栈，吞吐更高。需 `--features xdp` 构建、驱动支持，进程会在网卡上挂载 XDP 程序；**只能看到入向流量**，镜像口场景够用 |
 
 `SENSOR_WORKERS` 决定并行度。afpacket 下多个 worker 共享 FANOUT 组；afxdp 下
-worker 号即网卡队列号，数量不应超过网卡实际队列数。
+worker 号即网卡队列号，数量不应超过网卡实际队列数。`SENSOR_GRPC_COMPRESSION=gzip`
+让上行 gRPC 消息走 gzip（默认关闭，server 侧已注册编码器，清空该变量重启即回滚）。
 
 ### 按主机下发采集配置
 
@@ -382,6 +383,7 @@ server 全部通过环境变量配置，均有默认值：
 | `TLS_CA_KEY_FILE` | 空 | CA 私钥，开了 mTLS 时在线接入用它签发主机证书 |
 | `AGENT_DIST_DIR` | 空 | agent 与 sensor 安装包目录，供安装脚本下载，也是在线 agent / sensor 自动升级的目标版本 |
 | `AGENT_AUTO_UPGRADE` | `true` | 在线 agent / sensor 与安装包哈希不同时自动升级，`false` 同时关闭两者 |
+| `SENSOR_GRPC_COMPRESSION` | 空（关闭） | 探针侧变量：设为 `gzip` 时 sensor 上行 gRPC 消息（注册、状态、会话批量上报）压缩，默认关闭，清空后重启即回滚；先升级 server 再开（server 始终能解压），只改线上字节，事件内容与身份不变 |
 | `TRUSTED_PROXIES` | 空 | 可信反向代理的地址或网段（逗号分隔）。只有来自这些地址的请求才采信 `X-Forwarded-For`，从右往左取第一个不可信地址作为客户端，登录退避与审计按它记来源；留空不还原 |
 | `ABUSE_CH_AUTH_KEY` | 空 | ThreatFox / URLhaus 认证导出密钥，可在「系统设置 → 外部情报查询」加密保存 |
 | `INTEL_FEED_INTERVAL_HOURS` | `6` | 情报订阅同步周期（小时），订阅条目有效期为它的 8 倍 |
@@ -399,6 +401,10 @@ server 全部通过环境变量配置，均有默认值：
 | `VULN_DIR` | 空 | 离线漏洞库目录（放 `Debian.zip`、`Ubuntu.zip`），设置后不联网 |
 | `BEACON_LEARNING_DAYS` | `7` | 外联心跳学习期，按资产接入时间算；首次启用回放这段历史只学不报 |
 | `RETENTION_DAYS` | `30` | 原始事件保留天数，0 表示不清理。被告警引用的证据事件不受影响。events 是分区表时按日分区整体退役（老库迁移见 [event-partitioning.md](event-partitioning.md)） |
+| `TEMPORAL_GAP_RETENTION_DAYS` | `30` | 时序求值缺口（`temporal_evaluation_gaps`，诊断记录）按自身产生时间的保留天数，0 关闭，与 `RETENTION_DAYS` 相互独立。冷归档 swap 移出热表的事件的 gap 不随退役/删除清理，由 janitor 按此保留期清理（见 [event-archive.md](event-archive.md#105-派生状态决策表)） |
+| `EVENT_ARCHIVE_READ` | 空（关闭） | 设为 `1` 时 `/api/events` 与 related/explain 调查入口读冷块（`event_archive_chunks`）并合流，冷查询按组权限过滤；响应体是对象契约 `{items, truncated, coverage}`，覆盖缺口（关键词不搜冷块、冷读关闭、扫描预算耗尽等）如实写进 `coverage.reason`，调试头 `X-Archive-Coverage` 只是摘要。开启时启动先确保冷归档表存在，建表失败只降级为「没有冷层」。生产归档仍要手工跑 `eventarchive` CLI（见 [event-archive.md](event-archive.md)）。**运营不变式：一旦用 `eventarchive swap` 切走分区，这个变量必须为 `1`**——已有切走数据的部署不能靠关闭读取变成「查询完整」，缺口还在，只是不再被声明 |
+| `EVENT_ARCHIVE_DEDUP` | 空（关闭） | 设为 `1` 时接入路径在「事件时间不晚于归档边界」时按 ID 查冷层（`eventarchive.Exists`），命中就按重复处理：不入库、不重新检测、不产告警。归档边界有 60 秒缓存，逐条事件不查库；冷层故障时 fail-open（照常入库并继续检测），失败计入 `openxdr_archive_dedup_failopen_total{stage}` 并限流记日志。与 `EVENT_ARCHIVE_READ` 相互独立。**运营不变式：一旦用 `eventarchive swap` 切走分区，这个变量必须为 `1`**，否则迟到/重传的老事件会重新入库并重复告警（详见 [event-archive.md](event-archive.md#1010-重传判重接线event_archive_dedup)） |
+| `EVENT_ARCHIVE_MIN_AGE_DAYS` | `14` | `eventarchive swap` 切换闸门的运营下限（天）：待切**日结束**必须早于 `现在 − 有效下限`。有效下限取各项最大：本值、temporal 安全边界（max(时序规则实际窗口, 24h) + 迟到余量 + 处理余量）、beacon 回读窗口（仅口径含 4001/agent）、assetmap 无游标回填 7 天（仅口径含 4001/5001/5020）。设了但不是合法非负天数时 swap 直接报错，不静默退默认；本值只是运营纪律，正确性来自有效下限与消费者追平证明（见 [event-archive.md](event-archive.md#103-p4-切换闸门min-age-有效下限与消费者追平)） |
 | `IPDB_DIR` | 空（镜像内 `/opt/openxdr/ipdb`） | 离线 IP 归属库目录（DB-IP Lite 的 `dbip-asn-lite.mmdb`、`dbip-country-lite.mmdb`，CC BY 4.0），本地查 AS 与国家、不外发地址；发版镜像自带一份，缺库时归属留空并在启动日志说明。用 `openxdr-ipdb -dir <目录>` 更新，替换后自动加载，见 [资产图谱](asset-map.md#离线归属库) |
 | `IPINFO_PTR` | `true` | 对资产连过的与告警里出现的公网地址做反向解析（PTR），结果缓存，供图谱展示与 AI 标注认地址；内网没有外部解析时可设 `false` |
 | `VT_ALERT_MIN_ENGINES` | `3` | VirusTotal 判恶意的引擎数达到该值，就把地址加入威胁情报（来源 virustotal，随缓存期到期），之后再有主机连它即按情报命中告警；重查后不再达到即失效，人工录入的同一地址不动；0 关闭 |

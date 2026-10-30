@@ -37,6 +37,7 @@ import (
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/correlate"
 	"openxdr/server/internal/enroll"
+	"openxdr/server/internal/eventarchive"
 	"openxdr/server/internal/eventbus"
 	"openxdr/server/internal/eventpart"
 	"openxdr/server/internal/eventsearch"
@@ -117,7 +118,7 @@ func main() {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		telemetry.NewCollectorHealth(db), telemetry.NewIntegrationQueue(db), integration.RateLimitedRequests)
-	events, router := startEventBus(db, rules, temporalRules, suppressions, intelStore, dedupWindow, hub, registry)
+	events, router := startEventBus(ctx, db, rules, temporalRules, suppressions, intelStore, dedupWindow, hub, registry)
 	if router != nil {
 		defer router.Close()
 	}
@@ -140,13 +141,15 @@ func main() {
 	registerSQLRoutes(routes, db)
 	registerHostRoutes(ctx, routes, db, client, rules, credentialVault, enrollSvc, conf)
 	registerSettingsRoutes(routes, db, client, credentialVault, notifySettings, webhook, aiConf, intelFeeds, enrollSvc, dists)
-	registerAIRoutes(routes, client, llmFor, assetEngine)
+	// 冷归档读取默认关闭：EVENT_ARCHIVE_READ=1 才把连接交给 /api/events 与问 AI 入口，关着时行为与改动前一致
+	archiveRead := archiveConn(ctx, db)
+	registerAIRoutes(routes, client, archiveRead, llmFor, assetEngine)
 	outboundAllow := &integration.OutboundAllow{DB: client, Locked: os.Getenv("INTEGRATION_WEBHOOK_ALLOW")}
 	integrations := api.Integrations(client, credentialVault, outboundAllow)
 	routes.Handle("/api/system-integrations", integrations)
 	routes.Handle("/api/system-integrations/", integrations)
 	startIntegrationDelivery(ctx, client, credentialVault, outboundAllow)
-	routes.Handle("/", api.Handler(client, rules, hub, suppressions, intelStore, allowlist, chat))
+	routes.Handle("/", api.Handler(client, archiveRead, rules, hub, suppressions, intelStore, allowlist, chat))
 	mux := publicMux(auth.Middleware(client, routes), db, client, registry, enrollSvc, dists, events)
 	// 经反向代理时还原客户端地址，登录退避与审计才按真人计
 	trustedProxies, err := realip.Parse(os.Getenv("TRUSTED_PROXIES"))
@@ -273,10 +276,11 @@ func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules s
 	}
 
 	janitorEngine := &janitor.Janitor{
-		SQL:       db,
-		DB:        client,
-		Retention: time.Duration(getenvInt("RETENTION_DAYS", 30)) * 24 * time.Hour,
-		Interval:  time.Duration(getenvInt("RETENTION_INTERVAL_MINUTES", 60)) * time.Minute,
+		SQL:          db,
+		DB:           client,
+		Retention:    time.Duration(getenvInt("RETENTION_DAYS", 30)) * 24 * time.Hour,
+		Interval:     time.Duration(getenvInt("RETENTION_INTERVAL_MINUTES", 60)) * time.Minute,
+		GapRetention: time.Duration(getenvInt("TEMPORAL_GAP_RETENTION_DAYS", 30)) * 24 * time.Hour,
 	}
 	go cluster.RunLeader(ctx, db, "janitor", janitorEngine.Run)
 	// 事件日分区预建与保留期退役无关：RETENTION_DAYS=0 也要按天建分区
@@ -446,11 +450,32 @@ func startAutomation(ctx context.Context, db *sql.DB, client *ent.Client, webhoo
 
 // startEventBus 事件处理管道：配了 NATS_URL 走 JetStream 持久队列并挂上跨节点指令路由，
 // 否则单机直连，返回的 router 为 nil。
-func startEventBus(db *sql.DB, rules sigma.Catalog, temporalRules *temporal.Store, suppressions *suppress.Store, intelStore *intel.Store, dedupWindow time.Duration, hub *response.Hub, registry *prometheus.Registry) (eventbus.Bus, *response.NATSRouter) {
+func startEventBus(ctx context.Context, db *sql.DB, rules sigma.Catalog, temporalRules *temporal.Store, suppressions *suppress.Store, intelStore *intel.Store, dedupWindow time.Duration, hub *response.Hub, registry *prometheus.Registry) (eventbus.Bus, *response.NATSRouter) {
 	metrics := telemetry.New(registry)
 	processor := &ingest.Processor{
 		DB: db, Rules: rules, Temporal: temporalRules, Suppress: suppressions, Intel: intelStore,
 		DedupWindow: dedupWindow, Metrics: metrics,
+	}
+	// 冷归档重传判重默认关闭：EVENT_ARCHIVE_DEDUP=1 才接上，不设时 Processor.Archive 为 nil，
+	// 接入路径一行代码都不多跑。与 EVENT_ARCHIVE_READ 相互独立（一个管读接口、一个管接入），
+	// 但只要用 eventarchive swap 切走过分区，这里就必须为 1，否则重放的老事件会重新入库、
+	// 重复告警——见 docs/event-archive.md。
+	if getenv("EVENT_ARCHIVE_DEDUP", "") == "1" {
+		archive := ingest.NewCachedArchive(archiveDedup{db: db})
+		processor.Archive = archive
+		// ingest 用可选接口探测计数器，漏实现不会报错、只会静默失效，所以在接线的位置钉死它。
+		var _ interface{ ArchiveFailOpen(string) } = (*telemetry.Metrics)(nil)
+		// 启动时探一次边界：把边界写进启动日志，也让第一个事件就吃到缓存。
+		// 冷层不可用不影响 server 起来，按 fail-open（没有归档）运行并如实告警。
+		last, ok, err := archive.ArchiveBoundary(ctx)
+		switch {
+		case err != nil:
+			slog.Warn("冷归档重传判重已启用，但读不到归档边界，本次按没有归档运行（fail-open）", "err", err)
+		case ok:
+			slog.Info("冷归档重传判重已启用", "boundary", last, "cache_ttl", ingest.DefaultArchiveBoundaryTTL)
+		default:
+			slog.Info("冷归档重传判重已启用，当前冷归档为空")
+		}
 	}
 	var events eventbus.Bus = eventbus.NewDirect(processor, metrics)
 	hostname, _ := os.Hostname()
@@ -646,6 +671,40 @@ func newImportLLM(conf func() aiconf.Config, model string) *triage.LLM {
 	return l
 }
 
+// archiveConn 冷归档读取用的连接：只有 EVENT_ARCHIVE_READ=1 才接上，默认关闭。
+// 开启时先确保冷归档表存在；建表失败只记日志并降级为「没有冷层」——事件页不能因为
+// 冷归档起不来就整页报错，server 更不该因此起不来。阶段 B1 只读，归档写入仍然走 CLI。
+func archiveConn(ctx context.Context, db *sql.DB) *sql.DB {
+	if getenv("EVENT_ARCHIVE_READ", "") != "1" {
+		// 关着时检索与改动前一致、不报冷层缺口；库里已经有冷块却没开读，是部署配置错了，
+		// 在启动日志里如实告警，而不是让每次检索都弹提示
+		if ext, err := eventarchive.ArchiveExtent(ctx, db); err == nil && ext.Has {
+			slog.Warn("库里有冷归档数据，但 EVENT_ARCHIVE_READ 未开启：事件检索与调查不会覆盖已归档的历史",
+				"first", ext.First, "last", ext.Last)
+		}
+		return nil
+	}
+	if err := eventarchive.EnsureSchema(ctx, db); err != nil {
+		slog.Warn("冷归档读取已开启，但初始化冷归档表失败，本次按没有冷层运行", "err", err)
+		return nil
+	}
+	return db
+}
+
+// archiveDedup 把冷归档的两个只读函数接到接入路径的最小接口（ingest.ArchiveDedup）上：
+// 依赖方向仍是 main → 两个包，ingest 不 import eventarchive，eventarchive 也不知道自己在被谁调用。
+type archiveDedup struct{ db *sql.DB }
+
+// Archived 只在事件时间不晚于归档边界时被调用（罕见的重传路径）。
+func (a archiveDedup) Archived(ctx context.Context, id uuid.UUID) (bool, error) {
+	return eventarchive.Exists(ctx, a.db, id)
+}
+
+// ArchiveBoundary 由 ingest 侧的 CachedArchive 缓存 60 秒，不会逐条事件查库。
+func (a archiveDedup) ArchiveBoundary(ctx context.Context) (time.Time, bool, error) {
+	return eventarchive.Boundary(ctx, a.db)
+}
+
 // registerSQLRoutes 直接查库的接口：时序缺口、指令核验与身份观测。
 func registerSQLRoutes(routes *http.ServeMux, db *sql.DB) {
 	routes.Handle("/api/temporal-gaps", api.TemporalGaps(db))
@@ -699,12 +758,14 @@ func registerSettingsRoutes(routes *http.ServeMux, db *sql.DB, client *ent.Clien
 	routes.Handle("/api/enroll-tokens/", enrollTokens)
 }
 
-// registerAIRoutes 日志检索「问 AI」与资产图谱接口。
-func registerAIRoutes(routes *http.ServeMux, client *ent.Client, llmFor func(string) *triage.LLM, assetEngine *assetmap.Engine) {
+// registerAIRoutes 日志检索「问 AI」与资产图谱接口。conn 是冷归档读取连接（受
+// EVENT_ARCHIVE_READ 闸门控制，由调用方传入）：热表查不到的日志按 id 定位冷事件，
+// 与 /api/events 共用同一个受控连接。
+func registerAIRoutes(routes *http.ServeMux, client *ent.Client, conn *sql.DB, llmFor func(string) *triage.LLM, assetEngine *assetmap.Engine) {
 	// 日志检索里的「问 AI」：交互式调用，同样关掉隐式思考、限住输出，等得起
 	explainLLM := llmFor("explain")
 	explainLLM.NoThinking, explainLLM.MaxTokens = true, 1500
-	eventAI := api.EventAI(client, explainLLM)
+	eventAI := api.EventAI(client, conn, explainLLM)
 	for _, path := range api.EventAIPaths {
 		routes.Handle(path, eventAI)
 	}

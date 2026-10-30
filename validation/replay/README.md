@@ -44,6 +44,7 @@ where ts > now() - interval '15 minutes' group by 1;
 | DNS（AF_PACKET + 经典 BPF；Windows ETW DNS-Client 3008） | ✅ Win10 测试机：问答、NXDOMAIN（rcode 3 + SOA）、CNAME 链入库，按发起进程归属，出站连接回填域名（curl → www.baidu.com）（第五轮） | ✅ 问答配对、rcode / 应答入库，按源端口归属到发起 pid，出站连接回填域名（curl → example.org） | — | 未验证 |
 | 采集活性检测（静默降级、自检不外发） | ✅ Win10 测试机：外部停掉 `OpenXDR-Process` 会话，5 分钟后进程能力降为 degraded 并带原因（第五轮） | — | — | 见第五轮 |
 | 退出码与运行时长（eBPF exit_group） | — | ✅ `sh -c "sleep 2; exit 7"` → 退出码 7、2001 ms | — | 未验证 |
+| 平凡退出抑制（exit 0 且 <2s 不发 Terminate） | 未验证 | 未验证 | — | 未验证 |
 | 容器归属（cgroup） | — | ✅ docker 容器 ID（需 `--cgroupns=host`，否则看到相对路径） | — | 未验证（PVE LXC / QEMU） |
 | 登录（4624/4625 / wtmp-btmp） | ✅ 4625 含失败原因码 | 不适用（WSL 无 wtmp 写入） | 未验证 | ✅ wtmp SSH 登录 |
 | sensor TLS 证书元数据（跨段重组 + x509 解析） | —（sensor 仅 Linux） | ✅ lo 抓自签 TLS1.2 握手，`tls.cert` 全字段入库并触发自签证书告警 | — | ✅ Debian 12 测试机 eth0 在线接入（2026-10-21）：证书主体/签发者、JA3/JA3S、DNS 问答入库 |
@@ -51,6 +52,13 @@ where ts > now() - interval '15 minutes' group by 1;
 
 注：Windows 上秒退进程（如 `reg add`）的 cmdline 靠 ETW 事件触发后回读，
 进程已退场则读不到（cmd_line 为空）——已知竞态，注册表/文件类事件不受影响。
+
+注：「平凡退出抑制」为有意行为（`suppressTrivialExit`，默认开）：退出码为 0 且存活
+不到 2 秒的进程不再单独上报 Terminate（启动事件照发）；非零退出码、退出码未知
+（被信号杀）、启动时间未知、存活 ≥2 秒的照常上报；关闭开关恢复逐条上报。实机回放
+应选取明显低于/高于 2s 阈值的进程，避免把调度抖动当失败；精确 2s 边界由受控单测
+覆盖（`collector::tests` 判定矩阵）。轮询路径本就不上报秒退进程，不能作为抑制生效
+的证据。登记时记录 agent 版本、`suppressTrivialExit` 配置、实际采集后端与关联 GUID。
 
 ## 实机规则命中记录（2026-08-09）
 

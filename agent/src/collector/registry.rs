@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use uuid::Uuid;
@@ -53,6 +54,17 @@ const PLACEHOLDER_TTL: Duration = Duration::from_secs(10);
 
 /// 自检进程登记的有效期：启动与退出事件早该到了，过期的登记不再认，pid 复用也不会把别人的进程藏掉
 const CANARY_TTL: Duration = Duration::from_secs(30);
+
+/// 平凡退出的存活上限：成功退出、且启动到现在不到这么久，退出事件不携带新信息（见 trivial_exit）
+const TRIVIAL_EXIT_MAX_AGE: Duration = Duration::from_secs(2);
+
+/// 平凡退出抑制的开关。默认开，采集配置显式关掉才逐条上报退出
+static SUPPRESS_TRIVIAL_EXIT: AtomicBool = AtomicBool::new(true);
+
+/// 采集配置里的开关（`suppressTrivialExit`），启动时设置一次
+pub fn set_suppress_trivial_exit(on: bool) {
+    SUPPRESS_TRIVIAL_EXIT.store(on, Ordering::Relaxed);
+}
 
 struct Entry {
     guid: Uuid,
@@ -221,6 +233,27 @@ impl ProcessRegistry {
     /// 这个进程的启动是否被折叠且还没补发
     pub fn is_held(&self, pid: u32) -> bool {
         self.guids.get(&pid).is_some_and(|e| e.held.is_some())
+    }
+
+    /// 这次退出算不算「平凡退出」：成功退出（exit 0）且存活不到 2 秒。这样的退出事件
+    /// 只多一个已知为 0 的退出码和一段毫秒级时长，没有分析价值，不单独上报。只读，不改状态。
+    ///
+    /// 拿不准一律不抑制（多报不漏报）：退出码非零是有信息量的结论；退出码未知
+    /// （被信号杀掉、内核/ETW 拿不到）同样按「有信号」处理；启动时间读不到、pid 没登记、
+    /// 或时钟回拨算不出存活时长，都照常上报。
+    pub fn trivial_exit(&self, pid: u32, exit_code: Option<u32>) -> bool {
+        if !SUPPRESS_TRIVIAL_EXIT.load(Ordering::Relaxed) {
+            return false;
+        }
+        if exit_code != Some(0) {
+            return false;
+        }
+        let Some(started) = self.guids.get(&pid).and_then(|e| e.started) else {
+            return false;
+        };
+        SystemTime::now()
+            .duration_since(started)
+            .is_ok_and(|age| age < TRIVIAL_EXIT_MAX_AGE)
     }
 
     /// 进程有了要上报的动静（不是周期行为的子进程、网络连接、DNS 查询）：把它和被折叠的祖先

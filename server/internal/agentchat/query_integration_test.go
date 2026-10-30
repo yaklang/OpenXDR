@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -84,6 +85,17 @@ func TestQueryDedicatedGroupView(t *testing.T) {
 	}
 	if err = json.Unmarshal([]byte(result), &truncated); err != nil || !truncated.Truncated {
 		t.Fatalf("截断未标注: %v", err)
+	}
+	// P5：静态范围声明每次结果都带——模型不用额外调用就知道 events 只覆盖热表
+	var scoped queryResult
+	if err := json.Unmarshal([]byte(result), &scoped); err != nil {
+		t.Fatal(err)
+	}
+	if !scoped.Coverage.HotOnly || len(scoped.Coverage.Tables) == 0 || scoped.Coverage.Note == "" {
+		t.Fatalf("结果应带静态范围声明: %+v", scoped.Coverage)
+	}
+	if !slices.Contains(scoped.Coverage.Tables, "events") {
+		t.Fatalf("events 视图应在范围声明里: %+v", scoped.Coverage)
 	}
 	for _, statement := range []string{`SELECT repeat('中',1000000) AS payload`, `SELECT repeat('中',3000) AS payload`, `SELECT repeat('x',40000) AS payload FROM generate_series(1,3)`} {
 		result, err = query(ctx, dsn, statement)

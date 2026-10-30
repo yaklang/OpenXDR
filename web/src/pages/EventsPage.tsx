@@ -14,7 +14,19 @@ import { EventKind } from '../components/EventKind'
 import { eventAction, eventSummary } from '../components/eventSummary'
 import { CLASS_KEY, fmtTime } from '../components/format'
 import { FilterCard, Page, STICKY_HEADER, WIDE_ONLY, useWideTable } from '../components/Page'
-import { useI18n } from '../i18n'
+import { useI18n, type MsgKey } from '../i18n'
+
+// 覆盖缺口的人话说明：reason 是后端 eventsCoverage.Reason 的取值
+function coverageMessage(reason: string, t: (k: MsgKey) => string): string {
+  const key: MsgKey = ({
+    hot_keyword_degraded: 'eventsCoverageHotKeyword',
+    keyword_not_searched: 'eventsCoverageKeyword',
+    no_archive_schema: 'eventsCoverageNoSchema',
+    scan_incomplete: 'eventsCoverageScanBudget',
+    before_archive: 'eventsCoverageBeforeArchive',
+  } as Record<string, MsgKey>)[reason] ?? 'eventsCoverageUnknown'
+  return t(key)
+}
 
 // 日志检索：告警只是线索，取证要能沿着一个 IP、一段命令行翻出原始遥测
 export function EventsPage() {
@@ -97,6 +109,17 @@ export function EventsPage() {
         extra={<Space wrap><Refreshed at={dataUpdatedAt} fetching={isFetching} onRefresh={() => refetch()} /><Typography.Text type="secondary">{t('eventCount', { n: data ? `${data.items.length}${data.truncated ? '+' : ''}` : 0 })}</Typography.Text></Space>}
       >
         {data?.truncated && <Alert type="info" banner showIcon title={t('listTruncated', { n: data.items.length })} />}
+        {/* 覆盖缺口必须说清：零结果时它区分「没有」与「没搜到」；有结果时也如实标注。
+            关键词查询不搜冷归档是常态缺口——提示这条历史可在恢复归档后重新搜索，不会自动恢复 */}
+        {data?.coverage.reason && (
+          <Alert
+            type={data.items.length ? 'info' : 'warning'}
+            banner
+            showIcon
+            title={coverageMessage(data.coverage.reason, t)}
+            description={data.coverage.reason === 'keyword_not_searched' && data.items.length === 0 ? t('eventsCoverageRestoreHint') : undefined}
+          />
+        )}
         {(classCounts.length > 1 || filter.classUid !== 0) && (
           <div className="class-chips">
             <button type="button" className={`class-chip${filter.classUid === 0 ? ' active' : ''}`} onClick={() => setFilter({ classUid: 0 })}>{t('allClasses')}</button>

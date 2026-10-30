@@ -66,18 +66,22 @@ func TestEventAI(t *testing.T) {
 	}))
 	defer llmSrv.Close()
 	llm := triage.NewLLM(llmSrv.URL, "m", "", 10*time.Second)
-	ts := httptest.NewServer(as(analyst, EventAI(client, llm)))
+	ts := httptest.NewServer(as(analyst, EventAI(client, nil, llm)))
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/events/" + target.ID.String() + "/related")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var groups []relatedGroup
-	_ = json.NewDecoder(resp.Body).Decode(&groups)
+	var related relatedResponse
+	_ = json.NewDecoder(resp.Body).Decode(&related)
 	resp.Body.Close()
+	// 热表目标也要带候选边界（R5）：候选恒只查热表，热目标的历史关联可能已归档
+	if related.Archive == nil || related.Archive.TargetFromArchive || !related.Archive.CandidatesHotOnly {
+		t.Errorf("热表日志应带候选边界说明（目标不在冷层）: %+v", related.Archive)
+	}
 	got := map[string][]uuid.UUID{}
-	for _, g := range groups {
+	for _, g := range related.Groups {
 		for _, e := range g.Events {
 			got[g.Relation] = append(got[g.Relation], e.ID)
 		}
@@ -94,11 +98,11 @@ func TestEventAI(t *testing.T) {
 
 	// 从连接这条出发：别的主机连同一远端要出现，别组的不出现
 	resp, _ = http.Get(ts.URL + "/api/events/" + conn.ID.String() + "/related")
-	groups = nil
-	_ = json.NewDecoder(resp.Body).Decode(&groups)
+	related = relatedResponse{}
+	_ = json.NewDecoder(resp.Body).Decode(&related)
 	resp.Body.Close()
 	var peers []uuid.UUID
-	for _, g := range groups {
+	for _, g := range related.Groups {
 		if g.Relation == "peer" {
 			for _, e := range g.Events {
 				peers = append(peers, e.ID)
@@ -161,7 +165,7 @@ func TestEventAI(t *testing.T) {
 	if resp, _ := http.Get(ts.URL + "/api/events/" + hiddenEvent.ID.String() + "/related"); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("别组主机的日志应 404，得到 %d", resp.StatusCode)
 	}
-	noAI := httptest.NewServer(as(analyst, EventAI(client, triage.NewLLM("", "", "", time.Second))))
+	noAI := httptest.NewServer(as(analyst, EventAI(client, nil, triage.NewLLM("", "", "", time.Second))))
 	defer noAI.Close()
 	if resp, _ := http.Post(noAI.URL+"/api/events/"+target.ID.String()+"/explain", "application/json", nil); resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("没配模型应 503，得到 %d", resp.StatusCode)

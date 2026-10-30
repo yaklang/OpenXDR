@@ -58,6 +58,10 @@ agent 侧组装（`agent/src/collector/mod.rs:233` `process_event`）。
   eBPF（exit_group）与 netlink 路径的退出事件带 `exit_code`（被信号杀掉的为 null）；
   知道启动时间的（启动事件或启动快照里见过）带 `process.created_time`（毫秒）与顶层 `duration_ms`；
   ETW Stop 与轮询消失 pid 的退出事件只有 pid 等少量字段（进程已退场，补不到细节）
+- **短命且成功退出的进程不再产生 Terminate 事件**：退出码为 0、存活不到 2 秒的（采集开关
+  `suppressTrivialExit`，默认开，见 [采集端详解](collection.md#进程采集三级降级)）只留启动事件。
+  退出码非零或未知（被信号杀、内核/ETW 拿不到）、启动时间读不到、存活 ≥ 2 秒的照旧上报——
+  判不准就不抑制，宁可多报
 - 字段质量随采集路径变化，写规则时注意：
   - Linux eBPF/netlink：username 由 /proc status 的 uid 查 /etc/passwd 解析
     （passwd 查不到退化为 uid 数字串）；exe 路径来自内核或

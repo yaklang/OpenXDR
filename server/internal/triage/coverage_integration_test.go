@@ -40,6 +40,11 @@ func TestInvestigationCoverage(t *testing.T) {
 	if m["truncated"] != false || m["returned"] != 0 || m["coverage"] == "" {
 		t.Fatal(m)
 	}
+	// P5：检索工具的覆盖说明必须包含归档缺口——只查热表，已归档冷事件搜不到
+	if cov, ok := m["coverage"].(string); !ok || !strings.Contains(cov, "归档") {
+		t.Fatalf("覆盖说明应包含归档缺口: %v", m["coverage"])
+	}
+
 	for i := 0; i < 21; i++ {
 		db.Alert.Create().SetAssetID(host.ID).SetTs(now.Add(-time.Duration(i) * time.Second)).SetRuleID("test").SetSeverity(2).SaveX(ctx)
 	}

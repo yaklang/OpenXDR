@@ -62,7 +62,7 @@ func TestEngineMaterializesLinksAndInventory(t *testing.T) {
 		SetRaw(json.RawMessage(`{"device":{"listening":[]}}`)))
 
 	e := &Engine{DB: client, SQL: db, Interval: time.Second}
-	e.cursor = e.loadCursor(ctx)
+	e.cursor, e.cursorID = e.loadCursor(ctx)
 	if _, err := e.batch(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestEngineMaterializesLinksAndInventory(t *testing.T) {
 	mustEvent(client.Event.Create().SetTs(now).SetClassUID(classNetwork).SetSource("agent").SetAssetID(web.ID).SetProcessGUID(guid).
 		SetRaw(json.RawMessage(`{"src_endpoint":{"ip":"10.0.0.1","port":40001},"dst_endpoint":{"ip":"10.0.0.2","port":5432}}`)))
 	e2 := &Engine{DB: client, SQL: db, Interval: time.Second}
-	e2.cursor = e2.loadCursor(ctx)
+	e2.cursor, e2.cursorID = e2.loadCursor(ctx)
 	if n, err := e2.batch(ctx); err != nil || n != 1 {
 		t.Fatalf("续扫应只读到新事件: n=%d err=%v", n, err)
 	}
@@ -128,7 +128,7 @@ func TestEngineInboundLinks(t *testing.T) {
 		SetRaw(json.RawMessage(`{"connection_info":{"direction":"inbound"},"src_endpoint":{"ip":"172.18.0.3","port":1},"dst_endpoint":{"ip":"172.18.0.2","port":5432}}`)).
 		SaveX(ctx)
 	e := &Engine{DB: client, SQL: db, Interval: time.Second}
-	e.cursor = e.loadCursor(ctx)
+	e.cursor, e.cursorID = e.loadCursor(ctx)
 	if _, err := e.batch(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestEngineUnspecifiedSource(t *testing.T) {
 	}
 
 	e := &Engine{DB: client, SQL: db, Interval: time.Second}
-	e.cursor = e.loadCursor(ctx)
+	e.cursor, e.cursorID = e.loadCursor(ctx)
 	for range 2 { // 幂等：第二次没有脏数据
 		if err := e.dropNonDependencies(ctx); err != nil {
 			t.Fatal(err)

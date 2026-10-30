@@ -21,7 +21,7 @@ func intelHandler(t *testing.T) (*httptest.Server, *ent.Client) {
 	t.Helper()
 	_, client := testdb.New(t)
 	store := intel.New(client, time.Hour)
-	ts := httptest.NewServer(Handler(client, sigma.LoadDir(t.TempDir()), response.NewHub(client, false), suppress.New(client, time.Hour), store, nil))
+	ts := httptest.NewServer(Handler(client, nil, sigma.LoadDir(t.TempDir()), response.NewHub(client, false), suppress.New(client, time.Hour), store, nil))
 	t.Cleanup(ts.Close)
 	return ts, client
 }

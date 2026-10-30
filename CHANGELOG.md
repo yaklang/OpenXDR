@@ -5,6 +5,23 @@
 
 ## [未发布]
 
+### 冷归档
+
+- 新增事件冷归档（#8，感谢 @LordCasser）：`cmd/eventarchive` 把过期事件编码成 zstd 冷块存进 `event_archive_chunks`（实测压缩约 15 倍），
+  分影子归档 → 逐事件对拍 → 单日切换移出热表 → 按需整日还原；`/api/events` 与调查入口可冷热合流读取，关键词不搜冷块并在 `coverage` 里说明。
+  开关 `EVENT_ARCHIVE_READ`、`EVENT_ARCHIVE_DEDUP` 默认关闭；单日切换要求 events 已按天分区，生产启用按 [冷归档](docs/event-archive.md) 第 12 节试点。
+- `/api/events` 响应从数组改为对象 `{items, truncated, coverage}`，`coverage.reason` 说明本次没查全的原因（见 [API](docs/api.md)）。
+- 事件引用与过期清理之间加同日生命周期锁：入库每批事务开头按 UTC 日升序一次取共享锁，janitor 过期清理逐日取排他锁，
+  关闭「清理与告警引用交错留下悬空引用」的窗口；时序求值缺口按 `TEMPORAL_GAP_RETENTION_DAYS`（默认 30）独立清理。
+
+### 采集
+
+- agent 默认不再上报平凡退出（`suppressTrivialExit`，默认开）：退出码 0 且存活不到 2 秒的进程只留启动事件，
+  非零、未知退出码与长命进程照常上报；内置规则不依赖退出事件。显式 `{"suppressTrivialExit": false}` 可关。
+- agent 离线缓存批次改为带格式版本的 gzip 落盘（实测约为原文的 9%），旧格式照常读取。
+  **回退到旧版 agent 时，新格式的未补传批次会被当成损坏移入隔离区**，回退前先等缓存补传完。
+- sensor 上行 gRPC 可选 gzip（`SENSOR_GRPC_COMPRESSION=gzip`，默认关闭）。
+
 ### 存储
 
 - 关键词检索索引收窄：新索引 `events_search_trgm` 只索引事件里的字段值，去掉 UUID 与 32 位以上的十六进制串（进程 uid、文件哈希），

@@ -73,7 +73,7 @@ func seed(t *testing.T) (*httptest.Server, uuid.UUID) {
 		t.Fatal(err)
 	}
 
-	ts := httptest.NewServer(asAdmin(Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)))
+	ts := httptest.NewServer(asAdmin(Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)))
 	t.Cleanup(ts.Close)
 	return ts, inc.ID
 }
@@ -154,7 +154,7 @@ func TestAPIIncidentsPaging(t *testing.T) {
 	client.Alert.Create().SetTs(now.Add(time.Second)).SetRuleID("r").SetSeverity(1).
 		SetAssetID(grouped.ID).SetIncidentID(incs[1].ID).SaveX(ctx)
 
-	ts := httptest.NewServer(asAdmin(Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)))
+	ts := httptest.NewServer(asAdmin(Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)))
 	t.Cleanup(ts.Close)
 	list := func(path string) ([]incidentSummary, string) {
 		t.Helper()
@@ -230,7 +230,7 @@ func TestAPIIncidentsReview(t *testing.T) {
 			want[inc.ID] = true
 		}
 	}
-	ts := httptest.NewServer(asAdmin(Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)))
+	ts := httptest.NewServer(asAdmin(Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)))
 	t.Cleanup(ts.Close)
 
 	resp, body := get(t, ts, "/api/incidents?status=review")

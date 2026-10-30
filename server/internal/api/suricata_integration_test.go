@@ -40,7 +40,7 @@ func TestSuricataVisibility(t *testing.T) {
 	}
 	user := client.User.Create().SetUsername("reader").SetPasswordHash("x").SetRole("analyst").SaveX(ctx)
 	client.GroupMember.Create().SetUserID(user.ID).SetGroupID(g.ID).SetRole("viewer").SaveX(ctx)
-	h := Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
+	h := Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
 	for i, inc := range incidents {
 		r := httptest.NewRequest("GET", "/api/incidents/"+inc.ID.String(), nil)
 		w := httptest.NewRecorder()

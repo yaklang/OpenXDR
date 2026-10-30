@@ -19,6 +19,7 @@ type Metrics struct {
 	duration        *prometheus.HistogramVec
 	queueDepth      *prometheus.GaugeVec
 	queueUnhealthy  prometheus.Gauge
+	archiveFailOpen *prometheus.CounterVec
 }
 
 func New(reg prometheus.Registerer) *Metrics {
@@ -31,12 +32,17 @@ func New(reg prometheus.Registerer) *Metrics {
 		duration:        prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "openxdr_event_processing_seconds", Help: "单事件处理耗时", Buckets: prometheus.DefBuckets}, []string{"source"}),
 		queueDepth:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "openxdr_queue_pending_messages", Help: "JetStream 分片待处理消息"}, []string{"shard"}),
 		queueUnhealthy:  prometheus.NewGauge(prometheus.GaugeOpts{Name: "openxdr_queue_replicas_unhealthy", Help: "事件流不在同步状态的副本数（含流 leader 不可达）"}),
+		archiveFailOpen: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "openxdr_archive_dedup_failopen_total", Help: "冷归档重传判重拿不准而按未归档继续入库的事件数（阶段：boundary 边界查询、lookup 按 ID 定位）"}, []string{"stage"}),
 	}
-	reg.MustRegister(m.temporalSkipped, m.published, m.processed, m.failed, m.alerts, m.duration, m.queueDepth, m.queueUnhealthy)
+	reg.MustRegister(m.temporalSkipped, m.published, m.processed, m.failed, m.alerts, m.duration, m.queueDepth, m.queueUnhealthy, m.archiveFailOpen)
 	return m
 }
 
 func (m *Metrics) TemporalSkipped(reason string) { m.temporalSkipped.WithLabelValues(reason).Inc() }
+
+// ArchiveFailOpen 冷归档判重 fail-open 的累计次数：这部分事件照常入库与检测，
+// 运维据此判断「重传判重当前是否可靠」。
+func (m *Metrics) ArchiveFailOpen(stage string) { m.archiveFailOpen.WithLabelValues(stage).Inc() }
 
 func (m *Metrics) Published(source string) { m.published.WithLabelValues(source).Inc() }
 func (m *Metrics) PublishFailed()          { m.failed.WithLabelValues("publish").Inc() }

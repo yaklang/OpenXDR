@@ -9,7 +9,15 @@ import (
 	"testing"
 )
 
+// eventsResponseRaw 对象契约的宽松解码：字段值按 map 取，断言写起来直接。
+type eventsResponseRaw struct {
+	Items     []map[string]any `json:"items"`
+	Truncated bool             `json:"truncated"`
+	Coverage  eventsCoverage   `json:"coverage"`
+}
+
 // GET /api/events：时间窗默认 24h、关键词全文匹配、来源过滤、通配符转义。
+// 响应是对象契约 {items, truncated, coverage}（P5），断言主要落在 items 上。
 func TestAPIEventSearch(t *testing.T) {
 	ts, _ := seed(t) // seed 里有一条 syslog 事件，raw 含 "ssh failed"
 
@@ -21,9 +29,11 @@ func TestAPIEventSearch(t *testing.T) {
 			t.Fatalf("status = %d: %s", resp.StatusCode, body)
 		}
 		rows = nil
-		if err := json.Unmarshal(body, &rows); err != nil {
+		var out eventsResponseRaw
+		if err := json.Unmarshal(body, &out); err != nil {
 			t.Fatal(err)
 		}
+		rows = out.Items
 		return rows
 	}
 

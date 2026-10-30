@@ -30,6 +30,11 @@ const (
 
 // Engine 集群单活：增量扫描网络与设备清单事件，物化资产画像与依赖边，按需触发 AI 标注。
 // 读的是已落库的事件，队列模式与单机直连模式一视同仁。
+//
+// 游标语义（冷归档 R3 核对结论）：每批的依赖边/清单物化与游标 upsert 在同一事务提交，
+// 批内任何一步失败整体回滚——游标只在整批成功后推进；空区间（游标后没有事件）不推进，
+// 冷归档切换闸门按「未追平」保守拒绝。游标是 (ts,id) 元组：同一时刻的多条事件不会被
+// 批次边界或重启跳过（旧实现的 ts > 游标 会漏掉与游标同时刻的剩余事件，物化计数少记）。
 type Engine struct {
 	DB       *ent.Client
 	SQL      *sql.DB
@@ -39,6 +44,7 @@ type Engine struct {
 	Refresh time.Duration
 
 	cursor    time.Time
+	cursorID  uuid.UUID
 	lastCheck time.Time
 	lastPrune time.Time
 	// 标注失败的时刻，单活进程内存里记着即可，重启后重试无妨
@@ -46,7 +52,7 @@ type Engine struct {
 }
 
 func (e *Engine) Run(ctx context.Context) {
-	e.cursor = e.loadCursor(ctx)
+	e.cursor, e.cursorID = e.loadCursor(ctx)
 	if err := e.dropNonDependencies(ctx); err != nil {
 		slog.Error("清理未指定源地址的依赖边失败", "err", err)
 	}
@@ -80,14 +86,29 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 }
 
-func (e *Engine) loadCursor(ctx context.Context) time.Time {
+// loadCursor 读持久游标 (ts,id)。旧格式（裸时间）按 (ts, 最大 uuid) 读入：查询条件
+// 等价于旧实现的 ts > 游标，不会重读已处理的事件——依赖边的计数是累加，重读会重复计数。
+// loadCursor 读持久游标 (ts,id)。旧格式（裸时间）按 (ts, 最大 uuid) 读入：查询条件
+// 等价于旧实现的 ts > 游标，不会重读已处理的事件——依赖边的计数是累加，重读会重复计数。
+// （冷归档 R3 核对结论：游标只在整批成功后推进，空区间不推进，切换闸门按「未追平」保守拒绝。）
+func (e *Engine) loadCursor(ctx context.Context) (time.Time, uuid.UUID) {
 	var raw []byte
 	err := e.SQL.QueryRowContext(ctx, `SELECT value FROM settings WHERE id=$1`, cursorKey).Scan(&raw)
-	var ts time.Time
-	if err == nil && json.Unmarshal(raw, &ts) == nil {
-		return ts
+	if err != nil {
+		return time.Now().Add(-backfill), uuid.Max
 	}
-	return time.Now().Add(-backfill)
+	var tuple struct {
+		Ts time.Time `json:"ts"`
+		ID uuid.UUID `json:"id"`
+	}
+	if json.Unmarshal(raw, &tuple) == nil && !tuple.Ts.IsZero() {
+		return tuple.Ts, tuple.ID
+	}
+	var ts time.Time
+	if json.Unmarshal(raw, &ts) == nil {
+		return ts, uuid.Max
+	}
+	return time.Now().Add(-backfill), uuid.Max
 }
 
 // upsertLink 依赖边累加：同键的计数相加、时间取并集
@@ -120,7 +141,7 @@ func (e *Engine) batch(ctx context.Context) (int, error) {
 	}
 	if mode == graphqueue.Requested {
 		if e.cursor.IsZero() {
-			e.cursor = e.loadCursor(ctx)
+			e.cursor, e.cursorID = e.loadCursor(ctx)
 		}
 		if err := graphqueue.Activate(ctx, e.SQL, e.cursor); err != nil {
 			return 0, err
@@ -141,9 +162,18 @@ func (e *Engine) batch(ctx context.Context) (int, error) {
 	if mode == graphqueue.Queued {
 		events, err = queuedEvents(ctx, tx)
 	} else {
+		// (ts,id) > 游标：批次边界或重启落在同一时刻的多条事件之间时，
+		// 剩余同刻事件不会被跳过（物化的依赖边计数会少记）
 		events, err = e.DB.Event.Query().
-			Where(event.ClassUIDIn(classNetwork, ClassInventory, ClassSoftware), event.TsGT(e.cursor)).
-			Order(ent.Asc(event.FieldTs)).Limit(batchLimit).All(ctx)
+			Where(
+				event.ClassUIDIn(classNetwork, ClassInventory, ClassSoftware),
+				event.Or(
+					event.TsGT(e.cursor),
+					event.And(event.TsEQ(e.cursor), event.IDGT(e.cursorID)),
+				),
+			).
+			Order(ent.Asc(event.FieldTs), ent.Asc(event.FieldID)).
+			Limit(batchLimit).All(ctx)
 	}
 	if err != nil || len(events) == 0 {
 		return 0, err
@@ -212,13 +242,10 @@ func (e *Engine) batch(ctx context.Context) (int, error) {
 		}
 	}
 
-	cursor := e.cursor
+	last := events[len(events)-1]
 	ids := make([]string, len(events))
 	for i, ev := range events {
 		ids[i] = ev.ID.String()
-		if ev.Ts.After(cursor) {
-			cursor = ev.Ts
-		}
 	}
 	for k, a := range links {
 		if _, err := tx.ExecContext(ctx, upsertLink,
@@ -248,7 +275,11 @@ WHERE id=$1 AND (inventory_at IS NULL OR inventory_at < $4)`, id, string(listeni
 			return 0, err
 		}
 	}
-	value, _ := json.Marshal(cursor)
+	// 游标与本批全部物化同一事务提交：整批成功才推进（见 Engine 的游标语义注释）
+	value, _ := json.Marshal(struct {
+		Ts time.Time `json:"ts"`
+		ID uuid.UUID `json:"id"`
+	}{last.Ts, last.ID})
 	if _, err := tx.ExecContext(ctx, `INSERT INTO settings (id, value, updated_at) VALUES ($1, $2::jsonb, now())
 ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, cursorKey, string(value)); err != nil {
 		return 0, err
@@ -259,7 +290,7 @@ ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, cursorKe
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	e.cursor = cursor
+	e.cursor, e.cursorID = last.Ts, last.ID
 	return len(events), nil
 }
 

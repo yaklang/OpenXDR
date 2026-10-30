@@ -187,7 +187,7 @@ func retireDay(ctx context.Context, db *sql.DB, set partitionSet, day time.Time)
 		`SET LOCAL lock_timeout = '` + LockTimeout + `'`,
 		fmt.Sprintf(`LOCK TABLE %s IN SHARE MODE`, daily),
 		fmt.Sprintf(`CREATE TABLE %s (LIKE %s INCLUDING DEFAULTS)`, staging, Parent),
-		fmt.Sprintf(`INSERT INTO %s (%s) SELECT %s FROM %s WHERE id IN (%s)`, staging, Columns, Columns, daily, pinnedIDs),
+		fmt.Sprintf(`INSERT INTO %s (%s) SELECT %s FROM %s WHERE id IN (%s)`, staging, Columns, Columns, daily, PinnedIDs),
 	} {
 		if _, err := exec(stmt); err != nil {
 			return 0, err

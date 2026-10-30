@@ -138,7 +138,7 @@ ON events USING gin (openxdr_event_search_text(raw) gin_trgm_ops);
 `REFERENCES events(id)`；老库上已有的外键不动，迁移切换时才去掉。
 
 **钉住（pinned）的口径**与原 janitor 逐行清理完全一致：`alerts.event_id`、`temporal_evidence.event_id`、
-`alert_id` 非空的 `temporal_detections.anchor_id`（`eventpart/schema.go` 的 `pinnedIDs`）。
+`alert_id` 非空的 `temporal_detections.anchor_id`（`eventpart/schema.go` 的 `PinnedIDs`，冷归档复用同一常量）。
 
 ## 4. ent 自动迁移与分区表共存
 

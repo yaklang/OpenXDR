@@ -14,6 +14,9 @@ default = []
 ebpf = ["dep:aya", "dep:bytes", "dep:aya-build"]
 
 [dependencies]
+# 本地事件缓存的批次压缩。只用纯 Rust 后端（miniz_oxide）：CI 要交叉编译到
+# x86_64-pc-windows-gnu，不能引入需要 C 工具链或系统 zlib 的后端
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 gethostname = "1.1.0"
 if-addrs = "0.15.0"
 libc = "0.2.189"

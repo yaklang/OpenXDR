@@ -1,17 +1,44 @@
 //! 已落盘的批次只有收到完整 ACK 后才能删除；容量不足时拒绝追加，不淘汰旧证据。
+//!
+//! 批次文件布局（v1，写入时使用）：
+//! ```text
+//! MAGIC "OXDRSPL1" (8) || codec (1) || sha256(plaintext) (32) || body (N)
+//!   codec = 0：body 就是 plaintext
+//!   codec = 1：body 是 plaintext 的 gzip
+//!   plaintext = StoredBatch::encode_to_vec()，protobuf 编码不变
+//! ```
+//! 升级前的布局仍然可读（`sha256(plaintext) (32) || plaintext`），老批次照常补传。
+//! 摘要按 plaintext 计算而不是 body：损坏检测语义与升级前一致，protobuf 编码也不被替换，
+//! ACK 的条数语义因此不受压缩影响。
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
+use flate2::Compression;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use prost::Message;
 use sha2::{Digest, Sha256};
 
 use crate::pb::AgentEvent;
 
+/// 单批上限，按 plaintext（`StoredBatch::encode_to_vec()`）计量。
+/// 压缩只降低磁盘占用，不放宽单批大小与事件条数的语义。
 const MAX_BATCH_BYTES: usize = 4 * 1024 * 1024;
 const MAX_BATCH_EVENTS: usize = 500;
+/// 老格式的摘要长度，也是新格式摘要的长度
 const HEADER: usize = 32;
+
+/// 新格式魔数。老格式的头 32 字节是 sha256，前 8 字节全撞上魔数的概率是 2^-64；
+/// 真撞上也会在后面按 codec 解包或摘要校验时失败并进隔离区，不会被当成数据上传。
+const MAGIC: &[u8; 8] = b"OXDRSPL1";
+/// 不压缩：body 就是 plaintext
+const CODEC_NONE: u8 = 0;
+/// gzip：body 是 plaintext 的 gzip 压缩
+const CODEC_GZIP: u8 = 1;
+/// 新格式头长度：MAGIC(8) || codec(1) || sha256(plaintext)(32)
+const HEADER_V1: usize = MAGIC.len() + 1 + HEADER;
 
 #[derive(Clone, PartialEq, Message)]
 struct StoredBatch {
@@ -173,14 +200,21 @@ impl Spool {
             return Err(invalid("批次必须包含 1 到 500 条事件"));
         }
         let batch = StoredBatch { events };
-        let size = batch
+        // 单批上限继续按 plaintext 计量（连新格式头一起算，与升级前 plaintext + 32 字节头同口径）
+        let reserved = batch
             .encoded_len()
-            .checked_add(HEADER)
+            .checked_add(HEADER_V1)
             .ok_or_else(|| invalid("批次过大"))?;
-        if size > MAX_BATCH_BYTES {
+        if reserved > MAX_BATCH_BYTES {
             return Err(invalid("批次超过 4 MiB"));
         }
-        if self.bytes.saturating_add(size as u64) > self.limit || self.files.len() >= 8192 {
+        // 容量预检用 reserved（plaintext + 头）而不是压缩后大小：body 一定不大于 plaintext
+        // （压不动就存原文，见下面 codec 的选择），所以 reserved 是落盘字节的严格上界，
+        // 预检永远不会比实际写入乐观，rename 之后不可能出现“写进去才发现超限”，容量上界仍是硬的。
+        // 反过来按压缩后大小预检必须先压缩才判断得出，被拒绝的批次也要先付一次压缩开销；
+        // 剩余空间介于压缩后与未压缩大小之间时会多等一轮才落盘——旧证据仍保留，
+        // delivery 每 5 秒重试一次，代价只是批次数多一点。
+        if self.bytes.saturating_add(reserved as u64) > self.limit || self.files.len() >= 8192 {
             return Err(io::Error::new(
                 io::ErrorKind::StorageFull,
                 "缓存已满，旧证据保留",
@@ -191,11 +225,20 @@ impl Spool {
             .checked_add(1)
             .ok_or_else(|| invalid("缓存序号耗尽"))?;
         let payload = batch.encode_to_vec();
+        let digest = Sha256::digest(&payload);
+        // 压不动（比如单条小事件压不过 gzip 的 18 字节容器开销）就存原文，避免负收益
+        let (codec, body) = match gzip(&payload) {
+            Some(body) if body.len() < payload.len() => (CODEC_GZIP, body),
+            _ => (CODEC_NONE, payload),
+        };
+        let written = (HEADER_V1 + body.len()) as u64;
         let pending = self.dir.join("pending");
         let mut file = private_file(&pending, true)?;
         let write = (|| {
-            file.write_all(&Sha256::digest(&payload))?;
-            file.write_all(&payload)?;
+            file.write_all(MAGIC)?;
+            file.write_all(&[codec])?;
+            file.write_all(&digest)?;
+            file.write_all(&body)?;
             file.sync_all()
         })();
         drop(file);
@@ -206,8 +249,9 @@ impl Spool {
         let sequence = self.next;
         replace_file(&pending, &self.path(sequence))?;
         // rename 后即计入本进程索引；目录同步失败也不能覆盖已写入的批次。
-        self.files.insert(sequence, size as u64);
-        self.bytes += size as u64;
+        // 容量按实际落盘的字节累计（压缩才换来更大的等效容量），索引恢复时用的也是文件长度。
+        self.files.insert(sequence, written);
+        self.bytes += written;
         self.next = next;
         sync_dir(&self.dir)?;
         Ok(sequence)
@@ -308,19 +352,77 @@ pub(crate) fn private_file(path: &Path, exclusive: bool) -> io::Result<File> {
     options.open(path)
 }
 
+/// 用 flate2 的纯 Rust 后端（`miniz_oxide`，由 `rust_backend` 特性启用）压成 gzip。
+/// 不选 zstd：CI 会把 agent 交叉编译到 `x86_64-pc-windows-gnu`，需要 C 工具链的压缩库
+/// 进不了默认构建。`codec` 字节已为将来换算法预留——新增一个 codec 值即可，
+/// 读路径按 codec 分派，老文件（codec 0/1）照常读，不需要改格式或迁移数据。
+fn gzip(plaintext: &[u8]) -> Option<Vec<u8>> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(plaintext).ok()?;
+    encoder.finish().ok()
+}
+
+/// 校验并解出新格式的 plaintext。所有异常都归为 `InvalidData`，由调用方移进隔离区：
+/// 不 panic、不丢文件、也不让一个坏批次挡住后面的批次。
+fn unpack(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    if bytes.len() < HEADER_V1 {
+        return Err(invalid("持久批次损坏，保留原文件等待处理"));
+    }
+    let codec = bytes[MAGIC.len()];
+    let digest = &bytes[MAGIC.len() + 1..HEADER_V1];
+    let body = &bytes[HEADER_V1..];
+    let plaintext = match codec {
+        CODEC_NONE => {
+            if body.len() > MAX_BATCH_BYTES {
+                return Err(invalid("持久批次超过单批上限"));
+            }
+            body.to_vec()
+        }
+        CODEC_GZIP => {
+            // 有界解压：压缩炸弹最多解出 MAX_BATCH_BYTES + 1 字节就停，
+            // 不会因为 body 很小、展开很大而把内存打爆
+            let mut plaintext = Vec::new();
+            GzDecoder::new(body)
+                .take(MAX_BATCH_BYTES as u64 + 1)
+                .read_to_end(&mut plaintext)
+                .map_err(|_| invalid("持久批次解压失败"))?;
+            if plaintext.len() > MAX_BATCH_BYTES {
+                return Err(invalid("持久批次解压后超过单批上限"));
+            }
+            plaintext
+        }
+        _ => return Err(invalid("持久批次使用了未知压缩编码")),
+    };
+    if Sha256::digest(&plaintext).as_slice() != digest {
+        return Err(invalid("持久批次损坏，保留原文件等待处理"));
+    }
+    Ok(plaintext)
+}
+
 fn read_batch(path: &Path) -> io::Result<Vec<AgentEvent>> {
     reject_symlink(path)?;
     let file = File::open(path)?;
     let mut bytes = Vec::new();
-    file.take(MAX_BATCH_BYTES as u64 + 1)
+    // 上界：新格式头 + 单批上限（body 不会超过 plaintext，见 append），多读 1 字节用来判超限
+    file.take((HEADER_V1 + MAX_BATCH_BYTES + 1) as u64)
         .read_to_end(&mut bytes)?;
-    if bytes.len() <= HEADER
-        || bytes.len() > MAX_BATCH_BYTES
-        || Sha256::digest(&bytes[HEADER..])[..] != bytes[..HEADER]
-    {
+    if bytes.len() > HEADER_V1 + MAX_BATCH_BYTES {
         return Err(invalid("持久批次损坏，保留原文件等待处理"));
     }
-    let batch = StoredBatch::decode(&bytes[HEADER..]).map_err(|_| invalid("持久批次解码失败"))?;
+    let plaintext = if bytes.starts_with(MAGIC) {
+        unpack(&bytes)?
+    } else {
+        // 升级前落盘的老格式：sha256(plaintext) || plaintext，照常校验、照常补传
+        if bytes.len() <= HEADER
+            || bytes.len() > MAX_BATCH_BYTES
+            || Sha256::digest(&bytes[HEADER..])[..] != bytes[..HEADER]
+        {
+            return Err(invalid("持久批次损坏，保留原文件等待处理"));
+        }
+        bytes[HEADER..].to_vec()
+    };
+    let batch =
+        StoredBatch::decode(plaintext.as_slice()).map_err(|_| invalid("持久批次解码失败"))?;
     if batch.events.is_empty() || batch.events.len() > MAX_BATCH_EVENTS {
         return Err(invalid("持久批次条数无效"));
     }
@@ -381,6 +483,120 @@ mod tests {
             raw_json: r#"{"process":"test"}"#.into(),
             ..Default::default()
         }
+    }
+
+    /// 一条贴近真实分布的进程事件：
+    /// - 可重复的内容：JSON 骨架、可执行路径与 cmdline（同一个二进制反复启动）、
+    ///   文件哈希（哈希是文件的属性，同一路径的事件共用同一个值）；
+    /// - 每条独有的内容：随机进程 GUID、pid、时间戳。
+    ///
+    /// 压缩比取决于这两部分的比例，下面的报告按这个分布说明
+    fn sample(index: usize) -> AgentEvent {
+        let (path, cmdline) = match index % 4 {
+            0 => (
+                "/usr/bin/bash",
+                "/usr/bin/bash -c cd /opt/app && ./deploy.sh",
+            ),
+            1 => ("/usr/sbin/sshd", "sshd: deploy [priv]"),
+            2 => (
+                "/usr/bin/curl",
+                "/usr/bin/curl --connect-timeout 10 -o /tmp/pkg.tar.gz https://mirror.example.com/pkg.tar.gz",
+            ),
+            _ => (
+                "/usr/bin/openssl",
+                "/usr/bin/openssl enc -aes-256-cbc -salt -pbkdf2 -iter 600000",
+            ),
+        };
+        AgentEvent {
+            agent_id: "agent".into(),
+            ts_unix_ns: 1_760_000_000_000_000_000 + index as i64 * 1_000_000,
+            class_uid: 1007,
+            process_guid: hex(32, index as u64 * 0x9e37_79b9),
+            username: if index.is_multiple_of(3) {
+                "root"
+            } else {
+                "deploy"
+            }
+            .into(),
+            conn_tuple: if index.is_multiple_of(2) {
+                "tcp:10.20.30.40:51234>198.51.100.7:443".into()
+            } else {
+                String::new()
+            },
+            raw_json: format!(
+                "{{\"class_uid\":1007,\"process\":{{\"path\":\"{path}\",\"cmd_line\":\"{cmdline}\",\"pid\":{},\"file\":{{\"hashes\":[{{\"algorithm_id\":3,\"value\":\"{}\"}}]}}}},\"actor\":{{\"user\":{{\"name\":\"deploy\"}}}},\"message\":\"process activity\"}}",
+                1000 + index,
+                hex(64, (index % 4) as u64)
+            ),
+            parent_process_guid: "00000000-0000-4000-8000-0000000000ff".into(),
+            dropped_events: 0,
+        }
+    }
+
+    /// 确定性伪随机的十六进制串（模拟哈希 / GUID）：真实数据里这段不可压
+    fn hex(len: usize, seed: u64) -> String {
+        let mut state = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+        let mut out = String::with_capacity(len);
+        for _ in 0..len {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            out.push(char::from(b"0123456789abcdef"[(state >> 33) as usize % 16]));
+        }
+        out
+    }
+
+    /// 确定性伪随机可打印 ASCII，模拟压不动的内容（哈希、base64、压缩包片段）
+    fn random_ascii(seed: u64, len: usize) -> String {
+        let mut state = seed | 1;
+        let mut out = String::with_capacity(len);
+        for _ in 0..len {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            out.push(char::from(b'!' + (state >> 33) as u8 % 94));
+        }
+        out
+    }
+
+    fn plaintext_of(events: &[AgentEvent]) -> Vec<u8> {
+        StoredBatch {
+            events: events.to_vec(),
+        }
+        .encode_to_vec()
+    }
+
+    fn batch_file(dir: &Path, sequence: u64) -> PathBuf {
+        dir.join(format!("{sequence:020}.batch"))
+    }
+
+    /// 手工放文件前先把缓存目录建成 0700（`Spool::open` 会校验目录权限）
+    fn create_private_dir(dir: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
+        }
+        #[cfg(not(unix))]
+        fs::create_dir_all(dir).unwrap();
+    }
+
+    /// 手工写升级前的老格式批次：sha256(plaintext) || plaintext
+    fn write_legacy(dir: &Path, sequence: u64, plaintext: &[u8]) {
+        create_private_dir(dir);
+        let mut bytes = Sha256::digest(plaintext).to_vec();
+        bytes.extend_from_slice(plaintext);
+        fs::write(batch_file(dir, sequence), bytes).unwrap();
+    }
+
+    /// 手工写新格式批次，codec / digest / body 全由调用方指定，用来构造损坏样本
+    fn write_v1(dir: &Path, sequence: u64, codec: u8, digest: &[u8], body: &[u8]) {
+        create_private_dir(dir);
+        let mut bytes = MAGIC.to_vec();
+        bytes.push(codec);
+        bytes.extend_from_slice(digest);
+        bytes.extend_from_slice(body);
+        fs::write(batch_file(dir, sequence), bytes).unwrap();
     }
 
     #[test]
@@ -478,7 +694,9 @@ mod tests {
         let dir = Temp::new();
         let mut spool = Spool::open(&dir.0, 4 << 20).unwrap();
         let mut large = event();
-        large.raw_json = "x".repeat(3 << 20);
+        // 用不可压内容表达“一批就占掉大部分容量”：重复的 'x' 压缩后只剩几 KiB，
+        // 队列永远撞不到字节上限，测不到这条语义。断言本身未改
+        large.raw_json = random_ascii(0x5eed, 3 << 20);
         let id = spool.append(vec![large.clone()]).unwrap();
         assert_eq!(
             spool.append(vec![large.clone()]).unwrap_err().kind(),
@@ -488,5 +706,272 @@ mod tests {
         spool.acknowledge(id, 1).unwrap();
         assert!(spool.append(vec![event()]).is_ok());
         assert!(spool.append(vec![]).is_err());
+    }
+
+    #[test]
+    fn new_format_round_trip() {
+        let dir = Temp::new();
+        let events: Vec<_> = (0..40).map(sample).collect();
+        let mut spool = Spool::open(&dir.0, 8 << 20).unwrap();
+        let sequence = spool.append(events.clone()).unwrap();
+        let bytes = fs::read(batch_file(&dir.0, sequence)).unwrap();
+        assert!(bytes.starts_with(MAGIC));
+        assert_eq!(bytes[MAGIC.len()], CODEC_GZIP);
+        drop(spool);
+
+        // 重启后照常取出，事件逐字段相等
+        let mut spool = Spool::open(&dir.0, 8 << 20).unwrap();
+        let batch = spool.front().unwrap().unwrap();
+        assert_eq!(batch.sequence, sequence);
+        assert_eq!(batch.events, events);
+        spool.acknowledge(sequence, events.len() as u64).unwrap();
+        assert_eq!(spool.batches(), 0);
+    }
+
+    #[test]
+    fn legacy_batch_still_uploads_after_upgrade() {
+        let dir = Temp::new();
+        let events: Vec<_> = (0..3).map(sample).collect();
+        // 升级前落盘的文件：没有 MAGIC，就是 sha256 || payload
+        write_legacy(&dir.0, 7, &plaintext_of(&events));
+
+        let mut spool = Spool::open(&dir.0, 8 << 20).unwrap();
+        assert_eq!(spool.batches(), 1);
+        assert!(!dir.0.join(QUARANTINE).exists());
+        let batch = spool.front().unwrap().unwrap();
+        assert_eq!((batch.sequence, batch.events), (7, events));
+        spool.acknowledge(7, 3).unwrap();
+        assert_eq!(spool.batches(), 0);
+        assert_eq!(spool.bytes(), 0);
+        assert!(!batch_file(&dir.0, 7).exists());
+    }
+
+    #[test]
+    fn corrupted_new_format_is_quarantined_without_stalling() {
+        let dir = Temp::new();
+        let mut spool = Spool::open(&dir.0, 8 << 20).unwrap();
+        let broken = spool.append(vec![sample(0)]).unwrap();
+        let next = spool.append(vec![sample(1)]).unwrap();
+
+        // 改坏 body 最后一个字节（gzip 的 ISIZE 字段）：解压或摘要必然对不上
+        let path = batch_file(&dir.0, broken);
+        let mut bytes = fs::read(&path).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0x5a;
+        fs::write(&path, &bytes).unwrap();
+
+        // 不 panic，坏批次进隔离区，补传接着走下一批
+        let batch = spool.front().unwrap().unwrap();
+        assert_eq!(batch.sequence, next);
+        assert_eq!(batch.events, vec![sample(1)]);
+        assert!(!path.exists());
+        assert_eq!(fs::read_dir(dir.0.join(QUARANTINE)).unwrap().count(), 1);
+        assert!(spool.acknowledge(broken, 1).is_err());
+    }
+
+    #[test]
+    fn unknown_codec_is_quarantined() {
+        // 启动阶段：认不出 codec 的文件被隔离，不拒绝启动
+        let dir = Temp::new();
+        let events = vec![sample(2)];
+        let plaintext = plaintext_of(&events);
+        write_v1(&dir.0, 1, 0x7f, &Sha256::digest(&plaintext), &plaintext);
+        let mut spool = Spool::open(&dir.0, 8 << 20).unwrap();
+        assert_eq!(spool.batches(), 0);
+        assert_eq!(fs::read_dir(dir.0.join(QUARANTINE)).unwrap().count(), 1);
+
+        // 运行中取批：同样隔离，并接着取下一批
+        let first = spool.append(events.clone()).unwrap();
+        let second = spool.append(events).unwrap();
+        let path = batch_file(&dir.0, first);
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[MAGIC.len()] = 0x7f;
+        fs::write(&path, &bytes).unwrap();
+        assert_eq!(spool.front().unwrap().unwrap().sequence, second);
+        assert_eq!(fs::read_dir(dir.0.join(QUARANTINE)).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn digest_covers_plaintext_not_compressed_body() {
+        let events = vec![sample(3)];
+        let plaintext = plaintext_of(&events);
+        let body = gzip(&plaintext).unwrap();
+        assert!(body.len() < plaintext.len());
+
+        // 正例：摘要按 plaintext 算 → 读得回来
+        let dir = Temp::new();
+        write_v1(&dir.0, 1, CODEC_GZIP, &Sha256::digest(&plaintext), &body);
+        let mut spool = Spool::open(&dir.0, 8 << 20).unwrap();
+        assert_eq!(spool.front().unwrap().unwrap().events, events);
+        assert!(!dir.0.join(QUARANTINE).exists());
+
+        // 反例：摘要按 body 算（复用旧语义就会这样）→ 隔离，证明摘要不是对 body 的计算
+        let dir = Temp::new();
+        write_v1(&dir.0, 1, CODEC_GZIP, &Sha256::digest(&body), &body);
+        let spool = Spool::open(&dir.0, 8 << 20).unwrap();
+        assert_eq!(spool.batches(), 0);
+        assert_eq!(fs::read_dir(dir.0.join(QUARANTINE)).unwrap().count(), 1);
+
+        // codec 位 1 → 0：body 还是 gzip 字节，按原文读时摘要对不上 → 隔离
+        let dir = Temp::new();
+        write_v1(&dir.0, 1, CODEC_NONE, &Sha256::digest(&plaintext), &body);
+        let spool = Spool::open(&dir.0, 8 << 20).unwrap();
+        assert_eq!(spool.batches(), 0);
+        assert_eq!(fs::read_dir(dir.0.join(QUARANTINE)).unwrap().count(), 1);
+
+        // codec 位 0 → 1：body 是原文却按 gzip 解 → 解压失败 → 隔离
+        let dir = Temp::new();
+        write_v1(
+            &dir.0,
+            1,
+            CODEC_GZIP,
+            &Sha256::digest(&plaintext),
+            &plaintext,
+        );
+        let spool = Spool::open(&dir.0, 8 << 20).unwrap();
+        assert_eq!(spool.batches(), 0);
+        assert_eq!(fs::read_dir(dir.0.join(QUARANTINE)).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn compression_shrinks_disk_footprint() {
+        let dir = Temp::new();
+        let mut spool = Spool::open(&dir.0, 256 << 20).unwrap();
+        let events: Vec<_> = (0..250).map(sample).collect();
+        let mut plaintext_total = 0usize;
+        let mut sequences = Vec::new();
+        for chunk in events.chunks(128) {
+            plaintext_total += plaintext_of(chunk).len();
+            sequences.push(spool.append(chunk.to_vec()).unwrap());
+        }
+        let disk: u64 = sequences
+            .iter()
+            .map(|sequence| fs::metadata(batch_file(&dir.0, *sequence)).unwrap().len())
+            .sum();
+        assert_eq!(spool.bytes(), disk);
+        assert!(
+            (disk as usize) * 3 < plaintext_total,
+            "落盘 {disk} 字节应不到 plaintext {plaintext_total} 字节的三分之一"
+        );
+        for sequence in sequences {
+            let bytes = fs::read(batch_file(&dir.0, sequence)).unwrap();
+            assert_eq!(bytes[MAGIC.len()], CODEC_GZIP);
+        }
+    }
+
+    #[test]
+    fn incompressible_batch_falls_back_to_raw_codec() {
+        let dir = Temp::new();
+        let mut spool = Spool::open(&dir.0, 8 << 20).unwrap();
+        // 单条高熵事件：gzip 的 18 字节容器开销压不回来，落盘应退化为 codec=0
+        let events = vec![AgentEvent {
+            agent_id: "agent".into(),
+            raw_json: random_ascii(7, 96),
+            ..Default::default()
+        }];
+        let plaintext = plaintext_of(&events);
+        assert!(gzip(&plaintext).unwrap().len() >= plaintext.len());
+
+        let sequence = spool.append(events.clone()).unwrap();
+        let bytes = fs::read(batch_file(&dir.0, sequence)).unwrap();
+        assert_eq!(bytes[MAGIC.len()], CODEC_NONE);
+        assert_eq!(&bytes[HEADER_V1..], plaintext.as_slice());
+        assert_eq!(spool.front().unwrap().unwrap().events, events);
+    }
+
+    #[test]
+    fn capacity_counts_disk_bytes_but_prechecks_plaintext() {
+        let dir = Temp::new();
+        let mut spool = Spool::open(&dir.0, 4 << 20).unwrap();
+        let mut sequences = Vec::new();
+        for seed in 1..=2 {
+            let mut big = event();
+            big.raw_json = random_ascii(seed, 2 << 20);
+            sequences.push(spool.append(vec![big]).unwrap());
+        }
+        // 容量按实际落盘字节累计：压缩后的占用决定了 256 MiB 能装多少事件
+        let used = spool.bytes();
+        assert!((2 << 20) < used && used < (4 << 20), "已占用 {used} 字节");
+
+        // 高度可压的批次实际只占几 KiB（磁盘上放得下），但预检按 plaintext 计量 → 拒绝。
+        // 宁可少装一批，也不让 rename 之后才发现超限
+        let mut compressible = event();
+        compressible.raw_json = "x".repeat(3 << 20);
+        let compressed = gzip(&plaintext_of(&[compressible.clone()])).unwrap().len() as u64;
+        assert!((HEADER_V1 as u64 + compressed) < (16 << 10));
+        assert!(used + HEADER_V1 as u64 + compressed < 4 << 20);
+        assert_eq!(
+            spool.append(vec![compressible]).unwrap_err().kind(),
+            io::ErrorKind::StorageFull
+        );
+
+        // 旧证据照常可读、可确认
+        for sequence in sequences {
+            let batch = spool.front().unwrap().unwrap();
+            assert_eq!(batch.sequence, sequence);
+            spool.acknowledge(sequence, 1).unwrap();
+        }
+        assert_eq!(spool.bytes(), 0);
+        assert!(spool.append(vec![event()]).is_ok());
+    }
+
+    /// 前后对比：500 条代表性事件在 128 条/批下的落盘字节与 256 MiB 等效容量。
+    /// 用 `cargo test --locked spool -- --nocapture` 查看输出
+    #[test]
+    fn old_reader_rejects_new_format_instead_of_uploading() {
+        // 降级回旧版 agent 时，旧读路径只认 sha256(plaintext) || plaintext。
+        // 按旧规则判定新格式文件：摘要必然对不上 → 旧版走 InvalidData 分支把它移进
+        // quarantine，保留证据，不会把容器头当成事件上报
+        let dir = Temp::new();
+        let mut spool = Spool::open(&dir.0, 8 << 20).unwrap();
+        let sequence = spool.append(vec![sample(4)]).unwrap();
+        let bytes = fs::read(batch_file(&dir.0, sequence)).unwrap();
+        assert!(bytes.len() > HEADER);
+        assert_ne!(
+            Sha256::digest(&bytes[HEADER..]).as_slice(),
+            &bytes[..HEADER]
+        );
+    }
+
+    #[test]
+    fn representative_500_events_compression_report() {
+        let dir = Temp::new();
+        let mut spool = Spool::open(&dir.0, 256 << 20).unwrap();
+        let events: Vec<_> = (0..500).map(sample).collect();
+        let (mut plaintext_total, mut legacy_total) = (0usize, 0usize);
+        let mut sequences = Vec::new();
+        for chunk in events.chunks(128) {
+            let plaintext = plaintext_of(chunk);
+            plaintext_total += plaintext.len();
+            legacy_total += plaintext.len() + HEADER;
+            sequences.push(spool.append(chunk.to_vec()).unwrap());
+        }
+        let disk_total: u64 = sequences
+            .iter()
+            .map(|sequence| fs::metadata(batch_file(&dir.0, *sequence)).unwrap().len())
+            .sum();
+        assert_eq!(spool.bytes(), disk_total);
+
+        let ratio = legacy_total as f64 / disk_total as f64;
+        let saving = 100.0 - disk_total as f64 / legacy_total as f64 * 100.0;
+        let capacity = 256.0 * 1024.0 * 1024.0;
+        let before = capacity / (legacy_total as f64 / 500.0);
+        let after = capacity / (disk_total as f64 / 500.0);
+        println!("500 条代表性事件（128 条/批，{} 批）：", sequences.len());
+        println!("  plaintext 编码总字节 : {plaintext_total}");
+        println!("  升级前落盘总字节     : {legacy_total}（plaintext + 每批 {HEADER} 字节头）");
+        println!("  压缩后落盘总字节     : {disk_total}");
+        println!("  压缩比（旧/新）      : {ratio:.2}x");
+        println!("  磁盘节省             : {saving:.1}%");
+        println!(
+            "  单事件平均占用       : 旧 {:.0} 字节 → 新 {:.0} 字节",
+            legacy_total as f64 / 500.0,
+            disk_total as f64 / 500.0
+        );
+        println!(
+            "  256 MiB 等效容量     : 旧 {before:.0} 条 → 新 {after:.0} 条（{:.2}x）",
+            after / before
+        );
+        assert!(ratio > 1.5, "压缩比 {ratio:.2} 太低");
     }
 }

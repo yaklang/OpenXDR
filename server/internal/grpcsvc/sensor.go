@@ -13,6 +13,9 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
+	// 注册 gzip 编码器：探针开了 SENSOR_GRPC_COMPRESSION=gzip 后上行消息带
+	// grpc-encoding: gzip，没有这个空导入 grpc-go 会以 "Decompressor is not installed" 拒收。
+	_ "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/status"
 
 	"openxdr/server/ent"

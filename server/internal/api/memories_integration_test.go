@@ -31,7 +31,7 @@ func TestAPIMemories(t *testing.T) {
 	alice := client.User.Create().SetUsername("alice").SetPasswordHash("x").SetRole("analyst").SaveX(ctx)
 	client.GroupMember.Create().SetGroupID(gA.ID).SetUserID(alice.ID).SetRole("viewer").SaveX(ctx)
 
-	h := Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
+	h := Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
 	admin := httptest.NewServer(asAdmin(h))
 	t.Cleanup(admin.Close)
 	viewer := httptest.NewServer(as(alice, h))
@@ -87,7 +87,7 @@ func TestClosureProposalLifecycle(t *testing.T) {
 		return inc.ID
 	}
 	adopted, dismissed := mk(), mk()
-	h := Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
+	h := Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
 	admin := httptest.NewServer(asAdmin(h))
 	t.Cleanup(admin.Close)
 	_, body := get(t, admin, "/api/incidents/"+adopted.String())
@@ -125,7 +125,7 @@ func TestCloseWithoutNote(t *testing.T) {
 		client.Alert.Create().SetTs(time.Now()).SetRuleID("r").SetSeverity(3).SetAssetID(host.ID).SetIncidentID(inc.ID).SaveX(ctx)
 		return inc.ID
 	}
-	h := Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
+	h := Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
 	ts := httptest.NewServer(asAdmin(h))
 	t.Cleanup(ts.Close)
 	status := func(id uuid.UUID, body string) int {

@@ -78,8 +78,16 @@ func TestArchiveCleanupPreservesReferencesAndLocks(t *testing.T) {
 	for _, id := range ids {
 		c.Event.DeleteOneID(id).ExecX(ctx)
 	}
-	if n, err := temporal.PruneArchives(ctx, db, cutoff); err != nil || n != 3 {
-		t.Fatalf("引用清理后未释放归档: %d %v", n, err)
+	if n, err := temporal.PruneArchives(ctx, db, cutoff); err != nil || n != 2 {
+		t.Fatalf("引用清理后应释放未被 gap 引用的归档: %d %v", n, err)
+	}
+	// R6：gap 不再随事件删除级联，按自身 created_at 的诊断保留期清理——被 gap 引用的
+	// 归档快照跟随诊断期，gap 过期后由 PruneGaps 释放，PruneArchives 才能回收它。
+	if n, err := temporal.PruneGaps(ctx, db, 0); err != nil || n != 1 {
+		t.Fatalf("应按诊断期清掉 gap 释放引用: %d %v", n, err)
+	}
+	if n, err := temporal.PruneArchives(ctx, db, cutoff); err != nil || n != 1 {
+		t.Fatalf("gap 释放后最后一个归档应可回收: %d %v", n, err)
 	}
 	if err := db.QueryRow(`SELECT count(*) FROM temporal_rule_snapshots WHERE revision=$1`, prefix+"fresh").Scan(&found); err != nil || found != 1 {
 		t.Fatal("新归档被提前清理")

@@ -602,7 +602,7 @@ const queryDescription = "通过当前组专属只读数据库身份查询授权
 	"incidents(id, created_at, status, title, ai_verdict)；" +
 	"events(id, ts, class_uid, source, asset_id, username, conn_tuple, raw)；" +
 	"alert_events(alert_id, ts, last_ts, count, rule_id, severity, asset_id, incident_id, command_id, event_id, event_ts, class_uid, username, conn_tuple, raw, automation_id, automation_watch)：告警连同触发它的事件，" +
-	"要告警对应的事件就查它，不要自己 JOIN events（会超时）；" +
+	"要告警对应的事件就查它，不要自己 JOIN events（会超时）；events 与 alert_events 只覆盖仍保留在热表的事件，已归档冷数据不在任何 SQL 可查范围内（组视图同样），查不到不等于没发生；" +
 	"commands(id, created_at, asset_id, cmd, status, exit_code, stdout)；" +
 	"trusted_sources(id, name, reason, created_by, expires_at, key_fingerprint, source_cidr, login_user, matched_count, last_matched_at, revoked_at)：组管理员登记的可信自动化来源；" +
 	"identities(id, kind：directory 目录身份 / host 主机内身份, name, anchor_account_id, created_at)；" +

@@ -36,6 +36,8 @@
 | [deception-engine-design.md](deception-engine-design.md) | OpenXDR 与 DYGK 独立引擎接入设计：运行逻辑抽离、版本化协议、迁移清单与升级验收 | 实施欺骗引擎抽离或接入 DYGK 前 |
 | [decoy-defense.md](decoy-defense.md) | 诱饵、暂停注入、输出填充的运行策略、事件契约和平台接入边界 | 开发和验收三层诱饵防御 |
 | [event-partitioning.md](event-partitioning.md) | events 按天分区：主键与引用处理、ent 共存、预建与退役、老库在线迁移与回滚 | 改 events 表结构或保留期；执行分区迁移 |
+| [event-archive.md](event-archive.md) | 冷归档：冷块格式、影子归档、冷热读取、按 ID 定位、单日切换与恢复、闸门与生命周期、CLI 速查 | 归档/切换/恢复操作；容量与保留规划；改冷归档代码 |
+| [archive-rehearsal-2026-10-30.md](archive-rehearsal-2026-10-30.md) | 冷归档等规模演练记录（260 万行单日）：全链路耗时、Exists 延迟、空间账、Guard 反向验证 | 容量规划取数；换环境后对照重测 |
 | [cluster.md](cluster.md) | JetStream 队列、server 集群、幂等语义、故障恢复与 Prometheus/Grafana | 部署多节点；排查积压、重投与节点故障 |
 | [../deploy/ha/README.md](../deploy/ha/README.md) | 跨宿主机高可用：Patroni + 三节点 JetStream + Keepalived VIP，初始化与切换验收 | 部署两故障域 HA；升级或排查 VIP、主备切换 |
 

@@ -160,7 +160,9 @@ func (e *Engine) toolQueryEvents(ctx context.Context, args string) (any, error) 
 	for i, ev := range rows {
 		out[i] = brief(ev)
 	}
-	return map[string]any{"status": "ok", "mode": in.Mode, "raw_mode_scope": "search_only", "raw_excerpt_limit_bytes": eventExcerptBytes, "items": out, "limit": 15, "returned": len(out), "truncated": truncated, "from": since, "to": until, "coverage": "仅覆盖本事件资产组内已采集且仍保留的数据；indexed 不保证纯 UUID/32 位以上十六进制哈希值的覆盖，查这些值需用 raw。未发现不代表没有发生，截断时不能声称全量检索"}, nil
+	// 归档缺口如实说：本工具只查热表，已归档冷事件（含时间窗早于归档边界的部分）搜不到。
+	// 不带归档边界日期——triage 引擎没有冷层连接，写死一个日期反而会变成假话。
+	return map[string]any{"status": "ok", "mode": in.Mode, "raw_mode_scope": "search_only", "raw_excerpt_limit_bytes": eventExcerptBytes, "items": out, "limit": 15, "returned": len(out), "truncated": truncated, "from": since, "to": until, "coverage": "仅覆盖本事件资产组内已采集且仍保留在热表的数据；已归档（移出热表）的冷事件不在检索范围内，时间窗早于归档边界的部分未搜索；indexed 不保证纯 UUID/32 位以上十六进制哈希值的覆盖，查这些值需用 raw。未发现不代表没有发生，截断时不能声称全量检索"}, nil
 }
 
 func (e *Engine) toolProcessLineage(ctx context.Context, args string) (any, error) {

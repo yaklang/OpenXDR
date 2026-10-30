@@ -62,7 +62,8 @@ func TestQueuedGraphLateArrivalAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 换工作者，事件时间早于持久游标也必须消费。
-	next := &Engine{DB: client, SQL: db, cursor: e.loadCursor(ctx)}
+	cur, curID := e.loadCursor(ctx)
+	next := &Engine{DB: client, SQL: db, cursor: cur, cursorID: curID}
 	if n, err := next.batch(ctx); err != nil || n != 1 {
 		t.Fatalf("迟到网络事件被跳过: %d %v", n, err)
 	}

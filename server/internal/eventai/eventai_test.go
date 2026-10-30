@@ -44,8 +44,15 @@ func TestParse(t *testing.T) {
 func TestMessagesTruncates(t *testing.T) {
 	big := &ent.Event{ID: uuid.New(), Raw: []byte(`{"x":"` + strings.Repeat("a", 9000) + `"}`)}
 	cand := &ent.Event{ID: uuid.New(), Raw: []byte(`{"y":"` + strings.Repeat("b", 2000) + `"}`)}
-	system, user := Messages(big, map[string]any{"hostname": "web"}, []Group{{Relation: "nearby", Events: []*ent.Event{cand}}}, "en")
+	system, user := Messages(big, map[string]any{"hostname": "web"}, []Group{{Relation: "nearby", Events: []*ent.Event{cand}}}, "en", HotOnlyCoverage)
 	if !strings.Contains(system, "English") || len(user) > 6000 || !strings.Contains(user, cand.ID.String()) || !strings.Contains(user, `"relation":"nearby"`) {
 		t.Fatalf("长度 %d", len(user))
+	}
+	// 候选只查热表是恒真事实：覆盖说明固定追加在数据之后，不按目标冷热分支
+	if !strings.Contains(user, CandidatesHotOnlyNote) {
+		t.Fatalf("解读输入应包含候选来源的固定覆盖说明: %q", user)
+	}
+	if _, user := Messages(big, nil, nil, "", Coverage{CandidatesHotOnly: false}); strings.Contains(user, CandidatesHotOnlyNote) {
+		t.Fatalf("调用方未声明候选只查热表时不应出现该说明: %q", user)
 	}
 }
