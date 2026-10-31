@@ -260,6 +260,9 @@ verify 的逐日摘要必然发现，repair 修掉。
    `Schema.Create` 失败，必须在 switch 之前全部换掉；之后也不能回退到旧版本。
 2. 把 `eventpartition` 二进制拷进主库与备库容器（同 `cmd/backtest` 的做法），两边各跑
    `check -pgdata $PGDATA`：看老表数据与索引大小、需要的余量、预计耗时；余量不足先扩容。
+   **执行身份必须是 events 的属主**（server 的连接用户），工具每一步都会检查。在容器里以 postgres 超级用户连接时，
+   连接串加 `role=<属主>`，例如 `DATABASE_URL="postgres:///openxdr?host=/var/run/postgresql&role=openxdr"`；
+   否则新表与函数归错人，迁移期间镜像触发器以 server 身份写新表会被拒，入库中断。
 3. 低峰期 `prepare -confirm -retention-days <与 RETENTION_DAYS 一致>`：只在挂触发器时短暂锁老表写入（≤ lock-timeout）。
    此后入库每条事件多一次写入，直到 finish。
 4. `copy -confirm`，IO 紧张时加 `-pause 200ms`。按经验速率（30–80 MB/s，含同步复制）78 GB 约 0.5–1.5 小时，

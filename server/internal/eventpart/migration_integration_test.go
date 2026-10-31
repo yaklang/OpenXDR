@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -279,5 +280,33 @@ func TestOnlineMigrationFullFlow(t *testing.T) {
 	var raw json.RawMessage
 	if err := db.QueryRow(`SELECT raw FROM events WHERE id = $1`, evidence).Scan(&raw); err != nil || string(raw) != `{"k": "v"}` {
 		t.Fatalf("证据内容应原样保留: %s %v", raw, err)
+	}
+}
+
+// 执行身份不是 events 的属主时每一步都拒绝：新表与函数会归错人，server 写入会被拒（生产上停过约 5 分钟入库）
+func TestMigrationRequiresTableOwner(t *testing.T) {
+	ctx, client, db := open(t)
+	legacySchema(t, ctx, client, db)
+	if _, err := db.ExecContext(ctx, `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'migration_other') THEN CREATE ROLE migration_other; END IF; END $$`); err != nil {
+		t.Fatal(err)
+	}
+	other, err := sql.Open("pgx", os.Getenv("INTEGRATION_DATABASE_URL")+"&role=migration_other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { other.Close() })
+	free := func() (uint64, error) { return 1 << 40, nil }
+	for _, step := range []string{"check", "prepare"} {
+		m := &eventpart.Migrator{DB: other, Out: logWriter{t}, RetentionDays: 30, Free: free}
+		if err := m.Run(ctx, step, true, ""); err == nil || !strings.Contains(err.Error(), "不是 events 的属主") {
+			t.Fatalf("%s 应以属主不符拒绝: %v", step, err)
+		}
+	}
+	if count(t, db, `SELECT count(*) FROM pg_class WHERE relname = 'events_next'`) != 0 {
+		t.Fatal("被拒绝时不应建出任何东西")
+	}
+	m := &eventpart.Migrator{DB: db, Out: logWriter{t}, RetentionDays: 30, Free: free}
+	if err := m.Run(ctx, "check", false, ""); err != nil {
+		t.Fatalf("属主本人执行 check 应通过: %v", err)
 	}
 }

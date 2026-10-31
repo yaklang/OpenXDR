@@ -3,9 +3,11 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -115,7 +117,14 @@ func TestTrustedSourcesAPI(t *testing.T) {
 	// 候选：来自后台收进 ssh_logins 的核对过出处的登录，标出已被刚登记的来源覆盖
 	client.SSHLogin.Create().SetID(uuid.New()).SetTs(time.Now().Add(-time.Hour)).SetGroupID(g.ID).SetAssetID(host.ID).
 		SetLoginUser("root").SetSrcIP("10.1.1.35").SetAuthMethod("publickey").SetKeyFp(fp).SetKeyType("ED25519").ExecX(ctx)
-	cresp, err := http.Get(asLead.URL + "/api/trusted-sources/candidates?groupId=" + g.ID.String())
+	raw, err := sql.Open("pgx", os.Getenv("INTEGRATION_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { raw.Close() })
+	candidates := httptest.NewServer(as(lead, TrustedCandidates(client, raw)))
+	t.Cleanup(candidates.Close)
+	cresp, err := http.Get(candidates.URL + "/api/trusted-sources/candidates?groupId=" + g.ID.String())
 	if err != nil {
 		t.Fatal(err)
 	}
