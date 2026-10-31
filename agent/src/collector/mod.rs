@@ -528,7 +528,7 @@ fn emit_process(
         // pid 复用不能把后来的进程接到这条血缘上。补发与周期汇总在下面对外发
         registry.forget(pid);
     } else {
-        // 折叠看父进程是谁：要在 process_event 登记新进程之前取。父进程未知的从不折叠
+        // 折叠看父进程是谁：要在 process_event 登记新进程之前取。父进程说不清的从不折叠
         let sample = (activity == ACTIVITY_LAUNCH && periodic::enabled())
             .then(|| sample_of(registry, &info))
             .flatten();
@@ -558,16 +558,44 @@ fn emit_process(
 }
 
 fn sample_of(registry: &ProcessRegistry, info: &ProcessInfo<'_>) -> Option<periodic::Sample> {
-    let parent = registry.known(info.ppid?)?;
+    let ppid = info.ppid?;
+    let (parent_name, parent_exe, parent_cmd_line) = match registry.known(ppid) {
+        Some(parent) => (parent.name, parent.exe, parent.cmd_line),
+        None => live_parent(ppid)?,
+    };
     Some(periodic::Sample {
         name: full_name(info.name, info.exe).to_string(),
         exe: info.exe.map(str::to_string),
         cmd_line: info.cmd_line.map(str::to_string),
         username: info.username.clone(),
-        parent_name: parent.name,
-        parent_exe: parent.exe,
-        parent_cmd_line: parent.cmd_line,
+        parent_name,
+        parent_exe,
+        parent_cmd_line,
     })
+}
+
+/// 注册表里没有的父进程现场读 /proc：bash 为命令替换、管道 fork 出的子 shell 不 exec，采集端看不到，
+/// 但它和 fork 它的脚本是同一个程序、同一条命令行，折叠键因此稳定——生产上监控脚本的 free / awk 就卡在这里，
+/// 一直逐条上报。只用于折叠，不写进事件；父进程已退场或不是 Linux 就照旧不折叠。
+#[cfg(target_os = "linux")]
+fn live_parent(pid: u32) -> Option<(String, Option<String>, Option<String>)> {
+    let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    let exe = std::fs::read_link(format!("/proc/{pid}/exe"))
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned());
+    let cmd_line = std::fs::read(format!("/proc/{pid}/cmdline")).ok().map(|b| {
+        b.split(|c| *c == 0)
+            .filter(|s| !s.is_empty())
+            .map(String::from_utf8_lossy)
+            .collect::<Vec<_>>()
+            .join(" ")
+    });
+    Some((name.trim_end().to_string(), exe, cmd_line))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn live_parent(_pid: u32) -> Option<(String, Option<String>, Option<String>)> {
+    None
 }
 
 /// 采集器共用：组装一条进程活动事件（OCSF 1007），并在注册表里建立血缘。
@@ -1032,6 +1060,58 @@ mod tests {
             ..Default::default()
         };
         assert!(process_event("agent-1", &mut reg, ACTIVITY_TERMINATE, unknown).is_none());
+    }
+
+    /// 父进程不在注册表里（bash 为命令替换 fork 的子 shell 不 exec）时现场读 /proc 认父进程，周期行为照样折叠；
+    /// 父进程查不到的仍然逐条上报
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn emit_process_folds_under_unregistered_live_parent() {
+        let mut reg = ProcessRegistry::default();
+        let me = std::process::id();
+        let launch = |reg: &mut ProcessRegistry, pid: u32, ppid: u32| {
+            emit_process(
+                "agent-1",
+                reg,
+                ACTIVITY_LAUNCH,
+                ProcessInfo {
+                    pid,
+                    name: "free",
+                    exe: Some("/usr/bin/free"),
+                    cmd_line: Some("free -m"),
+                    ppid: Some(ppid),
+                    ..Default::default()
+                },
+            )
+        };
+        let sample = sample_of(
+            &reg,
+            &ProcessInfo {
+                pid: 1,
+                ppid: Some(me),
+                ..Default::default()
+            },
+        )
+        .expect("活着的父进程应能从 /proc 认出来");
+        assert_eq!(
+            sample.parent_exe.as_deref(),
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.to_str().map(str::to_string))
+                .as_deref()
+        );
+        for pid in 1_000_000..1_000_020 {
+            assert_eq!(launch(&mut reg, pid, me).len(), 1, "认定之前逐条上报");
+        }
+        assert!(launch(&mut reg, 1_000_100, me).is_empty(), "认定之后折叠");
+        assert!(reg.is_held(1_000_100));
+        for pid in 2_000_000..2_000_030 {
+            assert_eq!(
+                launch(&mut reg, pid, u32::MAX).len(),
+                1,
+                "父进程查不到的从不折叠"
+            );
+        }
     }
 
     /// 周期折叠走统一出口：认定后启动与退出都不单独上报；被折叠进程拉起不是周期行为的子进程时，
