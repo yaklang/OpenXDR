@@ -20,6 +20,7 @@ type Metrics struct {
 	batchDuration   prometheus.Histogram
 	batchSize       prometheus.Histogram
 	queueDepth      *prometheus.GaugeVec
+	queueSampleTime *prometheus.GaugeVec
 	queueUnhealthy  prometheus.Gauge
 	archiveFailOpen *prometheus.CounterVec
 }
@@ -35,10 +36,11 @@ func New(reg prometheus.Registerer) *Metrics {
 		batchDuration:   prometheus.NewHistogram(prometheus.HistogramOpts{Name: "openxdr_event_batch_seconds", Help: "整批入库事务耗时（含取锁与提交）", Buckets: prometheus.DefBuckets}),
 		batchSize:       prometheus.NewHistogram(prometheus.HistogramOpts{Name: "openxdr_event_batch_size", Help: "每批入库的事件数", Buckets: []float64{1, 2, 4, 8, 16, 32, 64, 128}}),
 		queueDepth:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "openxdr_queue_pending_messages", Help: "JetStream 分片待处理消息"}, []string{"shard"}),
+		queueSampleTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "openxdr_queue_sample_timestamp_seconds", Help: "JetStream 分片最近一次成功采样的 Unix 时间（0 表示尚未成功）"}, []string{"shard"}),
 		queueUnhealthy:  prometheus.NewGauge(prometheus.GaugeOpts{Name: "openxdr_queue_replicas_unhealthy", Help: "事件流不在同步状态的副本数（含流 leader 不可达）"}),
 		archiveFailOpen: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "openxdr_archive_dedup_failopen_total", Help: "冷归档重传判重拿不准而按未归档继续入库的事件数（阶段：boundary 边界查询、lookup 按 ID 定位）"}, []string{"stage"}),
 	}
-	reg.MustRegister(m.temporalSkipped, m.published, m.processed, m.failed, m.alerts, m.duration, m.batchDuration, m.batchSize, m.queueDepth, m.queueUnhealthy, m.archiveFailOpen)
+	reg.MustRegister(m.temporalSkipped, m.published, m.processed, m.failed, m.alerts, m.duration, m.batchDuration, m.batchSize, m.queueDepth, m.queueSampleTime, m.queueUnhealthy, m.archiveFailOpen)
 	return m
 }
 
@@ -62,6 +64,9 @@ func (m *Metrics) Batch(events int, elapsed time.Duration) {
 }
 func (m *Metrics) SetQueuePending(shard string, count uint64) {
 	m.queueDepth.WithLabelValues(shard).Set(float64(count))
+}
+func (m *Metrics) SetQueueSampleTimestamp(shard string, timestamp float64) {
+	m.queueSampleTime.WithLabelValues(shard).Set(timestamp)
 }
 func (m *Metrics) SetQueueReplicasUnhealthy(count int) { m.queueUnhealthy.Set(float64(count)) }
 

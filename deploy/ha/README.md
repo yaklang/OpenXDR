@@ -120,6 +120,11 @@ go build -o openxdr-queueleader ./cmd/queueleader
 
 验收同时检查：真实 Leader、Agent 本地缓存、服务端 pending、消费速率、最新入库事件时间、
 采集丢弃计数。迁移后端侧集中补传可能暂时抬高服务端 pending，不能只据这一项判定回退。
+应用每 10 秒先通过 JetStream API 查询流副本健康，再查询各分片待办；整轮共用 5 秒时限。
+流查询失败按配置的全部副本不健康计；分片查询失败或本轮超时则保留上次待办值，不能将其视为实时零积压。
+`openxdr_queue_sample_timestamp_seconds{shard}` 记录各分片最近一次成功采样时间（0 表示尚未成功）；
+用 `time() - openxdr_queue_sample_timestamp_seconds` 检查指标年龄。超时后下一轮从未采样的分片继续，避免后面的分片长期得不到更新。
+
 HTTP `/jsz` 的本地副本视图可能不同于 Leader 状态，排障需结合 JetStream API 与实际 Leader
 的监控输出，不能直接用某个从节点的本地视图判定整个集群失去同步。
 

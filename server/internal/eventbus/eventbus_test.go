@@ -131,3 +131,5 @@ func TestUnhealthyReplicas(t *testing.T) {
 		}
 	}
 }
+
+func (m *fakeMetrics) SetQueueSampleTimestamp(string, float64) {}

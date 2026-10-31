@@ -27,6 +27,7 @@ type Metrics interface {
 	Failed(stage string)
 	SetQueuePending(shard string, count uint64)
 	SetQueueReplicasUnhealthy(count int)
+	SetQueueSampleTimestamp(shard string, timestamp float64)
 }
 
 type Processor interface {
@@ -60,15 +61,16 @@ func (d *Direct) Ready() bool  { return true }
 func (d *Direct) Close() error { return nil }
 
 type JetStream struct {
-	nc         *nats.Conn
-	js         nats.JetStreamContext
-	shards     int
-	replicas   int
-	metrics    Metrics
-	subs       []*nats.Subscription
-	monitorEnd chan struct{}
-	retry      natsretry.Policy
-	batchSize  int
+	nc          *nats.Conn
+	js          nats.JetStreamContext
+	shards      int
+	replicas    int
+	metrics     Metrics
+	subs        []*nats.Subscription
+	monitorEnd  chan struct{}
+	retry       natsretry.Policy
+	batchSize   int
+	monitorNext int
 }
 
 func NewJetStream(url, instance string, shards, replicas int, maxBytes int64, maxAge time.Duration, processor Processor, metrics Metrics, batchSize int) (*JetStream, error) {
@@ -131,6 +133,7 @@ func NewJetStream(url, instance string, shards, replicas int, maxBytes int64, ma
 	b := &JetStream{nc: nc, js: js, shards: shards, replicas: replicas, metrics: metrics, monitorEnd: make(chan struct{}), retry: natsretry.Default, batchSize: batchSize}
 	for i := 0; i < shards; i++ {
 		shard := fmt.Sprintf("%02x", i)
+		metrics.SetQueueSampleTimestamp(shard, 0)
 		subject := "openxdr.events." + shard
 		durable := "ingest-" + shard
 		sub, err := js.QueueSubscribe(subject, durable, func(msg *nats.Msg) {
@@ -244,14 +247,28 @@ func (b *JetStream) monitor() {
 		case <-b.monitorEnd:
 			return
 		case <-ticker.C:
-			for i := 0; i < b.shards; i++ {
-				shard := fmt.Sprintf("%02x", i)
-				if info, err := b.js.ConsumerInfo(streamName, "ingest-"+shard); err == nil {
-					b.metrics.SetQueuePending(shard, info.NumPending+uint64(info.NumAckPending))
-				}
-			}
-			info, err := b.js.StreamInfo(streamName)
-			b.metrics.SetQueueReplicasUnhealthy(unhealthyReplicas(info, err, b.replicas))
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			b.sampleQueue(ctx)
+			cancel()
+		}
+	}
+}
+
+// 全轮共用截止时间，避免分片逐个超时拖住副本健康度更新。
+func (b *JetStream) sampleQueue(ctx context.Context) {
+	info, err := b.js.StreamInfo(streamName, nats.Context(ctx))
+	b.metrics.SetQueueReplicasUnhealthy(unhealthyReplicas(info, err, b.replicas))
+	for i := 0; i < b.shards && ctx.Err() == nil; i++ {
+		select {
+		case <-b.monitorEnd:
+			return
+		default:
+		}
+		shard := fmt.Sprintf("%02x", b.monitorNext)
+		b.monitorNext = (b.monitorNext + 1) % b.shards
+		if info, err := b.js.ConsumerInfo(streamName, "ingest-"+shard, nats.Context(ctx)); err == nil {
+			b.metrics.SetQueuePending(shard, info.NumPending+uint64(info.NumAckPending))
+			b.metrics.SetQueueSampleTimestamp(shard, float64(time.Now().Unix()))
 		}
 	}
 }
