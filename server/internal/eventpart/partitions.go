@@ -3,10 +3,13 @@ package eventpart
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -17,6 +20,9 @@ const (
 	// LockTimeout 限定分区 DDL 等锁的时长：等不到就放弃重试，不让排队的排他锁把读写全堵住。
 	LockTimeout = "3s"
 )
+
+// parentLockWait 退役时反复尝试拿父表排他锁的总时长，见 lockParent。
+var parentLockWait = 30 * time.Second
 
 // Today 返回 UTC 当天零点。分区边界一律按 UTC 日。
 func Today() time.Time { return dayStart(time.Now()) }
@@ -228,6 +234,9 @@ func retireDay(ctx context.Context, db *sql.DB, set partitionSet, day time.Time)
 	if err := cloneIndexes(ctx, tx, Parent, staging); err != nil {
 		return 0, err
 	}
+	if err := lockParent(ctx, tx); err != nil {
+		return 0, err
+	}
 	stmts := []string{fmt.Sprintf(`ALTER TABLE %s DETACH PARTITION %s`, Parent, daily)}
 	if hasArchive {
 		stmts = append(stmts, fmt.Sprintf(`ALTER TABLE %s DETACH PARTITION %s`, Parent, archive), `DROP TABLE `+archive)
@@ -242,6 +251,37 @@ func retireDay(ctx context.Context, db *sql.DB, set partitionSet, day time.Time)
 		}
 	}
 	return total - kept, tx.Commit()
+}
+
+// lockParent 不排队地拿父表排他锁（DETACH 需要它）。排队等锁时，后来的读写都被堵在它后面，
+// 而任何一条比 lock_timeout 长的读（检索、研判、后台扫描）都会让它超时——生产上与同周期的后台扫描每轮相撞，
+// 退役一直失败。改为在 SAVEPOINT 里 NOWAIT 反复试，碰上没有冲突持锁的瞬间就拿到，最多试 parentLockWait。
+func lockParent(ctx context.Context, tx *sql.Tx) error {
+	deadline := time.Now().Add(parentLockWait)
+	for {
+		if _, err := tx.ExecContext(ctx, `SAVEPOINT lock_parent`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `LOCK TABLE `+Parent+` IN ACCESS EXCLUSIVE MODE NOWAIT`)
+		if err == nil {
+			return nil
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT lock_parent`); err != nil {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s 内拿不到 %s 的排他锁：一直有读写在用父表", parentLockWait, Parent)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // cloneIndexes 在独立表上按父表的分区索引建好同构索引，ATTACH 时直接挂上而不是在排他锁里现建。

@@ -280,3 +280,58 @@ func TestReleaseTriggersReplaceForeignKeys(t *testing.T) {
 		t.Fatal("证据应随锚点级联删除")
 	}
 }
+
+// 父表上一直有读事务时，退役不排队等锁：等待期间别的写入照常进行，读一结束就拿到锁完成；
+// 超过尝试时长明确报错，不留半截状态。
+func TestRetireWaitsForParentLockWithoutQueueing(t *testing.T) {
+	ctx, client, db := open(t)
+	d10 := time.Date(2020, 1, 10, 0, 0, 0, 0, time.UTC)
+	if _, err := eventpart.EnsureDays(ctx, db, eventpart.Parent, d10, 0); err != nil {
+		t.Fatal(err)
+	}
+	old := newEvent(t, ctx, client, d10.Add(time.Hour))
+
+	hold := func() *sql.Tx {
+		reader, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := reader.ExecContext(ctx, `SELECT count(*) FROM events`); err != nil {
+			t.Fatal(err)
+		}
+		return reader
+	}
+
+	defer eventpart.SetParentLockWait(200 * time.Millisecond)()
+	reader := hold()
+	if _, _, err := eventpart.Retire(ctx, db, d10.AddDate(0, 0, 1)); err == nil {
+		t.Fatal("父表一直被占用时退役应在尝试时长后报错")
+	}
+	_ = reader.Rollback()
+	if !exists(t, db, `SELECT 1 FROM events WHERE id = $1`, old.ID) {
+		t.Fatal("失败的退役不应删掉任何事件")
+	}
+
+	eventpart.SetParentLockWait(10 * time.Second)
+	reader = hold()
+	done := make(chan error, 1)
+	go func() { _, _, err := eventpart.Retire(ctx, db, d10.AddDate(0, 0, 1)); done <- err }()
+	time.Sleep(500 * time.Millisecond)
+	start := time.Now()
+	newEvent(t, ctx, client, time.Now())
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("退役等锁期间写入被堵了 %s", waited)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("读事务没结束，退役不应完成: %v", err)
+	default:
+	}
+	_ = reader.Rollback()
+	if err := <-done; err != nil {
+		t.Fatalf("读事务结束后退役应完成: %v", err)
+	}
+	if exists(t, db, `SELECT 1 FROM events WHERE id = $1`, old.ID) {
+		t.Fatal("无引用的过期事件应随分区退役删掉")
+	}
+}
