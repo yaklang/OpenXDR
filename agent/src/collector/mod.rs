@@ -583,14 +583,7 @@ fn live_parent(pid: u32) -> Option<(String, Option<String>, Option<String>)> {
     let exe = std::fs::read_link(format!("/proc/{pid}/exe"))
         .ok()
         .map(|p| p.to_string_lossy().into_owned());
-    let cmd_line = std::fs::read(format!("/proc/{pid}/cmdline")).ok().map(|b| {
-        b.split(|c| *c == 0)
-            .filter(|s| !s.is_empty())
-            .map(String::from_utf8_lossy)
-            .collect::<Vec<_>>()
-            .join(" ")
-    });
-    Some((name.trim_end().to_string(), exe, cmd_line))
+    Some((name.trim_end().to_string(), exe, container::cmd_line(pid)))
 }
 
 #[cfg(not(target_os = "linux"))]
