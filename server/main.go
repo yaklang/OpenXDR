@@ -139,6 +139,7 @@ func main() {
 	enrollSvc := loadEnroll(client, silentAfter)
 	routes := http.NewServeMux()
 	registerSQLRoutes(routes, db)
+	routes.Handle("GET /api/trusted-sources/candidates", api.TrustedCandidates(client, db))
 	registerHostRoutes(ctx, routes, db, client, rules, credentialVault, enrollSvc, conf)
 	registerSettingsRoutes(routes, db, client, credentialVault, notifySettings, webhook, aiConf, intelFeeds, enrollSvc, dists)
 	// 冷归档读取默认关闭：EVENT_ARCHIVE_READ=1 才把连接交给 /api/events 与问 AI 入口，关着时行为与改动前一致
@@ -452,6 +453,8 @@ func startAutomation(ctx context.Context, db *sql.DB, client *ent.Client, webhoo
 // 否则单机直连，返回的 router 为 nil。
 func startEventBus(ctx context.Context, db *sql.DB, rules sigma.Catalog, temporalRules *temporal.Store, suppressions *suppress.Store, intelStore *intel.Store, dedupWindow time.Duration, hub *response.Hub, registry *prometheus.Registry) (eventbus.Bus, *response.NATSRouter) {
 	metrics := telemetry.New(registry)
+	// ingest 用可选接口记整批耗时，漏实现只会静默失效，在接线处钉死
+	var _ interface{ Batch(int, time.Duration) } = metrics
 	processor := &ingest.Processor{
 		DB: db, Rules: rules, Temporal: temporalRules, Suppress: suppressions, Intel: intelStore,
 		DedupWindow: dedupWindow, Metrics: metrics,

@@ -96,6 +96,7 @@ func (p *Processor) ProcessBatch(ctx context.Context, events []Envelope) (err er
 			return fmt.Errorf("时序规则已配置但没有有效快照")
 		}
 	}
+	begun := time.Now()
 	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return err
@@ -105,14 +106,14 @@ func (p *Processor) ProcessBatch(ctx context.Context, events []Envelope) (err er
 		return err
 	}
 	type result struct {
-		started   time.Time
+		elapsed   time.Duration
 		duplicate bool
 		alerts    int
 		skipped   []string
 	}
 	results := make([]result, len(events))
 	for i, e := range events {
-		results[i].started = time.Now()
+		started := time.Now()
 		envelopes, external, err := suricataHit(ctx, tx, e)
 		if err != nil {
 			return err
@@ -127,15 +128,20 @@ func (p *Processor) ProcessBatch(ctx context.Context, events []Envelope) (err er
 			results[i].alerts += n
 			results[i].skipped = append(results[i].skipped, skipped...)
 		}
+		results[i].elapsed = time.Since(started)
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	// 仅提交成功才计入成功数；耗时包含该事件开始处理至整批提交的真实等待。
+	// 仅提交成功才计入成功数。单事件耗时只算它自己的处理，不含等同批其他事件与提交——
+	// 否则批越大数越大，与「单事件处理耗时」的口径和告警阈值对不上；整批（含取锁与提交）另记一份。
 	if p.Metrics != nil {
+		if metrics, ok := p.Metrics.(interface{ Batch(int, time.Duration) }); ok {
+			metrics.Batch(len(events), time.Since(begun))
+		}
 		for i, e := range events {
 			r := results[i]
-			p.Metrics.Processed(e.Source, r.duplicate, r.alerts, time.Since(r.started))
+			p.Metrics.Processed(e.Source, r.duplicate, r.alerts, r.elapsed)
 			if metrics, ok := p.Metrics.(interface{ TemporalSkipped(string) }); ok {
 				for _, reason := range r.skipped {
 					metrics.TemporalSkipped(reason)

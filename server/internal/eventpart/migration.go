@@ -109,7 +109,25 @@ func (m *Migrator) Run(ctx context.Context, step string, confirm bool, day strin
 		return errors.New("另一个迁移进程正在运行")
 	}
 	defer conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext($1))`, lockKey)
+	if err := requireOwner(ctx, conn); err != nil {
+		return err
+	}
 	return fn(ctx, conn)
+}
+
+// requireOwner 迁移建出的新表、分区与函数归执行身份所有，必须与 events 的属主（server 的连接身份）一致：
+// 生产上曾以超级用户执行，events_next 归 postgres，老表镜像触发器以 server 身份写新表被拒，入库停了约 5 分钟；
+// 切换时建的函数归错人，server 启动 CREATE OR REPLACE 也会失败。超级用户在连接串里加 role=<属主> 即可。
+func requireOwner(ctx context.Context, q queryer) error {
+	var owner, current string
+	err := q.QueryRowContext(ctx, `SELECT pg_get_userbyid(relowner), current_user FROM pg_class WHERE oid = to_regclass($1)`, Parent).Scan(&owner, &current)
+	if err != nil {
+		return fmt.Errorf("读取 events 属主: %w", err)
+	}
+	if owner != current {
+		return fmt.Errorf("当前身份 %s 不是 events 的属主 %s：迁移建的表与函数会归错人，server 写入会被拒。以 %[2]s 连接，或在连接串加 role=%[2]s", current, owner)
+	}
+	return nil
 }
 
 func (m *Migrator) printf(format string, args ...any) { fmt.Fprintf(m.Out, format+"\n", args...) }
