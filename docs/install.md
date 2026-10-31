@@ -62,9 +62,9 @@ curl -fsS https://<地址>/ -o /dev/null -w '%{http_code}\n'   # 自建 CA 时�
 
 ### 旧 Linux 内核的采集检查
 
-Linux Agent 的 systemd 安装单元设置 `LimitMEMLOCK=134217728`（128 MiB 上限，不是预分配内存）。
+Linux Agent 的 systemd 安装单元设置 `LimitMEMLOCK=134217728`（128 MiB 上限，不是预分配内存），Agent 进程在首次加载 eBPF 前也会主动将 `RLIMIT_MEMLOCK` 抬升至 128 MiB（兼容二进制热升级的存量主机）。
 旧内核的 eBPF map 受锁定内存限制，默认 64 KiB 可能导致 map 创建失败并退回 netlink。
-已有安装不会因二进制升级自动重写 service：可在 `systemctl edit openxdr-agent` 的 `[Service]` 中设置同一值，
+若宿主机或容器环境额外通过安全策略限制了 `CAP_SYS_RESOURCE`，可在 `systemctl edit openxdr-agent` 的 `[Service]` 中设置 `LimitMEMLOCK=134217728`，
 执行 `systemctl daemon-reload` 和 `systemctl restart openxdr-agent`，再核对控制台采集能力、事件与缓存回执。
 不要仅凭服务 running 判断 eBPF 已启用。旧内核缺少 fanotify 名字报告时仍降级为 inotify，这个限制不能靠提高 memlock 消除。
 

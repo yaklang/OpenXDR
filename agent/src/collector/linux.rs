@@ -179,8 +179,37 @@ struct Pipeline {
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
+/// Linux 5.11 之前的内核把 eBPF map 计入 RLIMIT_MEMLOCK（默认 64 KiB 不足）。
+/// 存量主机通过二进制热升级时不会重写 systemd 单元文件，首次加载前由进程主动抬到 128 MiB。
+fn ensure_memlock_rlimit() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        const TARGET: libc::rlim_t = 128 * 1024 * 1024;
+        let mut current = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: current 是栈上有效的 rlimit 结构体
+        if unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut current) } == 0
+            && current.rlim_cur >= TARGET
+        {
+            return;
+        }
+        let raised = libc::rlimit {
+            rlim_cur: TARGET,
+            rlim_max: current.rlim_max.max(TARGET),
+        };
+        // SAFETY: raised 是栈上有效的 rlimit 结构体；失败不阻断，后续 aya::Ebpf::load 会按真实错误降级
+        if unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &raised) } != 0 {
+            let err = std::io::Error::last_os_error();
+            eprintln!("提升 RLIMIT_MEMLOCK 到 128 MiB 失败（{err}），旧内核 eBPF 可能受限");
+        }
+    });
+}
+
 /// 进程与网络各自载入一份对象：两组程序不共用 map，各自重建互不打扰
 fn load() -> Result<aya::Ebpf, BoxError> {
+    ensure_memlock_rlimit();
     Ok(aya::Ebpf::load(aya::include_bytes_aligned!(concat!(
         env!("OUT_DIR"),
         "/openxdr-ebpf"
