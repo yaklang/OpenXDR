@@ -678,6 +678,10 @@ mod command_tests {
         tokio::sync::mpsc::Receiver<()>,
         [tokio::task::JoinHandle<()>; 2],
     ) {
+        // 注册请求带自身哈希：第一次算要同步读整个测试二进制（arm64 上几百 MB），先算好，不占用例的时限
+        tokio::task::spawn_blocking(upgrade::self_sha256)
+            .await
+            .unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (connections, incoming) = tokio::sync::mpsc::channel(4);
