@@ -597,6 +597,8 @@ const queryDescription = "通过当前组专属只读数据库身份查询授权
 	"findings(id, asset_id, key, title, severity, status, first_seen, last_seen, resolved_at, note)；" +
 	"suppressions(id, rule_id, asset_id, reason, status, conditions, expires_at, matched_count, last_matched_at)；" +
 	"memories(id, asset_id, content, source, author, updated_at)；asset_links(src_asset_id, dst_ip, dst_port, proto, process, count, first_seen, last_seen)；" +
+	"managed_addresses(ip, in_group)：全平台已纳管主机的地址（含其他组，不给主机名与组名）。说某个地址「未纳管」之前必须先查这里：" +
+	"in_group=false 是已在其他组纳管，写成「已在其他组纳管」，不要报成未纳管或建议接入；查不到才是未纳管；" +
 	"ip_infos(ip, ptr, as_owner, asn, country, malicious, suspicious, domains：VirusTotal 结果；ipdb_asn, ipdb_org, ipdb_country：离线库的 AS 与国家；本组外联与告警里出现的公网地址)；reports(id, created_at, title, level, markdown, summary：一句话结论)；" +
 	"alerts(id, ts, last_ts, count, rule_id, severity, asset_id, incident_id, command_id, detail：合成检测如外联心跳 xdr:beacon 的间隔统计依据, automation_id, automation_watch)；" +
 	"incidents(id, created_at, status, title, ai_verdict)；" +

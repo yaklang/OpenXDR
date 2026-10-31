@@ -47,6 +47,11 @@ CREATE OR REPLACE VIEW :"schema".asset_links WITH (security_barrier) AS
   FROM public.asset_links WHERE src_asset_id IN (SELECT id FROM public.assets WHERE group_id = :'group_id');
 
 -- 只给本组主机连过的地址与本组告警里出现的地址（情报命中、入站对端），别组的不外泄
+-- 全平台已纳管主机的地址，只说是不是本组的，不给主机名与组名
+CREATE OR REPLACE VIEW :"schema".managed_addresses WITH (security_barrier) AS
+  SELECT ip, coalesce(bool_or(a.group_id = :'group_id'), false) AS in_group
+  FROM public.assets a CROSS JOIN LATERAL jsonb_array_elements_text(a.ip_addrs) AS ip
+  GROUP BY ip;
 CREATE OR REPLACE VIEW :"schema".ip_infos WITH (security_barrier) AS
   SELECT ip, ptr, as_owner, asn, country, malicious, suspicious, domains, vt_at,
          ipdb_asn, ipdb_org, ipdb_country, ipdb_at
@@ -146,6 +151,7 @@ COMMENT ON VIEW :"schema".suppressions IS '本组主机上的抑制规则（stat
 COMMENT ON VIEW :"schema".trusted_sources IS '本组登记的可信自动化来源（SSH 公钥指纹 / 来源网段 / 登录用户）；alerts.automation_id 指向这里';
 COMMENT ON VIEW :"schema".memories IS '本组长期记忆（source：human 人工 / ai）';
 COMMENT ON VIEW :"schema".asset_links IS '本组主机发起的连接聚合成的依赖边';
+COMMENT ON VIEW :"schema".managed_addresses IS '全平台已纳管主机的地址（含其他组，不含主机名与组名）；in_group=false 即已在其他组纳管，不是未纳管';
 COMMENT ON VIEW :"schema".ip_infos IS '本组主机连过的与本组告警里出现的公网地址：反向解析、离线归属库（ipdb_*，DB-IP Lite）与 VirusTotal 结果';
 COMMENT ON VIEW :"schema".reports IS '本组历史报告（level：ok / attention / urgent）';
 COMMENT ON VIEW :"schema".identity_accounts IS '本组账号登记（directory 目录 / windows 组+资产+SID / linux 组+资产+UID+用户名）及当前所属身份';

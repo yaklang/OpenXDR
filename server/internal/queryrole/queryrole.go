@@ -209,6 +209,12 @@ func ddl(group uuid.UUID, password string, fresh bool) []string {
   OR ip IN (SELECT substring(rule_id from 10) FROM public.alerts WHERE rule_id LIKE 'intel:ip:%' AND ` + inGroup + `)
   OR ip IN (SELECT unnest(ARRAY[e.raw->'src_endpoint'->>'ip', e.raw->'dst_endpoint'->>'ip'])
     FROM public.alerts a JOIN public.events e ON e.id = a.event_id AND e.asset_id = a.asset_id WHERE a.` + inGroup + `)`,
+		// 全平台已纳管主机的地址，只说是不是本组的，不给主机名与组名：AI 看不到别组资产，
+		// 会把别组纳管的主机报成「未纳管」；只透露「已纳管」，组隔离基本不破
+		`CREATE OR REPLACE VIEW ` + schema + `.managed_addresses WITH (security_barrier) AS
+  SELECT ip, coalesce(bool_or(a.group_id = ` + gid + `), false) AS in_group
+  FROM public.assets a CROSS JOIN LATERAL jsonb_array_elements_text(a.ip_addrs) AS ip
+  GROUP BY ip`,
 		`CREATE OR REPLACE VIEW ` + schema + `.reports WITH (security_barrier) AS
   SELECT id, created_at, title, level, markdown, summary
   FROM public.reports WHERE group_id = ` + gid,
@@ -276,6 +282,7 @@ func ddl(group uuid.UUID, password string, fresh bool) []string {
 		`COMMENT ON VIEW ` + schema + `.memories IS '本组长期记忆（source：human 人工 / ai）'`,
 		`COMMENT ON VIEW ` + schema + `.asset_links IS '本组主机发起的连接聚合成的依赖边'`,
 		`COMMENT ON VIEW ` + schema + `.ip_infos IS '本组主机连过的与本组告警里出现的公网地址：反向解析、离线归属库（ipdb_*，DB-IP Lite）与 VirusTotal 结果'`,
+		`COMMENT ON VIEW ` + schema + `.managed_addresses IS '全平台已纳管主机的地址（含其他组，不含主机名与组名）；in_group=false 即已在其他组纳管，不是未纳管'`,
 		`COMMENT ON VIEW ` + schema + `.reports IS '本组历史报告（level：ok / attention / urgent）'`,
 		`COMMENT ON VIEW ` + schema + `.identity_accounts IS '本组账号登记（directory 目录 / windows 组+资产+SID / linux 组+资产+UID+用户名）及当前所属身份'`,
 		`COMMENT ON VIEW ` + schema + `.identities IS '本组身份：每个目录账号一个，没有目录锚点的主机账号各自独立'`,

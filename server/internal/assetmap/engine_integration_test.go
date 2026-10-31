@@ -347,3 +347,40 @@ func TestFactsDetailsRetainPeersBeyondModelLimit(t *testing.T) {
 		t.Fatalf("计数改变事实指纹: %v", err)
 	}
 }
+
+// 跨组连接：按组看对端只是不露主机名的别组资产；全部组视图里连成主机到主机的边，节点带各自的组
+func TestLoadAllJoinsGroups(t *testing.T) {
+	ctx, client := testdb.New(t)
+	now := time.Now()
+	ga := client.Group.Create().SetName("业务").SaveX(ctx)
+	gb := client.Group.Create().SetName("基础设施").SaveX(ctx)
+	app := client.Asset.Create().SetHostname("app-01").SetGroupID(ga.ID).SetIPAddrs([]string{"10.0.0.1"}).SetLastSeen(now).SaveX(ctx)
+	db := client.Asset.Create().SetHostname("db-01").SetGroupID(gb.ID).SetIPAddrs([]string{"10.0.0.2"}).SetLastSeen(now).SaveX(ctx)
+	client.AssetLink.Create().SetSrcIP("10.0.0.1").SetSrcAssetID(app.ID).SetDstIP("10.0.0.2").SetDstPort(5432).SetProto("tcp").
+		SetProcess("java").SetCount(5).SetFirstSeen(now).SetLastSeen(now).SaveX(ctx)
+
+	byGroup, err := LoadGroup(ctx, client, ga.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := byGroup.Graph(now)
+	peer := slices.IndexFunc(g.Nodes, func(n Node) bool { return n.ID == "ip:10.0.0.2" })
+	if len(g.Nodes) != 2 || peer < 0 || g.Nodes[peer].Kind != "managed" || g.Nodes[peer].Label != "10.0.0.2" {
+		t.Fatalf("按组看别组资产只露地址: %+v", g.Nodes)
+	}
+
+	all, err := LoadAll(ctx, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g = all.Graph(now)
+	if len(g.Nodes) != 2 || len(g.Edges) != 1 || g.Edges[0].From != app.ID.String() || g.Edges[0].To != db.ID.String() {
+		t.Fatalf("全部组视图应连成主机到主机: %+v %+v", g.Nodes, g.Edges)
+	}
+	for _, n := range g.Nodes {
+		want := map[string]uuid.UUID{app.ID.String(): ga.ID, db.ID.String(): gb.ID}[n.ID]
+		if n.Kind != "asset" || n.GroupID == nil || *n.GroupID != want {
+			t.Fatalf("节点应是带自身组的资产: %+v", n)
+		}
+	}
+}
