@@ -141,9 +141,10 @@ async fn agent() {
                         }
                     }
                 }
-                let commands = tokio::spawn(command_loop(
+                let mut commands = tokio::spawn(command_loop(
                     client.clone(),
                     session.agent_id.clone(),
+                    session.config_json.clone(),
                     queue.clone(),
                 ));
                 let reporting = tokio::spawn(health::report(
@@ -168,6 +169,8 @@ async fn agent() {
                                 if let Err(err) = result { eprintln!("事件补传中断，缓存保留：{err}"); }
                                 break false;
                             }
+                            // 会话要换（见 command_loop）：未确认的批次留在缓存里，重新注册后补传
+                            _ = &mut commands => break false,
                             _ = tokio::time::sleep(Duration::from_millis(250)) => refresh_collection(&queue, &mut collector_task).await,
                         }
                     }
@@ -321,27 +324,32 @@ async fn register(
     let channel = tokio::time::timeout(Duration::from_secs(15), tls::connect(server)).await??;
     let mut client = AgentServiceClient::new(channel);
 
-    let resp = tokio::time::timeout(
-        Duration::from_secs(30),
-        client.register(pb::RegisterRequest {
-            hostname: enroll::hostname(),
-            os: std::env::consts::OS.into(),
-            ip_addrs: local_ips(),
-            agent_version: env!("CARGO_PKG_VERSION").into(),
-            arch: std::env::consts::ARCH.into(),
-            binary_sha256: upgrade::self_sha256().into(),
-        }),
-    )
-    .await??
-    .into_inner();
+    let resp = tokio::time::timeout(Duration::from_secs(30), client.register(register_request()))
+        .await??
+        .into_inner();
     Ok((client, resp))
+}
+
+fn register_request() -> pb::RegisterRequest {
+    pb::RegisterRequest {
+        hostname: enroll::hostname(),
+        os: std::env::consts::OS.into(),
+        ip_addrs: local_ips(),
+        agent_version: env!("CARGO_PKG_VERSION").into(),
+        arch: std::env::consts::ARCH.into(),
+        binary_sha256: upgrade::self_sha256().into(),
+    }
 }
 
 /// 常驻指令通道：先发一条带 agent_id 的空结果认领连接，
 /// 之后逐条执行 server 推来的指令并回执。
+/// 指令通道断开时自己重连，不牵动事件补传。断开多半是 server 重启：重连前重报一次注册，
+/// 分发版本、采集配置或注册身份变了就结束本次会话，由主循环重新注册后升级或换配置——
+/// 否则 server 重启后只有指令通道在重连，新版本推不下去（生产上有 6 台一直没升上去）。
 async fn command_loop(
     client: AgentServiceClient<tonic::transport::Channel>,
     agent_id: String,
+    config: String,
     queue: delivery::Queue,
 ) {
     let receiving = async {
@@ -349,12 +357,33 @@ async fn command_loop(
             command_stream(client.clone(), agent_id.clone(), queue.clone()).await;
             eprintln!("指令通道断开，5 秒后重连");
             tokio::time::sleep(Duration::from_secs(5)).await;
+            if session_changed(client.clone(), &agent_id, &config).await {
+                eprintln!("分发版本、采集配置或注册身份已变，重新注册");
+                return;
+            }
         }
     };
-    tokio::join!(
-        receiving,
-        receipts::upload(client.clone(), queue.clone(), agent_id.clone())
-    );
+    tokio::select! {
+        _ = receiving => {}
+        _ = receipts::upload(client.clone(), queue.clone(), agent_id.clone()) => {}
+    }
+}
+
+/// 重报注册看会话是否要换。注册失败按没变处理：照旧重连指令通道，事件补传自有重试
+async fn session_changed(
+    mut client: AgentServiceClient<tonic::transport::Channel>,
+    agent_id: &str,
+    config: &str,
+) -> bool {
+    match tokio::time::timeout(Duration::from_secs(30), client.register(register_request())).await {
+        Ok(Ok(resp)) => {
+            let resp = resp.into_inner();
+            !resp.upgrade_sha256.is_empty()
+                || resp.config_json != config
+                || resp.agent_id != agent_id
+        }
+        _ => false,
+    }
 }
 
 async fn command_stream(
@@ -455,6 +484,8 @@ mod command_tests {
         seen: tokio::sync::mpsc::Sender<()>,
         results: std::sync::Arc<std::sync::Mutex<Vec<pb::CommandResult>>>,
         mode: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        /// 注册时下发的分发版本哈希；None 表示注册接口不可用
+        upgrade: Option<String>,
     }
     #[tonic::async_trait]
     impl AgentService for Server {
@@ -486,7 +517,14 @@ mod command_tests {
             &self,
             _: Request<pb::RegisterRequest>,
         ) -> Result<Response<pb::RegisterResponse>, Status> {
-            Err(Status::unimplemented("测试只使用指令流"))
+            match &self.upgrade {
+                Some(sha) => Ok(Response::new(pb::RegisterResponse {
+                    agent_id: "reconnect-test".into(),
+                    upgrade_sha256: sha.clone(),
+                    ..Default::default()
+                })),
+                None => Err(Status::unimplemented("测试只使用指令流")),
+            }
         }
         async fn report_events(
             &self,
@@ -537,6 +575,7 @@ mod command_tests {
             tonic::transport::Server::builder()
                 .add_service(AgentServiceServer::new(Server {
                     seen,
+                    upgrade: None,
                     results: results.clone(),
                     mode: mode.clone(),
                 }))
@@ -631,8 +670,18 @@ mod command_tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    #[tokio::test]
-    async fn command_stream_reconnects_without_event_stream_restart() {
+    /// 起一个只认指令流的模拟服务端，返回客户端、每次建立指令流的通知与要收尾的任务
+    async fn command_server(
+        upgrade: Option<String>,
+    ) -> (
+        AgentServiceClient<tonic::transport::Channel>,
+        tokio::sync::mpsc::Receiver<()>,
+        [tokio::task::JoinHandle<()>; 2],
+    ) {
+        // 注册请求带自身哈希：第一次算要同步读整个测试二进制（arm64 上几百 MB），先算好，不占用例的时限
+        tokio::task::spawn_blocking(upgrade::self_sha256)
+            .await
+            .unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (connections, incoming) = tokio::sync::mpsc::channel(4);
@@ -644,36 +693,71 @@ mod command_tests {
                 }
             }
         });
-        let (seen, mut calls) = tokio::sync::mpsc::channel(4);
-        let server = tokio::spawn(
-            tonic::transport::Server::builder()
+        let (seen, calls) = tokio::sync::mpsc::channel(4);
+        let server = tokio::spawn(async move {
+            let _ = tonic::transport::Server::builder()
                 .add_service(AgentServiceServer::new(Server {
                     seen,
                     results: Default::default(),
                     mode: Default::default(),
+                    upgrade,
                 }))
-                .serve_with_incoming(ReceiverStream::new(incoming)),
-        );
+                .serve_with_incoming(ReceiverStream::new(incoming))
+                .await;
+        });
         let client = AgentServiceClient::connect(format!("http://{addr}"))
             .await
             .unwrap();
+        (client, calls, [server, accept])
+    }
+
+    fn test_queue() -> (std::path::PathBuf, delivery::Queue) {
         let dir = std::env::temp_dir().join(format!("command-test-{}", uuid::Uuid::new_v4()));
         let queue = delivery::Queue::new(
             spool::Spool::open(&dir, 4 * 1024 * 1024).unwrap(),
             health::Health::new(),
         );
-        let commands = tokio::spawn(command_loop(client, "reconnect-test".into(), queue));
+        (dir, queue)
+    }
+
+    #[tokio::test]
+    async fn command_stream_reconnects_without_event_stream_restart() {
+        let (client, mut calls, tasks) = command_server(None).await;
+        let (dir, queue) = test_queue();
+        let commands = tokio::spawn(command_loop(
+            client,
+            "reconnect-test".into(),
+            String::new(),
+            queue,
+        ));
         let result = tokio::time::timeout(Duration::from_secs(8), async {
             assert!(calls.recv().await.is_some());
             assert!(calls.recv().await.is_some());
         })
         .await;
         commands.abort();
-        server.abort();
-        accept.abort();
+        tasks.iter().for_each(|t| t.abort());
         let _ = commands.await;
         std::fs::remove_dir_all(dir).unwrap();
         result.unwrap();
+    }
+
+    /// 指令通道断开后重报注册发现分发版本变了：结束会话交给主循环重新注册升级，不再只重连指令通道
+    #[tokio::test]
+    async fn command_loop_ends_session_when_upgrade_is_pending() {
+        let (client, mut calls, tasks) = command_server(Some("new-build".into())).await;
+        let (dir, queue) = test_queue();
+        let commands = tokio::spawn(command_loop(
+            client,
+            "reconnect-test".into(),
+            String::new(),
+            queue,
+        ));
+        assert!(calls.recv().await.is_some(), "先建立一次指令流");
+        let ended = tokio::time::timeout(Duration::from_secs(10), commands).await;
+        tasks.iter().for_each(|t| t.abort());
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(ended.is_ok(), "有待升级时指令通道断开应结束会话");
     }
 }
 

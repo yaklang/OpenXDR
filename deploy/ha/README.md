@@ -54,7 +54,8 @@ SSH="ssh -F <ssh 配置>" GOPROXY=https://goproxy.cn,direct deploy/ha/release.sh
 脚本在本地构建 server / web 镜像（标签为提交短哈希），连同 `rules/`、`tasks/` 推到节点，
 先升不持有 VIP 的节点，`readyz` 通过后再升另一个；任一步失败立即停下。
 每个节点切换前把旧镜像标成 `pre-<标签>`，回滚方式见脚本头部注释。
-agent 不走这个脚本：把新版本放进节点的 `dist/` 目录，agent 重连时自动升级。
+agent 不走这个脚本：把新版本放进节点的 `dist/` 目录，agent 下次注册时自动升级——agent 重启、事件上报中断，
+或 server 重启导致指令通道断开（重连前会重报注册）都会触发；server 端按文件大小与修改时间重算哈希，不用重启 server。
 
 独立 DYGK 引擎的单节点配置、升级和恢复边界见 [dygk.md](dygk.md)。节点存在
 `docker-compose.dygk.yml` 时，发布脚本自动合并它以保留 server 控制通道；不会自动
