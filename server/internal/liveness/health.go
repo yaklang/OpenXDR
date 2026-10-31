@@ -23,6 +23,9 @@ const healthStale = 5 * time.Minute
 // dropSticky 丢事件超过阈值后多久才算恢复：丢事件是一阵一阵的，不能每分钟来回报
 const dropSticky = time.Hour
 
+// clockSkewThreshold 主机上报时刻与服务端接收时刻相差超过 1 分钟即告警（超过 5 分钟会被 gRPC 拒绝）
+const clockSkewThreshold = time.Minute
+
 var capabilityNames = map[string]string{
 	"process": "进程采集", "files": "文件监控", "network": "网络采集", "dns": "DNS 采集", "auth": "登录采集",
 	"inventory": "资产清单", "local-accounts": "本地账号清单", "persist": "持久化点监控", "kmod": "内核模块监控",
@@ -30,10 +33,11 @@ var capabilityNames = map[string]string{
 }
 
 type healthSnapshot struct {
-	ReceivedAt    time.Time `json:"receivedAt"`
-	DroppedEvents int64     `json:"droppedEvents"`
-	WriteBlocked  bool      `json:"writeBlocked"`
-	Capabilities  map[string]struct {
+	ReceivedAt     time.Time `json:"receivedAt"`
+	ReportedUnixMs int64     `json:"reportedUnixMs"`
+	DroppedEvents  int64     `json:"droppedEvents"`
+	WriteBlocked   bool      `json:"writeBlocked"`
+	Capabilities   map[string]struct {
 		Path     string `json:"path"`
 		State    string `json:"state"`
 		Reason   string `json:"reason"`
@@ -80,6 +84,14 @@ func healthProblems(h healthSnapshot, dropping bool, dropped int64) []problem {
 			text = fmt.Sprintf("本轮丢弃 %d 条事件（上报跟不上）", dropped)
 		}
 		out = append(out, problem{"drops", text})
+	}
+	if h.ReportedUnixMs > 0 && !h.ReceivedAt.IsZero() {
+		reported := time.UnixMilli(h.ReportedUnixMs)
+		if skew := h.ReceivedAt.Sub(reported); skew >= clockSkewThreshold {
+			out = append(out, problem{"clock_skew", fmt.Sprintf("主机时钟比服务端慢约 %d 秒，请检查 NTP 同步", int(skew.Round(time.Second).Seconds()))})
+		} else if skew <= -clockSkewThreshold {
+			out = append(out, problem{"clock_skew", fmt.Sprintf("主机时钟比服务端快约 %d 秒，请检查 NTP 同步", int((-skew).Round(time.Second).Seconds()))})
+		}
 	}
 	slices.SortFunc(out, func(a, b problem) int { return strings.Compare(a.key, b.key) })
 	return out
