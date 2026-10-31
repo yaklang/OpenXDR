@@ -17,6 +17,7 @@ export interface Verdict {
   confidence?: number
   summary?: string
   kill_chain?: string[]
+  action_codes?: string[]
   actions?: string[]
   error?: string
   raw?: string
@@ -853,6 +854,29 @@ export interface RuleRow {
 }
 
 export const fetchRules = () => get<RuleRow[]>('/api/rules')
+
+export interface BacktestSample {
+  id: string
+  ts: string
+  classUid: number
+  source: string
+  assetId?: string
+  hostname?: string
+  raw: unknown
+}
+
+export interface BacktestResult {
+  ruleId: string
+  hours: number
+  scannedEvents: number
+  truncated: boolean
+  matchedCount: number
+  hosts: { hostname: string; assetId?: string; count: number }[]
+  samples: BacktestSample[]
+}
+
+export const backtestRule = async (id: string, hours = 24): Promise<BacktestResult> =>
+  (await send('POST', `/api/rules/${encodeURIComponent(id)}/backtest?hours=${hours}`)).json()
 
 export interface IntelRow {
   id: string

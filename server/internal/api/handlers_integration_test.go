@@ -214,6 +214,37 @@ func TestAPICommandIssue(t *testing.T) {
 	}
 }
 
+// 规则回测：在热表事件上独立求值目标规则，返回扫描数、命中数与样本；未知规则返回 404。
+func TestAPIRuleBacktest(t *testing.T) {
+	ts, _ := seed(t)
+
+	r404, err := postJSON(ts, "/api/rules/no-such-rule/backtest", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r404.Body.Close()
+	if r404.StatusCode != 404 {
+		t.Fatalf("未知规则应返回 404，得到 %d", r404.StatusCode)
+	}
+
+	resp, err := postJSON(ts, "/api/rules/6e0c8f0e-9a44-4b4d-9b6e-1f2a5d9c8b7a/backtest?hours=24", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("backtest status = %d: %s", resp.StatusCode, body)
+	}
+	var out backtestResult
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ScannedEvents != 1 || out.MatchedCount != 1 || len(out.Samples) != 1 {
+		t.Fatalf("期望扫描 1 条、命中 1 条、样本 1 条，实际: %+v", out)
+	}
+}
+
 func doReq(t *testing.T, ts *httptest.Server, method, path, body string) (*http.Response, error) {
 	t.Helper()
 	req, err := http.NewRequest(method, ts.URL+path, strings.NewReader(body))

@@ -1,7 +1,7 @@
 import { TableActions } from '../components/TableActions'
 import { ExportOutlined, FilePdfOutlined, FileSearchOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Drawer, Empty, Input, Segmented, Space, Table, Tag, Typography } from 'antd'
+import { App, Button, Collapse, Drawer, Empty, Input, Segmented, Space, Table, Tag, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { downloadAgentPdf, fetchAgentReports, markAllReportsRead, markReportRead, reportHtmlUrl, type AgentReport } from '../api'
@@ -13,6 +13,35 @@ import { FilterCard, Page, STICKY_HEADER, WIDE_ONLY, useWideTable } from '../com
 import { fmtTime, errText } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
 import { LoadError } from '../components/LoadError'
+
+function splitReportMarkdown(raw: string): { top: string; fold: string } {
+  const md = raw.replace(/^\s*#\s+[^\n]*\n/, '').trim()
+  const lines = md.split('\n')
+  const topBlocks: string[] = []
+  const foldBlocks: string[] = []
+  let cur: string[] = []
+  let curIsFold = false
+  const flush = () => {
+    if (!cur.length) return
+    const block = cur.join('\n').trim()
+    if (block) {
+      if (curIsFold) foldBlocks.push(block)
+      else topBlocks.push(block)
+    }
+    cur = []
+  }
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith('## ') && !trimmed.startsWith('### ')) {
+      flush()
+      const h = trimmed.slice(3).replace(/^[^\u4e00-\u9fa5a-zA-Z]+|[一二三四五六七八九十、.\s]+/g, '')
+      curIsFold = h.startsWith('证据') || h.startsWith('推断') || h.startsWith('未验证')
+    }
+    cur.push(line)
+  }
+  flush()
+  return { top: topBlocks.join('\n\n'), fold: foldBlocks.join('\n\n') }
+}
 
 // 报告级别：无异常的只存档，有事项与紧急的会推送通知
 const LEVEL: Record<AgentReport['level'], { color: string; key: MsgKey; rank: number }> = {
@@ -127,23 +156,33 @@ export function ReportsPage() {
           </Space>
         )}
       >
-        {preview && <>
-          {/* 页头由平台给：级别、时间与一句话结论，各报告一致；正文是模型写的 */}
-          <div className="cmd-item" style={{ marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-            <Space wrap size={8}>
-              <Tag color={LEVEL[preview.level]?.color}>{t(LEVEL[preview.level]?.key ?? 'reportLevelAttention')}</Tag>
-              <Typography.Text type="secondary">{fmtTime(preview.created_at)}</Typography.Text>
-            </Space>
-            <Link to={`/chat/${preview.session_id}`}>{t('openSession')}</Link>
-          </div>
-          {preview.summary && (
-            <div className="gemini-report-summary">
-              <GeminiSparkle size={18} />
-              <Typography.Paragraph strong style={{ margin: 0, flex: 1 }}>{preview.summary}</Typography.Paragraph>
+        {preview && (() => {
+          const { top, fold } = splitReportMarkdown(preview.markdown)
+          return <>
+            {/* 页头由平台给：级别、时间与一句话结论，各报告一致；正文是模型写的 */}
+            <div className="cmd-item" style={{ marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+              <Space wrap size={8}>
+                <Tag color={LEVEL[preview.level]?.color}>{t(LEVEL[preview.level]?.key ?? 'reportLevelAttention')}</Tag>
+                <Typography.Text type="secondary">{fmtTime(preview.created_at)}</Typography.Text>
+              </Space>
+              <Link to={`/chat/${preview.session_id}`}>{t('openSession')}</Link>
             </div>
-          )}
-          <Markdown text={preview.markdown.replace(/^\s*#\s+[^\n]*\n/, '')} />
-        </>}
+            {preview.summary && (
+              <div className="gemini-report-summary">
+                <GeminiSparkle size={18} />
+                <Typography.Paragraph strong style={{ margin: 0, flex: 1 }}>{preview.summary}</Typography.Paragraph>
+              </div>
+            )}
+            <Markdown text={top} />
+            {fold && (
+              <Collapse size="small" style={{ marginTop: 16 }} items={[{
+                key: 'evidence',
+                label: t('reportFoldLabel'),
+                children: <Markdown text={fold} />,
+              }]} />
+            )}
+          </>
+        })()}
       </Drawer>
     </Page>
   )

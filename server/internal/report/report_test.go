@@ -101,4 +101,17 @@ func TestNormalize(t *testing.T) {
 	if _, _, _, err := Normalize("标题", "结论", "## 结论\n良性\n"); err == nil || !strings.Contains(err.Error(), "## 需要人处理、## 未验证") || !strings.Contains(err.Error(), Template) {
 		t.Errorf("缺节时应列出缺的节并带回骨架：%v", err)
 	}
+	// 带 Emoji 的章节标题同样兼容，且证据/推断/未验证折叠进 details
+	emojiBody := "## 📌 结论\n🟢 正常\n## 🤖 已执行的操作\n- 同步 2 项待办\n## ⚡ 需要人处理\n无\n## 🔍 证据\nss 输出\n## 未验证\n无\n"
+	if _, _, _, err := Normalize("标题", "一句话结论", emojiBody); err != nil {
+		t.Fatalf("Emoji 章节标题应通过 Normalize：%v", err)
+	}
+	top, fold := SplitFold(emojiBody)
+	if !strings.Contains(top, "已执行的操作") || strings.Contains(top, "ss 输出") || !strings.Contains(fold, "ss 输出") {
+		t.Fatalf("SplitFold 拆分不符：top=%q fold=%q", top, fold)
+	}
+	html, err := HTML(Page{Title: "巡检", Summary: "正常", Markdown: emojiBody, CreatedAt: time.Now()})
+	if err != nil || !strings.Contains(string(html), `<details class="evidence-fold">`) {
+		t.Fatalf("HTML 应包含可折叠证据区块：%v", err)
+	}
 }

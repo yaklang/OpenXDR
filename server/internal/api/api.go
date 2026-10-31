@@ -139,7 +139,7 @@ func Handler(db *ent.Client, conn *stdsql.DB, rules sigma.Catalog, hub *response
 	mapIntel(mux, db, intelStore)
 	mapStats(mux, db, rules)
 	mapEvents(mux, db, conn)
-	mapRules(mux, rules)
+	mapRules(mux, db, rules)
 	mapAttack(mux, rules)
 	mapReport(mux, db, rules)
 	mapAgentConfig(mux, db)

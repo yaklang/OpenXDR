@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"openxdr/server/ent"
 )
 
 func TestParseSpec(t *testing.T) {
@@ -74,5 +76,39 @@ func TestLoadDirSkipsBadAndDuplicate(t *testing.T) {
 	specs := LoadDir(dir)
 	if len(specs) != 1 || specs[0].ID != "a" || !strings.Contains(specs[0].Schedule, "daily") {
 		t.Errorf("应只留下 a.yml：%+v", specs)
+	}
+}
+
+func TestFormatReportPushText(t *testing.T) {
+	r := &ent.Report{
+		Title:   "每日主机安全与健康巡检",
+		Level:   "attention",
+		Summary: "巡检 9 台主机：2 台紧急风险，3 台需关注，4 台正常；已自主同步 5 项待办。",
+		Markdown: `## 结论
+巡检 9 台主机：2 台紧急风险，3 台需关注，4 台正常；已自主同步 5 项待办。
+
+## 已执行的操作
+- 待办同步：更新 3 项既有待办，新开 2 项待办
+- 长期记忆：记录 10.1.101.66 WireGuard 角色
+
+## 需要人处理
+1. 🔴 **[10.1.1.150]** — 禁用 root 密码登录或改强密码并加固 fail2ban
+2. 🔴 **[10.2.0.9]** — 定位并消除 CPU 饱和根因
+3. 🟡 **[10.1.1.196]** — 调查 nginx worker 段错误
+
+## 证据
+...`,
+	}
+	got := formatReportPushText("默认组", r)
+	for _, want := range []string{
+		"🗂️ 资产组：「默认组」｜🟡 需关注",
+		"📌 核心结论：巡检 9 台主机",
+		"🤖 AI 自治动作：待办同步：更新 3 项既有待办，新开 2 项待办；长期记忆：记录 10.1.101.66 WireGuard 角色",
+		"⚡ 待人工处理：",
+		"• 🔴 [10.1.1.150] — 禁用 root 密码登录或改强密码并加固 fail2ban",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("推送文本缺少 %q，实际：\n%s", want, got)
+		}
 	}
 }

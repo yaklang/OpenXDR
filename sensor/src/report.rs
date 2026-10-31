@@ -98,6 +98,8 @@ pub fn to_record(flow: &Flow) -> pb::FlowRecord {
         tls_cert_not_before: flow.meta.cert_not_before,
         tls_cert_not_after: flow.meta.cert_not_after,
         tls_handshake_only: flow.tls_client.handshake_only(flow.meta.tls13),
+        tls_version: flow.meta.tls_version.clone().unwrap_or_default(),
+        tls_alpn: flow.meta.tls_alpn.clone().unwrap_or_default(),
     }
 }
 
@@ -280,6 +282,8 @@ mod tests {
                 cert_not_before: 1_700_000_000,
                 cert_not_after: 1_800_000_000,
                 tls13: false,
+                tls_version: Some("TLS 1.2".to_string()),
+                tls_alpn: Some("h2".to_string()),
             },
             probed: true,
             probed_server: true,
@@ -337,5 +341,7 @@ mod tests {
         assert!(!r.tls_cert_self_signed);
         assert_eq!(r.tls_cert_not_before, 1_700_000_000);
         assert_eq!(r.tls_cert_not_after, 1_800_000_000);
+        assert_eq!(r.tls_version, "TLS 1.2");
+        assert_eq!(r.tls_alpn, "h2");
     }
 }

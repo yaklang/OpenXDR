@@ -60,11 +60,15 @@ func (n *Notifier) Run(ctx context.Context) {
 	}
 }
 
-// verdict 只取通知需要的三个字段，其余留给界面
+// verdict 提取通知需要的核心结论、AI 自治取证工具与建议代码
 type verdict struct {
-	Verdict    string `json:"verdict"`
-	Confidence int    `json:"confidence"`
-	Summary    string `json:"summary"`
+	Verdict       string   `json:"verdict"`
+	Confidence    int      `json:"confidence"`
+	Summary       string   `json:"summary"`
+	ActionCodes   []string `json:"action_codes"`
+	QueryEvidence []struct {
+		Tool string `json:"tool"`
+	} `json:"query_evidence"`
 }
 
 func (n *Notifier) sweep(ctx context.Context) error {
@@ -152,15 +156,17 @@ func (n *Notifier) markNotified(ctx context.Context, inc *ent.Incident) error {
 
 // Message 通知内容，也是 generic 格式的推送体。
 type Message struct {
-	IncidentID string    `json:"incidentId"`
-	CreatedAt  time.Time `json:"createdAt"`
-	Title      string    `json:"title"`
-	Verdict    string    `json:"verdict,omitempty"`
-	Confidence int       `json:"confidence,omitempty"`
-	Summary    string    `json:"summary,omitempty"`
-	AlertCount int       `json:"alertCount"`
-	Severity   int16     `json:"maxSeverity"`
-	Link       string    `json:"link,omitempty"`
+	IncidentID  string    `json:"incidentId"`
+	CreatedAt   time.Time `json:"createdAt"`
+	Title       string    `json:"title"`
+	Verdict     string    `json:"verdict,omitempty"`
+	Confidence  int       `json:"confidence,omitempty"`
+	Summary     string    `json:"summary,omitempty"`
+	ActionCodes []string  `json:"actionCodes,omitempty"`
+	QueryTools  []string  `json:"queryTools,omitempty"`
+	AlertCount  int       `json:"alertCount"`
+	Severity    int16     `json:"maxSeverity"`
+	Link        string    `json:"link,omitempty"`
 	// RuleAuthors 命中规则的作者（去重）
 	RuleAuthors []string `json:"ruleAuthors,omitempty"`
 }
@@ -190,6 +196,12 @@ func (n *Notifier) message(ctx context.Context, inc *ent.Incident, linkBase stri
 		var v verdict
 		_ = json.Unmarshal(inc.AiVerdict, &v)
 		m.Verdict, m.Confidence, m.Summary = v.Verdict, v.Confidence, v.Summary
+		m.ActionCodes = v.ActionCodes
+		for _, q := range v.QueryEvidence {
+			if q.Tool != "" {
+				m.QueryTools = append(m.QueryTools, q.Tool)
+			}
+		}
 	} else if inc.TriageFailures > 0 {
 		m.Summary = fmt.Sprintf("AI 研判连续失败 %d 次，未等结论先推送", inc.TriageFailures)
 	}
@@ -201,35 +213,156 @@ func (n *Notifier) message(ctx context.Context, inc *ent.Incident, linkBase stri
 
 var severityText = []string{"-", "信息", "低危", "中危", "高危", "严重"}
 
-var verdictText = map[string]string{"malicious": "恶意", "suspicious": "可疑", "benign": "良性，但级别高需人工复核"}
+var severityEmoji = []string{"⚪", "ℹ️", "🟢", "⚠️", "🔥", "🚨"}
 
-// text 各家 IM 共用的正文。
+var verdictText = map[string]string{
+	"malicious":  "🔴 恶意",
+	"suspicious": "🟡 可疑",
+	"benign":     "🟢 良性，但级别高需人工复核",
+}
+
+var verdictHeaderEmoji = map[string]string{
+	"malicious":  "🚨",
+	"suspicious": "⚠️",
+	"benign":     "🛡️",
+}
+
+var toolLabel = map[string]string{
+	"process_lineage":  "进程血缘",
+	"query_events":     "原始事件",
+	"host_alerts":      "历史告警",
+	"process_baseline": "UEBA 基线",
+}
+
+var actionShortLabel = map[string]string{
+	"verify_source":            "🔍 核实来源与授权",
+	"collect_original_records": "📥 补取原始记录",
+	"trace_process":            "🧬 追查进程血缘",
+	"inspect_history":          "📜 核对告警历史",
+	"inspect_baseline":         "📊 核对 UEBA 基线",
+	"monitor":                  "👁️ 持续监测",
+	"preserve_evidence":        "🔒 保留现场证据",
+	"review_closure":           "✅ 复核后良性结案",
+	"review_response":          "🛑 审核隔离/阻断响应",
+	"hunt_related":             "🎯 按指标横向排查",
+}
+
+// conciseHeadline 从研判摘要中提炼首屏一句话核心结论（≤110 字），剥离长篇过程流水账与尾部免责套话。
+func conciseHeadline(summary string, maxRunes int) string {
+	s := strings.TrimSpace(summary)
+	if s == "" {
+		return ""
+	}
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		first := strings.TrimSpace(s[:idx])
+		if first != "" {
+			s = first
+		}
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	// 兼容单段长摘要：剔除尾部证据边界套话，优先取含定性判断的分句
+	for _, marker := range []string{"证据限制：", "限制说明：", "注意：", "本次证据未提供"} {
+		if idx := strings.Index(s, marker); idx > 0 {
+			s = strings.TrimSpace(s[:idx])
+		}
+	}
+	r = []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "…"
+}
+
+func formatQueryAutonomy(tools []string) string {
+	if len(tools) == 0 {
+		return ""
+	}
+	var order []string
+	counts := map[string]int{}
+	for _, t := range tools {
+		name := toolLabel[t]
+		if name == "" {
+			name = t
+		}
+		if counts[name] == 0 {
+			order = append(order, name)
+		}
+		counts[name]++
+	}
+	parts := make([]string, 0, len(order))
+	for _, name := range order {
+		if counts[name] > 1 {
+			parts = append(parts, fmt.Sprintf("%s×%d", name, counts[name]))
+		} else {
+			parts = append(parts, name)
+		}
+	}
+	return fmt.Sprintf("已自主完成 %d 轮排查（%s）", len(tools), strings.Join(parts, "、"))
+}
+
+func formatActionCodes(codes []string) string {
+	if len(codes) == 0 {
+		return ""
+	}
+	var out []string
+	for _, c := range codes {
+		if label := actionShortLabel[c]; label != "" {
+			out = append(out, label)
+		} else {
+			out = append(out, c)
+		}
+		if len(out) >= 3 {
+			break
+		}
+	}
+	return strings.Join(out, " / ")
+}
+
+// text 各家 IM 共用的精简电报体正文。
 func text(m Message) string {
 	var b bytes.Buffer
-	fmt.Fprintf(&b, "【OpenXDR】%s\n", m.Title)
+	headIcon := verdictHeaderEmoji[m.Verdict]
+	if headIcon == "" {
+		headIcon = "🔔"
+	}
+	fmt.Fprintf(&b, "%s【OpenXDR】%s\n", headIcon, m.Title)
+	sev := fmt.Sprint(m.Severity)
+	sevIcon := "⚪"
+	if int(m.Severity) < len(severityText) && m.Severity > 0 {
+		sev = severityText[m.Severity]
+		sevIcon = severityEmoji[m.Severity]
+	}
 	if m.Verdict != "" {
 		label := verdictText[m.Verdict]
 		if label == "" {
 			label = m.Verdict
 		}
-		fmt.Fprintf(&b, "AI 判定: %s（置信度 %d）\n", label, m.Confidence)
+		fmt.Fprintf(&b, "🤖 AI 判定: %s（置信度 %d%%）｜%s 最高级别: %s（告警 %d 条）\n", label, m.Confidence, sevIcon, sev, m.AlertCount)
+	} else {
+		fmt.Fprintf(&b, "%s 最高级别: %s（告警 %d 条）\n", sevIcon, sev, m.AlertCount)
 	}
-	sev := fmt.Sprint(m.Severity)
-	if int(m.Severity) < len(severityText) && m.Severity > 0 {
-		sev = severityText[m.Severity]
-	}
-	fmt.Fprintf(&b, "告警 %d 条，最高级别: %s\n", m.AlertCount, sev)
 	if m.Summary != "" {
 		if m.Verdict != "" {
-			b.WriteString("AI 摘要（模型判断）: ")
+			b.WriteString("📌 AI 摘要（模型判断）: ")
+		} else {
+			b.WriteString("📌 状态说明: ")
 		}
-		fmt.Fprintf(&b, "%s\n", m.Summary)
+		fmt.Fprintf(&b, "%s\n", conciseHeadline(m.Summary, 110))
+	}
+	if auto := formatQueryAutonomy(m.QueryTools); auto != "" {
+		fmt.Fprintf(&b, "🔍 AI 自治取证: %s\n", auto)
+	}
+	if acts := formatActionCodes(m.ActionCodes); acts != "" {
+		fmt.Fprintf(&b, "⚡ 建议动作: %s\n", acts)
 	}
 	if len(m.RuleAuthors) > 0 {
-		fmt.Fprintf(&b, "规则作者: %s\n", strings.Join(m.RuleAuthors, "; "))
+		fmt.Fprintf(&b, "🏷️ 规则作者: %s\n", strings.Join(m.RuleAuthors, "; "))
 	}
 	if m.Link != "" {
-		fmt.Fprintf(&b, "%s\n", m.Link)
+		fmt.Fprintf(&b, "🔗 处置直达: %s\n", m.Link)
 	}
 	return b.String()
 }
@@ -284,9 +417,13 @@ func (h *Webhook) SendTo(ctx context.Context, target Target, title, body, path s
 	if path != "" && target.LinkBase != "" {
 		t.Link = target.LinkBase + path
 	}
-	full := "【OpenXDR】" + t.Title + "\n" + t.Body
+	icon := "📋"
+	if strings.Contains(t.Title, "紧急") || strings.Contains(t.Title, "失败") || strings.Contains(t.Title, "离线") {
+		icon = "🚨"
+	}
+	full := icon + "【OpenXDR】" + t.Title + "\n" + t.Body
 	if t.Link != "" {
-		full += "\n" + t.Link
+		full += "\n🔗 查看详情: " + t.Link
 	}
 	return send(ctx, client, target.URL, target.Format, payload(target.Format, t, full))
 }

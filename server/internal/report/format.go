@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -17,28 +18,37 @@ const (
 
 // Sections 正文的节，按这个顺序写；Required 为必须出现的节
 var (
-	Sections = []string{"结论", "需要人处理", "证据", "推断", "未验证", "已执行的操作"}
+	Sections = []string{"结论", "已执行的操作", "需要人处理", "证据", "推断", "未验证"}
 	Required = []string{"结论", "需要人处理", "未验证"}
 )
 
 // Template 给模型看的正文骨架，报告不合格时原样带回去
 const Template = `## 结论
-定性与关键理由，一两段。
-## 需要人处理
-逐条写事项、主机、严重程度与建议；巡检分「新增 / 仍未解决 / 本轮已修复」三个三级标题。没有写「无」。
-## 证据
-已观察到的事实，标明主机与来源命令或查询；多台主机按主机分三级标题。
-## 推断
-基于证据的判断与把握程度，没有可省略。
-## 未验证
-没覆盖到、等待批准或执行失败的检查项。没有写「无」。
+≤3 行：总体定性（🟢 正常 / 🟡 需关注 / 🔴 紧急）+ 异常与正常主机分布统计。
 ## 已执行的操作
-改动、登记的待办、提交的抑制或结案建议；只读排查写「无」，可省略。`
+本轮 AI 已自主完成的动作（同步待办、写入/更新记忆、标记服务或外联、提议抑制/结案等），每条 1 行；只读无改动写「无」或省略。
+## 需要人处理
+按「### 🔴 紧急 / 新增」「### 🟡 仍未解决」「### ✅ 本轮已修复」列出，每条限 1–2 行（**[主机] 事项** — 影响 + 处置建议）；没有写「无」。
+## 证据
+仅异常先行：无异常主机合并为一张紧凑表格或一句话（严禁逐台展开「未见异常」）；有异常主机只列支撑异常的核心证据（≤4 条/台）。
+## 推断
+基于证据的简短判断与把握度，≤3 条，没有可省略。
+## 未验证
+合并为 ≤3 条单行列表，没有写「无」。`
 
 var (
 	h1      = regexp.MustCompile(`^#\s+\S`)
 	section = regexp.MustCompile(`(?m)^##\s+(.+?)\s*$`)
 )
+
+func cleanHeading(s string) string {
+	return strings.TrimLeftFunc(strings.TrimSpace(s), func(r rune) bool {
+		if strings.ContainsRune("一二三四五六七八九十、.0123456789 \t", r) {
+			return true
+		}
+		return !unicode.Is(unicode.Han, r) && !unicode.IsLetter(r)
+	})
+}
 
 // Normalize 校验并整理一份报告：标题与结论去掉首尾空白并限长，正文去掉模型自己写的一级标题（页头已经有标题），
 // 必需的节缺了就拒绝并带回骨架。返回值可直接入库。
@@ -56,8 +66,9 @@ func Normalize(title, summary, markdown string) (string, string, string, error) 
 	}
 	have := map[string]bool{}
 	for _, m := range section.FindAllStringSubmatch(markdown, -1) {
+		cleaned := cleanHeading(m[1])
 		for _, name := range Sections {
-			if strings.HasPrefix(strings.TrimLeft(m[1], "一二三四五六七八九十、.0123456789 "), name) {
+			if strings.HasPrefix(cleaned, name) {
 				have[name] = true
 			}
 		}
@@ -72,6 +83,40 @@ func Normalize(title, summary, markdown string) (string, string, string, error) 
 		return "", "", "", fmt.Errorf("正文缺少 %s。按这个骨架分节（二级标题照写，节内自由组织）：\n%s", strings.Join(missing, "、"), Template)
 	}
 	return title, summary, markdown, nil
+}
+
+// SplitFold 将报告正文拆成首屏决策层（结论、已执行的操作、需要人处理）与可折叠取证层（证据、推断、未验证）。
+func SplitFold(markdown string) (top, fold string) {
+	markdown = stripTitle(markdown)
+	lines := strings.Split(markdown, "\n")
+	var topBlocks, foldBlocks []string
+	var cur []string
+	curIsFold := false
+	flush := func() {
+		if len(cur) == 0 {
+			return
+		}
+		block := strings.TrimSpace(strings.Join(cur, "\n"))
+		if block != "" {
+			if curIsFold {
+				foldBlocks = append(foldBlocks, block)
+			} else {
+				topBlocks = append(topBlocks, block)
+			}
+		}
+		cur = nil
+	}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## ") && !strings.HasPrefix(trimmed, "### ") {
+			flush()
+			h := cleanHeading(strings.TrimPrefix(trimmed, "## "))
+			curIsFold = strings.HasPrefix(h, "证据") || strings.HasPrefix(h, "推断") || strings.HasPrefix(h, "未验证")
+		}
+		cur = append(cur, line)
+	}
+	flush()
+	return strings.Join(topBlocks, "\n\n"), strings.Join(foldBlocks, "\n\n")
 }
 
 // stripTitle 去掉正文开头的一级标题：标题由平台渲染，正文里再写一遍就重复了

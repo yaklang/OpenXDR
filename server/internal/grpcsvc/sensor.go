@@ -271,10 +271,16 @@ func flowRaw(f *pb.FlowRecord) json.RawMessage {
 			body["answers"] = answers
 		}
 	}
-	if f.TlsSni != "" || f.Ja3 != "" || f.Ja3S != "" || f.TlsCertSubject != "" || f.TlsHandshakeOnly {
+	if f.TlsSni != "" || f.Ja3 != "" || f.Ja3S != "" || f.TlsVersion != "" || f.TlsAlpn != "" || f.TlsCertSubject != "" || f.TlsHandshakeOnly {
 		tls := map[string]any{}
 		if f.TlsSni != "" {
 			tls["sni"] = f.TlsSni
+		}
+		if f.TlsVersion != "" {
+			tls["version"] = f.TlsVersion
+		}
+		if f.TlsAlpn != "" {
+			tls["alpn"] = f.TlsAlpn
 		}
 		if f.Ja3 != "" {
 			tls["ja3_hash"] = f.Ja3

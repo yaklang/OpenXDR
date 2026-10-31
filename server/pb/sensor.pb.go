@@ -429,7 +429,9 @@ type FlowRecord struct {
 	TlsCertNotAfter   int64                  `protobuf:"varint,26,opt,name=tls_cert_not_after,json=tlsCertNotAfter,proto3" json:"tls_cert_not_after,omitempty"`       // 有效期止，unix 秒，无则 0
 	// 客户端发完 ClientHello 后没有发出任何应用数据（TLS 1.3 除去 Finished）就结束了会话：
 	// 只握手不发请求。只在客户端方向 record 跟得上时才置 true，跟丢了宁可不报
-	TlsHandshakeOnly bool `protobuf:"varint,27,opt,name=tls_handshake_only,json=tlsHandshakeOnly,proto3" json:"tls_handshake_only,omitempty"`
+	TlsHandshakeOnly bool   `protobuf:"varint,27,opt,name=tls_handshake_only,json=tlsHandshakeOnly,proto3" json:"tls_handshake_only,omitempty"`
+	TlsVersion       string `protobuf:"bytes,28,opt,name=tls_version,json=tlsVersion,proto3" json:"tls_version,omitempty"` // ServerHello 选定的 TLS 版本（如 "TLS 1.3"、"TLS 1.2"），无则空
+	TlsAlpn          string `protobuf:"bytes,29,opt,name=tls_alpn,json=tlsAlpn,proto3" json:"tls_alpn,omitempty"`          // ALPN 应用层协议（如 "h2"、"http/1.1"），服务端选定值优先，无则空
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -653,6 +655,20 @@ func (x *FlowRecord) GetTlsHandshakeOnly() bool {
 	return false
 }
 
+func (x *FlowRecord) GetTlsVersion() string {
+	if x != nil {
+		return x.TlsVersion
+	}
+	return ""
+}
+
+func (x *FlowRecord) GetTlsAlpn() string {
+	if x != nil {
+		return x.TlsAlpn
+	}
+	return ""
+}
+
 type FlowAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Received      uint64                 `protobuf:"varint,1,opt,name=received,proto3" json:"received,omitempty"`
@@ -724,7 +740,7 @@ const file_sensor_proto_rawDesc = "" +
 	"\tFlowBatch\x12\x1b\n" +
 	"\tsensor_id\x18\x01 \x01(\tR\bsensorId\x123\n" +
 	"\x05flows\x18\x02 \x03(\v2\x1d.openxdr.sensor.v1.FlowRecordR\x05flows\x12'\n" +
-	"\x0fdropped_packets\x18\x03 \x01(\x04R\x0edroppedPackets\"\xf0\x06\n" +
+	"\x0fdropped_packets\x18\x03 \x01(\x04R\x0edroppedPackets\"\xac\a\n" +
 	"\n" +
 	"FlowRecord\x12\"\n" +
 	"\rstart_unix_ns\x18\x01 \x01(\x03R\vstartUnixNs\x12\x1e\n" +
@@ -757,7 +773,10 @@ const file_sensor_proto_rawDesc = "" +
 	"\x14tls_cert_self_signed\x18\x18 \x01(\bR\x11tlsCertSelfSigned\x12-\n" +
 	"\x13tls_cert_not_before\x18\x19 \x01(\x03R\x10tlsCertNotBefore\x12+\n" +
 	"\x12tls_cert_not_after\x18\x1a \x01(\x03R\x0ftlsCertNotAfter\x12,\n" +
-	"\x12tls_handshake_only\x18\x1b \x01(\bR\x10tlsHandshakeOnly\"%\n" +
+	"\x12tls_handshake_only\x18\x1b \x01(\bR\x10tlsHandshakeOnly\x12\x1f\n" +
+	"\vtls_version\x18\x1c \x01(\tR\n" +
+	"tlsVersion\x12\x19\n" +
+	"\btls_alpn\x18\x1d \x01(\tR\atlsAlpn\"%\n" +
 	"\aFlowAck\x12\x1a\n" +
 	"\breceived\x18\x01 \x01(\x04R\breceived2\xf5\x02\n" +
 	"\rSensorService\x12_\n" +

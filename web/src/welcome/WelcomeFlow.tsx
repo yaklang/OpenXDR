@@ -2,7 +2,7 @@ import { ArrowRightOutlined, CheckOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Checkbox, ConfigProvider, Empty, Input, Space, Tag, Typography, theme } from 'antd'
 import { AnimatePresence, motion, useReducedMotion, type Variants } from 'motion/react'
-import { Component, useCallback, useEffect, useState, type ReactNode } from 'react'
+import { Component, Suspense, lazy, useCallback, useEffect, useState, type ReactNode } from 'react'
 import { acceptAgreement, createGroup, fetchAssets, finishOnboarding, type SetupState } from '../api'
 import { useSession } from '../app/session'
 import { AddHostModal } from '../components/AddHostModal'
@@ -10,10 +10,11 @@ import { AIModelSettings } from '../components/AISettings'
 import { errText, fmtTime } from '../components/format'
 import { NotifySettingsCard } from '../pages/SettingsPage'
 import { useI18n } from '../i18n'
-import BlackHole from './BlackHole'
 import { BrandMark } from './BrandMark'
 import { AGREEMENT, COMPANIES, COPY, type Copy } from './copy'
 import './welcome.css'
+
+const BlackHole = lazy(() => import('./BlackHole'))
 
 type Phase = 'present' | 'hero' | 'agreement' | 'wizard'
 const STEP_KEYS = ['ai', 'project', 'assets', 'webhook'] as const
@@ -74,8 +75,10 @@ function Backdrop({ dim, speed }: { dim: number; speed: number }) {
   return (
     <div className="wl-backdrop" aria-hidden>
       <GLBoundary>
-        <BlackHole width="100%" height="100%" speed={speed} zoom={1.48} particleCount={16} orbSize={0.76} glow={0.075}
-          contrast={2.7} distanceFade={0.32} mirrorSplits={2} warpEnabled backgroundColor="#0a0a0a" opacity={0.96} cursorInteraction={false} />
+        <Suspense fallback={<div className="wl-fallback" />}>
+          <BlackHole width="100%" height="100%" speed={speed} zoom={1.48} particleCount={16} orbSize={0.76} glow={0.075}
+            contrast={2.7} distanceFade={0.32} mirrorSplits={2} warpEnabled backgroundColor="#0a0a0a" opacity={0.96} cursorInteraction={false} />
+        </Suspense>
       </GLBoundary>
       <div className="wl-shade-side" />
       <div className="wl-shade-bottom" />

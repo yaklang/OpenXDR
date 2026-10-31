@@ -1,11 +1,15 @@
+import { ExperimentOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
-import { Input, Select, Space, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
+import { Alert, Button, Drawer, Empty, Input, Segmented, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router'
-import { fetchRules, type RuleRow } from '../api'
-import { LoadError } from '../components/LoadError'
+import { Link, useSearchParams } from 'react-router'
+import { backtestRule, fetchRules, type RuleRow } from '../api'
 import { AttackMatrix } from '../components/AttackMatrix'
-import { CLASS_KEY, SeverityTag } from '../components/format'
+import { EventKind } from '../components/EventKind'
+import { eventSummary } from '../components/eventSummary'
+import { CLASS_KEY, fmtTime, SeverityTag } from '../components/format'
+import { HostLink } from '../components/HostLink'
+import { LoadError } from '../components/LoadError'
 import { FilterCard, Page, STICKY_HEADER } from '../components/Page'
 import { useI18n } from '../i18n'
 
@@ -29,7 +33,14 @@ export function RulesPage() {
   const [classFilter, setClassFilter] = useState<number>(0)
   const [platformFilter, setPlatformFilter] = useState<string>('')
   const [dataSourceFilter, setDataSourceFilter] = useState<string>('')
+  const [btRule, setBtRule] = useState<RuleRow | null>(null)
+  const [btHours, setBtHours] = useState<number>(24)
   const { data, isPending, isError, error, refetch } = useQuery({ queryKey: ['rules'], queryFn: fetchRules })
+  const btQuery = useQuery({
+    queryKey: ['rule-backtest', btRule?.id, btHours],
+    queryFn: () => backtestRule(btRule!.id, btHours),
+    enabled: Boolean(btRule && !btRule.kind),
+  })
 
   const platforms = useMemo(() => {
     const set = new Set<string>()
@@ -87,6 +98,16 @@ export function RulesPage() {
           { title: t('thClass'), dataIndex: 'classUid', width: 115, sorter: (a, b) => a.classUid - b.classUid, render: v => (CLASS_KEY[v] ? t(CLASS_KEY[v]) : v || t('allClasses')) },
           { title: t('thPlatform'), dataIndex: 'product', width: 115, sorter: (a, b) => (a.product ?? '').localeCompare(b.product ?? ''), render: v => v || '-' },
           { title: t('thDataSource'), width: 190, sorter: (a, b) => Number(a.ingested) - Number(b.ingested), render: (_, r) => (r.ingested ? <Tag>{r.kind ? t('temporalRuleSource') : r.source}</Tag> : <Tag color="warning">{t('noDataSource')}</Tag>) },
+          {
+            title: '', width: 92, align: 'right',
+            render: (_, r) => r.kind ? (
+              <Tooltip title={t('ruleBacktestTemporalUnsupported')}>
+                <Button size="small" type="text" disabled icon={<ExperimentOutlined />}>{t('ruleBacktestBtn')}</Button>
+              </Tooltip>
+            ) : (
+              <Button size="small" icon={<ExperimentOutlined />} onClick={() => setBtRule(r)}>{t('ruleBacktestBtn')}</Button>
+            ),
+          },
         ]}
       />}
     </FilterCard>
@@ -102,6 +123,113 @@ export function RulesPage() {
           { key: 'attack', label: t('navAttack'), children: <AttackMatrix /> },
         ]}
       />
+      <Drawer
+        open={Boolean(btRule)}
+        onClose={() => setBtRule(null)}
+        size="large"
+        title={btRule ? <Space><ExperimentOutlined /><span>{t('ruleBacktestTitle')}</span><SeverityTag value={btRule.severity} /></Space> : t('ruleBacktestTitle')}
+        extra={btRule && (
+          <Space>
+            <Segmented
+              size="small"
+              value={btHours}
+              onChange={v => setBtHours(Number(v))}
+              options={[
+                { value: 24, label: t('lastHours', { n: 24 }) },
+                { value: 72, label: t('lastHours', { n: 72 }) },
+                { value: 168, label: t('lastHours', { n: 168 }) },
+              ]}
+            />
+            <Button size="small" icon={<ReloadOutlined spin={btQuery.isFetching} />} onClick={() => btQuery.refetch()} />
+          </Space>
+        )}
+      >
+        {btRule && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ padding: '12px 14px', borderRadius: 10, background: 'rgba(138,180,248,0.06)', border: '1px solid rgba(138,180,248,0.16)' }}>
+              <Typography.Text strong style={{ display: 'block', fontSize: 14 }}>{btRule.title || btRule.id}</Typography.Text>
+              <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>{btRule.id}</Typography.Text>
+              <Typography.Paragraph type="secondary" style={{ margin: '6px 0 0', fontSize: 12.5 }}>
+                {t('ruleBacktestHint')}
+              </Typography.Paragraph>
+            </div>
+
+            {btQuery.isPending ? (
+              <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
+            ) : btQuery.isError ? (
+              <LoadError error={btQuery.error} onRetry={() => btQuery.refetch()} />
+            ) : btQuery.data ? (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
+                  <div className="stat-tile" style={{ padding: '12px 14px' }}>
+                    <div className="label">{t('ruleBacktestScanned')}</div>
+                    <div className="num" style={{ fontSize: 22 }}>{btQuery.data.scannedEvents}{btQuery.data.truncated ? '+' : ''}</div>
+                  </div>
+                  <div className="stat-tile" style={{ padding: '12px 14px' }}>
+                    <div className="label">{t('ruleBacktestMatched')}</div>
+                    <div className="num" style={{ fontSize: 22, color: btQuery.data.matchedCount > 0 ? '#fdd663' : '#81c995' }}>{btQuery.data.matchedCount}</div>
+                  </div>
+                  <div className="stat-tile" style={{ padding: '12px 14px' }}>
+                    <div className="label">{t('ruleBacktestHosts')}</div>
+                    <div className="num" style={{ fontSize: 22 }}>{btQuery.data.hosts.length}</div>
+                  </div>
+                </div>
+
+                {btQuery.data.truncated && (
+                  <Alert type="info" showIcon title={t('ruleBacktestTruncated', { n: btQuery.data.scannedEvents })} />
+                )}
+
+                {btQuery.data.hosts.length > 0 && (
+                  <div>
+                    <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12, fontWeight: 600 }}>
+                      {t('ruleBacktestHostDist')}
+                    </Typography.Text>
+                    <Space size={[6, 6]} wrap>
+                      {btQuery.data.hosts.map(h => (
+                        <Tag key={h.hostname} variant="filled" color="gold">
+                          {h.assetId ? <Link to={`/assets/${h.assetId}`}>{h.hostname}</Link> : h.hostname}
+                          <span className="mono" style={{ marginLeft: 6, opacity: 0.85 }}>×{h.count}</span>
+                        </Tag>
+                      ))}
+                    </Space>
+                  </div>
+                )}
+
+                <div>
+                  <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12, fontWeight: 600 }}>
+                    {t('ruleBacktestSamples')}
+                  </Typography.Text>
+                  {btQuery.data.samples.length === 0 ? (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('ruleBacktestZeroHits')} />
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {btQuery.data.samples.map(s => (
+                        <div key={s.id} style={{ padding: '10px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                          <Space size={8} wrap style={{ marginBottom: 4, width: '100%', justifyContent: 'space-between' }}>
+                            <Space size={6} wrap>
+                              <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>{fmtTime(s.ts)}</Typography.Text>
+                              <HostLink id={s.assetId ?? null} fallback={s.hostname} />
+                              <EventKind classUid={s.classUid} />
+                            </Space>
+                            {s.assetId && (
+                              <Link to={`/events?assetId=${s.assetId}&classUid=${s.classUid}&hours=${btHours}`} style={{ fontSize: 12 }}>
+                                {t('pivotEvents')} →
+                              </Link>
+                            )}
+                          </Space>
+                          <Typography.Text className="mono" style={{ fontSize: 12.5, wordBreak: 'break-all' }}>
+                            {eventSummary(s.classUid, s.raw, t, false) || JSON.stringify(s.raw).slice(0, 180)}
+                          </Typography.Text>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : null}
+          </div>
+        )}
+      </Drawer>
     </Page>
   )
 }

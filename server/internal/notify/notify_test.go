@@ -82,13 +82,28 @@ func TestDecideNoAI(t *testing.T) {
 func TestText(t *testing.T) {
 	got := text(Message{
 		Title: "可疑进程链", Verdict: "malicious", Confidence: 85,
-		Summary: "存在攻击链", AlertCount: 12, Severity: 4,
+		Summary:     "存在攻击链\n第二段详细取证依据与证据限制说明",
+		ActionCodes: []string{"review_response", "hunt_related"},
+		QueryTools:  []string{"process_lineage", "query_events", "query_events"},
+		AlertCount:  12, Severity: 4,
 		Link: "http://x/?incident=abc", RuleAuthors: []string{"Florian Roth (Nextron Systems)"},
 	})
-	for _, want := range []string{"可疑进程链", "恶意", "85", "AI 摘要（模型判断）: 存在攻击链", "12 条", "高危", "存在攻击链", "http://x/?incident=abc", "规则作者: Florian Roth (Nextron Systems)"} {
+	for _, want := range []string{
+		"🚨【OpenXDR】可疑进程链",
+		"🤖 AI 判定: 🔴 恶意（置信度 85%）",
+		"🔥 最高级别: 高危（告警 12 条）",
+		"📌 AI 摘要（模型判断）: 存在攻击链",
+		"🔍 AI 自治取证: 已自主完成 3 轮排查（进程血缘、原始事件×2）",
+		"⚡ 建议动作: 🛑 审核隔离/阻断响应 / 🎯 按指标横向排查",
+		"🏷️ 规则作者: Florian Roth (Nextron Systems)",
+		"🔗 处置直达: http://x/?incident=abc",
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("正文缺少 %q：\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "第二段详细取证依据") {
+		t.Errorf("IM 通知不应展开次段取证长文：\n%s", got)
 	}
 }
 
@@ -134,7 +149,7 @@ func TestWebhookSendText(t *testing.T) {
 	if err := json.Unmarshal(got, &v); err != nil {
 		t.Fatal(err)
 	}
-	if v.Text.Content != "【OpenXDR】每日巡检\n3 台主机正常\nhttp://x/r/1" {
+	if v.Text.Content != "📋【OpenXDR】每日巡检\n3 台主机正常\n🔗 查看详情: http://x/r/1" {
 		t.Errorf("正文不符：%q", v.Text.Content)
 	}
 

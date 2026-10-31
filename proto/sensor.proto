@@ -84,6 +84,8 @@ message FlowRecord {
   // 客户端发完 ClientHello 后没有发出任何应用数据（TLS 1.3 除去 Finished）就结束了会话：
   // 只握手不发请求。只在客户端方向 record 跟得上时才置 true，跟丢了宁可不报
   bool tls_handshake_only = 27;
+  string tls_version = 28;           // ServerHello 选定的 TLS 版本（如 "TLS 1.3"、"TLS 1.2"），无则空
+  string tls_alpn = 29;              // ALPN 应用层协议（如 "h2"、"http/1.1"），服务端选定值优先，无则空
 }
 
 message FlowAck {

@@ -447,7 +447,7 @@ func (s *Scheduler) execute(ctx context.Context, t *ent.Task, g *ent.Group, run 
 	}
 	// 巡检失败不能悄无声息：没人看控制台时，Webhook 是唯一的信号
 	if s.Notify != nil {
-		text := fmt.Sprintf("组「%s」的任务重试后仍失败：%v", g.Name, err)
+		text := fmt.Sprintf("❌ 资产组：「%s」\n⚠️ 任务重试后仍失败：%v", g.Name, err)
 		if nerr := s.Notify(done, "任务失败："+t.Name, text, "/?session="+session.ID.String()); nerr != nil {
 			slog.Error("任务失败通知发送失败", "run", run.ID, "err", nerr)
 		}
@@ -507,16 +507,76 @@ func (s *Scheduler) pushReports(ctx context.Context, g *ent.Group, session *ent.
 		if r.Level == "urgent" {
 			title = "【紧急】" + title
 		}
-		// 一句话结论就是推送正文；旧报告没有结论时退回正文摘录
-		summary := r.Summary
-		if summary == "" {
-			summary = excerpt(r.Markdown, 300)
-		}
-		text := fmt.Sprintf("组「%s」\n%s", g.Name, summary)
+		// 一句话结论 + AI 自治摘要 + 待办要点；旧报告没有结论时退回正文摘录
+		text := formatReportPushText(g.Name, r)
 		if err := s.Notify(ctx, title, text, "/api/agent-reports/"+r.ID.String()+"/html"); err != nil {
 			slog.Error("报告推送失败", "report", r.ID, "err", err)
 		}
 	}
+}
+
+// formatReportPushText 组装定时报告的 IM 推送文本（带 Emoji、AI 自治动作与前 3 项待办）。
+func formatReportPushText(groupName string, r *ent.Report) string {
+	badge := "🟡 需关注"
+	if r.Level == "urgent" {
+		badge = "🔴 紧急处理"
+	} else if r.Level == "ok" {
+		badge = "🟢 正常"
+	}
+	summary := strings.TrimSpace(r.Summary)
+	if summary == "" {
+		summary = excerpt(r.Markdown, 240)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "🗂️ 资产组：「%s」｜%s\n📌 核心结论：%s", groupName, badge, summary)
+	if autoItems := extractSectionItems(r.Markdown, "已执行的操作", 2, 65); len(autoItems) > 0 {
+		fmt.Fprintf(&b, "\n🤖 AI 自治动作：%s", strings.Join(autoItems, "；"))
+	}
+	if todoItems := extractSectionItems(r.Markdown, "需要人处理", 3, 72); len(todoItems) > 0 {
+		b.WriteString("\n⚡ 待人工处理：")
+		for _, item := range todoItems {
+			fmt.Fprintf(&b, "\n  • %s", item)
+		}
+	}
+	return b.String()
+}
+
+// extractSectionItems 从报告指定二级章节提取最多 limit 条简洁要点（过滤“无”）。
+func extractSectionItems(md, section string, limit, maxRunes int) []string {
+	var inSec bool
+	var out []string
+	for _, raw := range strings.Split(md, "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "## ") && !strings.HasPrefix(line, "### ") {
+			h := strings.TrimSpace(strings.TrimPrefix(line, "## "))
+			inSec = h == section || strings.HasSuffix(h, " "+section)
+			continue
+		}
+		if !inSec || line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "|") {
+			continue
+		}
+		line = strings.TrimLeft(line, "-*• ")
+		for i, ch := range line {
+			if ch >= '0' && ch <= '9' {
+				continue
+			}
+			if (ch == '.' || ch == '、') && i > 0 {
+				line = strings.TrimSpace(line[i+len(string(ch)):])
+			}
+			break
+		}
+		line = strings.ReplaceAll(line, "**", "")
+		line = strings.ReplaceAll(line, "`", "")
+		line = strings.TrimSpace(line)
+		if line == "" || line == "无" || line == "无。" || strings.HasPrefix(line, "无（") {
+			continue
+		}
+		out = append(out, excerpt(line, maxRunes))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 // excerpt 按字符截断，IM 消息里放全文没人看

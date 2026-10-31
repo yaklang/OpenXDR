@@ -204,7 +204,7 @@ export function IncidentDetailPage() {
             )}
             <VerdictCard verdict={inc.aiVerdict} />
             <TriageHistory key={inc.id} id={inc.id} />
-            <Card title={t('graphTitle')}><IncidentGraph graph={inc.graph} /></Card>
+            <Card title={t('graphTitle')}><IncidentGraph graph={inc.graph} assetId={inc.assetId} incidentId={inc.id} canAct={canAct} /></Card>
             <Card title={t('alertsTitle', { n: inc.alerts.length })} styles={{ body: { padding: alertView === 'timeline' ? '20px 24px 4px' : 0 } }}
               extra={<Segmented size="small" value={alertView} onChange={v => setAlertView(v as 'table' | 'timeline')}
                 options={[{ value: 'timeline', label: t('viewTimeline') }, { value: 'table', label: t('viewTable') }]} />}>

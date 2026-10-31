@@ -73,7 +73,7 @@ EOF
 | memories | id, created_at, updated_at, asset_id, content, source(human/ai), author |
 | asset_links | src_ip, src_asset_id, dst_ip, dst_port, proto, process, count, first_seen, last_seen（本组主机发起的连接聚合） |
 | ip_infos | ip, ptr, as_owner, asn, country, malicious, suspicious, domains, vt_at, ipdb_asn, ipdb_org, ipdb_country, ipdb_at（本组主机连过的、本组告警里出现的公网地址：情报命中、入站对端都有；平台后台补全。as_owner 到 vt_at 来自 VirusTotal，未配置时为空，vt_at 为空表示还没查过；ipdb_* 来自本地离线库 DB-IP Lite（ipdb_country 是地理定位国家代码），库缺失时 ipdb_at 为空；两边都有时以 VirusTotal 为准、不一致可以都写进报告） |
-| reports | id, created_at, title, level(ok/attention/urgent), markdown, summary（本组历史报告，可与上一轮对比；定时任务的标题就是任务名） |
+| reports | id, created_at, title, level(ok/attention/urgent), summary, markdown（本组历史报告；对比上一轮时只查 `created_at, level, summary` 并结合 `open_findings`，严禁读取历史报告的 `markdown` 正文，防止旧报告的冗长篇幅传染本轮） |
 | identities | id, kind(directory/host), name, anchor_account_id, created_at（每个目录账号一个身份；没有目录锚点的主机账号各自是主机内身份） |
 | identity_accounts | id, kind(directory/windows/linux), asset_id, name, domain, sid, uid, directory_account_id, first_seen, last_seen, identity_id, link_basis, link_confidence, link_source, linked_at（账号与当前所属身份） |
 | identity_links | id, identity_id, account_id, basis(directory_anchor/ad_sid/host_local/manual), confidence(authoritative/strong/local/manual), evidence(jsonb), source, created_at, revoked_at, revoked_by, revoke_reason（链接与撤销历史） |
@@ -164,26 +164,26 @@ closed 属实且已处置；说明写成人能直接采纳的结案说明，可�
 不能整条规则压掉：比如 DNS 服务器上的可疑后缀规则管着全网的查询，只能压具体域名。一次性的误报写进结论即可，不要提；
 被拒绝过的不要再提。平台指令（包括你自己的命令）触发的告警本来就不进事件，不需要抑制。
 
-最后用 `xdr report` 交一份报告，所有报告同一个格式：
+最后用 `xdr report` 交一份报告，必须遵循**简洁、异常先行、凸显 AI 自治**的格式（全文尽量控制在 1,500–2,500 字以内，严禁写成冗长流水账）：
 
 - **标题**：「对象 + 主题」，最多 50 字，不写结论（定时任务的标题由平台固定成任务名，写什么都行）。
-- **一句话结论**：最多 120 字、不换行，读的人只看这一句也知道要不要处理，比如「pve2 RAID 电池故障待更换，其余正常」。
+- **一句话结论**：最多 120 字、不换行，直奔主题写清异常数、关键事项与 AI 已完成的自治动作，比如「巡检 9 台主机：2 台紧急风险，3 台需关注，4 台正常；已自主同步 5 项待办」。
 - **正文**：不写一级标题（平台会渲染标题、级别、时间与结论），按下面的二级标题分节、按这个顺序；
   结论、需要人处理、未验证三节必须有，没有内容就写「无」，其余可省略：
 
 ```markdown
 ## 结论
-定性与关键理由，一两段。
-## 需要人处理
-逐条写事项、主机、严重程度与建议；巡检分「### 新增」「### 仍未解决」「### 本轮已修复」。
-## 证据
-已观察到的事实，标明主机与来源命令或查询；多台主机按主机分三级标题。
-## 推断
-基于证据的判断与把握程度。
-## 未验证
-没覆盖到、等待批准或执行失败的检查项。
+≤3 行：总体定性（🟢 正常 / 🟡 需关注 / 🔴 紧急）+ 异常与正常主机统计。
 ## 已执行的操作
-改动、登记的待办、提交的抑制或结案建议。
+提前展示本轮 AI 已自主完成的动作（同步待办、写入/更新记忆、标记服务或外联、提议抑制/结案等），每条 1 行；只读无改动写「无」或省略。
+## 需要人处理
+按「### 🔴 紧急 / 新增」「### 🟡 仍未解决」「### ✅ 本轮已修复」列出，每条严格限 1–2 行（**[主机] 事项** — 影响 + 处置建议）；没有写「无」。
+## 证据
+仅异常先行：无异常主机合并为一张紧凑表格或一句话（严禁逐台展开「未见异常」）；有异常主机也只列支撑异常的核心证据（≤4 条/台，严禁罗列该主机的正常检查项）。
+## 推断
+基于证据的简短判断与把握度，≤3 条。
+## 未验证
+合并为 ≤3 条单行列表。
 ```
 
 级别：没有需要人处理的事项写 ok（只存档不推送），有就写 attention，疑似入侵或服务即将中断写 urgent。对话里也照这个分。

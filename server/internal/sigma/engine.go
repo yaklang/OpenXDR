@@ -595,6 +595,26 @@ func (e *Engine) Rules() []*Rule {
 	return e.load().rules
 }
 
+// Matches 对单条事件独立求值，供控制台规则回测使用。
+// 跨事件时序规则（Kind 非空）无单事件条件树，直接返回 false。
+func (r *Rule) Matches(classUID int, os string, raw map[string]any) bool {
+	if r == nil || r.cond == nil || r.Kind != "" {
+		return false
+	}
+	if r.ClassUID != 0 && r.ClassUID != classUID {
+		return false
+	}
+	if r.Product != "" && os != "" && r.Product != os {
+		return false
+	}
+	ctx := &evalCtx{
+		raw:  raw,
+		sels: r.sels,
+		memo: make([]int8, len(r.sels)),
+	}
+	return r.cond.eval(ctx)
+}
+
 // RuleBruteforceSuccess 爆破得手合成检测：多次登录失败后同用户登录成功。
 // 跨事件计数超出单事件匹配引擎的能力，逻辑在 ingest 侧实现，标题在此登记。
 const RuleBruteforceSuccess = "xdr:bruteforce-success"
