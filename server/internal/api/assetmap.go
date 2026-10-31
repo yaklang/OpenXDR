@@ -41,14 +41,24 @@ func AssetMap(db *ent.Client, aiEnabled func() bool) http.Handler {
 	return mux
 }
 
-// assetMapGraph 组内资产图谱。
+// assetMapGraph 组内资产图谱；groupId=all 是全部组视图，只给全局 admin。
 func assetMapGraph(db *ent.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := assetMapGroup(w, r, db)
-		if !ok {
-			return
+		var g *assetmap.Group
+		var err error
+		if r.URL.Query().Get("groupId") == "all" {
+			if u := auth.From(r.Context()); u == nil || u.Role != "admin" {
+				http.Error(w, "全部组视图只对全局管理员开放", http.StatusForbidden)
+				return
+			}
+			g, err = assetmap.LoadAll(r.Context(), db)
+		} else {
+			id, ok := assetMapGroup(w, r, db)
+			if !ok {
+				return
+			}
+			g, err = assetmap.LoadGroup(r.Context(), db, id)
 		}
-		g, err := assetmap.LoadGroup(r.Context(), db, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

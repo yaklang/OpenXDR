@@ -30,8 +30,8 @@ func TestEnsureIsolatesGroupAndDrops(t *testing.T) {
 
 	a := client.Group.Create().SetName("a").SaveX(ctx)
 	b := client.Group.Create().SetName("b").SaveX(ctx)
-	a1 := client.Asset.Create().SetHostname("a1").SetGroupID(a.ID).SaveX(ctx)
-	b1 := client.Asset.Create().SetHostname("b1").SetGroupID(b.ID).SaveX(ctx)
+	a1 := client.Asset.Create().SetHostname("a1").SetGroupID(a.ID).SetIPAddrs([]string{"10.9.0.1"}).SaveX(ctx)
+	b1 := client.Asset.Create().SetHostname("b1").SetGroupID(b.ID).SetIPAddrs([]string{"10.9.0.2"}).SaveX(ctx)
 	// 新视图的两组数据：每张表各给 a、b 一份，只读身份只能看到 a 的
 	now := time.Now()
 	for _, x := range []struct {
@@ -151,6 +151,15 @@ func TestEnsureIsolatesGroupAndDrops(t *testing.T) {
 	var proc string
 	if err := ro.QueryRowContext(ctx, `SELECT count(*), min(raw->'process'->>'name') FROM alert_events WHERE rule_id IN ('r', 'cross')`).Scan(&n, &proc); err != nil || n != 1 || proc != "a1" {
 		t.Errorf("alert_events 只应带出本组主机自己的事件：%d 条 %q，%v", n, proc, err)
+	}
+	// 别组纳管的地址看得到、标为非本组，但拿不到别组主机名：AI 才不会把它报成未纳管
+	var managed string
+	if err := ro.QueryRowContext(ctx, `SELECT string_agg(ip || '=' || in_group, ',' ORDER BY ip) FROM managed_addresses`).Scan(&managed); err != nil ||
+		managed != "10.9.0.1=true,10.9.0.2=false" {
+		t.Fatalf("managed_addresses 应列出两组地址并只标本组: %q %v", managed, err)
+	}
+	if err := ro.QueryRowContext(ctx, `SELECT count(*) FROM pg_attribute WHERE attrelid = 'managed_addresses'::regclass AND attnum > 0`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("managed_addresses 只该有 ip 与 in_group 两列: %d %v", n, err)
 	}
 	if err := ro.QueryRowContext(ctx, `SELECT count(*) FROM public.assets`).Scan(&n); err == nil {
 		t.Error("不应能读业务基表")

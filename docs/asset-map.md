@@ -257,7 +257,7 @@ server 每轮检查文件的修改时间与大小，变了就重新打开，一�
 
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
-| GET | `/api/asset-map?groupId=` | 组 viewer | 节点（本组资产 / 未纳管地址 / 别组资产 / 互联网）与有向边 |
+| GET | `/api/asset-map?groupId=` | 组 viewer | 节点（本组资产 / 未纳管地址 / 别组资产 / 互联网）与有向边；`groupId=all` 是全部组视图，仅全局管理员，所有组的资产都画成主机节点、跨组连接连成主机到主机，资产节点带 `groupId` |
 | GET | `/api/attack-surface?groupId=` | 组 viewer | 汇总、暴露面（按风险分降序）、盲区 |
 | GET | `/api/zones?groupId=` | 组 viewer | 区域定义 |
 | POST | `/api/zones` | 组 admin | `{groupId,name,kind,cidrs}`；同名 409 |

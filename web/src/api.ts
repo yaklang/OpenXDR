@@ -1345,6 +1345,8 @@ export interface MapNode {
   online?: boolean
   listening?: number
   ports?: string[]
+  // 资产所在的组：全部组视图里点开详情按资产自己的组取
+  groupId?: string
 }
 // 公网目的地址：按地址合并的外联明细，带反向解析、离线归属库、VirusTotal 信息与 AI 给的用途
 export interface PeerStat {
@@ -1414,6 +1416,7 @@ export interface AssetProfile {
 }
 export type ProfileEdit = { role?: string; summary?: string; criticality?: number; unlock?: string[] }
 
+// groupId 为 all 是全部组视图（仅全局管理员），跨组的连接连成主机到主机
 export const fetchAssetMap = (groupId: string) => get<AssetMap>(`/api/asset-map?groupId=${groupId}`)
 // 软件漏洞：按源码包归组，可升级修复与暂无修复分开
 export interface VulnItem { id: string; aliases?: string[]; summary?: string; score: number; vector?: string; fixed?: string }

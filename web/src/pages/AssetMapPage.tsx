@@ -41,8 +41,11 @@ export function AssetMapPage() {
   // 未纳管地址多时默认收起，首屏先看清已纳管资产之间的关系；null 表示还没手动切过
   const [discoveredChoice, setShowDiscovered] = useState<boolean | null>(null)
   const [showInternet, setShowInternet] = useState(true)
+  // 全部组：全局管理员把所有组画进一张图，跨组的连接连成主机到主机（按组看只是别组的一个地址）
+  const [allGroups, setAllGroups] = useState(false)
   const [selected, setSelected] = useState<Selection>(null)
-  const query = useQuery({ queryKey: ['assetMap', group?.id], queryFn: () => fetchAssetMap(group!.id), enabled: !!group, refetchInterval: 60_000 })
+  const scope = isAdmin && allGroups ? 'all' : group?.id
+  const query = useQuery({ queryKey: ['assetMap', scope], queryFn: () => fetchAssetMap(scope!), enabled: !!scope, refetchInterval: 60_000 })
   const discoveredCount = query.data?.nodes.filter(n => n.kind === 'discovered' || n.kind === 'managed').length ?? 0
   const showDiscovered = discoveredChoice ?? discoveredCount <= 20
 
@@ -67,6 +70,7 @@ export function AssetMapPage() {
               value={search} onChange={e => setSearch(e.target.value)} />
             <Space size={6}><Switch size="small" checked={showDiscovered} onChange={setShowDiscovered} aria-label={t('mapShowDiscovered')} />{t('mapShowDiscovered')}{discoveredCount > 0 && ` (${discoveredCount})`}</Space>
             <Space size={6}><Switch size="small" checked={showInternet} onChange={setShowInternet} aria-label={t('mapShowInternet')} />{t('mapShowInternet')}</Space>
+            {isAdmin && <Space size={6}><Switch size="small" checked={allGroups} onChange={setAllGroups} aria-label={t('mapAllGroups')} />{t('mapAllGroups')}</Space>}
           </Space>
           <Legend />
         </Flex>
@@ -93,7 +97,7 @@ export function AssetMapPage() {
           return (
             <>
               <Typography.Text strong style={{ display: 'block', margin: '16px 0 8px' }}>{t('topTargets')}</Typography.Text>
-              <PublicDestList items={selected.edge.targets!} host={a && { id: a.id, name: a.label, groupId: group?.id }} />
+              <PublicDestList items={selected.edge.targets!} host={a && { id: a.id, name: a.label, groupId: a.groupId ?? group?.id }} />
             </>
           )
         })()}
@@ -123,7 +127,7 @@ function NodeDetail({ node, graph, canEdit, isGroupAdmin }: { node: MapNode; gra
     return (
       <Space orientation="vertical" size={12} style={{ width: '100%' }}>
         <Link to={`/assets/${node.id}`}>{t('viewAsset')} <ArrowRightOutlined /></Link>
-        <AssetProfileView key={node.id} assetId={node.id} hostname={node.label} groupId={group?.id} canEdit={canEdit} isGroupAdmin={isGroupAdmin} compact />
+        <AssetProfileView key={node.id} assetId={node.id} hostname={node.label} groupId={node.groupId ?? group?.id} canEdit={canEdit} isGroupAdmin={isGroupAdmin} compact />
       </Space>
     )
   }
@@ -154,7 +158,7 @@ function NodeDetail({ node, graph, canEdit, isGroupAdmin }: { node: MapNode; gra
               <Typography.Text strong>{e.from === node.id ? `${t('mapLegendInternet')} → ${label(e.to)}` : `${label(e.from)} → ${t('mapLegendInternet')}`}</Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t('connCount', { n: e.count.toLocaleString() })} · <Ago iso={e.lastSeen} /></Typography.Text>
             </Flex>
-            <div style={{ marginTop: 8 }}><PublicDestList items={e.targets ?? []} host={{ id: assetId, name: label(assetId), groupId: group?.id }} limit={6} /></div>
+            <div style={{ marginTop: 8 }}><PublicDestList items={e.targets ?? []} host={{ id: assetId, name: label(assetId), groupId: graph.nodes.find(n => n.id === assetId)?.groupId ?? group?.id }} limit={6} /></div>
           </div>
         )
       })}
