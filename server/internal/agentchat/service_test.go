@@ -85,3 +85,27 @@ func TestCommandReceiptsDoNotClaimEffectOrRetry(t *testing.T) {
 		}
 	}
 }
+
+func TestStorableJSONSanitizesNulForPostgresJSONB(t *testing.T) {
+	clean := json.RawMessage(`{"role":"toolResult","content":[{"type":"text","text":"normal output"}]}`)
+	if got := storableJSON(clean); string(got) != string(clean) {
+		t.Fatalf("干净 JSON 不应被改动: %s", got)
+	}
+
+	raw := json.RawMessage("{\"role\":\"toolResult\",\"text\":\"a\\u0000b\\U0000c\\\\u0000d\\\\\\u0000e\x00f\"}")
+	got := storableJSON(raw)
+	if strings.Contains(string(got), `\u0000`) && !strings.Contains(string(got), `\\u0000`) {
+		t.Fatalf("未转义的 \\u0000 应被替换: %s", got)
+	}
+	var parsed struct {
+		Role string `json:"role"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("清理后仍应是合法 JSON: %v (%s)", err, got)
+	}
+	want := `a␀b␀c\u0000d\␀e␀f`
+	if parsed.Text != want {
+		t.Fatalf("parsed.Text = %q, want %q", parsed.Text, want)
+	}
+}

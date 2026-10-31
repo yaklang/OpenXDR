@@ -2,6 +2,7 @@
 package agentchat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -576,7 +577,7 @@ func (s *Service) recorder(session *ent.AgentSession, seq *int, emit piruntime.O
 					return errors.New("Pi 消息角色无效")
 				}
 				*seq++
-				if err := s.DB.SessionMessage.Create().SetSessionID(id).SetSeq(*seq).SetRole(message.Role).SetContent(e.Message).Exec(ctx); err != nil {
+				if err := s.DB.SessionMessage.Create().SetSessionID(id).SetSeq(*seq).SetRole(message.Role).SetContent(storableJSON(e.Message)).Exec(ctx); err != nil {
 					return err
 				}
 				// 每次模型返回后看一眼额度：到顶就在下一次调用前停下，已记下的这条不丢
@@ -592,6 +593,42 @@ func (s *Service) recorder(session *ent.AgentSession, seq *int, emit piruntime.O
 		}
 		return nil
 	}
+}
+
+// storableJSON 清理消息 JSON 中的 NUL 字符（\u0000 与原始 \x00 字节）：
+// PostgreSQL jsonb 列拒绝 \u0000（SQLSTATE 22P05），沙箱读 /proc/*/cmdline 等输出时偶有带入。
+// 像命令回执一样换成可见的 ␀（\u2400），保留已转义的字面量 \\u0000 不动。
+func storableJSON(raw json.RawMessage) json.RawMessage {
+	if utf8.Valid(raw) && bytes.IndexByte(raw, 0) < 0 && !bytes.Contains(raw, []byte("0000")) {
+		return raw
+	}
+	out := make([]byte, 0, len(raw))
+	for i := 0; i < len(raw); {
+		if raw[i] == 0 {
+			out = append(out, "␀"...)
+			i++
+			continue
+		}
+		if raw[i] == '\\' && i+1 < len(raw) {
+			if raw[i+1] == '\\' {
+				out = append(out, '\\', '\\')
+				i += 2
+				continue
+			}
+			if i+6 <= len(raw) && (raw[i+1] == 'u' || raw[i+1] == 'U') &&
+				raw[i+2] == '0' && raw[i+3] == '0' && raw[i+4] == '0' && raw[i+5] == '0' {
+				out = append(out, `\u2400`...)
+				i += 6
+				continue
+			}
+		}
+		out = append(out, raw[i])
+		i++
+	}
+	if !utf8.Valid(out) {
+		out = bytes.ToValidUTF8(out, []byte("\uFFFD"))
+	}
+	return out
 }
 
 // queryDescription 与 queryrole 的视图定义同一口径，改视图时一起改。
@@ -773,6 +810,9 @@ func (s *Service) waitCommand(ctx context.Context, cmd *ent.Command, timeout uin
 		case <-ticker.C:
 			current, err := s.DB.Command.Get(wait, cmd.ID)
 			if err != nil {
+				if wait.Err() != nil {
+					return "", fmt.Errorf("等待命令 %s 回执结束，执行状态未知，请用 command_status 查询已有指令，禁止自动重试: %w", cmd.ID, wait.Err())
+				}
 				return "", fmt.Errorf("命令 %s 回执读取失败，执行状态未知，请用 command_status 查询已有指令，禁止自动重试", cmd.ID)
 			}
 			cmd = current

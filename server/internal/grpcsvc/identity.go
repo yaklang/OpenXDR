@@ -3,11 +3,13 @@ package grpcsvc
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
@@ -71,9 +73,18 @@ func checkService(ctx context.Context, fullMethod string) error {
 	return nil
 }
 
-// Interceptors 在所有 RPC 之前核对证书用途，放在 handler 之外，新加的 RPC 不会漏检。
+// Interceptors 在所有 RPC 之前核对证书用途，放在 handler 之外，新加的 RPC 不会漏检；
+// 同时开启 HTTP/2 PING 保活，穿过四层负载均衡空闲超时并及时收回失联对端的半开指令通道。
 func Interceptors() []grpc.ServerOption {
 	return []grpc.ServerOption{
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			Time:    60 * time.Second,
+			Timeout: 20 * time.Second,
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             15 * time.Second,
+			PermitWithoutStream: true,
+		}),
 		grpc.ChainUnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 			if err := checkService(ctx, info.FullMethod); err != nil {
 				return nil, err
