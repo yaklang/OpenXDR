@@ -1,8 +1,9 @@
-import { CheckCircleFilled, ExclamationCircleFilled, RobotOutlined, WarningFilled } from '@ant-design/icons'
-import { Alert, Card, Col, Collapse, Empty, Flex, Row, Table, Timeline, Typography, theme } from 'antd'
+import { CheckCircleFilled, ExclamationCircleFilled, WarningFilled } from '@ant-design/icons'
+import { Alert, Card, Col, Collapse, Empty, Flex, Row, Space, Table, Timeline, Typography, theme } from 'antd'
 import type { ReactNode } from 'react'
 import type { RecordEvidence, Verdict } from '../api'
 import { useI18n, type MsgKey } from '../i18n'
+import { GeminiSparkle } from './Logo'
 
 // 研判结论放在详情页最上面：先看结论与置信度，再看攻击链与处置建议
 export function VerdictCard({ verdict }: { verdict: Verdict | null }) {
@@ -13,8 +14,8 @@ export function VerdictCard({ verdict }: { verdict: Verdict | null }) {
     suspicious: { key: 'verdictSuspicious', color: token.colorWarning, bg: token.colorWarningBg, icon: <WarningFilled /> },
     benign: { key: 'verdictBenign', color: token.colorSuccess, bg: token.colorSuccessBg, icon: <CheckCircleFilled /> },
   }
-  if (!verdict) return <Card title={t('aiVerdict')}><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('waitingVerdict')} /></Card>
-  if (verdict.error) return <Card title={t('aiVerdict')}><Alert type="warning" showIcon title={t('unparsableVerdict', { e: verdict.raw ?? verdict.error })} /></Card>
+  if (!verdict) return <Card title={<Space size={8}><GeminiSparkle size={16} />{t('aiVerdict')}</Space>}><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('waitingVerdict')} /></Card>
+  if (verdict.error) return <Card title={<Space size={8}><GeminiSparkle size={16} />{t('aiVerdict')}</Space>}><Alert type="warning" showIcon title={t('unparsableVerdict', { e: verdict.raw ?? verdict.error })} /></Card>
   const meta = META[verdict.verdict ?? '']
   const chain = verdict.kill_chain ?? []
   const actions = verdict.actions ?? []
@@ -22,9 +23,9 @@ export function VerdictCard({ verdict }: { verdict: Verdict | null }) {
   return (
     <Card styles={{ body: { padding: 0 } }}>
       <Flex align="center" gap={16} className="verdict-band" style={{ background: meta?.bg ?? token.colorFillQuaternary, borderLeftColor: meta?.color ?? token.colorBorder }}>
-        <span style={{ fontSize: 30, color: meta?.color, lineHeight: 1 }}>{meta?.icon ?? <RobotOutlined />}</span>
+        <span style={{ fontSize: 30, color: meta?.color, lineHeight: 1 }}>{meta?.icon ?? <GeminiSparkle size={28} />}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}><RobotOutlined /> {t('aiVerdict')}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}><Space size={4}><GeminiSparkle size={13} />{t('aiVerdict')}</Space></Typography.Text>
           <div style={{ fontSize: 20, fontWeight: 600, color: meta?.color }}>{meta ? t(meta.key) : verdict.verdict}</div>
         </div>
         {verdict.confidence != null && (
@@ -34,7 +35,7 @@ export function VerdictCard({ verdict }: { verdict: Verdict | null }) {
           </div>
         )}
       </Flex>
-      <div style={{ padding: '18px 24px 8px' }}>
+      <div style={{ padding: '20px 24px 16px' }}>
         {!!verdict.evidence_observations?.length && <EvidenceObservations observations={verdict.evidence_observations} />}
         {verdict.summary && <>
           <Typography.Text type="secondary">{t('triageModelSummary')}</Typography.Text>

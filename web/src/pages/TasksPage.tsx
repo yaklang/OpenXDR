@@ -95,8 +95,8 @@ function OnDuty({ run, groupName, hosts, now }: { run: TaskRunRow; groupName: st
   const acts = useActivities(run.sessionId, hosts)
   const recent = acts.slice(-5).reverse()
   return (
-    <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 8, background: token.colorSuccessBg }}>
-      <Space wrap size={8} style={{ marginBottom: 6 }}>
+    <div style={{ marginTop: 14, padding: '14px 18px', borderRadius: 16, background: token.colorSuccessBg }}>
+      <Space wrap size={8} style={{ marginBottom: 8 }}>
         <Tag color="success" variant="filled" icon={<LoadingOutlined />}>{t('workerWorking')}</Tag>
         <Typography.Text type="secondary">{t('workerShift', { group: groupName, elapsed: duration(now - Date.parse(run.startedAt)), steps: acts.length })}</Typography.Text>
         {run.sessionId && <Link to={`/chat/${run.sessionId}`}>{t('workerWatch')}</Link>}
@@ -210,8 +210,8 @@ function Worker({ task, busy, hosts, onToggle, onGroup, onRun, onEdit }: {
   const ring = { working: token.colorSuccess, idle: token.colorPrimary, off: token.colorTextQuaternary }[state]
 
   return (
-    <Card styles={{ body: { padding: 16 } }} style={{ height: '100%' }}>
-      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+    <Card styles={{ body: { padding: 22 } }} style={{ height: '100%' }}>
+      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
         <div className={state === 'working' ? 'worker-pulse' : undefined} style={{ borderRadius: '50%', boxShadow: `0 0 0 3px ${ring}`, flexShrink: 0 }}>
           <Avatar size={48} icon={<RobotOutlined />} style={{ background: state === 'off' ? token.colorFillSecondary : ring }} />
         </div>
@@ -339,7 +339,7 @@ export function TasksPage() {
               </Space>
             </Flex>
             {!tasks.length ? <Card><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('noMatch')} /></Card> : (
-          <Row gutter={[16, 16]}>
+          <Row gutter={[20, 20]}>
             {tasks.map(task => (
               <Col key={task.id} xs={24} lg={12}>
                 <Worker task={task} hosts={hosts} busy={busy.includes(task.id)}

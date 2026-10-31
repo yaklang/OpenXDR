@@ -64,24 +64,24 @@ export function AIUsageOverview() {
   ]
 
   return (
-    <Flex vertical gap={16}>
+    <Flex vertical gap={20}>
       <Flex justify="space-between" align="center" wrap gap={8}>
         <Typography.Text type="secondary">{t('usageHint')}</Typography.Text>
         <Segmented value={days} onChange={v => setDays(v as number)} options={[7, 30, 90].map(n => ({ value: n, label: t('lastDays', { n }) }))} />
       </Flex>
       {!query.data ? <Card><Skeleton active /></Card> : (
         <>
-          <Row gutter={[16, 16]}>
+          <Row gutter={[20, 20]}>
             {tiles.map(x => (
               <Col key={x.label} xs={12} lg={6}>
-                <Card styles={{ body: { padding: '16px 20px' } }}>
+                <Card styles={{ body: { padding: '18px 22px' } }}>
                   <Typography.Text type="secondary">{x.label}</Typography.Text>
                   <div className="usage-value">{x.value}</div>
                 </Card>
               </Col>
             ))}
           </Row>
-          <Row gutter={[16, 16]}>
+          <Row gutter={[20, 20]}>
             <Col xs={24} xl={16}>
               <Card title={t('usageDaily')} style={{ height: '100%' }}
                 extra={<Segmented size="small" value={view} onChange={v => setView(v as 'chart' | 'table')} options={[{ value: 'chart', label: t('viewChart') }, { value: 'table', label: t('viewTable') }]} />}>

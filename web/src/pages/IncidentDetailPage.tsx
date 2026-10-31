@@ -66,7 +66,7 @@ function QueueCard({ items, index }: { items: QueueItem[]; index: number }) {
   const from = Math.max(0, Math.min(index - 3, items.length - 7))
   return (
     <Card title={t('queueTitle')} size="small" extra={<Typography.Text type="secondary">{index + 1} / {items.length}</Typography.Text>}
-      styles={{ body: { padding: 6 } }}>
+      styles={{ body: { padding: '10px 12px' } }}>
       {items.slice(from, from + 7).map((q, i) => {
         const body = <><SeverityTag value={q.severity} /><Typography.Text ellipsis style={{ flex: 1 }}>{q.title ?? q.id}</Typography.Text></>
         return from + i === index
@@ -182,9 +182,9 @@ export function IncidentDetailPage() {
         </>
       }
     >
-      <Row gutter={[16, 16]}>
+      <Row gutter={[20, 20]}>
         <Col xs={24} xl={16}>
-          <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={20} style={{ width: '100%' }}>
             {inc.closureProposal && !done && (
               <Alert type="info" showIcon icon={<RobotOutlined />}
                 title={t(inc.closureProposal.status === 'closed' ? 'proposalClosed' : 'proposalFp')}
@@ -247,7 +247,7 @@ export function IncidentDetailPage() {
           </Space>
         </Col>
         <Col xs={24} xl={8}>
-          <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={20} style={{ width: '100%' }}>
             {queue.total > 1 && queue.index >= 0 && <QueueCard items={queue.items} index={queue.index} />}
             <Card title={t('basicInfo')}>
               <Descriptions column={1} size="small">

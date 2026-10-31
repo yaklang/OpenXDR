@@ -40,9 +40,9 @@ function Stat({ label, value, tone, onClick }: { label: string; value: ReactNode
     <Card size="small" hoverable={!!onClick} onClick={onClick}
       role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
       onKeyDown={onClick ? e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() } } : undefined}
-      styles={{ body: { padding: '14px 18px' } }}>
+      styles={{ body: { padding: '18px 22px' } }}>
       <Typography.Text type="secondary" style={{ fontSize: 13 }}>{label}</Typography.Text>
-      <div style={{ fontSize: 24, fontWeight: 600, marginTop: 2, color: tone ?? token.colorText, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+      <div style={{ fontSize: 26, fontWeight: 600, marginTop: 4, color: tone ?? token.colorText, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
     </Card>
   )
 }
@@ -210,7 +210,7 @@ function AssetDetail() {
     >
       {commandDetail && <CommandDetailDrawer id={commandDetail} onClose={() => setCommandDetail(null)} />}
       {verifying?.assetId === asset.id && <CommandVerificationDrawer key={`${verifying.id}:${asset.groupId}`} command={verifying} canEdit={canAct} onClose={() => setVerifying(null)} />}
-      <Row gutter={[16, 16]}>
+      <Row gutter={[20, 20]}>
         <Col xs={12} xl={6}>
           <Stat label={t('unresolvedIncidents')} value={unresolvedCount ?? '-'} tone={unresolvedCount ? token.colorError : undefined} onClick={() => openTab('incidents')} />
         </Col>
@@ -311,7 +311,7 @@ function AssetDetail() {
           </Card>
         </Col>
         <Col xs={24} xl={7}>
-          <Card title={t('profileTitle')} style={{ marginBottom: 16 }}>
+          <Card title={t('profileTitle')} style={{ marginBottom: 20 }}>
             <AssetProfileView assetId={asset.id} hostname={asset.hostname} groupId={asset.groupId} canEdit={canAct} isGroupAdmin={isAdmin || group?.role === 'admin'} compact noAgent={!asset.agentId} />
           </Card>
           <Card title={t('hostInfo')}>

@@ -11,6 +11,7 @@ import { useTheme } from '../app/theme'
 import { Ago } from '../components/Ago'
 import { GettingStarted } from '../components/GettingStarted'
 import { LoadError } from '../components/LoadError'
+import { GeminiSparkle } from '../components/Logo'
 import { Page, TableCard, WIDE_ONLY, useWideTable } from '../components/Page'
 import { saveQueue } from '../components/incidentQueue'
 import { useRowLink } from '../components/rowLink'
@@ -59,17 +60,19 @@ function ActionCenter({ items }: { items: { icon: ReactNode; label: string; coun
   const { t } = useI18n()
   const { token } = theme.useToken()
   return (
-    <Card title={t('actionCenter')} style={{ height: '100%' }} styles={{ body: { padding: '8px 12px' } }}>
-      {items.map(i => (
-        <Link key={i.to} to={i.to} className="action-row">
-          <span className="action-icon" style={{ color: i.count ? i.color : token.colorTextQuaternary, background: i.count ? `${i.color}1a` : token.colorFillQuaternary }}>{i.icon}</span>
-          <Typography.Text style={{ flex: 1 }}>{i.label}</Typography.Text>
-          <span className="action-count" style={{ color: i.count ? token.colorText : token.colorTextQuaternary }}>{i.count ?? '-'}</span>
-          <RightOutlined style={{ color: token.colorTextQuaternary, fontSize: 12 }} />
-        </Link>
-      ))}
+    <Card title={t('actionCenter')} style={{ height: '100%' }} styles={{ body: { padding: '12px 20px 20px' } }}>
+      <div className="action-list-wrap">
+        {items.map(i => (
+          <Link key={i.to} to={i.to} className="action-row">
+            <span className="action-icon" style={{ color: i.count ? i.color : token.colorTextQuaternary, background: i.count ? `${i.color}1a` : token.colorFillTertiary }}>{i.icon}</span>
+            <Typography.Text style={{ flex: 1 }}>{i.label}</Typography.Text>
+            <span className="action-count" style={{ color: i.count ? token.colorText : token.colorTextQuaternary }}>{i.count ?? '-'}</span>
+            <RightOutlined style={{ color: token.colorTextQuaternary, fontSize: 12 }} />
+          </Link>
+        ))}
+      </div>
       {items.every(i => i.count === 0) && (
-        <Flex align="center" gap={6} style={{ padding: '10px 8px 4px', color: token.colorSuccess }}>
+        <Flex align="center" gap={6} style={{ padding: '12px 8px 2px', color: token.colorSuccess }}>
           <CheckCircleOutlined />{t('allClear')}
         </Flex>
       )}
@@ -94,7 +97,7 @@ function AiOps() {
   const reports = useQuery({ queryKey: ['reports', group?.id], queryFn: () => fetchAgentReports(group!.id), enabled: !!group })
 
   return (
-    <Card title={t('aiOpsTitle')} style={{ height: '100%' }} extra={<Link to="/chat">{t('navChat')} <ArrowRightOutlined /></Link>}>
+    <Card title={<Space size={8}><GeminiSparkle size={16} />{t('aiOpsTitle')}</Space>} style={{ height: '100%' }} extra={<Link to="/chat">{t('navChat')} <ArrowRightOutlined /></Link>}>
       <Typography.Text type="secondary" strong>{t('recentRuns')}</Typography.Text>
       <div className="mini-list">
         {(runs.data ?? []).length === 0 && <Typography.Text type="secondary">{t('noTaskRuns')}</Typography.Text>}
@@ -155,7 +158,7 @@ export function OverviewPage() {
   return (
     <Page title={t('navOverview')} subtitle={t('overviewSubtitle')}>
       <GettingStarted />
-      <Row gutter={[16, 16]}>
+      <Row gutter={[20, 20]}>
         <Col xs={24} xl={16}>
           <Funnel events={s?.events24h ?? 0} alerts={s?.alerts24h ?? 0} incidents={s?.reviewIncidents ?? 0}
             foot={[

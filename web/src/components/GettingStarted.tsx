@@ -41,9 +41,9 @@ export function GettingStarted() {
     <Card
       title={<>{t('gsTitle')} <Typography.Text type="secondary" style={{ fontWeight: 400, fontSize: 13, marginLeft: 8 }}>{t('gsProgress', { done, total: steps.length })}</Typography.Text></>}
       extra={<Button type="text" size="small" onClick={dismiss}>{t('gsDismiss')}</Button>}
-      style={{ marginBottom: 16 }}
+      style={{ marginBottom: 20 }}
     >
-      <Progress percent={(done / steps.length) * 100} showInfo={false} size="small" style={{ margin: '-8px 0 12px' }} />
+      <Progress percent={(done / steps.length) * 100} showInfo={false} size="small" style={{ margin: '-4px 0 16px' }} />
       <div className="gs-grid">
         {steps.map((s, i) => (
           <div key={s.title} className={`gs-step${s.done ? ' gs-done' : ''}`}>

@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { downloadAgentPdf, fetchAgentReports, markAllReportsRead, markReportRead, reportHtmlUrl, type AgentReport } from '../api'
 import { useSession } from '../app/session'
+import { GeminiSparkle } from '../components/Logo'
 import { Markdown } from '../components/Markdown'
 import { EmptyHint, Refreshed } from '../components/Ago'
 import { FilterCard, Page, WIDE_ONLY, useWideTable } from '../components/Page'
@@ -119,8 +120,8 @@ export function ReportsPage() {
         onClose={() => setPreview(null)}
         extra={preview && (
           <Space>
-            <Button icon={<ExportOutlined aria-hidden />} onClick={() => html(preview)}>HTML</Button>
-            <Button icon={<FilePdfOutlined aria-hidden />} loading={downloads.has(preview.id)} onClick={() => pdf(preview)}>PDF</Button>
+            <Button shape="round" icon={<ExportOutlined aria-hidden />} onClick={() => html(preview)}>HTML</Button>
+            <Button shape="round" icon={<FilePdfOutlined aria-hidden />} loading={downloads.has(preview.id)} onClick={() => pdf(preview)}>PDF</Button>
           </Space>
         )}
       >
@@ -131,7 +132,12 @@ export function ReportsPage() {
             <Typography.Text type="secondary">{fmtTime(preview.created_at)}</Typography.Text>
             <Link to={`/chat/${preview.session_id}`}>{t('openSession')}</Link>
           </Space>
-          {preview.summary && <Typography.Paragraph strong style={{ borderLeft: '4px solid #1677ff', padding: '6px 12px', background: 'rgba(22,119,255,0.06)' }}>{preview.summary}</Typography.Paragraph>}
+          {preview.summary && (
+            <div className="gemini-report-summary">
+              <GeminiSparkle size={18} />
+              <Typography.Paragraph strong style={{ margin: 0, flex: 1 }}>{preview.summary}</Typography.Paragraph>
+            </div>
+          )}
           <Markdown text={preview.markdown.replace(/^\s*#\s+[^\n]*\n/, '')} />
         </>}
       </Drawer>

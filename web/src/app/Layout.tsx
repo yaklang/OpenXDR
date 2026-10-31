@@ -154,6 +154,7 @@ export function Layout() {
 function Shell() {
   const { t } = useI18n()
   const { isAdmin, groups, group, setGroupId } = useSession()
+  const { dark, toggle: toggleTheme } = useTheme()
   const { token } = theme.useToken()
   const wide = !!Grid.useBreakpoint().lg
   const [menuOpen, setMenuOpen] = useState(false)
@@ -239,10 +240,12 @@ function Shell() {
     </nav>
   )
 
+  const isChat = selected === '/chat'
+
   return (
-    <AntLayout style={{ minHeight: '100vh' }}>
+    <AntLayout className="app-shell" style={{ minHeight: '100vh' }}>
       {wide ? (
-        <AntLayout.Sider theme="light" width={232} collapsedWidth={64} collapsed={collapsed} className="app-sider">
+        <AntLayout.Sider theme="light" width={240} collapsedWidth={68} collapsed={collapsed} className="app-sider">
           {sider}
         </AntLayout.Sider>
       ) : (
@@ -250,9 +253,9 @@ function Shell() {
           {sider}
         </Drawer>
       )}
-      <AntLayout style={{ minWidth: 0 }}>
+      <AntLayout className="app-main-wrap" style={{ minWidth: 0 }}>
         <AntLayout.Header className="app-header">
-          <Button type="text" aria-label={t('navigation')} aria-expanded={wide ? !collapsed : menuOpen} icon={collapsed || !wide ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={wide ? collapse : () => setMenuOpen(true)} />
+          <Button type="text" shape="circle" aria-label={t('navigation')} aria-expanded={wide ? !collapsed : menuOpen} icon={collapsed || !wide ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={wide ? collapse : () => setMenuOpen(true)} />
           {!wide && <Link to="/chat" aria-label="OpenXDR" style={{ display: 'flex' }}><Logo size={24} /></Link>}
           {compact && <div className="app-group">{groupSelect}</div>}
           <div style={{ flex: 1 }} />
@@ -260,10 +263,13 @@ function Shell() {
             <Button className="search-trigger app-search" icon={<SearchOutlined />} onClick={() => setPalette(true)}>
               <span>{t('paletteTrigger')}</span><kbd>{mac ? '⌘' : 'Ctrl'} K</kbd>
             </Button>
-          ) : <Button type="text" className="app-search" aria-label={t('paletteTrigger')} icon={<SearchOutlined />} onClick={() => setPalette(true)} />}
+          ) : <Button type="text" shape="circle" className="app-search" aria-label={t('paletteTrigger')} icon={<SearchOutlined />} onClick={() => setPalette(true)} />}
+          <Tooltip title={dark ? t('lightMode') : t('darkMode')}>
+            <Button type="text" shape="circle" aria-label={dark ? t('lightMode') : t('darkMode')} icon={dark ? <SunOutlined /> : <MoonOutlined />} onClick={toggleTheme} />
+          </Tooltip>
           <ApprovalBell />
         </AntLayout.Header>
-        <AntLayout.Content className="app-content">
+        <AntLayout.Content className={isChat ? 'app-content app-content-chat' : 'app-content'}>
           <Outlet />
         </AntLayout.Content>
         <CommandPalette open={palette} onClose={() => setPalette(false)} onHelp={() => setHelp(true)} />

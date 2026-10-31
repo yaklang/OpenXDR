@@ -27,9 +27,9 @@ const RISK: Record<string, { key: MsgKey; color: string }> = {
 function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: string }) {
   const { token } = theme.useToken()
   return (
-    <Card size="small" styles={{ body: { padding: '14px 18px' } }}>
+    <Card size="small" styles={{ body: { padding: '18px 22px' } }}>
       <Typography.Text type="secondary" style={{ fontSize: 13 }}>{label}</Typography.Text>
-      <div style={{ fontSize: 26, fontWeight: 600, marginTop: 2, color: tone ?? token.colorText, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+      <div style={{ fontSize: 26, fontWeight: 600, marginTop: 4, color: tone ?? token.colorText, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
     </Card>
   )
 }
@@ -57,8 +57,8 @@ export function AttackSurfacePage() {
     <Page title={t('navAttackSurface')} subtitle={t('surfaceSubtitle')}
       extra={group && <Button icon={<ApartmentOutlined />} onClick={() => setZonesOpen(true)}>{t('manageZones')}</Button>}>
       {query.isError ? <LoadError error={query.error} onRetry={() => query.refetch()} /> : (
-        <Flex vertical gap={16}>
-          <Row gutter={[16, 16]}>
+        <Flex vertical gap={20}>
+          <Row gutter={[20, 20]}>
             <Col xs={12} md={8} xl={{ flex: '20%' }}><Stat label={t('surfInternet')} value={s?.summary.internet ?? '-'} tone={s?.summary.internet ? token.colorError : undefined} /></Col>
             <Col xs={12} md={8} xl={{ flex: '20%' }}><Stat label={t('surfDmz')} value={s?.summary.dmz ?? '-'} tone={s?.summary.dmz ? token.colorWarning : undefined} /></Col>
             <Col xs={12} md={8} xl={{ flex: '20%' }}><Stat label={t('surfInternal')} value={s?.summary.internal ?? '-'} /></Col>
