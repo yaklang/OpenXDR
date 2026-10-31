@@ -9,7 +9,7 @@ import { HostLink } from '../components/HostLink'
 import { AccountKindTag, IdentityKindTag } from '../components/IdentityParts'
 import { accountLabel } from '../components/identityText'
 import { LoadError } from '../components/LoadError'
-import { FilterCard, Page } from '../components/Page'
+import { FilterCard, Page, STICKY_HEADER } from '../components/Page'
 import { useI18n } from '../i18n'
 
 const PAGE = 100
@@ -50,7 +50,7 @@ export function IdentitiesPage() {
         onReset={q || kind || system ? reset : undefined}
         extra={<Refreshed at={query.dataUpdatedAt} fetching={query.isFetching} onRefresh={() => query.refetch()} />}>
         {query.isError ? <LoadError error={query.error} onRetry={() => query.refetch()} /> : <>
-          <Table<IdentitySummary> size="small" rowKey="id" loading={query.isPending && !!group} dataSource={query.data?.items ?? []} pagination={false}
+          <Table<IdentitySummary> sticky={STICKY_HEADER} size="small" rowKey="id" loading={query.isPending && !!group} dataSource={query.data?.items ?? []} pagination={false}
             scroll={{ x: 720 }}
             locale={{ emptyText: <EmptyHint title={t('identitiesEmpty')} hint={t('identitiesEmptyHint')} /> }}
             columns={[
@@ -74,7 +74,7 @@ export function IdentitiesPage() {
               { title: t('identityHosts'), dataIndex: 'hosts', width: 90 },
               { title: t('identityLastSeen'), dataIndex: 'lastSeen', width: 120, render: v => <Ago iso={v} /> },
             ]} />
-          {(offset > 0 || query.data?.truncated) && <Space style={{ padding: 12 }}>
+          {(offset > 0 || query.data?.truncated) && <Space style={{ padding: '16px 4px 2px', width: '100%', justifyContent: 'flex-end' }}>
             <Button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE))}>{t('directoryPrevious')}</Button>
             <Button disabled={!query.data?.truncated} onClick={() => setOffset(offset + PAGE)}>{t('directoryNext')}</Button>
           </Space>}

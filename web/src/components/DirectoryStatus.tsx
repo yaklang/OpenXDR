@@ -77,10 +77,10 @@ function DirectoryAccounts({ sourceId, scope }: { sourceId: string; scope: strin
         { title: t('username'), dataIndex: 'username', render: value => <span style={{ overflowWrap: 'anywhere' }}>{value}</span> },
         { title: t('directoryAccountState'), dataIndex: 'enabled', width: 110, render: (value: boolean | null) => <Tag>{t(value === true ? 'directoryEnabled' : value === false ? 'directoryDisabled' : 'identityUnknown')}</Tag> },
         { title: t('directoryObserved'), dataIndex: 'observedAt', width: 170, render: fmtTime },
-      ]} expandable={{ expandedRowRender: row => <Descriptions column={1} size="small" items={[
+      ]} expandable={{ expandedRowRender: row => <div className="ev-expand"><Descriptions column={1} size="small" items={[
         { key: 'id', label: t('directoryExternalId'), children: <Typography.Text copyable style={{ overflowWrap: 'anywhere' }}>{row.externalId}</Typography.Text> },
         { key: 'sid', label: 'SID', children: row.windowsSid ? <Typography.Text copyable style={{ overflowWrap: 'anywhere' }}>{row.windowsSid}</Typography.Text> : '—' },
-      ]} /> }} />}
+      ]} /></div> }} />}
   </Space>
 }
 

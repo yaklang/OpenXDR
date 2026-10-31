@@ -89,7 +89,7 @@ export function IncidentGraph({ graph }: { graph: Graph }) {
 
   return (
     <div>
-      <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
+      <Flex justify="space-between" align="center" style={{ marginBottom: 12 }}>
       <Space size={16} wrap>
         {COLUMNS.filter(k => columns[k].length).map(k => (
           <Space key={k} size={6}><span className="graph-legend" style={{ background: colors[k] }} /><Typography.Text type="secondary" style={{ fontSize: 12 }}>{t(LEGEND[k])}</Typography.Text></Space>
@@ -103,7 +103,7 @@ export function IncidentGraph({ graph }: { graph: Graph }) {
       </Flex>
       <div
         ref={box}
-        style={{ height, overflow: 'hidden', cursor: drag.current ? 'grabbing' : 'grab', touchAction: 'none' }}
+        style={{ height, overflow: 'hidden', cursor: drag.current ? 'grabbing' : 'grab', touchAction: 'none', borderRadius: 16, background: token.colorFillQuaternary, border: `1px solid ${token.colorBorderSecondary}` }}
         onPointerDown={e => { drag.current = { x: e.clientX - view.x, y: e.clientY - view.y }; e.currentTarget.setPointerCapture(e.pointerId) }}
         onPointerMove={e => { const d = drag.current; if (d) setView(v => ({ ...v, x: e.clientX - d.x, y: e.clientY - d.y })) }}
         onPointerUp={() => { drag.current = null }}
@@ -133,8 +133,8 @@ export function IncidentGraph({ graph }: { graph: Graph }) {
           const c = colors[node.type] ?? token.colorBorder
           return (
             <g key={node.id}>
-              <rect x={p.x} y={p.y} width={NODE_W} height={NODE_H} rx={7} fill={token.colorBgContainer} stroke={token.colorBorder} strokeWidth={1} />
-              <rect x={p.x} y={p.y} width={5} height={NODE_H} rx={2} fill={c} />
+              <rect x={p.x} y={p.y} width={NODE_W} height={NODE_H} rx={10} fill={token.colorBgContainer} stroke={token.colorBorder} strokeWidth={1} />
+              <rect x={p.x} y={p.y} width={5} height={NODE_H} rx={2.5} fill={c} />
               <text x={p.x + 14} y={p.y + 22} fill={token.colorText} fontSize={13}>
                 <title>{node.label}</title>
                 {label}
@@ -145,7 +145,7 @@ export function IncidentGraph({ graph }: { graph: Graph }) {
         </g>
       </svg>
       </div>
-      {overflows && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t('graphDragHint')}</Typography.Text>}
+      {overflows && <Typography.Text type="secondary" style={{ display: 'block', marginTop: 6, fontSize: 12 }}>{t('graphDragHint')}</Typography.Text>}
       {graph.overflow > 0 && <Typography.Text type="warning">{t('graphOverflow', { n: graph.overflow })}</Typography.Text>}
     </div>
   )

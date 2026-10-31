@@ -9,16 +9,16 @@ import { useSession } from '../app/session'
 import { GeminiSparkle } from '../components/Logo'
 import { Markdown } from '../components/Markdown'
 import { EmptyHint, Refreshed } from '../components/Ago'
-import { FilterCard, Page, WIDE_ONLY, useWideTable } from '../components/Page'
+import { FilterCard, Page, STICKY_HEADER, WIDE_ONLY, useWideTable } from '../components/Page'
 import { fmtTime, errText } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
 import { LoadError } from '../components/LoadError'
 
 // 报告级别：无异常的只存档，有事项与紧急的会推送通知
-const LEVEL: Record<AgentReport['level'], { color: string; key: MsgKey }> = {
-  ok: { color: 'success', key: 'reportLevelOk' },
-  attention: { color: 'warning', key: 'reportLevelAttention' },
-  urgent: { color: 'error', key: 'reportLevelUrgent' },
+const LEVEL: Record<AgentReport['level'], { color: string; key: MsgKey; rank: number }> = {
+  ok: { color: 'success', key: 'reportLevelOk', rank: 1 },
+  attention: { color: 'warning', key: 'reportLevelAttention', rank: 2 },
+  urgent: { color: 'error', key: 'reportLevelUrgent', rank: 3 },
 }
 
 // 报告中心：Pi 会话（含定时巡检）提交的报告，按当前组列出
@@ -80,16 +80,18 @@ export function ReportsPage() {
         extra={<Refreshed at={dataUpdatedAt} fetching={isFetching} onRefresh={() => refetch()} />}
       >
         {isError ? <LoadError error={error} onRetry={() => refetch()} /> : <Table<AgentReport>
+          sticky={STICKY_HEADER}
           scroll={wideTable ? { x: 800 } : undefined}
           rowKey="id"
           loading={isPending}
           dataSource={rows}
-          pagination={{ pageSize: 20, hideOnSinglePage: true }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, hideOnSinglePage: true }}
           locale={{ emptyText: search ? <EmptyHint title={t('noMatch')} /> : <EmptyHint title={t('noReports')} hint={t('noReportsHint')}
             action={canChat && <Link to={`/chat?${new URLSearchParams({ prompt: t('reportPrompt') })}`}><Button type="primary">{t('reportAskAI')}</Button></Link>} /> }}
           columns={[
             {
               title: t('reportTitle'), dataIndex: 'title',
+              sorter: (a, b) => a.title.localeCompare(b.title),
               render: (v, r) => (
                 <div>
                   <Button type="link" className="report-title-button" icon={<FileSearchOutlined aria-hidden />} onClick={() => open(r)} style={r.read ? undefined : { fontWeight: 600 }}>{v}</Button>
@@ -98,8 +100,8 @@ export function ReportsPage() {
                 </div>
               ),
             },
-            { title: t('reportLevel'), dataIndex: 'level', width: 90, render: (v: AgentReport['level']) => <Tag color={LEVEL[v]?.color}>{t(LEVEL[v]?.key ?? 'reportLevelAttention')}</Tag> },
-            { responsive: WIDE_ONLY, title: t('thCreatedAt'), dataIndex: 'created_at', width: 190, render: fmtTime },
+            { title: t('reportLevel'), dataIndex: 'level', width: 95, sorter: (a, b) => (LEVEL[a.level]?.rank ?? 0) - (LEVEL[b.level]?.rank ?? 0), render: (v: AgentReport['level']) => <Tag color={LEVEL[v]?.color}>{t(LEVEL[v]?.key ?? 'reportLevelAttention')}</Tag> },
+            { responsive: WIDE_ONLY, title: t('thCreatedAt'), dataIndex: 'created_at', width: 190, sorter: (a, b) => a.created_at.localeCompare(b.created_at), render: fmtTime },
             { responsive: WIDE_ONLY, title: t('sourceSession'), dataIndex: 'session_id', width: 140, render: v => <Link to={`/chat/${v}`}>{t('openSession')}</Link> },
             {
               responsive: WIDE_ONLY, title: t('actions'), width: 200,
@@ -127,11 +129,13 @@ export function ReportsPage() {
       >
         {preview && <>
           {/* 页头由平台给：级别、时间与一句话结论，各报告一致；正文是模型写的 */}
-          <Space wrap style={{ marginBottom: 12 }}>
-            <Tag color={LEVEL[preview.level]?.color}>{t(LEVEL[preview.level]?.key ?? 'reportLevelAttention')}</Tag>
-            <Typography.Text type="secondary">{fmtTime(preview.created_at)}</Typography.Text>
+          <div className="cmd-item" style={{ marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <Space wrap size={8}>
+              <Tag color={LEVEL[preview.level]?.color}>{t(LEVEL[preview.level]?.key ?? 'reportLevelAttention')}</Tag>
+              <Typography.Text type="secondary">{fmtTime(preview.created_at)}</Typography.Text>
+            </Space>
             <Link to={`/chat/${preview.session_id}`}>{t('openSession')}</Link>
-          </Space>
+          </div>
           {preview.summary && (
             <div className="gemini-report-summary">
               <GeminiSparkle size={18} />

@@ -1,11 +1,11 @@
 import { ImportOutlined, SyncOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Card, Empty, Flex, Form, Input, InputNumber, List, Modal, Popconfirm, Space, Spin, Switch, Table, Tag, Typography } from 'antd'
-import { useRef, useState } from 'react'
+import { App, Button, Card, Empty, Flex, Form, Input, InputNumber, List, Modal, Popconfirm, Select, Space, Spin, Switch, Table, Tag, Typography } from 'antd'
+import { useMemo, useRef, useState } from 'react'
 import { deleteIntel, fetchIntel, fetchIntelFeeds, importIntel, saveIntelFeeds, syncIntelFeeds, type IntelRow } from '../api'
 import { useSession } from '../app/session'
 import { LoadError } from '../components/LoadError'
-import { Page, TableCard } from '../components/Page'
+import { Page, STICKY_HEADER, TableCard } from '../components/Page'
 import { SeverityTag, fmtTime, errText } from '../components/format'
 import { useI18n } from '../i18n'
 
@@ -50,7 +50,9 @@ function FeedsCard() {
       {isError ? <LoadError error={error} onRetry={() => refetch()} /> : isPending ? <Spin /> : <>
       <Typography.Paragraph type="secondary">{t('intelFeedsHint', { n: data?.intervalHours ?? 6 })}</Typography.Paragraph>
       <List
+        className="intel-feed-list"
         size="small"
+        split={false}
         dataSource={data?.feeds ?? []}
         renderItem={f => (
           <List.Item
@@ -72,7 +74,7 @@ function FeedsCard() {
           </List.Item>
         )}
       />
-      <Typography.Title level={5} style={{ marginTop: 16 }}>{t('intelFeedHitList')}</Typography.Title>
+      <Typography.Title level={5} style={{ marginTop: 20, marginBottom: 10 }}>{t('intelFeedHitList')}</Typography.Title>
       <Table<IntelRow>
         scroll={{ x: 750 }}
         size="small"
@@ -81,11 +83,11 @@ function FeedsCard() {
         pagination={{ pageSize: 10, hideOnSinglePage: true }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('intelFeedNoHits')} /> }}
         columns={[
-          { title: t('thKind'), dataIndex: 'kind', width: 90, render: v => <Tag>{v}</Tag> },
-          { title: t('thValue'), dataIndex: 'value', render: (v, r) => <span className="mono" title={r.note ?? ''}>{v}</span> },
-          { title: t('thSource'), dataIndex: 'source', width: 160 },
-          { title: t('thHits'), dataIndex: 'matchedCount', width: 90, align: 'right' },
-          { title: t('thLastMatched'), dataIndex: 'lastMatchedAt', width: 170, render: fmtTime },
+          { title: t('thKind'), dataIndex: 'kind', width: 95, sorter: (a, b) => a.kind.localeCompare(b.kind), render: v => <Tag>{v}</Tag> },
+          { title: t('thValue'), dataIndex: 'value', sorter: (a, b) => a.value.localeCompare(b.value), render: (v, r) => <Typography.Text className="mono" copyable title={r.note ?? ''}>{v}</Typography.Text> },
+          { title: t('thSource'), dataIndex: 'source', width: 160, sorter: (a, b) => (a.source ?? '').localeCompare(b.source ?? '') },
+          { title: t('thHits'), dataIndex: 'matchedCount', width: 95, align: 'right', sorter: (a, b) => a.matchedCount - b.matchedCount },
+          { title: t('thLastMatched'), dataIndex: 'lastMatchedAt', width: 170, sorter: (a, b) => (a.lastMatchedAt ?? '').localeCompare(b.lastMatchedAt ?? ''), render: fmtTime },
         ]}
       />
       </>}
@@ -101,9 +103,26 @@ export function IntelPage() {
   const { canWrite } = useSession()
   const [importing, setImporting] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [q, setQ] = useState('')
+  const [kindFilter, setKindFilter] = useState('')
+  const [sevFilter, setSevFilter] = useState(0)
   const submitting = useRef(false)
   const [form] = Form.useForm()
   const { data, isPending, isError, error, refetch } = useQuery({ queryKey: ['intel'], queryFn: fetchIntel })
+
+  const kinds = useMemo(() => {
+    const set = new Set<string>()
+    for (const r of data ?? []) if (r.kind) set.add(r.kind)
+    return Array.from(set).sort()
+  }, [data])
+
+  const activeQ = q.trim().toLowerCase()
+  const hasFilters = Boolean(activeQ || kindFilter || sevFilter)
+  const rows = useMemo(() => (data ?? []).filter(r =>
+    (!kindFilter || r.kind === kindFilter) &&
+    (!sevFilter || r.severity === sevFilter) &&
+    (!activeQ || r.value.toLowerCase().includes(activeQ) || (r.source ?? '').toLowerCase().includes(activeQ) || (r.note ?? '').toLowerCase().includes(activeQ))
+  ), [data, kindFilter, sevFilter, activeQ])
 
   const refresh = () => client.invalidateQueries({ queryKey: ['intel'] })
   const doImport = async (v: { text: string; source?: string; expiresInDays?: number }) => {
@@ -131,24 +150,38 @@ export function IntelPage() {
       subtitle={t('intelSubtitle', { n: data?.length ?? 0 })}
       extra={canWrite && <Button type="primary" icon={<ImportOutlined />} onClick={() => setImporting(true)}>{t('intelImport')}</Button>}
     >
-      <Flex vertical gap={16}>
+      <Flex vertical gap={20}>
       <FeedsCard />
-      <TableCard title={t('intelManual')}>
+      <TableCard
+        title={t('intelManual')}
+        extra={
+          <Space wrap>
+            {hasFilters && data && <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>{t('filteredCount', { n: rows.length, total: data.length })}</Typography.Text>}
+            <Input.Search allowClear style={{ width: 240 }} placeholder={t('searchIntel')} value={q} onChange={e => setQ(e.target.value)} />
+            <Select aria-label={t('thKind')} style={{ width: 130 }} value={kindFilter} onChange={setKindFilter}
+              options={[{ value: '', label: t('allKinds') }, ...kinds.map(k => ({ value: k, label: k }))]} />
+            <Select aria-label={t('thSeverity')} style={{ width: 130 }} value={sevFilter} onChange={setSevFilter}
+              options={[{ value: 0, label: t('allSeverities') }, ...[5, 4, 3, 2, 1].map(n => ({ value: n, label: t(`sev${n}` as 'sev1') }))]} />
+            {hasFilters && <Button type="link" onClick={() => { setQ(''); setKindFilter(''); setSevFilter(0) }}>{t('resetFilters')}</Button>}
+          </Space>
+        }
+      >
         {isError ? <LoadError error={error} onRetry={() => refetch()} /> : <Table<IntelRow>
+          sticky={STICKY_HEADER}
           scroll={{ x: 1100 }}
           rowKey="id"
           loading={isPending}
-          dataSource={data ?? []}
-          pagination={{ pageSize: 20, hideOnSinglePage: true }}
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('noIntel')} /> }}
+          dataSource={rows}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, hideOnSinglePage: true }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t(hasFilters ? 'noMatch' : 'noIntel')} /> }}
           columns={[
-            { title: t('thKind'), dataIndex: 'kind', width: 90, render: v => <Tag>{v}</Tag> },
-            { title: t('thValue'), dataIndex: 'value', render: (v, r) => <span className="mono" title={r.note ?? ''}>{v}</span> },
-            { title: t('thSource'), dataIndex: 'source', width: 140 },
-            { title: t('thSeverity'), dataIndex: 'severity', width: 90, render: v => <SeverityTag value={v} /> },
-            { title: t('thHits'), dataIndex: 'matchedCount', width: 90, align: 'right', sorter: (a, b) => a.matchedCount - b.matchedCount },
-            { title: t('thLastMatched'), dataIndex: 'lastMatchedAt', width: 170, render: fmtTime },
-            { title: t('thExpires'), dataIndex: 'expiresAt', width: 170, render: v => (v ? fmtTime(v) : t('longTerm')) },
+            { title: t('thKind'), dataIndex: 'kind', width: 95, sorter: (a, b) => a.kind.localeCompare(b.kind), render: v => <Tag>{v}</Tag> },
+            { title: t('thValue'), dataIndex: 'value', sorter: (a, b) => a.value.localeCompare(b.value), render: (v, r) => <Typography.Text className="mono" copyable title={r.note ?? ''}>{v}</Typography.Text> },
+            { title: t('thSource'), dataIndex: 'source', width: 140, sorter: (a, b) => (a.source ?? '').localeCompare(b.source ?? '') },
+            { title: t('thSeverity'), dataIndex: 'severity', width: 95, sorter: (a, b) => a.severity - b.severity, render: v => <SeverityTag value={v} /> },
+            { title: t('thHits'), dataIndex: 'matchedCount', width: 95, align: 'right', sorter: (a, b) => a.matchedCount - b.matchedCount },
+            { title: t('thLastMatched'), dataIndex: 'lastMatchedAt', width: 170, sorter: (a, b) => (a.lastMatchedAt ?? '').localeCompare(b.lastMatchedAt ?? ''), render: fmtTime },
+            { title: t('thExpires'), dataIndex: 'expiresAt', width: 170, sorter: (a, b) => (a.expiresAt ?? '9999').localeCompare(b.expiresAt ?? '9999'), render: v => (v ? fmtTime(v) : t('longTerm')) },
             ...(canWrite
               ? [{
                   title: t('actions'), width: 90,

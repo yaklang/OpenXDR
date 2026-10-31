@@ -55,33 +55,61 @@ html[data-theme="dark"] .ant-card { box-shadow: none; }
 
 .login-wrap { min-height: 100vh; display: flex; }
 .login-hero {
-  flex: 1.2;
-  padding: 72px 8vw;
+  flex: 1.18;
+  padding: 72px 7.5vw;
   display: flex;
   flex-direction: column;
   justify-content: center;
   color: #fff;
   background:
-    radial-gradient(60% 55% at 22% 20%, rgba(66, 133, 244, .22) 0%, transparent 70%),
-    radial-gradient(50% 50% at 78% 75%, rgba(155, 114, 203, .18) 0%, transparent 70%),
-    radial-gradient(120% 90% at 15% 10%, #17181c 0%, #0d0e11 70%);
+    radial-gradient(62% 58% at 20% 18%, rgba(66, 133, 244, .24) 0%, transparent 72%),
+    radial-gradient(52% 52% at 78% 76%, rgba(155, 114, 203, .2) 0%, transparent 72%),
+    radial-gradient(45% 45% at 50% 88%, rgba(217, 101, 112, .12) 0%, transparent 70%),
+    radial-gradient(120% 90% at 15% 10%, #17191f 0%, #0d0e12 72%);
 }
-.login-hero-name { font-size: 22px; font-weight: 600; letter-spacing: -.01em; }
+.login-hero-name { font-size: 22px; font-weight: 600; letter-spacing: -.015em; }
 .login-hero-title {
-  font-size: 48px;
+  font-size: clamp(36px, 3.6vw, 48px);
   font-weight: 600;
-  margin-top: 56px;
-  line-height: 1.1;
+  margin-top: 52px;
+  line-height: 1.12;
   letter-spacing: -.03em;
-  background: linear-gradient(95deg, #ffffff 0%, #c2e7ff 55%, #d7aefb 100%);
+  background: linear-gradient(95deg, #ffffff 0%, #c2e7ff 52%, #d7aefb 96%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
-.login-hero-sub { font-size: 19px; color: #c4c7c5; margin-top: 16px; }
-.login-hero-point { font-size: 15px; opacity: .92; }
-.login-panel { flex: 1; display: flex; align-items: center; justify-content: center; padding: 48px 24px; }
-.login-form { width: 100%; max-width: 360px; }
-@media (max-width: 900px) { .login-hero { display: none; } }
+.login-hero-sub { font-size: 18px; color: #c4c7c5; margin-top: 16px; line-height: 1.5; max-width: 540px; }
+.login-hero-points { margin-top: 40px; display: flex; flex-direction: column; gap: 14px; max-width: 540px; }
+.login-hero-point-row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 18px; border-radius: 18px;
+  background: rgba(255, 255, 255, .045);
+  border: 1px solid rgba(255, 255, 255, .07);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.login-hero-point-icon {
+  width: 32px; height: 32px; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(255, 255, 255, .08);
+}
+.login-hero-point { font-size: 14.5px; color: #e3e3e3; line-height: 1.5; }
+.login-panel { position: relative; flex: 1; display: flex; align-items: center; justify-content: center; padding: 64px 28px; }
+.login-panel-Actions { position: absolute; top: 24px; right: 28px; }
+.login-form {
+  width: 100%; max-width: 416px;
+  padding: 40px 38px 38px;
+  border-radius: 28px;
+  background: var(--ant-color-bg-container);
+  border: 1px solid var(--ant-color-border-secondary);
+  box-shadow: 0 8px 32px rgba(11, 87, 208, .04);
+}
+html[data-theme="dark"] .login-form { box-shadow: 0 12px 36px rgba(0, 0, 0, .28); }
+.login-form .ant-input-affix-wrapper { border-radius: 14px; padding-block: 9px; }
+@media (max-width: 900px) {
+  .login-hero { display: none; }
+  .login-form { padding: 32px 24px; border-radius: 24px; }
+}
 
 .json-block {
   margin: 0;
@@ -407,15 +435,16 @@ kbd { font-family: inherit; font-size: 11px; padding: 1px 6px; border-radius: 6p
   .funnel-arrow { width: auto; flex-direction: row; padding: 4px 0; }
 }
 
-/* ATT&CK 矩阵：每个战术一列 */
+/* ATT&CK 矩阵：每个战术一列（柔和色调列容器 + 圆角技术色块） */
 .matrix-scroll { overflow-x: auto; padding-bottom: 6px; }
 .matrix { display: grid; gap: 10px; min-width: min-content; }
-.matrix-head { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 6px 10px; margin-bottom: 8px; border-bottom: 2px solid; text-align: center; }
-.matrix-cells { display: flex; flex-direction: column; gap: 5px; }
-.matrix-cell { display: block; padding: 4px 0; border-radius: 8px; font-size: 12px; text-align: center; font-variant-numeric: tabular-nums; transition: filter .15s; }
+.matrix-col { padding: 10px 8px 12px; border-radius: 16px; background: var(--ant-color-fill-quaternary); border: 1px solid var(--ant-color-border-secondary); }
+.matrix-head { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 4px 10px; margin-bottom: 10px; border-bottom: 2px solid; text-align: center; }
+.matrix-cells { display: flex; flex-direction: column; gap: 6px; }
+.matrix-cell { display: block; padding: 5px 0; border-radius: 10px; font-size: 12px; font-weight: 500; text-align: center; font-variant-numeric: tabular-nums; transition: filter .15s, transform .15s; }
 .matrix-cell:hover { filter: brightness(.92); }
 .matrix-cell:focus-visible { outline: 2px solid var(--ant-color-primary); outline-offset: 1px; }
-.matrix-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; }
+.matrix-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 4px; }
 
 /* 窄屏导航使用抽屉，给内容保留完整宽度；桌面端给足四周留白 */
 .app-content { padding: 28px 36px 48px; }
@@ -531,6 +560,10 @@ html[data-theme="light"] .welcome-composer:focus-within {
 .palette-input.ant-input-borderless:focus,
 .palette-input.ant-input-borderless:focus-visible,
 .palette-input.ant-input-borderless:focus-within,
+.palette-input.ant-input-affix-wrapper,
+.palette-input.ant-input-affix-wrapper:focus,
+.palette-input.ant-input-affix-wrapper:focus-visible,
+.palette-input.ant-input-affix-wrapper:focus-within,
 .palette-input input:focus,
 .palette-input input:focus-visible,
 .palette-input:focus,
@@ -538,6 +571,55 @@ html[data-theme="light"] .welcome-composer:focus-within {
   outline: none !important;
   box-shadow: none !important;
 }
+/* 紧凑组合（Space.Compact / Input.Search）：外侧保持胶囊圆角，内侧接缝平齐 */
+.ant-space-compact > .ant-space-compact-first-item,
+.ant-space-compact > .ant-space-compact-first-item.ant-input-affix-wrapper,
+.ant-space-compact > .ant-space-compact-first-item > .ant-select-selector {
+  border-start-end-radius: 0 !important;
+  border-end-end-radius: 0 !important;
+}
+.ant-space-compact > .ant-space-compact-last-item,
+.ant-space-compact > .ant-space-compact-last-item.ant-btn {
+  border-start-start-radius: 0 !important;
+  border-end-start-radius: 0 !important;
+}
+.ant-space-compact > :not(.ant-space-compact-first-item):not(.ant-space-compact-last-item),
+.ant-space-compact > :not(.ant-space-compact-first-item):not(.ant-space-compact-last-item) > .ant-select-selector {
+  border-radius: 0 !important;
+}
+/* 折叠面板、边框描述表与抽屉：柔和圆角与呼吸感内边距 */
+.ant-collapse:not(.ant-collapse-borderless) {
+  border-radius: 18px;
+  overflow: hidden;
+  border-color: var(--ant-color-border-secondary);
+  background: var(--ant-color-fill-quaternary);
+}
+.ant-collapse > .ant-collapse-item { border-bottom-color: var(--ant-color-border-secondary); }
+.ant-collapse > .ant-collapse-item > .ant-collapse-header { padding: 12px 18px; font-weight: 500; }
+.ant-descriptions-bordered .ant-descriptions-view {
+  border-radius: 14px;
+  overflow: hidden;
+  border-color: var(--ant-color-border-secondary) !important;
+}
+.ant-descriptions-bordered .ant-descriptions-item-label {
+  background: var(--ant-color-fill-quaternary) !important;
+}
+.ant-table-wrapper .ant-table.ant-table-bordered > .ant-table-container {
+  border-radius: 14px;
+  overflow: hidden;
+  border-color: var(--ant-color-border-secondary);
+}
+.intel-feed-list .ant-list-item {
+  padding: 14px 18px !important;
+  margin-bottom: 8px;
+  border-radius: 16px;
+  background: var(--ant-color-fill-quaternary);
+  border: 1px solid var(--ant-color-border-secondary) !important;
+}
+.intel-feed-list .ant-list-item:last-child { margin-bottom: 0; }
+.ant-drawer .ant-drawer-header { padding: 18px 24px; border-bottom-color: var(--ant-color-border-secondary); }
+.ant-drawer .ant-drawer-body { padding: 22px 24px; }
+.ant-drawer .ant-drawer-footer { padding: 14px 24px; border-top-color: var(--ant-color-border-secondary); }
 .welcome-hint { display: block; text-align: center; font-size: 12px; max-width: 840px; width: 100%; }
 .row-link { cursor: pointer; }
 /* 表格里的数字等宽，列内上下对齐 */
@@ -569,7 +651,7 @@ a.queue-row:hover { background: var(--ant-color-fill-quaternary); color: inherit
 .ev-act-ok { background: var(--ant-color-success-bg); color: var(--ant-color-success-text); }
 .ev-act-bad { background: var(--ant-color-error-bg); color: var(--ant-color-error-text); }
 .ev-act-warn { background: var(--ant-color-warning-bg); color: var(--ant-color-warning-text); }
-.class-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 24px; background: color-mix(in srgb, var(--ant-color-fill-quaternary) 55%, transparent); border-bottom: 1px solid var(--ant-color-border-secondary); }
+.class-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 14px; padding: 10px 14px; border-radius: 16px; background: var(--ant-color-fill-quaternary); border: 1px solid var(--ant-color-border-secondary); }
 .class-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px 4px 6px; border-radius: 999px; border: 1px solid var(--ant-color-border-secondary); background: var(--ant-color-bg-container); color: inherit; font: inherit; font-size: 13px; cursor: pointer; transition: border-color .15s, background .15s; }
 .class-chip:first-child { padding-left: 12px; }
 .class-chip:hover { border-color: var(--ant-color-primary-border-hover); }

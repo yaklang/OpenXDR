@@ -43,32 +43,36 @@ export function IntegrationSubscriptions({ integration }: { integration: Integra
     form.setFieldsValue(row ? { name: row.name, url: row.url, groupIds: row.groupIds, kinds: row.kinds, enabled: row.enabled, movePending: false } : { name: '', url: '', groupIds: integration.groupIds, kinds: ['incident.triaged'], enabled: false, movePending: false })
     setEditing(row ?? 'new')
   }
-  return <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-    <Typography.Paragraph>{t('integrationWebhookHint')}</Typography.Paragraph>
-    <Button disabled={!integration.scopes.includes('incidents:read')} onClick={() => edit()}>{t('integrationNewSubscription')}</Button>
+  return <Space orientation="vertical" size={20} style={{ width: '100%' }}>
+    <Typography.Paragraph style={{ marginBottom: 0 }}>{t('integrationWebhookHint')}</Typography.Paragraph>
+    <div>
+      <Button type="primary" disabled={!integration.scopes.includes('incidents:read')} onClick={() => edit()}>{t('integrationNewSubscription')}</Button>
+    </div>
     {secret && <Alert type="warning" title={t('integrationSecretOnce')} description={<><Typography.Text>Key ID: {secret.keyId}</Typography.Text><Typography.Paragraph copyable style={{ overflowWrap: 'anywhere' }}>{secret.secret}</Typography.Paragraph></>} closable onClose={() => setSecret(null)} />}
     {subscriptions.isError ? <LoadError error={subscriptions.error} onRetry={() => subscriptions.refetch()} /> : <Table<IntegrationSubscription> rowKey="id" dataSource={subscriptions.data} loading={subscriptions.isPending} scroll={{ x: 750 }} columns={[
       { title: t('integrationName'), dataIndex: 'name' },
       { title: 'URL', dataIndex: 'url', ellipsis: true },
       { title: t('integrationEnabled'), render: (_, s) => <Tag>{t(s.enabled ? 'integrationOn' : 'integrationOff')}</Tag> },
-      { title: t('integrationActions'), render: (_, s) => <Space wrap>
-        <Button onClick={() => edit(s)}>{t('integrationEdit')}</Button>
-        <Button disabled={busy || !s.enabled} onClick={() => run(async () => { await testIntegrationSubscription(integration.id, s.id); message.success(t('integrationTestQueued')) })}>{t('integrationTest')}</Button>
-        <Popconfirm title={t('integrationRotateHint')} onConfirm={() => run(async () => { setSecret(await rotateIntegrationSecret(integration.id, s.id)) })}><Button disabled={busy || s.enabled}>{t('integrationRotate')}</Button></Popconfirm>
-        <Popconfirm title={t('integrationDeleteSubscriptionHint')} onConfirm={() => run(async () => { await deleteIntegrationSubscription(integration.id, s.id) })}><Button danger disabled={busy}>{t('integrationDeleteSubscription')}</Button></Popconfirm>
-      </Space> },
+      { title: t('integrationActions'), render: (_, s) => <div className="table-actions">
+        <Button size="small" onClick={() => edit(s)}>{t('integrationEdit')}</Button>
+        <Button size="small" disabled={busy || !s.enabled} onClick={() => run(async () => { await testIntegrationSubscription(integration.id, s.id); message.success(t('integrationTestQueued')) })}>{t('integrationTest')}</Button>
+        <Popconfirm title={t('integrationRotateHint')} onConfirm={() => run(async () => { setSecret(await rotateIntegrationSecret(integration.id, s.id)) })}><Button size="small" disabled={busy || s.enabled}>{t('integrationRotate')}</Button></Popconfirm>
+        <Popconfirm title={t('integrationDeleteSubscriptionHint')} onConfirm={() => run(async () => { await deleteIntegrationSubscription(integration.id, s.id) })}><Button size="small" danger disabled={busy}>{t('integrationDeleteSubscription')}</Button></Popconfirm>
+      </div> },
     ]} />}
-    <Typography.Title level={5}>{t('integrationDeliveries')}</Typography.Title>
+    <Typography.Title level={5} style={{ margin: '4px 0 0' }}>{t('integrationDeliveries')}</Typography.Title>
     {summary && <Space wrap>
       {['pending', 'sending', 'delivered', 'dead'].map(state => <Tag key={state} color={state === 'dead' && summary.counts[state] ? 'error' : undefined}>{statusText(state)}: {summary.counts[state] ?? 0}</Tag>)}
       {summary.oldestPendingAt && <Typography.Text>{t('integrationOldestPending')}: {fmtTime(summary.oldestPendingAt)}</Typography.Text>}
     </Space>}
     {!!summary?.counts.dead && <Alert type="warning" title={t('integrationDeadHint')} />}
-    <Space wrap>
-      <Select aria-label={t('thStatus')} value={status} onChange={v => { setStatus(v); setPage(1) }} style={{ width: 180 }} options={[{ value: '', label: t('integrationAllDeliveries') }, ...Object.keys(deliveryLabels).map(value => ({ value, label: statusText(value) }))]} />
-      <Select aria-label={t('integrationSubscription')} value={subscriptionId} onChange={v => { setSubscriptionId(v); setPage(1) }} style={{ width: 200 }} options={[{ value: '', label: t('integrationAllSubscriptions') }, ...(subscriptions.data ?? []).map(s => ({ value: s.id, label: s.name }))]} />
-      <DatePicker.RangePicker showTime value={range} onChange={v => { setRange(v); setPage(1) }} />
-    </Space>
+    <div className="filter-bar" style={{ padding: '12px 18px' }}>
+      <Space wrap size={12} className="filter-controls">
+        <Select aria-label={t('thStatus')} value={status} onChange={v => { setStatus(v); setPage(1) }} style={{ width: 180 }} options={[{ value: '', label: t('integrationAllDeliveries') }, ...Object.keys(deliveryLabels).map(value => ({ value, label: statusText(value) }))]} />
+        <Select aria-label={t('integrationSubscription')} value={subscriptionId} onChange={v => { setSubscriptionId(v); setPage(1) }} style={{ width: 200 }} options={[{ value: '', label: t('integrationAllSubscriptions') }, ...(subscriptions.data ?? []).map(s => ({ value: s.id, label: s.name }))]} />
+        <DatePicker.RangePicker showTime value={range} onChange={v => { setRange(v); setPage(1) }} />
+      </Space>
+    </div>
     {deliveries.isError ? <LoadError error={deliveries.error} onRetry={() => deliveries.refetch()} /> : <Table<IntegrationDelivery> rowKey="id" dataSource={deliveries.data?.items} loading={deliveries.isPending} pagination={{ current: page, pageSize: 50, total: deliveries.data?.total ?? 0, showSizeChanger: false, onChange: setPage }} scroll={{ x: 850 }} columns={[
       { title: t('thCreatedAt'), render: (_, d) => fmtTime(d.createdAt) },
       { title: t('integrationSubscription'), render: (_, d) => subscriptions.data?.find(s => s.id === d.subscriptionId)?.name ?? d.subscriptionId },
@@ -76,7 +80,7 @@ export function IntegrationSubscriptions({ integration }: { integration: Integra
       { title: t('integrationAttempts'), dataIndex: 'attempts' },
       { title: t('integrationNextAttempt'), render: (_, d) => d.status === 'pending' ? fmtTime(d.nextAt) : '—' },
       { title: t('integrationDeliveryError'), dataIndex: 'lastError' },
-      { title: t('integrationActions'), render: (_, d) => <Space><Button onClick={() => setInspecting(d)}>{t('integrationDeliveryDetail')}</Button><Popconfirm title={t('integrationReplayHint')} onConfirm={() => run(async () => { await retryIntegrationDelivery(integration.id, d.id) })}><Button disabled={busy || d.status !== 'dead'}>{t('integrationReplay')}</Button></Popconfirm></Space> },
+      { title: t('integrationActions'), render: (_, d) => <div className="table-actions"><Button size="small" onClick={() => setInspecting(d)}>{t('integrationDeliveryDetail')}</Button><Popconfirm title={t('integrationReplayHint')} onConfirm={() => run(async () => { await retryIntegrationDelivery(integration.id, d.id) })}><Button size="small" disabled={busy || d.status !== 'dead'}>{t('integrationReplay')}</Button></Popconfirm></div> },
     ]} />}
     <Modal open={!!inspecting} title={t('integrationDeliveryDetail')} onCancel={() => setInspecting(null)} footer={null} width={800}>
       <Typography.Paragraph copyable>{inspecting?.eventId}</Typography.Paragraph>

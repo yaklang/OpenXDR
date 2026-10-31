@@ -121,16 +121,18 @@ function LastShift({ run }: { run: TaskRunRow }) {
   const partial = ok && run.partial
   const took = run.finishedAt ? duration(Date.parse(run.finishedAt) - Date.parse(run.startedAt)) : '-'
   return (
-    <Space wrap size={8} style={{ marginTop: 12 }}>
-      {partial || interrupted || skipped ? <ExclamationCircleFilled style={{ color: 'var(--ant-color-warning)' }} />
-        : ok ? <CheckCircleFilled style={{ color: 'var(--ant-color-success)' }} />
-          : <CloseCircleFilled style={{ color: 'var(--ant-color-error)' }} />}
-      <Typography.Text>{t(partial ? 'workerLastPartial' : ok ? 'workerLastOk' : interrupted ? 'workerLastInterrupted' : skipped ? 'workerLastSkipped' : 'workerLastFailed')}</Typography.Text>
-      {!skipped && <Typography.Text type="secondary"><Ago iso={run.finishedAt ?? run.startedAt} /> · {t('workerTook', { took })} · {t('workerSteps', { n: run.steps })}</Typography.Text>}
-      {run.reportId && <a href={`/api/agent-reports/${run.reportId}/html`} target="_blank" rel="noreferrer"><FileTextOutlined /> {run.reportTitle}</a>}
-      {!ok && !interrupted && !skipped && run.error && <Tooltip title={run.error}><Typography.Text type="danger" ellipsis style={{ maxWidth: 360 }}>{errorText(run.error, t)}</Typography.Text></Tooltip>}
-      {run.sessionId && <Link to={`/chat/${run.sessionId}`}>{t('openSession')}</Link>}
-    </Space>
+    <div className="cmd-item" style={{ marginTop: 14 }}>
+      <Space wrap size={8}>
+        {partial || interrupted || skipped ? <ExclamationCircleFilled style={{ color: 'var(--ant-color-warning)' }} />
+          : ok ? <CheckCircleFilled style={{ color: 'var(--ant-color-success)' }} />
+            : <CloseCircleFilled style={{ color: 'var(--ant-color-error)' }} />}
+        <Typography.Text>{t(partial ? 'workerLastPartial' : ok ? 'workerLastOk' : interrupted ? 'workerLastInterrupted' : skipped ? 'workerLastSkipped' : 'workerLastFailed')}</Typography.Text>
+        {!skipped && <Typography.Text type="secondary"><Ago iso={run.finishedAt ?? run.startedAt} /> · {t('workerTook', { took })} · {t('workerSteps', { n: run.steps })}</Typography.Text>}
+        {run.reportId && <a href={`/api/agent-reports/${run.reportId}/html`} target="_blank" rel="noreferrer"><FileTextOutlined /> {run.reportTitle}</a>}
+        {!ok && !interrupted && !skipped && run.error && <Tooltip title={run.error}><Typography.Text type="danger" ellipsis style={{ maxWidth: 360 }}>{errorText(run.error, t)}</Typography.Text></Tooltip>}
+        {run.sessionId && <Link to={`/chat/${run.sessionId}`}>{t('openSession')}</Link>}
+      </Space>
+    </div>
   )
 }
 
@@ -140,10 +142,10 @@ function ShiftStrip({ runs }: { runs: TaskRunRow[] }) {
   const { token } = theme.useToken()
   const color = { succeeded: token.colorSuccess, failed: token.colorError, interrupted: token.colorWarning, skipped: token.colorTextQuaternary, running: token.colorPrimary }
   return (
-    <Space size={3} wrap>
+    <Space size={4} wrap>
       {[...runs].slice(0, 20).reverse().map(r => (
         <Tooltip key={r.id} title={<>{fmtTime(r.startedAt)}<br />{t('workerSteps', { n: r.steps })}{r.partial && <><br />{t('runPartial')}</>}{r.reportTitle && <><br />{r.reportTitle}</>}{r.error && <><br />{errorText(r.error, t)}</>}</>}>
-          <span style={{ display: 'inline-block', width: 10, height: 18, borderRadius: 3, background: r.partial ? token.colorWarning : color[r.status], opacity: r.status === 'running' ? 1 : 0.8 }} />
+          <span style={{ display: 'inline-block', width: 10, height: 18, borderRadius: 5, background: r.partial ? token.colorWarning : color[r.status], opacity: r.status === 'running' ? 1 : 0.8 }} />
         </Tooltip>
       ))}
     </Space>
@@ -258,15 +260,15 @@ function Worker({ task, busy, hosts, onToggle, onGroup, onRun, onEdit }: {
       </div>
 
       {working.map(r => <OnDuty key={r.id} run={r} hosts={hosts} now={now} groupName={groups.find(g => g.id === r.groupId)?.name ?? ''} />)}
-      {!working.length && (last ? <LastShift run={last} /> : <Typography.Paragraph type="secondary" style={{ margin: '12px 0 0' }}>{t('workerNoShift')}</Typography.Paragraph>)}
+      {!working.length && (last ? <LastShift run={last} /> : <div className="cmd-item" style={{ marginTop: 14 }}><Typography.Text type="secondary">{t('workerNoShift')}</Typography.Text></div>)}
 
       {runs.length > 0 && (
-        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <ShiftStrip runs={runs} />
           <Button type="link" size="small" onClick={() => setShowRuns(v => !v)}>{t(showRuns ? 'workerHideRuns' : 'workerAllRuns')}</Button>
         </div>
       )}
-      {showRuns && (runsQuery.isError ? <LoadError error={runsQuery.error} onRetry={() => runsQuery.refetch()} /> : <Runs runs={runs} loading={runsQuery.isPending} />)}
+      {showRuns && <div className="ev-expand" style={{ marginTop: 12 }}>{runsQuery.isError ? <LoadError error={runsQuery.error} onRetry={() => runsQuery.refetch()} /> : <Runs runs={runs} loading={runsQuery.isPending} />}</div>}
     </Card>
   )
 }
@@ -327,7 +329,7 @@ export function TasksPage() {
         : !data?.length ? <Card><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('noTasks')} /></Card>
         : (
           <>
-            <Flex gap={12} wrap align="center" justify="space-between" style={{ marginBottom: 16 }}>
+            <Flex gap={12} wrap align="center" justify="space-between" className="filter-bar" style={{ marginBottom: 20, borderRadius: 18, border: '1px solid var(--ant-color-border-secondary)' }}>
               <Segmented value={category} onChange={v => setCategory(v as TaskCategory | 'all')} options={[
                 { value: 'all', label: t('taskCatAll') },
                 ...(['ops', 'security', 'report'] as const).map(c => ({ value: c, label: t(CATEGORY[c].key) })),

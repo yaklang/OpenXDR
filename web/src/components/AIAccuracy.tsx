@@ -51,7 +51,7 @@ export function AIAccuracy() {
   )
 
   return (
-    <Flex vertical gap={16}>
+    <Flex vertical gap={20}>
       <Flex justify="space-between" align="center" wrap gap={8}>
         <Typography.Text type="secondary" style={{ maxWidth: 820 }}>{t('accHint')}</Typography.Text>
         <Segmented value={days} onChange={v => setDays(v as number)} options={[30, 90, 365].map(n => ({ value: n, label: t('lastDays', { n }) }))} />
@@ -59,9 +59,9 @@ export function AIAccuracy() {
       {!data || !total ? <Card><Skeleton active /></Card> : (
         <>
           {total.reviewed === 0
-            ? <Alert type="info" showIcon message={t('accNoSamples')} />
-            : total.reviewed < FEW && <Alert type="warning" showIcon message={t('accFewSamples', { n: total.reviewed })} />}
-          <Row gutter={[16, 16]}>
+            ? <Alert type="info" showIcon title={t('accNoSamples')} />
+            : total.reviewed < FEW && <Alert type="warning" showIcon title={t('accFewSamples', { n: total.reviewed })} />}
+          <Row gutter={[20, 20]}>
             {[
               { label: t('accReviewed'), value: <div className="usage-value">{total.reviewed}</div> },
               { label: t('accMissRate'), hint: t('accMissHint'), value: <div className="usage-value"><Rate n={total.missed} d={total.aiBenign} bad big /></div> },
@@ -69,10 +69,10 @@ export function AIAccuracy() {
               { label: `${t('accAdopted')} / ${t('accAuto')}`, value: <div className="usage-value">{total.adopted} / {total.auto}</div> },
             ].map(x => (
               <Col key={x.label} xs={12} lg={6}>
-                <Card styles={{ body: { padding: '16px 20px' } }} style={{ height: '100%' }}>
+                <Card styles={{ body: { padding: '20px 24px' } }} style={{ height: '100%' }}>
                   <Typography.Text type="secondary">{x.label}</Typography.Text>
                   {x.value}
-                  {x.hint && <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>{x.hint}</Typography.Text>}
+                  {x.hint && <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 4 }}>{x.hint}</Typography.Text>}
                 </Card>
               </Col>
             ))}
@@ -87,7 +87,7 @@ export function AIAccuracy() {
               locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
               columns={columns(t('thRule'), r => r.title || <span className="mono">{r.key}</span>)} />
           </TableCard>
-          <Row gutter={[16, 16]}>
+          <Row gutter={[20, 20]}>
             <Col xs={24} xl={12}><TableCard title={t('accMissed')} style={{ height: '100%' }}>{cases(data.missed, t('accMissedEmpty'))}</TableCard></Col>
             <Col xs={24} xl={12}><TableCard title={t('accFalseAlarms')} style={{ height: '100%' }}>{cases(data.falseAlarms, t('accFalseEmpty'))}</TableCard></Col>
           </Row>

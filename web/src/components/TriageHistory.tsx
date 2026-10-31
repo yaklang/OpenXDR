@@ -16,7 +16,7 @@ export function TriageHistory({ id }: { id: string }) {
   const triggers = { initial: 'triageRunInitial', reopened: 'triageRunReopened', urgent: 'triageRunUrgent', evidence: 'triageRunEvidence' } as const
   return <Card title={t('triageRunHistory')} extra={<Button type="link" onClick={() => setOpen(!open)}>{t(open ? 'triageRunHide' : 'triageRunShow')}</Button>}>
     <Typography.Text type="secondary">{t('triageRunHint')}</Typography.Text>
-    {open && <>
+    {open && <div style={{ marginTop: 14 }}>
       {query.isError && <LoadError error={query.error} onRetry={() => query.refetch()} />}
       <Table<TriageRun> size="small" rowKey="id" loading={query.isPending} dataSource={query.data?.items ?? []} pagination={false} scroll={{ x: 1000 }} columns={[
         { title: t('thTime'), width: 170, render: (_, row) => fmtTime(row.started_at) },
@@ -36,10 +36,10 @@ export function TriageHistory({ id }: { id: string }) {
         </Typography.Text>)}
       </Space> }} />
       <Space style={{ marginTop: 12 }}>
-        <Button disabled={page === 1} onClick={() => setPage(page - 1)}>{t('triageRunPrevious')}</Button>
+        <Button size="small" disabled={page === 1} onClick={() => setPage(page - 1)}>{t('triageRunPrevious')}</Button>
         <span>{page}</span>
-        <Button disabled={!query.data?.more} onClick={() => setPage(page + 1)}>{t('triageRunNext')}</Button>
+        <Button size="small" disabled={!query.data?.more} onClick={() => setPage(page + 1)}>{t('triageRunNext')}</Button>
       </Space>
-    </>}
+    </div>}
   </Card>
 }

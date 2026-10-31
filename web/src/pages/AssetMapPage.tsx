@@ -62,7 +62,7 @@ export function AssetMapPage() {
     <Page title={t('navAssetMap')} subtitle={t('assetMapSubtitle')}>
       <Card styles={{ body: { padding: 0 } }}>
         <Flex justify="space-between" align="center" gap={12} wrap className="filter-bar">
-          <Space wrap>
+          <Space wrap className="filter-controls">
             <Input.Search allowClear placeholder={t('mapSearch')} aria-label={t('mapSearch')} style={{ width: 240, maxWidth: '100%' }}
               value={search} onChange={e => setSearch(e.target.value)} />
             <Space size={6}><Switch size="small" checked={showDiscovered} onChange={setShowDiscovered} aria-label={t('mapShowDiscovered')} />{t('mapShowDiscovered')}{discoveredCount > 0 && ` (${discoveredCount})`}</Space>

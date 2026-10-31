@@ -95,7 +95,8 @@ export function CommandPalette({ open, onClose, onHelp }: { open: boolean; onClo
         size="large"
         variant="borderless"
         className="palette-input"
-        prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
+        prefix={<SearchOutlined style={{ color: token.colorTextTertiary, marginRight: 4 }} />}
+        suffix={<kbd>Esc</kbd>}
         placeholder={t('palettePlaceholder')}
         value={q}
         onChange={e => setQ(e.target.value)}
@@ -104,7 +105,7 @@ export function CommandPalette({ open, onClose, onHelp }: { open: boolean; onClo
           if (e.key === 'ArrowUp') { e.preventDefault(); setActive(a => Math.max(a - 1, 0)) }
           if (e.key === 'Enter') go(hits[active])
         }}
-        style={{ padding: '14px 16px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}
+        style={{ padding: '16px 20px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}
       />
       <div ref={list} className="palette-list">
         {hits.length === 0 && <Typography.Text type="secondary" style={{ display: 'block', padding: 20, textAlign: 'center' }}>{t('noMatch')}</Typography.Text>}

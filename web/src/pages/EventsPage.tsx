@@ -108,14 +108,14 @@ export function EventsPage() {
         }
         extra={<Space wrap><Refreshed at={dataUpdatedAt} fetching={isFetching} onRefresh={() => refetch()} /><Typography.Text type="secondary">{t('eventCount', { n: data ? `${data.items.length}${data.truncated ? '+' : ''}` : 0 })}</Typography.Text></Space>}
       >
-        {data?.truncated && <Alert type="info" banner showIcon title={t('listTruncated', { n: data.items.length })} />}
+        {data?.truncated && <Alert type="info" showIcon style={{ marginBottom: 14 }} title={t('listTruncated', { n: data.items.length })} />}
         {/* 覆盖缺口必须说清：零结果时它区分「没有」与「没搜到」；有结果时也如实标注。
             关键词查询不搜冷归档是常态缺口——提示这条历史可在恢复归档后重新搜索，不会自动恢复 */}
         {data?.coverage.reason && (
           <Alert
             type={data.items.length ? 'info' : 'warning'}
-            banner
             showIcon
+            style={{ marginBottom: 14 }}
             title={coverageMessage(data.coverage.reason, t)}
             description={data.coverage.reason === 'keyword_not_searched' && data.items.length === 0 ? t('eventsCoverageRestoreHint') : undefined}
           />
@@ -172,8 +172,8 @@ export function EventsPage() {
             },
           }}
           columns={[
-            { title: t('thTime'), dataIndex: 'ts', render: v => (wideTable ? fmtTime(v) : fmtTime(v).slice(11)), width: wideTable ? 170 : 84 },
-            { responsive: WIDE_ONLY, title: t('thClass'), dataIndex: 'classUid', width: 110, render: v => <EventKind classUid={v} /> },
+            { title: t('thTime'), dataIndex: 'ts', sorter: (a, b) => a.ts.localeCompare(b.ts), render: v => (wideTable ? fmtTime(v) : fmtTime(v).slice(11)), width: wideTable ? 170 : 84 },
+            { responsive: WIDE_ONLY, title: t('thClass'), dataIndex: 'classUid', width: 110, sorter: (a, b) => a.classUid - b.classUid, render: v => <EventKind classUid={v} /> },
             { responsive: WIDE_ONLY, title: t('thHostname'), dataIndex: 'assetId', width: 130, render: v => <HostLink id={v} /> },
             {
               title: t('thSummary'), key: 'summary', ellipsis: { showTitle: false },
@@ -194,7 +194,8 @@ export function EventsPage() {
               },
             },
             {
-              responsive: WIDE_ONLY, title: t('thUser'), dataIndex: 'username', width: 110,
+              responsive: WIDE_ONLY, title: t('thUser'), dataIndex: 'username', width: 115,
+              sorter: (a, b) => (a.username ?? '').localeCompare(b.username ?? ''),
               // 纯数字是宿主机上查不到用户名的 UID，多是容器的映射 UID；不按某个偏移去猜容器里是谁
               render: (v: string | null) => v && /^\d+$/.test(v)
                 ? <Tooltip title={t('numericUserHint')}><Typography.Text type="secondary">uid {v}</Typography.Text></Tooltip>

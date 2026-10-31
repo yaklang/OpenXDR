@@ -66,7 +66,7 @@ function QueueCard({ items, index }: { items: QueueItem[]; index: number }) {
   const from = Math.max(0, Math.min(index - 3, items.length - 7))
   return (
     <Card title={t('queueTitle')} size="small" extra={<Typography.Text type="secondary">{index + 1} / {items.length}</Typography.Text>}
-      styles={{ body: { padding: '10px 12px' } }}>
+      styles={{ body: { padding: '12px 16px' } }}>
       {items.slice(from, from + 7).map((q, i) => {
         const body = <><SeverityTag value={q.severity} /><Typography.Text ellipsis style={{ flex: 1 }}>{q.title ?? q.id}</Typography.Text></>
         return from + i === index
@@ -209,6 +209,7 @@ export function IncidentDetailPage() {
               extra={<Segmented size="small" value={alertView} onChange={v => setAlertView(v as 'table' | 'timeline')}
                 options={[{ value: 'timeline', label: t('viewTimeline') }, { value: 'table', label: t('viewTable') }]} />}>
               {alertView === 'timeline' ? <AlertTimeline alerts={inc.alerts} /> : (
+              <div className="table-card-content">
               <Table<AlertRow>
                 size="small"
                 rowKey="id"
@@ -242,6 +243,7 @@ export function IncidentDetailPage() {
                   },
                 ]}
               />
+              </div>
               )}
             </Card>
           </Space>

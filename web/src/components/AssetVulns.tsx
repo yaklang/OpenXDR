@@ -19,8 +19,8 @@ export function AssetVulns({ assetId }: { assetId: string }) {
   if (q.isError) return <LoadError error={q.error} onRetry={() => q.refetch()} />
   if (q.isPending) return <Skeleton active />
   const rep = q.data
-  if (!rep) return <Alert type="info" showIcon message={t('vulnNoInventory')} />
-  if (!rep.ecosystem) return <Alert type="info" showIcon message={t('vulnUnsupported', { n: rep.packages })} />
+  if (!rep) return <Alert type="info" showIcon title={t('vulnNoInventory')} />
+  if (!rep.ecosystem) return <Alert type="info" showIcon title={t('vulnUnsupported', { n: rep.packages })} />
 
   const table = (rows: VulnPackage[], upgrade: boolean) => (
     <Table<VulnPackage> size="small" rowKey="source" dataSource={rows} pagination={{ pageSize: 15, hideOnSinglePage: true }}
@@ -57,8 +57,8 @@ export function AssetVulns({ assetId }: { assetId: string }) {
       <Typography.Text type="secondary">
         {t('vulnMeta', { eco: rep.ecosystem, n: rep.packages, at: rep.softwareAt ? fmtTime(rep.softwareAt) : '-', sync: rep.sync ? fmtTime(rep.sync.at) : '-' })}
       </Typography.Text>
-      {!rep.sync && <Alert type="info" showIcon message={t('vulnNotSynced')} />}
-      {rep.sync?.error && <Alert type="warning" showIcon message={t('vulnSyncError', { error: rep.sync.error })} />}
+      {!rep.sync && <Alert type="info" showIcon title={t('vulnNotSynced')} />}
+      {rep.sync?.error && <Alert type="warning" showIcon title={t('vulnSyncError', { error: rep.sync.error })} />}
       <Typography.Title level={5} style={{ margin: 0 }}>{t('vulnFixable')} · {rep.fixable?.length ?? 0}</Typography.Title>
       {table(rep.fixable ?? [], true)}
       <Collapse ghost items={[{

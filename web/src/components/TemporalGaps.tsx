@@ -23,14 +23,16 @@ export function TemporalGaps({ asset }: { asset: Asset }) {
   const currentPage = Math.min(page, Math.max(1, Math.ceil(rows.length / 10)))
   const copy = (value: string) => <Typography.Text copyable style={{ overflowWrap: 'anywhere' }}>{value}</Typography.Text>
 
-  return <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+  return <Space orientation="vertical" size={16} style={{ width: '100%' }}>
     <Typography.Text type="secondary">{t('temporalGapsHint')}</Typography.Text>
-    <Space wrap>
-      <Select aria-label={t('temporalGapsRecorded')} style={{ width: 170 }} value={hours}
-        options={[1, 6, 24, 72, 168].map(n => ({ value: n, label: t('lastHours', { n }) }))}
-        onChange={value => { setHours(value); setPage(1) }} />
-      <Button loading={query.isFetching} onClick={() => query.refetch()}>{t('refresh')}</Button>
-    </Space>
+    <div className="filter-bar" style={{ padding: '10px 14px' }}>
+      <Space wrap className="filter-controls">
+        <Select aria-label={t('temporalGapsRecorded')} style={{ width: 170 }} value={hours}
+          options={[1, 6, 24, 72, 168].map(n => ({ value: n, label: t('lastHours', { n }) }))}
+          onChange={value => { setHours(value); setPage(1) }} />
+        <Button loading={query.isFetching} onClick={() => query.refetch()}>{t('refresh')}</Button>
+      </Space>
+    </div>
     {query.isError ? <LoadError error={query.error} onRetry={() => query.refetch()} /> : <>
       {rows.length > 0 && <Alert type="warning" showIcon title={t('temporalGapsWarning')} />}
       {query.data?.truncated && <Alert type="info" showIcon title={t('temporalGapsTruncated', { n: rows.length })} />}
@@ -43,12 +45,12 @@ export function TemporalGaps({ asset }: { asset: Asset }) {
           // 迟到缺口没有读取窗口，不存在候选数量下限
           { title: t('temporalGapsCount'), dataIndex: 'candidateCountLowerBound', width: 160, render: (value: number, row) => row.reason === 'late' ? '—' : `≥ ${value.toLocaleString()}` },
         ]}
-        expandable={{ expandedRowRender: row => <Descriptions size="small" column={1} items={[
+        expandable={{ expandedRowRender: row => <div className="ev-expand"><Descriptions size="small" column={1} items={[
           { key: 'event', label: t('identitySourceEvent'), children: copy(row.eventId) },
           { key: 'revision', label: t('temporalGapsRevision'), children: copy(row.revision) },
           { key: 'window', label: t('temporalGapsWindow'), children: `${fmtTime(row.windowFrom)} — ${fmtTime(row.windowTo)}` },
           { key: 'group', label: t('identityHistoricalGroup'), children: groups.find(g => g.id === row.groupId)?.name ?? row.groupId },
-        ]} /> }} />
+        ]} /></div> }} />
     </>}
   </Space>
 }

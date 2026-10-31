@@ -42,7 +42,10 @@ function Funnel({ events, alerts, incidents, foot }: { events: number; alerts: n
           <div key={s.label} className="funnel-stage" style={i === 2
             ? { background: token.colorPrimaryBg, boxShadow: `inset 0 0 0 1px ${dark ? token.colorPrimary : token.colorPrimaryBorder}` }
             : { background: token.colorFillQuaternary }}>
-            <Typography.Text type="secondary">{s.label}</Typography.Text>
+            <Space size={6} align="center">
+              {i === 2 && <GeminiSparkle size={14} />}
+              <Typography.Text type="secondary">{s.label}</Typography.Text>
+            </Space>
             <div className="funnel-value" style={{ color: i === 2 ? (dark ? token.colorPrimaryTextHover : token.colorPrimary) : token.colorText }}>
               {s.to ? <Link to={s.to} style={{ color: 'inherit' }}>{compact(s.value)}</Link> : compact(s.value)}
             </div>
@@ -100,7 +103,7 @@ function AiOps() {
     <Card title={<Space size={8}><GeminiSparkle size={16} />{t('aiOpsTitle')}</Space>} style={{ height: '100%' }} extra={<Link to="/chat">{t('navChat')} <ArrowRightOutlined /></Link>}>
       <Typography.Text type="secondary" strong>{t('recentRuns')}</Typography.Text>
       <div className="mini-list">
-        {(runs.data ?? []).length === 0 && <Typography.Text type="secondary">{t('noTaskRuns')}</Typography.Text>}
+        {(runs.data ?? []).length === 0 && <div className="mini-row"><Typography.Text type="secondary">{t('noTaskRuns')}</Typography.Text></div>}
         {runs.data?.map(r => (
           <Flex key={r.id} justify="space-between" align="center" className="mini-row">
             <Typography.Text ellipsis style={{ maxWidth: '55%' }}>{locale === 'en' && r.nameEn ? r.nameEn : r.name}</Typography.Text>
@@ -113,7 +116,7 @@ function AiOps() {
       </div>
       <Typography.Text type="secondary" strong>{t('recentReports')}</Typography.Text>
       <div className="mini-list">
-        {(reports.data ?? []).length === 0 && <Typography.Text type="secondary">{t('noReports')}</Typography.Text>}
+        {(reports.data ?? []).length === 0 && <div className="mini-row"><Typography.Text type="secondary">{t('noReports')}</Typography.Text></div>}
         {reports.data?.slice(0, 4).map(r => (
           <Flex key={r.id} justify="space-between" align="center" className="mini-row">
             <Link to="/reports" style={{ maxWidth: '65%' }}><Typography.Text ellipsis><FileTextOutlined /> {r.title}</Typography.Text></Link>

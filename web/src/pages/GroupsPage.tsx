@@ -1,7 +1,7 @@
 import { TableActions } from '../components/TableActions'
 import { PlusOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tabs, Transfer } from 'antd'
+import { App, Button, Drawer, Empty, Form, Input, Modal, Popconfirm, Select, Space, Spin, Table, Tabs, Transfer, Typography } from 'antd'
 import { useRef, useState } from 'react'
 import {
   assignAsset, createGroup, deleteGroup, fetchAssets, fetchGroups, fetchMembers, fetchUsers, removeMember, setMember, unassignAsset,
@@ -9,7 +9,7 @@ import {
 } from '../api'
 import { LoadError } from '../components/LoadError'
 import { DirectoryStatus } from '../components/DirectoryStatus'
-import { Page, TableCard } from '../components/Page'
+import { FilterCard, Page, STICKY_HEADER } from '../components/Page'
 import { ROLE_KEY, fmtTime, errText } from '../components/format'
 import { useI18n } from '../i18n'
 
@@ -91,8 +91,8 @@ function GroupDrawer({ group, onClose }: { group: GroupRow; onClose: () => void 
                   pagination={false}
                   locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('noMembers')} /> }}
                   columns={[
-                    { title: t('username'), dataIndex: 'username' },
-                    { title: t('groupRole'), dataIndex: 'role', width: 160, render: (v, m) => <Select disabled={busy} aria-label={`${m.username} ${t('groupRole')}`} size="small" style={{ width: 130 }} value={v} options={roleOptions} onChange={r => run(() => setMember(group.id, m.userId, r))} /> },
+                    { title: t('username'), dataIndex: 'username', sorter: (a, b) => a.username.localeCompare(b.username) },
+                    { title: t('groupRole'), dataIndex: 'role', width: 160, sorter: (a, b) => a.role.localeCompare(b.role), render: (v, m) => <Select disabled={busy} aria-label={`${m.username} ${t('groupRole')}`} size="small" style={{ width: 130 }} value={v} options={roleOptions} onChange={r => run(() => setMember(group.id, m.userId, r))} /> },
                     {
                       title: t('actions'), width: 90,
                       render: (_, m) => (
@@ -136,10 +136,14 @@ export function GroupsPage() {
   const client = useQueryClient()
   const pending = useRef(false)
   const [busy, setBusy] = useState(false)
+  const [q, setQ] = useState('')
   const [creating, setCreating] = useState(false)
   const [managing, setManaging] = useState<GroupRow | null>(null)
   const [form] = Form.useForm()
   const { data, isPending } = useQuery({ queryKey: ['groups'], queryFn: fetchGroups })
+
+  const activeQ = q.trim().toLowerCase()
+  const rows = (data ?? []).filter(g => !activeQ || g.name.toLowerCase().includes(activeQ))
 
   const run = async (fn: () => Promise<unknown>) => {
     if (pending.current) return false
@@ -163,18 +167,23 @@ export function GroupsPage() {
       subtitle={t('groupsSubtitle')}
       extra={<Button type="primary" icon={<PlusOutlined />} disabled={busy} onClick={() => { form.resetFields(); setCreating(true) }}>{t('newGroup')}</Button>}
     >
-      <TableCard>
+      <FilterCard
+        onReset={activeQ ? () => setQ('') : undefined}
+        extra={activeQ && data ? <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>{t('filteredCount', { n: rows.length, total: data.length })}</Typography.Text> : undefined}
+        filters={<Input.Search allowClear style={{ width: 240 }} placeholder={t('searchGroups')} value={q} onChange={e => setQ(e.target.value)} />}
+      >
         <Table<GroupRow>
+          sticky={STICKY_HEADER}
           scroll={{ x: 650 }}
           rowKey="id"
           loading={isPending}
-          dataSource={data ?? []}
+          dataSource={rows}
           pagination={false}
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('noGroups')} /> }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t(activeQ ? 'noMatch' : 'noGroups')} /> }}
           columns={[
-            { title: t('groupName'), dataIndex: 'name', render: (v, g) => <Button type="link" disabled={busy} onClick={() => setManaging(g)}>{v}</Button> },
-            { title: t('thAssetCount'), dataIndex: 'assetCount', width: 120, align: 'right' },
-            { title: t('thCreatedAt'), dataIndex: 'createdAt', width: 200, render: fmtTime },
+            { title: t('groupName'), dataIndex: 'name', sorter: (a, b) => a.name.localeCompare(b.name), render: (v, g) => <Button type="link" disabled={busy} onClick={() => setManaging(g)}>{v}</Button> },
+            { title: t('thAssetCount'), dataIndex: 'assetCount', width: 120, align: 'right', sorter: (a, b) => a.assetCount - b.assetCount },
+            { title: t('thCreatedAt'), dataIndex: 'createdAt', width: 200, sorter: (a, b) => a.createdAt.localeCompare(b.createdAt), render: fmtTime },
             {
               title: t('actions'), width: 160,
               render: (_, g) => (
@@ -188,7 +197,7 @@ export function GroupsPage() {
             },
           ]}
         />
-      </TableCard>
+      </FilterCard>
       <Modal open={creating} title={t('newGroup')} onCancel={() => { if (!busy) setCreating(false) }} confirmLoading={busy} closable={!busy} maskClosable={!busy} keyboard={!busy} cancelButtonProps={{ disabled: busy }} onOk={() => form.submit()} destroyOnHidden>
         <Form disabled={busy} form={form} layout="vertical" onFinish={async v => { if (await run(() => createGroup(v.name.trim()))) { setCreating(false); form.resetFields() } }}>
           <Form.Item name="name" label={t('groupName')} rules={[{ required: true, whitespace: true }]}><Input /></Form.Item>

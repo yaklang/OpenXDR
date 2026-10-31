@@ -143,9 +143,9 @@ export function SurfaceGraph({ surface, hideLow, onPick }: { surface: AttackSurf
           }
           const asset = c.rows[0]
           return (
-            <div key={c.id} style={{ position: 'absolute', left, top: c.box.y, width: CARD_W, height: c.box.h, borderRadius: 10, overflow: 'hidden',
+            <div key={c.id} style={{ position: 'absolute', left, top: c.box.y, width: CARD_W, height: c.box.h, borderRadius: 16, overflow: 'hidden',
               background: token.colorBgContainer, border: `1px solid ${token.colorBorderSecondary}`, boxShadow: token.boxShadowTertiary, borderTop: `3px solid ${zoneColor(asset.zone.kind)}` }}>
-              <div style={{ height: HEAD_H - 3, padding: '6px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${token.colorBorderSecondary}` }}
+              <div style={{ height: HEAD_H - 3, padding: '6px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${token.colorBorderSecondary}` }}
                 onMouseEnter={() => setHover(c.id)} onMouseLeave={() => setHover(null)}>
                 <Link to={`/assets/${c.id}`} style={{ fontWeight: 600 }}>{c.label}</Link>
                 <CritTag value={asset.criticality} />
@@ -156,7 +156,7 @@ export function SurfaceGraph({ surface, hideLow, onPick }: { surface: AttackSurf
                 return (
                   <div key={key} role="button" tabIndex={0} onClick={() => onPick(e)} onKeyDown={ev => ev.key === 'Enter' && onPick(e)}
                     onMouseEnter={() => setHover(key)} onMouseLeave={() => setHover(null)}
-                    style={{ height: ROW_H, display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px', cursor: 'pointer', fontSize: 12,
+                    style={{ height: ROW_H, display: 'flex', alignItems: 'center', gap: 6, padding: '0 12px', cursor: 'pointer', fontSize: 12,
                       background: hover === key ? token.colorFillTertiary : undefined, borderLeft: `3px solid ${riskColor(e.service.risk)}` }}>
                     <span className="mono" style={{ width: 70, flexShrink: 0 }}>{e.proto}/{e.port}</span>
                     <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: unknown ? token.colorWarning : undefined }}>

@@ -27,16 +27,18 @@ export function CollectorHealth({ asset }: { asset: Asset }) {
   const stale = !Number.isFinite(received) || now - received > 90000 || received > now + 300000
   const rows = Object.entries(health.capabilities ?? {}).map(([name, value]) => ({ name, ...value }))
   return <Card title={t('collectorTitle')} size="small">
-    <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       {stale && <Alert type="warning" showIcon title={t('collectorStale')} />}
       {health.writeBlocked && <Alert type="error" showIcon title={t('collectorBlocked')} />}
-      <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 4 }} items={[
-        { key: 'received', label: t('collectorReceived'), children: fmtTime(health.receivedAt) },
-        { key: 'receipts', label: t('collectorReceipts'), children: health.receipts ? `${health.receipts.pending} / ${health.receipts.incomplete}` : '—' },
-        { key: 'queue', label: t('collectorQueue'), children: `${health.queueBatches} · ${size(health.queueBytes)}` },
-        { key: 'limit', label: t('collectorLimit'), children: size(health.queueLimitBytes) },
-        { key: 'dropped', label: t('collectorDropped'), children: <Typography.Text type={health.droppedEvents ? 'danger' : undefined}>{health.droppedEvents}</Typography.Text> },
-      ]} />
+      <div className="cmd-item" style={{ padding: '14px 18px' }}>
+        <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 4 }} items={[
+          { key: 'received', label: t('collectorReceived'), children: fmtTime(health.receivedAt) },
+          { key: 'receipts', label: t('collectorReceipts'), children: health.receipts ? `${health.receipts.pending} / ${health.receipts.incomplete}` : '—' },
+          { key: 'queue', label: t('collectorQueue'), children: `${health.queueBatches} · ${size(health.queueBytes)}` },
+          { key: 'limit', label: t('collectorLimit'), children: size(health.queueLimitBytes) },
+          { key: 'dropped', label: t('collectorDropped'), children: <Typography.Text type={health.droppedEvents ? 'danger' : undefined}>{health.droppedEvents}</Typography.Text> },
+        ]} />
+      </div>
       {health.receipts && health.receipts.incomplete > 0 && <Alert type="warning" showIcon title={t('collectorReceiptIncomplete')} />}
       <Table<CollectorCapability & { name: string }> size="small" rowKey="name" pagination={false} dataSource={rows} columns={[
         { title: t('collectorComponent'), dataIndex: 'name', render: (name: string) => names[name] ? t(names[name]) : name },
@@ -62,18 +64,20 @@ export function SensorHealth({ asset }: { asset: Asset }) {
   const capture = health.capabilities?.capture
   const state = states[capture?.state ?? 'unknown'] ?? states.unknown
   return <Card title={title} size="small">
-    <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       {stale && <Alert type="warning" showIcon title={t('collectorStale')} />}
-      <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 4 }} items={[
-        { key: 'state', label: t('collectorState'), children: <Tag color={stale ? undefined : state.color}>{t(state.label)}</Tag> },
-        { key: 'path', label: t('sensorCapture'), children: <Typography.Text className="mono">{capture?.path || `${health.backend}:${health.iface}`}</Typography.Text> },
-        { key: 'workers', label: t('sensorWorkers'), children: <Typography.Text type={health.workersAlive < health.workers ? 'danger' : undefined}>{health.workersAlive} / {health.workers}</Typography.Text> },
-        { key: 'received', label: t('collectorReceived'), children: fmtTime(health.receivedAt) },
-        { key: 'packets', label: t('sensorPacketRate'), children: health.packetRate.toLocaleString() },
-        { key: 'flows', label: t('sensorFlowRate'), children: health.flowRate.toLocaleString() },
-        { key: 'kernel', label: t('sensorKernelDrops'), children: <Typography.Text type={health.kernelDrops ? 'danger' : undefined}>{health.kernelDrops.toLocaleString()}</Typography.Text> },
-        { key: 'queue', label: t('sensorQueueDrops'), children: <Typography.Text type={health.queueDrops ? 'danger' : undefined}>{health.queueDrops.toLocaleString()}</Typography.Text> },
-      ]} />
+      <div className="cmd-item" style={{ padding: '14px 18px' }}>
+        <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 4 }} items={[
+          { key: 'state', label: t('collectorState'), children: <Tag color={stale ? undefined : state.color}>{t(state.label)}</Tag> },
+          { key: 'path', label: t('sensorCapture'), children: <Typography.Text className="mono">{capture?.path || `${health.backend}:${health.iface}`}</Typography.Text> },
+          { key: 'workers', label: t('sensorWorkers'), children: <Typography.Text type={health.workersAlive < health.workers ? 'danger' : undefined}>{health.workersAlive} / {health.workers}</Typography.Text> },
+          { key: 'received', label: t('collectorReceived'), children: fmtTime(health.receivedAt) },
+          { key: 'packets', label: t('sensorPacketRate'), children: health.packetRate.toLocaleString() },
+          { key: 'flows', label: t('sensorFlowRate'), children: health.flowRate.toLocaleString() },
+          { key: 'kernel', label: t('sensorKernelDrops'), children: <Typography.Text type={health.kernelDrops ? 'danger' : undefined}>{health.kernelDrops.toLocaleString()}</Typography.Text> },
+          { key: 'queue', label: t('sensorQueueDrops'), children: <Typography.Text type={health.queueDrops ? 'danger' : undefined}>{health.queueDrops.toLocaleString()}</Typography.Text> },
+        ]} />
+      </div>
       <Typography.Text type="secondary">{t('sensorEvidenceHint')}</Typography.Text>
     </Space>
   </Card>

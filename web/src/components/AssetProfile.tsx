@@ -177,12 +177,12 @@ export function AssetProfileView({ assetId, hostname, groupId, canEdit, isGroupA
         : <Typography.Text type="secondary">{t('notAnnotated')}</Typography.Text>
 
   return (
-    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={20} style={{ width: '100%' }}>
       {/* 说明文字可以折行，按钮固定在右侧，卡片窄时不被挤到下一行 */}
-      <Flex justify="space-between" align="start" gap={8}>
+      <Flex justify="space-between" align="center" gap={8} className="cmd-item">
         <div style={{ minWidth: 0 }}>{annotation}</div>
         {canEdit && (
-          <Space size={4} style={{ flex: 'none' }}>
+          <Space size={6} style={{ flex: 'none' }}>
             <Button size="small" icon={<EditOutlined />} onClick={() => setEditing(true)}>{t('editProfile')}</Button>
             {p.aiEnabled && <Button size="small" icon={<ReloadOutlined />} loading={busy} disabled={!!p.annotateRequestedAt}
               onClick={() => run(() => requestAnnotate(assetId), t('annotateQueued'))}>{t('reannotate')}</Button>}

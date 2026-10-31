@@ -1,25 +1,25 @@
 import { TableActions } from '../components/TableActions'
 import { RobotOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Segmented, Space, Table, Tag, Tooltip, Typography } from 'antd'
-import { useEffect, useState } from 'react'
+import { App, Button, Input, Segmented, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { fetchFindingsPage, setFindingStatus, type FindingRow } from '../api'
 import { useCanAct, useSession } from '../app/session'
 import { useCanChat, useHandoff } from '../components/Handoff'
 import { HostLink } from '../components/HostLink'
-import { FilterCard, Page, useWideTable } from '../components/Page'
+import { FilterCard, Page, STICKY_HEADER, useWideTable } from '../components/Page'
 import { Ago, EmptyHint, Refreshed } from '../components/Ago'
 import { LoadError } from '../components/LoadError'
 import { ResolveModal } from '../components/ResolveModal'
 import { errText } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
 
-const SEVERITY: Record<FindingRow['severity'], { key: MsgKey; color: string }> = {
-  info: { key: 'sev1', color: 'default' },
-  low: { key: 'sev2', color: 'blue' },
-  medium: { key: 'sev3', color: 'gold' },
-  high: { key: 'sev4', color: 'orange' },
+const SEVERITY: Record<FindingRow['severity'], { key: MsgKey; color: string; rank: number }> = {
+  info: { key: 'sev1', color: 'default', rank: 1 },
+  low: { key: 'sev2', color: 'blue', rank: 2 },
+  medium: { key: 'sev3', color: 'gold', rank: 3 },
+  high: { key: 'sev4', color: 'orange', rank: 4 },
 }
 
 const STATUS: Record<FindingRow['status'], { key: MsgKey; color: string }> = {
@@ -41,6 +41,8 @@ export function FindingsPage() {
   const status = params.get('status') ?? (ids !== undefined ? 'all' : 'open')
   const requestedPage = Number(params.get('page'))
   const page = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1
+  const [q, setQ] = useState('')
+  const [sevFilter, setSevFilter] = useState<string>('')
   const [acting, setActing] = useState<{ row: FindingRow; next: 'resolved' | 'ignored' } | null>(null)
   const [selectedKeys, setSelected] = useState<string[]>([])
   const canChat = useCanChat()
@@ -56,6 +58,13 @@ export function FindingsPage() {
     if (page > lastPage) setParams(prev => { const next = new URLSearchParams(prev); next.set('page', String(lastPage)); return next }, { replace: true })
   }, [data?.total, isError, isFetching, page, status, setParams])
 
+  const activeQ = q.trim().toLowerCase()
+  const hasClientFilter = Boolean(activeQ || sevFilter)
+  const rows = useMemo(() => (data?.items ?? []).filter(f =>
+    (!sevFilter || f.severity === sevFilter) &&
+    (!activeQ || f.title.toLowerCase().includes(activeQ) || f.key.toLowerCase().includes(activeQ) || (f.hostname ?? '').toLowerCase().includes(activeQ) || (f.detail ?? '').toLowerCase().includes(activeQ))
+  ), [data?.items, sevFilter, activeQ])
+
   // 返回是否成功：弹窗靠它决定关不关、原因留不留
   const change = async (row: FindingRow, next: string, note?: string) => {
     try {
@@ -70,7 +79,7 @@ export function FindingsPage() {
   }
 
   useEffect(() => { setSelected([]); setActing(null) }, [status, ids, page])
-  const picked = (data?.items ?? []).filter(f => selectedKeys.includes(f.id) && f.status === 'open' && canChat(f.groupId))
+  const picked = rows.filter(f => selectedKeys.includes(f.id) && f.status === 'open' && canChat(f.groupId))
   const selected = picked.map(f => f.id)
   const sameGroup = picked.length > 0 && picked.every(f => f.groupId === picked[0].groupId)
   const handTo = (list: FindingRow[]) => handoff.start(list[0].groupId, list.map(f => `finding:${f.id}`),
@@ -80,6 +89,7 @@ export function FindingsPage() {
   return (
     <Page title={t('navFindings')} subtitle={t('findingsSubtitle')}>
       <FilterCard
+        onReset={hasClientFilter ? () => { setQ(''); setSevFilter('') } : undefined}
         extra={(
           <Space wrap>
             {selected.length > 0 && (
@@ -95,37 +105,49 @@ export function FindingsPage() {
         )}
         filters={
           <Space wrap>
-          <Segmented
-            value={status}
-            onChange={v => { setSelected([]); setParams(prev => { const next = new URLSearchParams(prev); next.set('status', String(v)); next.delete('page'); return next }) }}
-            options={[
-              ...(['open', 'resolved', 'ignored'] as const).map(s => ({ value: s, label: t(STATUS[s].key) })),
-              { value: 'all', label: t('all') },
-            ]}
-          />
-          {ids !== undefined && <><Tag>{t('findingLinkedFilter')}</Tag><Button size="small" onClick={() => setParams({ status: 'open' })}>{t('resetFilters')}</Button></>}
+            <Segmented
+              value={status}
+              onChange={v => { setSelected([]); setParams(prev => { const next = new URLSearchParams(prev); next.set('status', String(v)); next.delete('page'); return next }) }}
+              options={[
+                ...(['open', 'resolved', 'ignored'] as const).map(s => ({ value: s, label: t(STATUS[s].key) })),
+                { value: 'all', label: t('all') },
+              ]}
+            />
+            <Input.Search allowClear style={{ width: 240 }} placeholder={t('searchFindings')} value={q} onChange={e => setQ(e.target.value)} />
+            <Select aria-label={t('thSeverity')} style={{ width: 135 }} value={sevFilter} onChange={setSevFilter}
+              options={[
+                { value: '', label: t('allSeverities') },
+                { value: 'high', label: t('sev4') },
+                { value: 'medium', label: t('sev3') },
+                { value: 'low', label: t('sev2') },
+                { value: 'info', label: t('sev1') },
+              ]}
+            />
+            {ids !== undefined && <><Tag>{t('findingLinkedFilter')}</Tag><Button size="small" onClick={() => setParams({ status: 'open' })}>{t('resetFilters')}</Button></>}
           </Space>
         }
       >
         {isError ? <LoadError error={error} onRetry={() => refetch()} /> : <Table<FindingRow>
+          sticky={STICKY_HEADER}
           scroll={{ x: 1400 }}
           tableLayout="fixed"
           rowKey="id"
           rowSelection={{ selectedRowKeys: selected, onChange: keys => setSelected(keys as string[]), getCheckboxProps: f => ({ disabled: f.status !== 'open' || !canChat(f.groupId) }) }}
           loading={isPending}
-          dataSource={data?.items ?? []}
-          pagination={{ current: page, pageSize: 20, total: data?.total, showSizeChanger: false, hideOnSinglePage: true, onChange: p => { setSelected([]); setParams(prev => { const next = new URLSearchParams(prev); next.set('page', String(p)); return next }) } }}
-          locale={{ emptyText: <EmptyHint title={t('noFindings')} hint={t('noFindingsHint')} action={<Link to="/tasks">{t('goTasks')}</Link>} /> }}
-          expandable={{ expandedRowRender: f => <pre className="tooltip-pre">{f.detail || '-'}</pre> }}
+          dataSource={rows}
+          pagination={{ current: page, pageSize: 20, total: hasClientFilter ? rows.length : data?.total, showSizeChanger: false, hideOnSinglePage: true, onChange: p => { setSelected([]); setParams(prev => { const next = new URLSearchParams(prev); next.set('page', String(p)); return next }) } }}
+          locale={{ emptyText: <EmptyHint title={t(hasClientFilter ? 'noMatch' : 'noFindings')} hint={hasClientFilter ? undefined : t('noFindingsHint')} action={hasClientFilter ? undefined : <Link to="/tasks">{t('goTasks')}</Link>} /> }}
+          expandable={{ expandedRowRender: f => <div className="ev-expand"><pre className="json-block" style={{ whiteSpace: 'pre-wrap' }}>{f.detail || '-'}</pre></div> }}
           columns={[
-            { title: t('thSeverity'), dataIndex: 'severity', width: 90, render: (v: FindingRow['severity']) => <Tag color={SEVERITY[v]?.color}>{t(SEVERITY[v]?.key ?? 'sev1')}</Tag> },
-            { title: t('thTitle'), dataIndex: 'title', render: (v, f) => <Space orientation="vertical" size={0} style={{ width: '100%', overflowWrap: 'anywhere' }}><span>{v}</span><Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>{f.key}</Typography.Text></Space> },
-            { title: t('thHostname'), dataIndex: 'assetId', width: 140, render: (v, f) => <HostLink id={v} fallback={f.hostname} /> },
-            { title: t('group'), dataIndex: 'groupId', width: 120, render: v => groups.find(g => g.id === v)?.name ?? v.slice(0, 8) },
-            { title: t('thFirstSeen'), dataIndex: 'firstSeen', width: 110, render: v => <Ago iso={v} /> },
-            { title: t('thLastConfirmed'), dataIndex: 'lastSeen', width: 110, render: v => <Ago iso={v} /> },
+            { title: t('thSeverity'), dataIndex: 'severity', width: 95, sorter: (a, b) => SEVERITY[a.severity].rank - SEVERITY[b.severity].rank, render: (v: FindingRow['severity']) => <Tag color={SEVERITY[v]?.color}>{t(SEVERITY[v]?.key ?? 'sev1')}</Tag> },
+            { title: t('thTitle'), dataIndex: 'title', sorter: (a, b) => a.title.localeCompare(b.title), render: (v, f) => <Space orientation="vertical" size={0} style={{ width: '100%', overflowWrap: 'anywhere' }}><span>{v}</span><Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>{f.key}</Typography.Text></Space> },
+            { title: t('thHostname'), dataIndex: 'assetId', width: 140, sorter: (a, b) => (a.hostname ?? '').localeCompare(b.hostname ?? ''), render: (v, f) => <HostLink id={v} fallback={f.hostname} /> },
+            { title: t('group'), dataIndex: 'groupId', width: 120, sorter: (a, b) => (groups.find(g => g.id === a.groupId)?.name ?? '').localeCompare(groups.find(g => g.id === b.groupId)?.name ?? ''), render: v => groups.find(g => g.id === v)?.name ?? v.slice(0, 8) },
+            { title: t('thFirstSeen'), dataIndex: 'firstSeen', width: 115, sorter: (a, b) => a.firstSeen.localeCompare(b.firstSeen), render: v => <Ago iso={v} /> },
+            { title: t('thLastConfirmed'), dataIndex: 'lastSeen', width: 115, sorter: (a, b) => a.lastSeen.localeCompare(b.lastSeen), render: v => <Ago iso={v} /> },
             {
               title: t('thStatus'), dataIndex: 'status', width: 110,
+              sorter: (a, b) => a.status.localeCompare(b.status),
               render: (v: FindingRow['status'], f) => (
                 <Tooltip title={f.note && t('noteBy', { who: f.resolvedBy ?? '', note: f.note })}>
                   <Tag color={STATUS[v].color}>{t(STATUS[v].key)}</Tag>

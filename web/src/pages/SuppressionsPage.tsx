@@ -1,12 +1,13 @@
 import { TableActions } from '../components/TableActions'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Popconfirm, Popover, Space, Table, Tag, Tooltip } from 'antd'
+import { App, Button, Input, Popconfirm, Popover, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
+import { useState } from 'react'
 import { Link } from 'react-router'
 import { deleteSuppression, fetchAssets, fetchSuppressions, reviewSuppression, type SuppressEvidence, type Suppression } from '../api'
 import { useSession } from '../app/session'
 import { EmptyHint } from '../components/Ago'
 import { HostLink } from '../components/HostLink'
-import { Page, TableCard, useWideTable } from '../components/Page'
+import { FilterCard, Page, STICKY_HEADER, useWideTable } from '../components/Page'
 import { fmtTime, errText } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
 import { LoadError } from '../components/LoadError'
@@ -20,6 +21,8 @@ export function SuppressionsPage() {
   const { message } = App.useApp()
   const client = useQueryClient()
   const { canWrite, isAdmin, groups } = useSession()
+  const [q, setQ] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
   const { data, isPending, isError, error, refetch } = useQuery({ queryKey: ['suppressions'], queryFn: fetchSuppressions })
   const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
   // AI 提议由主机所在组的管理员批准，与命令审批同一档权限
@@ -27,8 +30,21 @@ export function SuppressionsPage() {
     const groupId = assets.data?.find(a => a.id === s.assetId)?.groupId
     return isAdmin || groups.find(g => g.id === groupId)?.role === 'admin'
   }
+  const activeQ = q.trim().toLowerCase()
+  const hasFilters = Boolean(activeQ || statusFilter)
   // 待批准的排在最前
-  const rows = [...(data ?? [])].sort((a, b) => Number(b.status === 'proposed') - Number(a.status === 'proposed'))
+  const rows = [...(data ?? [])]
+    .filter(s =>
+      (!statusFilter || s.status === statusFilter) &&
+      (!activeQ ||
+        (s.ruleTitle ?? '').toLowerCase().includes(activeQ) ||
+        s.ruleId.toLowerCase().includes(activeQ) ||
+        (s.reason ?? '').toLowerCase().includes(activeQ) ||
+        s.createdBy.toLowerCase().includes(activeQ) ||
+        (s.conditions ?? []).some(c => (c.field + ' ' + c.value).toLowerCase().includes(activeQ)))
+    )
+    .sort((a, b) => Number(b.status === 'proposed') - Number(a.status === 'proposed'))
+
   const review = async (id: string, decision: 'approve' | 'reject') => {
     try {
       await reviewSuppression(id, decision)
@@ -49,18 +65,40 @@ export function SuppressionsPage() {
 
   return (
     <Page title={t('navSuppressions')} subtitle={t('suppressionsSubtitle')}>
-      <TableCard>
+      <FilterCard
+        onReset={hasFilters ? () => { setQ(''); setStatusFilter('') } : undefined}
+        extra={hasFilters && data ? <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>{t('filteredCount', { n: rows.length, total: data.length })}</Typography.Text> : undefined}
+        filters={
+          <Space wrap>
+            <Input.Search allowClear style={{ width: 280 }} placeholder={t('searchSuppressions')} value={q} onChange={e => setQ(e.target.value)} />
+            <Select aria-label={t('thStatus')} style={{ width: 150 }} value={statusFilter} onChange={setStatusFilter}
+              options={[
+                { value: '', label: t('allStatuses') },
+                { value: 'proposed', label: t('supProposed') },
+                { value: 'active', label: t('supActive') },
+                { value: 'rejected', label: t('supRejected') },
+              ]}
+            />
+          </Space>
+        }
+      >
         {isError ? <LoadError error={error} onRetry={() => refetch()} /> : <Table<Suppression>
+          sticky={STICKY_HEADER}
           rowKey="id"
           loading={isPending}
           dataSource={rows}
-          pagination={{ pageSize: 20, hideOnSinglePage: true }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, hideOnSinglePage: true }}
           scroll={{ x: 1580 }}
-          locale={{ emptyText: <EmptyHint title={t('noSuppressions')} hint={t('noSuppressionsHint')} /> }}
+          locale={{ emptyText: <EmptyHint title={t(hasFilters ? 'noMatch' : 'noSuppressions')} hint={hasFilters ? undefined : t('noSuppressionsHint')} /> }}
           columns={[
-            { title: t('thRule'), dataIndex: 'ruleTitle', width: 220, ellipsis: true, render: (v, s) => <Tooltip title={s.ruleId}>{v ?? s.ruleId}</Tooltip> },
             {
-              title: t('thStatus'), dataIndex: 'status', width: 90,
+              title: t('thRule'), dataIndex: 'ruleTitle', width: 220, ellipsis: true,
+              sorter: (a, b) => (a.ruleTitle ?? a.ruleId).localeCompare(b.ruleTitle ?? b.ruleId),
+              render: (v, s) => <Tooltip title={s.ruleId}>{v ?? s.ruleId}</Tooltip>,
+            },
+            {
+              title: t('thStatus'), dataIndex: 'status', width: 105,
+              sorter: (a, b) => a.status.localeCompare(b.status),
               render: (v: Suppression['status'], s) => <Tag color={v === 'proposed' ? 'gold' : v === 'rejected' ? 'default' : 'green'}>{t(v === 'proposed' ? (s.evidence ? 'supStatsDraft' : 'supProposed') : v === 'rejected' ? 'supRejected' : 'supActive')}</Tag>,
             },
             { title: t('thScope'), dataIndex: 'assetId', width: 130, render: v => (v ? <HostLink id={v} /> : <Tag color="warning">{t('allHosts')}</Tag>) },
@@ -72,10 +110,11 @@ export function SuppressionsPage() {
             },
             { title: t('reason'), dataIndex: 'reason', ellipsis: true, render: v => v ?? '-' },
             { title: t('thMatched'), dataIndex: 'matchedCount', width: 110, align: 'right', sorter: (a, b) => a.matchedCount - b.matchedCount },
-            { title: t('thLastMatched'), dataIndex: 'lastMatchedAt', width: 160, render: fmtTime },
-            { title: t('thExpires'), dataIndex: 'expiresAt', width: 160, render: v => (v ? fmtTime(v) : t('longTerm')) },
+            { title: t('thLastMatched'), dataIndex: 'lastMatchedAt', width: 165, sorter: (a, b) => (a.lastMatchedAt ?? '').localeCompare(b.lastMatchedAt ?? ''), render: fmtTime },
+            { title: t('thExpires'), dataIndex: 'expiresAt', width: 165, sorter: (a, b) => (a.expiresAt ?? '9999').localeCompare(b.expiresAt ?? '9999'), render: v => (v ? fmtTime(v) : t('longTerm')) },
             {
               title: t('thCreatedBy'), dataIndex: 'createdBy', width: 120,
+              sorter: (a, b) => a.createdBy.localeCompare(b.createdBy),
               render: (v: string, s) => (s.evidence
                 ? <Popover title={t('supFromStats')} content={<StatsEvidence e={s.evidence} />}><Tag color="cyan" style={{ cursor: 'help' }}>{t('supFromStats')}</Tag></Popover>
                 : s.sessionId ? <Space size={4}><Tag color="purple" variant="filled">AI</Tag><Link to={`/chat/${s.sessionId}`}>{t('openSession')}</Link></Space> : v),
@@ -102,7 +141,7 @@ export function SuppressionsPage() {
               : []),
           ]}
         />}
-      </TableCard>
+      </FilterCard>
     </Page>
   )
 }

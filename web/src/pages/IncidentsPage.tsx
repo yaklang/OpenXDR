@@ -1,8 +1,8 @@
 import { TableActions } from '../components/TableActions'
 import { RobotOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, App, Button, Checkbox, Segmented, Space, Table, Tag, Tooltip, Typography } from 'antd'
-import { useEffect, useState } from 'react'
+import { Alert, App, Button, Checkbox, Input, Segmented, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { fetchIncidentGroups, fetchIncidents, resolveIncidents, type IncidentSummary } from '../api'
 import { useCanAct, useSession } from '../app/session'
@@ -41,6 +41,9 @@ export function IncidentsPage() {
   const status = view === 'groups' && !GROUPABLE.includes(rawStatus) ? 'review' : rawStatus
   const requestedPage = Number(params.get('page') ?? 1)
   const page = Number.isSafeInteger(requestedPage) && requestedPage > 0 && requestedPage <= Math.floor(Number.MAX_SAFE_INTEGER / PAGE_SIZE) ? requestedPage : 1
+  const [q, setQ] = useState('')
+  const [sevFilter, setSevFilter] = useState(0)
+  const [verdictFilter, setVerdictFilter] = useState('')
   const [selectedKeys, setSelected] = useState<string[]>([])
   const [resolving, setResolving] = useState<Resolving | null>(null)
   const [confirmMalicious, setConfirmMalicious] = useState(false)
@@ -65,7 +68,21 @@ export function IncidentsPage() {
       return next
     }, { replace: true })
   }, [view, query.data?.total, query.isSuccess, query.isFetching, page, setParams])
-  const rows = query.data?.items ?? []
+
+  const activeQ = q.trim().toLowerCase()
+  const hasClientFilter = Boolean(activeQ || sevFilter || verdictFilter)
+  const allRows = query.data?.items ?? []
+  const rows = useMemo(() => allRows.filter(r =>
+    (!sevFilter || r.severity === sevFilter) &&
+    (!verdictFilter || (verdictFilter === 'none' ? !r.aiVerdict?.verdict : r.aiVerdict?.verdict === verdictFilter)) &&
+    (!activeQ || (r.title ?? '').toLowerCase().includes(activeQ) || r.id.toLowerCase().includes(activeQ))
+  ), [allRows, sevFilter, verdictFilter, activeQ])
+
+  const filteredGroups = useMemo(() => (grouped.data?.items ?? []).filter(g =>
+    (!sevFilter || g.severity === sevFilter) &&
+    (!activeQ || (g.ruleTitle ?? '').toLowerCase().includes(activeQ) || g.ruleId.toLowerCase().includes(activeQ) || (g.hostname ?? '').toLowerCase().includes(activeQ))
+  ), [grouped.data?.items, sevFilter, activeQ])
+
   const actable = (r: IncidentSummary) => !done(r) && canAct(r.groupId)
   const selected = rows.filter(r => selectedKeys.includes(r.id) && actable(r)).map(r => r.id)
   useEffect(() => { setSelected([]); setResolving(null) }, [status, page, view])
@@ -147,6 +164,7 @@ export function IncidentsPage() {
   return (
     <Page title={t('navIncidents')} subtitle={t('incidentsSubtitle')}>
       <FilterCard
+        onReset={hasClientFilter ? () => { setQ(''); setSevFilter(0); setVerdictFilter('') } : undefined}
         extra={(
           <Space wrap>
             {view === 'groups'
@@ -188,6 +206,20 @@ export function IncidentsPage() {
                 ] : []),
               ]}
             />
+            <Input.Search allowClear style={{ width: 220 }} placeholder={t('searchIncidents')} value={q} onChange={e => setQ(e.target.value)} />
+            <Select aria-label={t('thSeverity')} style={{ width: 130 }} value={sevFilter} onChange={setSevFilter}
+              options={[{ value: 0, label: t('allSeverities') }, ...[5, 4, 3, 2, 1].map(n => ({ value: n, label: t(`sev${n}` as 'sev1') }))]} />
+            {view === 'list' && (
+              <Select aria-label={t('thVerdict')} style={{ width: 135 }} value={verdictFilter} onChange={setVerdictFilter}
+                options={[
+                  { value: '', label: t('allVerdicts') },
+                  { value: 'malicious', label: t('verdictMalicious') },
+                  { value: 'suspicious', label: t('verdictSuspicious') },
+                  { value: 'benign', label: t('verdictBenign') },
+                  { value: 'none', label: t('verdictNone') },
+                ]}
+              />
+            )}
           </Space>
         }
       >
@@ -195,25 +227,25 @@ export function IncidentsPage() {
           <>
             {grouped.data?.truncated && <Alert type="info" showIcon title={t('groupsTruncated', { n: grouped.data.total ?? 0 })} style={{ margin: 12 }} />}
             <IncidentGroupTable
-              groups={grouped.data?.items ?? []}
+              groups={filteredGroups}
               loading={grouped.isPending}
-              emptyText={<EmptyHint title={t(status === 'review' ? 'noReview' : 'noUnresolved')} hint={t('noUnresolvedHint')} />}
+              emptyText={<EmptyHint title={t(hasClientFilter ? 'noMatch' : status === 'review' ? 'noReview' : 'noUnresolved')} hint={hasClientFilter ? undefined : t('noUnresolvedHint')} />}
               actable={actable}
               onResolve={startResolve}
             />
           </>
         )) : query.isError ? <LoadError error={query.error} onRetry={() => query.refetch()} /> : (
           <Table<IncidentSummary>
-          sticky={STICKY_HEADER}
-          scroll={wideTable ? { x: 1100 } : undefined}
+            sticky={STICKY_HEADER}
+            scroll={wideTable ? { x: 1100 } : undefined}
             rowKey="id"
             rowClassName={r => (flash.has(r.id) ? 'row-link row-flash' : 'row-link')}
             onRow={rowLink}
             loading={query.isPending}
             dataSource={rows}
-            locale={{ emptyText: <EmptyHint title={t(status === 'review' ? 'noReview' : status === 'unresolved' ? 'noUnresolved' : 'noIncidents')} hint={status === 'review' || status === 'unresolved' ? t('noUnresolvedHint') : undefined} /> }}
+            locale={{ emptyText: <EmptyHint title={t(hasClientFilter ? 'noMatch' : status === 'review' ? 'noReview' : status === 'unresolved' ? 'noUnresolved' : 'noIncidents')} hint={!hasClientFilter && (status === 'review' || status === 'unresolved') ? t('noUnresolvedHint') : undefined} /> }}
             pagination={{
-              current: page, pageSize: PAGE_SIZE, total: query.data?.total ?? rows.length,
+              current: page, pageSize: PAGE_SIZE, total: hasClientFilter ? rows.length : (query.data?.total ?? rows.length),
               hideOnSinglePage: true, showSizeChanger: false, onChange: p => go({ page: p }),
               showTotal: n => t('totalCount', { n }),
             }}
@@ -223,16 +255,25 @@ export function IncidentsPage() {
               getCheckboxProps: r => ({ disabled: !actable(r) }),
             } : undefined}
             columns={[
-              { title: t('thSeverity'), dataIndex: 'severity', width: 90, render: v => <SeverityTag value={v} /> },
-              { title: t('thTitle'), dataIndex: 'title', ellipsis: wideTable, render: (v, r) => <Link to={`/incidents/${r.id}`}>{v ?? r.id}</Link> },
-              { responsive: WIDE_ONLY, title: t('group'), dataIndex: 'groupId', width: 140, ellipsis: true, render: v => groups.find(g => g.id === v)?.name ?? '-' },
+              { title: t('thSeverity'), dataIndex: 'severity', width: 95, sorter: (a, b) => a.severity - b.severity, render: v => <SeverityTag value={v} /> },
+              { title: t('thTitle'), dataIndex: 'title', ellipsis: wideTable, sorter: (a, b) => (a.title ?? a.id).localeCompare(b.title ?? b.id), render: (v, r) => <Link to={`/incidents/${r.id}`}>{v ?? r.id}</Link> },
+              {
+                responsive: WIDE_ONLY, title: t('group'), dataIndex: 'groupId', width: 140, ellipsis: true,
+                sorter: (a, b) => (groups.find(g => g.id === a.groupId)?.name ?? '').localeCompare(groups.find(g => g.id === b.groupId)?.name ?? ''),
+                render: v => groups.find(g => g.id === v)?.name ?? '-',
+              },
               {
                 title: t('thStatus'), dataIndex: 'status', width: 130,
+                sorter: (a, b) => a.status.localeCompare(b.status),
                 render: (v, r) => <Space size={4} wrap><IncidentStatusTag value={v} retriage={r.retriage} triageStartedAt={r.triageStartedAt} />{r.closureProposal && <Tag color="purple" variant="filled">{t('proposalTag')}</Tag>}</Space>,
               },
-              { responsive: WIDE_ONLY, title: t('thVerdict'), width: 150, render: (_, r) => <VerdictBadge row={r} /> },
-              { responsive: WIDE_ONLY, title: t('thAlerts'), dataIndex: 'alertCount', width: 80, align: 'right' },
-              { responsive: WIDE_ONLY, title: t('thCreatedAt'), dataIndex: 'createdAt', width: 110, render: v => <Ago iso={v} /> },
+              {
+                responsive: WIDE_ONLY, title: t('thVerdict'), width: 150,
+                sorter: (a, b) => (a.aiVerdict?.verdict ?? '').localeCompare(b.aiVerdict?.verdict ?? ''),
+                render: (_, r) => <VerdictBadge row={r} />,
+              },
+              { responsive: WIDE_ONLY, title: t('thAlerts'), dataIndex: 'alertCount', width: 85, align: 'right', sorter: (a, b) => a.alertCount - b.alertCount },
+              { responsive: WIDE_ONLY, title: t('thCreatedAt'), dataIndex: 'createdAt', width: 115, sorter: (a, b) => a.createdAt.localeCompare(b.createdAt), render: v => <Ago iso={v} /> },
               ...(anyActable ? [{
                 // 三个链接按钮（AI、确认属实、误报）带内边距约 220px，给少了最后一个会被裁掉
                 responsive: WIDE_ONLY, title: '', width: 230,

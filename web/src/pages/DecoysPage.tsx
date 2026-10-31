@@ -7,7 +7,7 @@ import { useSession } from '../app/session'
 import { Ago } from '../components/Ago'
 import { HostLink } from '../components/HostLink'
 import { LoadError } from '../components/LoadError'
-import { Page } from '../components/Page'
+import { Page, TableCard } from '../components/Page'
 import { DeceptionEngine, DeceptionReleases, DeceptionStatus } from '../components/DeceptionEngine'
 import { errText } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
@@ -58,42 +58,45 @@ function GroupDecoys({ groupId }: { groupId: string }) {
   const installCredential = credentials.data?.find(c => c.assetId === installTarget?.asset_id)
   const profile = profiles.data?.find(p => p.id === selected && p.kind === kind)
   return <Page title={t('navDecoys')} subtitle={t('decoysSubtitle')} extra={<Space><DeceptionReleases isAdmin={isAdmin} />{canManage && <Button type="primary" onClick={() => setOpen(true)}>{t('decoysRegister')}</Button>}</Space>}>
-    <Space orientation="vertical" style={{ width: '100%' }} size="middle">
+    <Space orientation="vertical" style={{ width: '100%' }} size={20}>
       <Alert type="info" showIcon title={t('decoysBoundary')} />
       {installStatus.isError && <LoadError error={installStatus.error} onRetry={() => installStatus.refetch()} />}
       {canManage && installStatus.data && !installStatus.data.enabled && <Alert type="info" title={t('decoysInstallDisabled')} />}
       {profiles.isError && <LoadError error={profiles.error} onRetry={() => profiles.refetch()} />}
       <DeceptionStatus />
-      {rows.isError ? <LoadError error={rows.error} onRetry={() => rows.refetch()} /> :
-      <Table<DecoyDeployment>
-        rowKey="id" loading={rows.isPending} dataSource={rows.data?.items ?? []} pagination={false} scroll={{ x: 850 }}
-        columns={[
-          { title: t('thHostname'), dataIndex: 'asset_id', render: id => <HostLink id={id} /> },
-          { title: t('decoysKind'), dataIndex: 'kind' },
-          { title: t('decoysResource'), dataIndex: 'resource', render: (v, row) => v || row.port },
-          { title: t('decoysProfile'), dataIndex: 'profile', render: id => t(id === 'decoy' ? 'decoysIdentify' : id === 'pause' ? 'decoysPause' : 'decoysPadding') },
-          { title: t('decoysTemplate'), dataIndex: 'template' },
-{ title: t('deceptionEngine'), render: (_, row) => <Tag>{t(row.active_revision_id ? 'deceptionManaged' : 'deceptionLegacy')}</Tag> },
-          { title: t('decoysStatus'), dataIndex: 'status', render: status => <Tag color={status === 'registered' ? 'blue' : 'default'}>{t(status === 'registered' ? 'decoysRegistered' : 'decoysRevoked')}</Tag> },
-          { title: t('decoysRuntime'), render: (_, row) => <Space orientation="vertical" size={0}><Tag>{t(({ unreported: 'decoysUnreported', starting: 'decoysStarting', running: 'decoysRunning', stopped: 'decoysStopped', failed: 'decoysFailed', stale: 'decoysStale', stopping: 'decoysStopping' } as const)[row.runtime_status ?? 'unreported'])}</Tag>{row.runtime_seen_at && <Ago iso={row.runtime_seen_at} />}{row.active_revision_id && <><Typography.Text type="secondary">{t('deceptionPending')}: {row.runtime_pending ?? t('deceptionNotReported')}</Typography.Text>{row.runtime_error && <Typography.Text type="danger">{t(runtimeErrors[row.runtime_error] ?? 'deceptionLoadFailed')}</Typography.Text>}<Typography.Text type="secondary">{t('deceptionEntranceUnverified')}</Typography.Text></>}</Space> },
-          { title: t('decoysInstallState'), render: (_, row) => <Tag>{t(({ idle: 'decoysInstallIdle', installing: 'decoysInstalling', installed: 'decoysInstalled', unconfirmed: 'decoysInstallUnconfirmed' } as const)[row.install_state ?? 'idle'])}</Tag> },
-          { title: t('decoysCreated'), dataIndex: 'created_at', render: at => <Ago iso={at} /> },
-          { title: t('decoysOperator'), dataIndex: 'created_by' },
-          { title: t('actions'), render: (_, row) => <Space wrap>
-            <Button size="small" onClick={() => setObserving(row.id)}>{t('decoysEvents')}</Button>
-            {canManage && row.status === 'registered' && <>
-              <DeceptionEngine row={row} refresh={refresh} />
-{row.kind !== 'shell' && <Button size="small" disabled={!installStatus.data?.enabled || !row.remote_installable} onClick={() => { installForm.resetFields(); setInstallTarget(row) }}>{t('decoysInstall')}</Button>}
-              {!row.hosted && <Popconfirm title={t('decoysTokenConfirm')} onConfirm={() => issue(row.id)}><Button size="small" disabled={issuing || row.install_state === 'installing'}>{t('decoysToken')}</Button></Popconfirm>}
-              <Popconfirm title={t('decoysRevokeHint')} onConfirm={() => revoke.mutateAsync(row.id)}><Button danger size="small" loading={revoke.isPending && revoke.variables === row.id} disabled={revoke.isPending}>{t('decoysRevoke')}</Button></Popconfirm>
-            </>}
-          </Space> },
-        ]} />}
-      <Space>
-        <Button disabled={offset === 0 || rows.isFetching} onClick={() => setOffset(n => Math.max(0, n - 50))}>{t('decoysPrevious')}</Button>
-        <Button disabled={!rows.data?.more || rows.isFetching || rows.isError} onClick={() => setOffset(n => n + 50)}>{t('decoysNext')}</Button>
-        <Button loading={rows.isFetching} onClick={() => rows.refetch()}>{t('decoysRefresh')}</Button>
-      </Space>
+      <TableCard extra={
+        <Space>
+          <Button size="small" disabled={offset === 0 || rows.isFetching} onClick={() => setOffset(n => Math.max(0, n - 50))}>{t('decoysPrevious')}</Button>
+          <Button size="small" disabled={!rows.data?.more || rows.isFetching || rows.isError} onClick={() => setOffset(n => n + 50)}>{t('decoysNext')}</Button>
+          <Button size="small" loading={rows.isFetching} onClick={() => rows.refetch()}>{t('decoysRefresh')}</Button>
+        </Space>
+      }>
+        {rows.isError ? <LoadError error={rows.error} onRetry={() => rows.refetch()} /> :
+        <Table<DecoyDeployment>
+          rowKey="id" loading={rows.isPending} dataSource={rows.data?.items ?? []} pagination={false} scroll={{ x: 850 }}
+          columns={[
+            { title: t('thHostname'), dataIndex: 'asset_id', render: id => <HostLink id={id} /> },
+            { title: t('decoysKind'), dataIndex: 'kind' },
+            { title: t('decoysResource'), dataIndex: 'resource', render: (v, row) => v || row.port },
+            { title: t('decoysProfile'), dataIndex: 'profile', render: id => t(id === 'decoy' ? 'decoysIdentify' : id === 'pause' ? 'decoysPause' : 'decoysPadding') },
+            { title: t('decoysTemplate'), dataIndex: 'template' },
+            { title: t('deceptionEngine'), render: (_, row) => <Tag>{t(row.active_revision_id ? 'deceptionManaged' : 'deceptionLegacy')}</Tag> },
+            { title: t('decoysStatus'), dataIndex: 'status', render: status => <Tag color={status === 'registered' ? 'blue' : 'default'}>{t(status === 'registered' ? 'decoysRegistered' : 'decoysRevoked')}</Tag> },
+            { title: t('decoysRuntime'), render: (_, row) => <Space orientation="vertical" size={0}><Tag>{t(({ unreported: 'decoysUnreported', starting: 'decoysStarting', running: 'decoysRunning', stopped: 'decoysStopped', failed: 'decoysFailed', stale: 'decoysStale', stopping: 'decoysStopping' } as const)[row.runtime_status ?? 'unreported'])}</Tag>{row.runtime_seen_at && <Ago iso={row.runtime_seen_at} />}{row.active_revision_id && <><Typography.Text type="secondary">{t('deceptionPending')}: {row.runtime_pending ?? t('deceptionNotReported')}</Typography.Text>{row.runtime_error && <Typography.Text type="danger">{t(runtimeErrors[row.runtime_error] ?? 'deceptionLoadFailed')}</Typography.Text>}<Typography.Text type="secondary">{t('deceptionEntranceUnverified')}</Typography.Text></>}</Space> },
+            { title: t('decoysInstallState'), render: (_, row) => <Tag>{t(({ idle: 'decoysInstallIdle', installing: 'decoysInstalling', installed: 'decoysInstalled', unconfirmed: 'decoysInstallUnconfirmed' } as const)[row.install_state ?? 'idle'])}</Tag> },
+            { title: t('decoysCreated'), dataIndex: 'created_at', render: at => <Ago iso={at} /> },
+            { title: t('decoysOperator'), dataIndex: 'created_by' },
+            { title: t('actions'), render: (_, row) => <Space wrap>
+              <Button size="small" onClick={() => setObserving(row.id)}>{t('decoysEvents')}</Button>
+              {canManage && row.status === 'registered' && <>
+                <DeceptionEngine row={row} refresh={refresh} />
+                {row.kind !== 'shell' && <Button size="small" disabled={!installStatus.data?.enabled || !row.remote_installable} onClick={() => { installForm.resetFields(); setInstallTarget(row) }}>{t('decoysInstall')}</Button>}
+                {!row.hosted && <Popconfirm title={t('decoysTokenConfirm')} onConfirm={() => issue(row.id)}><Button size="small" disabled={issuing || row.install_state === 'installing'}>{t('decoysToken')}</Button></Popconfirm>}
+                <Popconfirm title={t('decoysRevokeHint')} onConfirm={() => revoke.mutateAsync(row.id)}><Button danger size="small" loading={revoke.isPending && revoke.variables === row.id} disabled={revoke.isPending}>{t('decoysRevoke')}</Button></Popconfirm>
+              </>}
+            </Space> },
+          ]} />}
+      </TableCard>
     </Space>
     <Modal open={open} title={t('decoysRegister')} onCancel={() => { if (!create.isPending) setOpen(false) }} confirmLoading={create.isPending}
       okButtonProps={{ disabled: profiles.isPending || profiles.isError || assets.isPending || assets.isError }}
@@ -119,15 +122,15 @@ function GroupDecoys({ groupId }: { groupId: string }) {
       </Space>}
     </Modal>
     <Modal open={!!observing} title={t('decoysEvents')} footer={null} onCancel={() => setObserving(null)} destroyOnHidden>
-      <Alert type="info" title={t('decoysEventsHint')} />
+      <Alert type="info" title={t('decoysEventsHint')} style={{ marginBottom: 14 }} />
       {observations.isError ? <LoadError error={observations.error} onRetry={() => observations.refetch()} /> : <>
         <Table rowKey="id" loading={observations.isPending} dataSource={observations.data?.items ?? []} pagination={{ pageSize: 10 }} columns={[{ title: t('decoysStatus'), dataIndex: 'kind' }, { title: t('decoysReceived'), dataIndex: 'received_at', render: at => <Ago iso={at} /> }, { title: t('deceptionSession'), dataIndex: 'session_id', render: (value: string) => value?.slice(0, 12) || '—' }, { title: t('actions'), render: (_, row) => row.incident_id ? <Link to={`/incidents/${row.incident_id}`}>{t('decoysOpenReview')}</Link> : canReview && reviewable.has(row.kind) && <Popconfirm title={t('decoysReviewConfirm')} onConfirm={() => review.mutateAsync(row.id)}><Button size="small" disabled={review.isPending} loading={review.isPending && review.variables === row.id}>{t('decoysReview')}</Button></Popconfirm> }]} />
         {observations.data?.more && <Typography.Text>{t('decoysEventsTruncated')}</Typography.Text>}
-        <Button onClick={() => observations.refetch()} loading={observations.isFetching}>{t('decoysRefresh')}</Button>
+        <Button style={{ marginTop: 12 }} onClick={() => observations.refetch()} loading={observations.isFetching}>{t('decoysRefresh')}</Button>
       </>}
     </Modal>
   <Modal title={t('decoysInstall')} open={!!installTarget} confirmLoading={install.isPending} closable={!install.isPending} maskClosable={false} cancelButtonProps={{ disabled: install.isPending }} okButtonProps={{ disabled: credentials.isPending || credentials.isError || !installCredential || installCredential.os !== 'linux' }} onCancel={() => setInstallTarget(null)} onOk={() => installForm.submit()}>
-      <Alert type="warning" showIcon title={t('decoysInstallHint')} />
+      <Alert type="warning" showIcon title={t('decoysInstallHint')} style={{ marginBottom: 14 }} />
       {credentials.isError && <LoadError error={credentials.error} onRetry={() => credentials.refetch()} />}
       {!credentials.isPending && !credentials.isError && (!installCredential || installCredential.os !== 'linux') && <Alert type="error" title={t('decoysInstallNoCredential')} />}
       {installCredential && <Typography.Paragraph>{installCredential.username}@{installCredential.address}:{installCredential.port}</Typography.Paragraph>}

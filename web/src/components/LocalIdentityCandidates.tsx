@@ -23,10 +23,10 @@ export function LocalIdentityCandidates({ eventId, scope }: { eventId: string; s
           { title: t('directoryObserved'), dataIndex: 'observedAt', width: 170, render: fmtTime },
           { title: t('username'), dataIndex: 'name', render: v => <span style={{ overflowWrap: 'anywhere' }}>{v}</span> },
           { title: 'UID', dataIndex: 'uid' }, { title: 'GID', dataIndex: 'gid' },
-        ]} expandable={{ expandedRowRender: row => <Space orientation="vertical">
+        ]} expandable={{ expandedRowRender: row => <div className="ev-expand"><Space orientation="vertical">
           <Typography.Text>{t('identitySourceEvent')}: <Typography.Text copyable>{row.eventId}</Typography.Text></Typography.Text>
           <Typography.Text style={{ overflowWrap: 'anywhere' }}>Shell: {row.shell || '—'}</Typography.Text>
-        </Space> }} />
+        </Space></div> }} />
     </>}
   </Space>
 }

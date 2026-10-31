@@ -174,7 +174,7 @@ function Agreement({ c, setup, onAccepted, onExit }: { c: Copy; setup: SetupStat
     <motion.section className="wl-panel wl-agreement" {...panel}>
       <header>
         <h2>{c.agreementTitle}</h2>
-        <Tag bordered={false}>{c.version} {setup.agreementVersion}</Tag>
+        <Tag variant="filled">{c.version} {setup.agreementVersion}</Tag>
       </header>
       <p className="wl-lead">{c.agreementLead}</p>
       <div className="wl-terms" tabIndex={0}>
