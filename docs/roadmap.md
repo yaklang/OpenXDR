@@ -223,6 +223,24 @@ PostgreSQL 回归覆盖两种事件搜索、组外祖先/子进程、未分组�
 | 外部工单与身份来源 | 有真实目标系统、权限和配置 | 事件投递去重、工单回写、失败恢复及权限边界验证；目录身份只按强证据关联 |
 | 情报订阅 | 核实目标源当前接口及所需密钥 | 同步成功、失败原因、数据有效期和碰撞可核对；无密钥时明确不可用，不以 0 条伪装成功 |
 
+#### P1 实机补验与生产状态核对（2026-11-02）
+
+- **采集和检测实机补验（已完成真 Linux 与 Win10 测试机全项矩阵补验，见 [`validation/replay/README.md` 第七轮](../validation/replay/README.md#第七轮linux-ebpf-网络dns退出码与双平台平凡退出抑制补验2026-11-02)）**：
+  - **真 Linux（`openxdr-test-linux`，Debian 12，内核 `6.1.0-54-cloud-amd64`，eBPF + AF_PACKET + fanotify）**：实机补齐并留证网络入站（`SYN_RECV→ESTABLISHED` 归属监听进程）与 UDP 出站（`kprobe udp_sendmsg` 归属发起进程）、DNS（`AF_PACKET` 问答配对、NXDOMAIN `rcode_id=3`、按源端口归属进程、出站 TCP 连接回填 `dst_endpoint.hostname`）、eBPF `exit_group` 退出码与运行时长（`exit 7` → `exit_code=7, duration_ms=2001`）、平凡退出抑制（`suppressTrivialExit=true`：`<2s` 且 `exit 0` 抑制 Terminate，`<2s` 非零退出码 `exit 9` 与 `≥2s` `exit 0` 照常发 Terminate 并复用启动 GUID），以及生产宿主机群的容器归属（Docker 12 位容器 ID + 容器名，PVE `lxc` / `qemu` VMID + 名称）。
+  - **Windows 10 Pro 22H2 测试机（`OPENXDR-TESTWIN`，build 19045，ETW）**：排查并修复 `agent/src/collector/windows.rs` 在 `EVENT_PROCESS_STOP` 分支漏解 `ExitCode` 的真实缺陷（此前 Windows `Terminate` 事件 `exit_code` 恒为空，导致 `suppressTrivialExit` 在 Windows 上完全不触发，连带每 30 秒上报 `persistwatch` 的 4 条 `<1s` `powershell.exe` / `conhost.exe` 正常退出事件）；修复并升级至 `653999b7af63...` 后，实机四组对照（`<2s` `exit /b 0` 抑制、`<2s` `exit /b 9` 不抑制、`3s` `exit 0` 不抑制、`2s` `exit 7` 不抑制）全部通过并留证。
+- **批量与异构纳管（已在生产 4 类异构系统与双平台在线升级中验证）**：
+  - 生产环境当前在线纳管 **21 台主机**，覆盖 4 类操作系统与内核形态：Debian 12（17 台，含 cloud 6.1 与标准 6.1 内核）、Debian 13 / Proxmox VE 9（2 台，`7.0.2-6-pve` 内核）、统信 UOS Server 20（1 台，`4.19.0-amd64-server` 内核，自动选择 `netlink` + `fanotify`）、Windows 10 Pro 22H2（1 台，build 19045）。
+  - 实机验证 Linux（`4bf965743c44...`，覆盖 20 台 Linux 资产）与 Windows（`653999b7af63...`，覆盖 `OPENXDR-TESTWIN`）经 gRPC 下发分块、SHA-256 校验、`--version` 自检、退出码 75 原子替换重启及跨节点指令流重连的完整闭环。
+- **外部工单与身份来源（身份来源已在生产验证，外部工单待目标系统接入）**：
+  - **目录身份来源**：生产已接入 Authentik（`https://auth.yuzhian.com.cn`），累计自动同步成功 **1,258 次**（`failed = 0`），物化 **584 个目录身份（`identities`）** 与 **584 条身份关联边（`identity_links`）**。
+  - **外部工单**：生产尚未配置外部工单系统（`integrations = 0`、`external_tickets = 0`），保持未验证状态，待有真实目标工单系统与凭据时再行接入。
+- **情报订阅（已在生产验证免密钥源同步、碰撞与需密钥源显式边界）**：
+  - `feed:et-compromised`（EmergingThreats 失陷 IP）：生产定时同步正常，当前有效指标 **542 条 IP**（有效期至 `2026-11-03`），累计在生产流量与连接事件上产生 **24 次真实情报碰撞命中**。
+  - `feed:feodo`（abuse.ch Feodo Tracker C2 IP）：生产定时同步正常，当前有效指标 **5 条 IP**。
+  - 需 `Auth-Key` 的 `urlhaus` 与 `threatfox` 在未配置密钥时保持明确不可用，不以 0 条伪装成功。
+- **欺骗引擎与整站恢复演练（保持边界，待维护窗口与外部入口条件）**：
+  - 生产已登记 5 条 `decoy_deployments` 记录，外部业务入口引流与整站跨机灾难恢复演练需独立隔离环境与维护窗口，不在生产业务实例上直接做破坏性注入。
+
 ### P2：有需求和条件再启动
 
 - macOS Agent：先具备开发/CI/实机环境和明确用户需求。
