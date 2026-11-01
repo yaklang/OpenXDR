@@ -1,0 +1,168 @@
+name: "2. Build, Package & Connect Ecosystem Release"
+
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        type: string
+        required: false
+        default: ''
+      target_ref:
+        type: string
+        required: false
+        default: 'english-edition'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag အမည် (ဥပမာ v2026.10.31-en)'
+        required: false
+        default: ''
+      target_ref:
+        description: 'Build လုပ်မည့် Branch (ပုံမှန် english-edition)'
+        required: false
+        default: 'english-edition'
+      trigger_downstream:
+        description: 'Release ပြီးလျှင် yakit / ytray တို့ကိုပါ အလိုအလျောက် လှမ်းနှိုးမည်လား? (true/false)'
+        required: false
+        default: 'false'
+  push:
+    tags:
+      - 'v*-en'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  build-and-publish:
+    name: "Build & Publish (${{ github.event.repository.name }})"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "1. Determine Checkout Ref & Tag"
+        id: meta
+        run: |
+          INPUT_REF="${{ inputs.target_ref }}"
+          INPUT_TAG="${{ inputs.tag_name }}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            REF="${GITHUB_REF_NAME}"
+            TAG="${GITHUB_REF_NAME}"
+          else
+            REF="${INPUT_REF:-english-edition}"
+            TAG="${INPUT_TAG:-v$(date +'%Y.%m.%d')-en}"
+          fi
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: "2. Checkout Translated English Source"
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.meta.outputs.ref }}
+
+      - name: "3. Setup Node.js 22 & Yarn"
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: "4. Setup Golang 1.23"
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: "5. Build & Package Artifacts for Yakit / Yaklang / YTray Integration"
+        run: |
+          mkdir -p release-assets
+          REPO_NAME="${{ github.event.repository.name }}"
+          TAG="${{ steps.meta.outputs.tag }}"
+
+          echo "==================================================="
+          echo "Packaging ${REPO_NAME} (${TAG}) for Ecosystem"
+          echo "==================================================="
+
+          # Case 1: yaklang-chrome-extension (Used by both Yakit and YTray)
+          if [ "$REPO_NAME" = "yaklang-chrome-extension" ]; then
+            if [ -f "package.json" ]; then
+              npm install --legacy-peer-deps || yarn install --ignore-engines || true
+              npm run build || yarn build || true
+            fi
+            BUILD_DIR="."
+            for d in dist build out extension; do
+              if [ -d "$d" ] && [ -f "$d/manifest.json" ]; then
+                BUILD_DIR="$d"
+                break
+              fi
+            done
+            (cd "$BUILD_DIR" && zip -r "$GITHUB_WORKSPACE/release-assets/google-chrome-plugin.zip" . -x "*.git*" "node_modules/*" "release-assets/*")
+            cp release-assets/google-chrome-plugin.zip release-assets/yakit-browser-agent.zip
+            sha256sum release-assets/google-chrome-plugin.zip | awk '{print $1}' > release-assets/google-chrome-plugin.zip.sha256
+            sha256sum release-assets/yakit-browser-agent.zip | awk '{print $1}' > release-assets/yakit-browser-agent.zip.sha256
+
+          # Case 2: syntaxflow (Used by Yaklang & IRify Static Analysis)
+          elif [ "$REPO_NAME" = "syntaxflow" ]; then
+            if [ -f "go.mod" ]; then
+              go mod tidy || true
+              for cmd_dir in ./cmd/*; do
+                if [ -d "$cmd_dir" ]; then
+                  bin_name=$(basename "$cmd_dir")
+                  GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o "release-assets/${bin_name}_linux_amd64" "$cmd_dir" || true
+                  GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o "release-assets/${bin_name}_windows_amd64.exe" "$cmd_dir" || true
+                  GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o "release-assets/${bin_name}_darwin_arm64" "$cmd_dir" || true
+                fi
+              done
+            fi
+            zip -r "release-assets/syntaxflow-en.zip" . -x "*.git*" "node_modules/*" "release-assets/*"
+
+          # Case 3: awesome-yak-scripts & pentest-crawler-ai-enhance (Used by Yakit Plugins/PoCs)
+          else
+            if [ -f "go.mod" ]; then
+              go mod tidy || true
+              go build -trimpath -ldflags="-s -w" -o "release-assets/${REPO_NAME}_linux_amd64" . 2>/dev/null || true
+              GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o "release-assets/${REPO_NAME}_windows_amd64.exe" . 2>/dev/null || true
+            fi
+            zip -r "release-assets/${REPO_NAME}-en.zip" . -x "*.git*" "node_modules/*" "release-assets/*"
+            cp "release-assets/${REPO_NAME}-en.zip" "release-assets/${REPO_NAME}-english-bundle.zip"
+          fi
+
+          # Export latest.json metadata for ecosystem discovery
+          cat <<EOF > release-assets/ecosystem-manifest.json
+          {
+            "repository": "${{ github.repository }}",
+            "product": "${REPO_NAME}",
+            "tag": "${TAG}",
+            "branch": "${{ steps.meta.outputs.ref }}",
+            "updated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+
+          ls -lh release-assets/
+
+      - name: "6. Publish GitHub Release"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "${{ github.event.repository.name }} English Edition (${{ steps.meta.outputs.tag }})"
+          target_commitish: ${{ steps.meta.outputs.ref }}
+          overwrite: true
+          body: |
+            ### ${{ github.event.repository.name }} (English Edition) — ${{ steps.meta.outputs.tag }}
+            * **100% Translated & Synchronized** with the Yaklang English Ecosystem:
+              * `professoxrmoriarty/yakit` (Yakit, IRify, Memfit AI)
+              * `professoxrmoriarty/yaklang` (Core Engine)
+              * `professoxrmoriarty/ytray` (System Tray Manager)
+          draft: false
+          prerelease: false
+          files: release-assets/*
+
+      - name: "7. Notify / Trigger Downstream Ecosystem (yakit & ytray)"
+        if: inputs.trigger_downstream == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          REPO_NAME="${{ github.event.repository.name }}"
+          if [ "$REPO_NAME" = "yaklang-chrome-extension" ]; then
+            echo "Triggering Yakit and YTray builds with updated English Chrome Extension..."
+            gh workflow run release-en.yml --repo "professoxrmoriarty/yakit" --ref "english-edition" || true
+            gh workflow run 2-build-release.yml --repo "professoxrmoriarty/ytray" --ref "english-edition" || true
+          else
+            echo "Triggering Yakit sync/release to pull latest ${REPO_NAME} bundle..."
+            gh workflow run 1-sync-translate.yml --repo "professoxrmoriarty/yakit" --ref "english-edition" || true
+          fi
