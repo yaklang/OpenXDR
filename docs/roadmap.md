@@ -161,6 +161,8 @@ PostgreSQL 回归覆盖两种事件搜索、组外祖先/子进程、未分组�
 提交前全量 Go 单测、build、vet、相关 Go 格式检查和 Web build/lint 通过；lint 有既有警告。
 集成测试与浏览器组件验收的范围见回归文档，不将其扩大为生产验收。
 
+**2026-11-02 补充**：针对 `engineering-review.partial.json` 暴露的 `verify_source` 通用角色用语歧义（单主机事件被评分器误读为声称存在“各客户端”或“转发器”），已将服务端建议目录 `verify_source` 收紧为“核实本事件实际涉及的资产、主机或客户端来源……涉及多个对象或经中间节点转发时，不把单一对象或中间节点的归属结论套用到其他对象”，并在 `judgePrompt` 中明确防扩写限定语不构成额外实体存在断言；同时补齐前端 `VerdictCard.tsx` 对全部 10 个服务端 `action_codes` 的中英文标签与色彩映射，与通知卡片一致。离线 31 项语料及单测通过；完整 6×2 真实模型复测与独立人工复核仍待后续单独完成。
+
 ### P0-2：生产自然研判验收与失败可见性
 
 **问题**：执行明细已上线，但尚无足够自然样本说明生产延迟、失败原因与重试行为；
@@ -178,6 +180,37 @@ PostgreSQL 回归覆盖两种事件搜索、组外祖先/子进程、未分组�
 
 **完成条件**：生产样本与指标可对账；失败/恢复在受控测试中可见且不重复制造待办；
 自然事件缺失的验收项仍标未验证。并发调整必须由排队与资源瓶颈证据驱动。
+
+#### 生产自然样本基线与慢查询修复（2026-11-02）
+
+对生产库（`10.1.1.198`）累计 **461 条自然 `triage_runs`** 与 **3,163 次工具调用**完成对账基线：
+
+| 触发类型 (`trigger`) | 状态 (`status`) | 故障分类 (`failure_kind`) | 样本数 | 排队 P50 / P95 | 执行 P50 / P95 | 平均模型耗时 / 调用数 | 平均工具耗时 / 调用数 |
+|---|---|---|---:|---:|---:|---:|---:|
+| `initial`（首次） | `succeeded` | — | 112 | 19.9s / 93.8s | 41.9s / 93.6s | 28.1s / 3.8 次 | 19.4s / 7.0 次 |
+| `initial`（首次） | `failed` | `model_or_verdict` | 4 | 54.0s / 365.4s | 56.1s / 100.3s | 49.0s / 5.0 次 | 7.1s / 5.5 次 |
+| `initial`（首次） | `interrupted` | `canceled`（滚动重启） | 6 | 17.8s / 24.4s | 46.3s / 52.3s | 38.8s / 3.2 次 | 7.5s / 8.7 次 |
+| `evidence`（新增证据） | `succeeded` | — | 281 | 14.8s / 47.0s | 41.5s / 93.8s | 32.6s / 3.2 次 | 13.2s / 6.7 次 |
+| `evidence`（新增证据） | `failed` | `model_or_verdict` (6) / `timeout` (1) / `persist` (1) | 8 | 21.8s / 242.7s | 59.3s / 180.0s | 57.6s / 4.9 次 | 9.6s / 7.8 次 |
+| `evidence`（新增证据） | `interrupted` | `lease_replaced` | 2 | 47.6s / 57.8s | 64.9s / 71.1s | 36.7s / 2.5 次 | 19.0s / 8.5 次 |
+| `urgent`（高危加急） | `succeeded` | — | 45 | 29.9s / 642.9s | 56.2s / 101.2s | 40.3s / 3.7 次 | 18.8s / 8.4 次 |
+| `urgent`（高危加急） | `interrupted` | `canceled`（滚动重启） | 3 | 109.9s / 121.0s | 43.3s / 62.6s | 40.1s / 3.0 次 | 6.8s / 6.7 次 |
+
+逐工具调用统计（3,163 次）：
+
+- `host_alerts`：成功 469 次（P50 `11 ms`、P95 `29 ms`、最大 `66 ms`），错误 1 次。
+- `process_baseline`：成功 186 次（P50 `10 ms`、P95 `26 ms`、最大 `39 ms`），错误 1 次。
+- `process_lineage`：成功 973 次（P50 `55 ms`、P95 `316 ms`、最大 `2,146 ms`），错误 1 次。
+- `query_events`：成功 1,436 次（P50 `2,144 ms`、P95 `10,011 ms`、最大 `14,825 ms`），错误 96 次（其中近 48 小时 44 次稳定卡在 `10,001–10,014 ms` 的 `eventsearch.Search` 三分之二超时预算）。
+
+**已证实的慢查询根因与修复**：
+
+1. **`triage` 工具 `query_events` / `process_lineage` 与 `correlate.findByLateral` 的 `HasAssetWith` 子查询计划退化**：
+   - 根因：`toolQueryEvents` 原先通过 `entevent.HasAssetWith(scope)`（`events.asset_id IN (SELECT id FROM assets WHERE group_id = ...)`）过滤分区表 `events`。生产库单日分区达 362 万行时，PostgreSQL 优化器无法穿透子查询估算组内资产基数：在 `eventsearch.Search` 第 1 步（`OFFSET 9999 LIMIT 1`）选择 `Index Scan Backward using events_p20261101_ts` 倒序扫过跨组全部 362 万行（实测耗时 **31,268 ms**）；在第 2 步（`Where(m.scan())`）选择 `Hash Join + Parallel Seq Scan`，对全表 362 万行先算 `openxdr_event_search_text(raw)` 再关联 `assets`（实测耗时 **221,073 ms**）。
+   - 修复：新增 `Engine.incidentEventScope` 先查出本事件允许范围的资产 UUID 列表，再以 `entevent.AssetIDIn(ids...)` 过滤 `events`（与 `/api/events` 的 `s.event()` 口径一致），并在 `correlate.findByLateral` 中同样先解析同组对端资产列表 `event.AssetIDIn(peers...)`（单资产组直接短路返回）。生产库 `EXPLAIN (ANALYZE, BUFFERS)` 实测验证优化器直接走 `events_p20261101_asset_id_ts` 复合索引：第 1 步由 **31,268 ms 降至 5.2 ms**（缓冲页由 3,522,069 页降至 26 页），第 2 步由 **221,073 ms 降至 168.5 ms**。
+2. **只读视图 `ip_infos` 与跨节点指令通道回归核验**：
+   - PR #21（`8edc57601`）将组只读视图 `ip_infos` 改为最近 7 天时间界定 + 禁用 JIT 编译并完成老分区冷归档后，生产实测 `SELECT count(*) FROM group_<uuid>.ip_infos` 由 **29,164 ms 降至 74.7 ms**，Pi 巡检不再生效 `canceling statement due to statement timeout`。
+   - 部署跨节点旧指令流驱逐（`openxdr.evict.<agent_id>`）与 gRPC HTTP/2 keepalive（`60add936c`）后连续观察 26 小时，21 台在线主机累计下发 **147 条 `exec` 指令全部 `succeeded`**，`failed = 0`、`sent` 悬挂 = `0`。
 
 ### P1：覆盖、恢复与业务接通
 

@@ -11,6 +11,7 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/asset"
+	entevent "openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/predicate"
 )
@@ -46,6 +47,20 @@ func (e *Engine) incidentAssetScope(ctx context.Context, id uuid.UUID) (predicat
 		allowed = append(allowed, asset.GroupIDIsNil())
 	}
 	return asset.Or(allowed...), nil
+}
+
+// 先解析本轮可访问的资产 ID 列表再查 events，让分区表直接走 (asset_id, ts) 索引，
+// 避免 HasAssetWith 子查询触发全分区 ts 倒序扫或 Hash Join 顺序扫描。
+func (e *Engine) incidentEventScope(ctx context.Context, id uuid.UUID) (predicate.Event, error) {
+	scope, err := e.incidentAssetScope(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := e.DB.Asset.Query().Where(scope).IDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return entevent.AssetIDIn(ids...), nil
 }
 
 func (e *Engine) investigationAsset(ctx context.Context, id uuid.UUID) (*ent.Asset, error) {

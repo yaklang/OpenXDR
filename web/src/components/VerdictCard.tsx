@@ -6,6 +6,16 @@ import { useI18n, type MsgKey } from '../i18n'
 import { GeminiSparkle } from './Logo'
 
 const ACTION_CODE_LABELS: Record<string, { zh: string; en: string; color: string }> = {
+  verify_source: { zh: '🔍 核实来源与授权', en: '🔍 Verify source & auth', color: 'gold' },
+  collect_original_records: { zh: '📥 补取原始记录', en: '📥 Collect raw records', color: 'default' },
+  trace_process: { zh: '🧬 追查进程血缘', en: '🧬 Trace process lineage', color: 'processing' },
+  inspect_history: { zh: '📜 核对告警历史', en: '📜 Inspect alert history', color: 'processing' },
+  inspect_baseline: { zh: '📊 核对 UEBA 基线', en: '📊 Check UEBA baseline', color: 'processing' },
+  monitor: { zh: '👁️ 持续监测', en: '👁️ Monitor activity', color: 'cyan' },
+  preserve_evidence: { zh: '🔒 保留现场证据', en: '🔒 Preserve evidence', color: 'purple' },
+  review_closure: { zh: '✅ 复核后良性结案', en: '✅ Review benign closure', color: 'success' },
+  review_response: { zh: '🛑 审核隔离/阻断响应', en: '🛑 Review containment', color: 'error' },
+  hunt_related: { zh: '🎯 按指标横向排查', en: '🎯 Hunt related IOCs', color: 'volcano' },
   confirm_activity_source: { zh: '🔍 核实活动来源', en: '🔍 Confirm source', color: 'gold' },
   supplement_process_context: { zh: '🧬 补充进程血缘', en: '🧬 Check process lineage', color: 'processing' },
   supplement_network_context: { zh: '🌐 补充网络日志', en: '🌐 Check network logs', color: 'processing' },

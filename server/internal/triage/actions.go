@@ -12,7 +12,7 @@ type actionDefinition struct {
 }
 
 var actionDefinitions = []actionDefinition{
-	{Code: "verify_source", Text: "在现有权限范围内，向相关资产负责人逐一核实本事件涉及资产及证据中各客户端的应用归属、变更授权与业务用途，分别记录可核验的依据；不把转发器或一个客户端的归属结论套用到其他客户端。"},
+	{Code: "verify_source", Text: "在现有权限范围内，向相关资产负责人逐一核实本事件实际涉及的资产、主机或客户端来源的应用归属、变更授权与业务用途，分别记录可核验的依据；涉及多个对象或经中间节点转发时，不把单一对象或中间节点的归属结论套用到其他对象。"},
 	{Code: "collect_original_records", Text: "由人工从可用的原始日志来源补取完整记录；平台事件检索的 raw 模式只改变搜索范围，不能取消正文裁剪或扩大返回上限。"},
 	{Code: "trace_process", Text: "核实事件中的 process_guid 后查询进程血缘；查询失败或记录缺失时由人工补证，不把缺失当作无父进程。"},
 	{Code: "inspect_history", Text: "查询本事件涉及资产的告警历史和最近采集状态，核对时间范围；最近状态不能证明事发时的采集覆盖。"},

@@ -134,14 +134,14 @@ func (e *Engine) toolQueryEvents(ctx context.Context, args string) (any, error) 
 	if in.Mode == "raw" {
 		match = eventsearch.RawKeyword(in.Keyword)
 	}
-	scope, err := e.incidentAssetScope(ctx, e.investigationID)
+	scope, err := e.incidentEventScope(ctx, e.investigationID)
 	if err != nil {
 		return nil, err
 	}
 	until := time.Now().UTC()
 	since := until.Add(-time.Duration(in.Hours) * time.Hour)
 	query := func() *ent.EventQuery {
-		return e.DB.Event.Query().Where(entevent.TsGTE(since), entevent.TsLTE(until), entevent.HasAssetWith(scope)).WithAsset()
+		return e.DB.Event.Query().Where(entevent.TsGTE(since), entevent.TsLTE(until), scope).WithAsset()
 	}
 	rows, complete, err := eventsearch.Search(ctx, query, match, 16)
 	if err != nil {
@@ -177,7 +177,7 @@ func (e *Engine) toolProcessLineage(ctx context.Context, args string) (any, erro
 		return nil, fmt.Errorf("process_guid 不是合法 UUID")
 	}
 
-	scope, err := e.incidentAssetScope(ctx, e.investigationID)
+	scope, err := e.incidentEventScope(ctx, e.investigationID)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +187,7 @@ func (e *Engine) toolProcessLineage(ctx context.Context, args string) (any, erro
 	cur := guid
 	for depth := 0; depth < 10; depth++ {
 		ev, err := e.DB.Event.Query().
-			Where(entevent.ProcessGUIDEQ(cur), entevent.HasAssetWith(scope)).
+			Where(entevent.ProcessGUIDEQ(cur), scope).
 			WithAsset().
 			First(ctx)
 		if err != nil {
@@ -209,7 +209,7 @@ func (e *Engine) toolProcessLineage(ctx context.Context, args string) (any, erro
 	}
 
 	children, err := e.DB.Event.Query().
-		Where(entevent.ParentProcessGUIDEQ(guid), entevent.HasAssetWith(scope)).
+		Where(entevent.ParentProcessGUIDEQ(guid), scope).
 		WithAsset().
 		Limit(11).
 		All(ctx)
