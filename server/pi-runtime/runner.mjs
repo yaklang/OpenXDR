@@ -18,7 +18,7 @@ export async function run(request, send, callTool, signal) {
   }
   const maxTurns = request.max_turns ?? 32;
   const maxTokens = request.max_tokens ?? 8192;
-  if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 256 ||
+  if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 1000 ||
       !Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 65536) {
     throw new Error('max_turns 或 max_tokens 超出范围');
   }

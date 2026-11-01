@@ -55,8 +55,8 @@ func mapUsers(api *http.ServeMux, db *ent.Client) {
 			return
 		}
 		// 系统身份不是用户，同名账号会让人分不清审计里是谁动的手
-		if body.Username == commandgate.SystemActor {
-			http.Error(w, "用户名 "+commandgate.SystemActor+" 保留给定时任务", http.StatusBadRequest)
+		if body.Username == commandgate.SystemActor || body.Username == commandgate.ReviewerActor {
+			http.Error(w, "用户名 "+body.Username+" 保留给平台身份（定时任务、AI 审计员）", http.StatusBadRequest)
 			return
 		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), bcrypt.DefaultCost)

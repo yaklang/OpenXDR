@@ -95,7 +95,7 @@ export async function run(request, send, callTool, signal) {
     throw new Error('api_base 必须是无内嵌凭据的 HTTP(S) 地址');
   }
   const maxTurns = request.max_turns ?? 32;
-  if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 256) throw new Error('max_turns 超出范围');
+  if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 1000) throw new Error('max_turns 超出范围');
   const allowed = new Set((request.tools || []).map(tool => tool.name));
   mkdirSync(XDR_DIR, { recursive: true });
   mkdirSync(WORK, { recursive: true });
