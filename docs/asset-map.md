@@ -41,7 +41,7 @@ WHERE id='assetmap.delivery' AND value='"legacy"'::jsonb;
 ```
 
 `requested` 期间，新入库的相关事件开始登记待办。图谱工作者切换时短暂锁住 events 写入，
-等待原有写事务结束，补齐旧游标之后的待办，再原子切换为 `queue`；锁等待上限 5 秒，
+等待原有写事务结束，补齐旧游标之后的待办（以及最近 24 小时内因慢时钟早于旧游标而尚未物化的最新一条 5001/5020 清单），再原子切换为 `queue`；锁等待上限 5 秒，
 整个切换上限 30 秒，失败保留 requested，下轮重试。不要手工跳过 requested 直接设置 queue。
 
 验收应确认 `assetmap.delivery` 为 `"queue"`、待办持续被消费，并补传一条早于旧游标的测试事件，

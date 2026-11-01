@@ -128,6 +128,20 @@ SELECT id,ts FROM events WHERE ts>$1 AND class_uid IN (4001,5001,5020)
 ON CONFLICT(event_id) DO NOTHING`, cursor); err != nil {
 		return err
 	}
+	// 切换前若慢时钟主机的 5001/5020 清单因事件时间早于旧游标被跳过，补齐最近 24 小时内
+	// 每台资产尚未物化的最新一条清单（清单按时间覆盖，不碰 4001 依赖边累计数）。
+	if _, err := tx.ExecContext(ctx, `INSERT INTO assetmap_queue(event_id,event_ts)
+SELECT s.id,s.ts FROM (
+ SELECT DISTINCT ON (e.asset_id,e.class_uid) e.id,e.ts,e.class_uid,a.inventory_at,a.software_at
+ FROM events e JOIN assets a ON a.id=e.asset_id
+ WHERE e.ts>$1 AND e.ts<=$2 AND e.class_uid IN (5001,5020)
+ ORDER BY e.asset_id,e.class_uid,e.ts DESC,e.id DESC
+) s
+WHERE (s.class_uid=5001 AND (s.inventory_at IS NULL OR s.inventory_at<s.ts))
+   OR (s.class_uid=5020 AND (s.software_at IS NULL OR s.software_at<s.ts))
+ON CONFLICT(event_id) DO NOTHING`, cursor.Add(-24*time.Hour), cursor); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE settings SET value='"queue"'::jsonb,updated_at=now() WHERE id=$1 AND value='"requested"'::jsonb`, ModeKey); err != nil {
 		return err
 	}

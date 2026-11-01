@@ -41,3 +41,28 @@ func TestHealthProblemsSilentReason(t *testing.T) {
 		t.Fatalf("恢复后不应有问题: %v", ps)
 	}
 }
+
+func TestHealthProblemsClockSkew(t *testing.T) {
+	parse := func(raw string) healthSnapshot {
+		t.Helper()
+		var h healthSnapshot
+		if err := json.Unmarshal([]byte(raw), &h); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	// 相差 87 秒（慢时钟）：报 clock_skew，秒数进文字不进签名
+	slow1 := healthProblems(parse(`{"receivedAt":"2026-10-31T16:48:30Z","reportedUnixMs":1793465223000}`), false, 0)
+	slow2 := healthProblems(parse(`{"receivedAt":"2026-10-31T16:49:30Z","reportedUnixMs":1793465280000}`), false, 0)
+	if len(slow1) != 1 || slow1[0].key != "clock_skew" || slow1[0].text != "主机时钟比服务端慢约 87 秒，请检查 NTP 同步" {
+		t.Fatalf("慢时钟判定错误: %+v", slow1)
+	}
+	if signature(slow1) != signature(slow2) {
+		t.Fatalf("时钟偏差秒数微调不应改变签名: %s vs %s", signature(slow1), signature(slow2))
+	}
+	// 相差 10 秒以内：正常不报
+	ok := healthProblems(parse(`{"receivedAt":"2026-10-31T16:48:30Z","reportedUnixMs":1793465305000}`), false, 0)
+	if len(ok) != 0 {
+		t.Fatalf("正常时钟抖动不应告警: %+v", ok)
+	}
+}

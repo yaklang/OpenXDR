@@ -13,7 +13,7 @@ const states: Record<string, { label: MsgKey; color?: string }> = {
 }
 const names: Record<string, MsgKey> = {
   process: 'collectorProcess', files: 'collectorFiles', network: 'collectorNetwork', dns: 'collectorDNS',
-  powershell: 'collectorPowerShell', auth: 'collectorAuth', inventory: 'collectorInventory', 'local-accounts': 'collectorLocalAccounts', persist: 'collectorPersist', kmod: 'collectorKmod',
+  powershell: 'collectorPowerShell', auth: 'collectorAuth', inventory: 'collectorInventory', 'local-accounts': 'collectorLocalAccounts', persist: 'collectorPersist', kmod: 'collectorKmod', software: 'collectorSoftware',
 }
 const size = (n: number) => `${(n / 1048576).toFixed(2)} MiB`
 
@@ -25,10 +25,12 @@ export function CollectorHealth({ asset }: { asset: Asset }) {
   if (!health) return <Card title={t('collectorTitle')} size="small"><Typography.Text type="secondary">{t('collectorNoReport')}</Typography.Text></Card>
   const received = Date.parse(health.receivedAt)
   const stale = !Number.isFinite(received) || now - received > 90000 || received > now + 300000
+  const skewSec = Number.isFinite(received) && health.reportedUnixMs > 0 ? Math.round(Math.abs(received - health.reportedUnixMs) / 1000) : 0
   const rows = Object.entries(health.capabilities ?? {}).map(([name, value]) => ({ name, ...value }))
   return <Card title={t('collectorTitle')} size="small">
     <Space orientation="vertical" size={16} style={{ width: '100%' }}>
       {stale && <Alert type="warning" showIcon title={t('collectorStale')} />}
+      {skewSec >= 60 && <Alert type="warning" showIcon title={t('collectorClockSkew', { s: skewSec })} />}
       {health.writeBlocked && <Alert type="error" showIcon title={t('collectorBlocked')} />}
       <div className="cmd-item" style={{ padding: '14px 18px' }}>
         <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 4 }} items={[

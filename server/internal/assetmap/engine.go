@@ -53,6 +53,9 @@ type Engine struct {
 
 func (e *Engine) Run(ctx context.Context) {
 	e.cursor, e.cursorID = e.loadCursor(ctx)
+	if mode, err := graphqueue.Mode(ctx, e.SQL); err == nil && mode == graphqueue.Legacy {
+		slog.Warn("资产图谱仍处于 legacy 游标模式，慢时钟主机清单可能被跳过；全部节点升级后请按 docs/asset-map.md 切换为持久待办")
+	}
 	if err := e.dropNonDependencies(ctx); err != nil {
 		slog.Error("清理未指定源地址的依赖边失败", "err", err)
 	}
@@ -86,8 +89,6 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 }
 
-// loadCursor 读持久游标 (ts,id)。旧格式（裸时间）按 (ts, 最大 uuid) 读入：查询条件
-// 等价于旧实现的 ts > 游标，不会重读已处理的事件——依赖边的计数是累加，重读会重复计数。
 // loadCursor 读持久游标 (ts,id)。旧格式（裸时间）按 (ts, 最大 uuid) 读入：查询条件
 // 等价于旧实现的 ts > 游标，不会重读已处理的事件——依赖边的计数是累加，重读会重复计数。
 // （冷归档 R3 核对结论：游标只在整批成功后推进，空区间不推进，切换闸门按「未追平」保守拒绝。）

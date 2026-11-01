@@ -370,3 +370,34 @@ func TestQueuedGraphRPMSoftwareInventory(t *testing.T) {
 		t.Fatalf("RPM 数据丢失: %+v", sw)
 	}
 }
+
+func TestQueuedGraphLegacyHandoffRecoversSkippedSnapshots(t *testing.T) {
+	ctx, client, db, p, e, event := queueFixture(t)
+	if _, err := db.Exec(`UPDATE settings SET value='"legacy"'::jsonb WHERE id=$1`, graphqueue.ModeKey); err != nil {
+		t.Fatal(err)
+	}
+	// 游标已被快时钟主机的网络事件推到 event.Timestamp，此时慢时钟主机上报了一条早 90 秒的 5020 软件清单
+	e.cursor = event.Timestamp
+	e.cursorID = uuid.Max
+	skewedSw := event
+	skewedSw.ID = uuid.New()
+	skewedSw.ClassUID = ClassSoftware
+	skewedSw.Timestamp = event.Timestamp.Add(-90 * time.Second)
+	skewedSw.Raw = json.RawMessage(`{"os":{"id":"kylin","version_id":"V10"},"manager":"rpm","packages":[["bash","5.0-1","",""]]}`)
+	if err := p.Process(ctx, skewedSw); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := e.batch(ctx); err != nil || n != 0 {
+		t.Fatalf("legacy 模式下早于游标的事件不应被游标捞出: %d %v", n, err)
+	}
+	if _, err := db.Exec(`UPDATE settings SET value='"requested"'::jsonb WHERE id=$1`, graphqueue.ModeKey); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := e.batch(ctx); err != nil || n != 1 {
+		t.Fatalf("切换 queue 时应自动补齐最近 24h 内未物化的 5020 清单: %d %v", n, err)
+	}
+	a := client.Asset.GetX(ctx, *event.AssetID)
+	if a.SoftwareAt == nil || !a.SoftwareAt.Equal(skewedSw.Timestamp) {
+		t.Fatalf("切换后未恢复慢时钟主机的软件清单: %+v", a)
+	}
+}
