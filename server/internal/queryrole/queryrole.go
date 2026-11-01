@@ -208,7 +208,7 @@ func ddl(group uuid.UUID, password string, fresh bool) []string {
     WHERE src_asset_id IN (SELECT id FROM public.assets WHERE group_id = ` + gid + `))
   OR ip IN (SELECT substring(rule_id from 10) FROM public.alerts WHERE rule_id LIKE 'intel:ip:%' AND ` + inGroup + `)
   OR ip IN (SELECT unnest(ARRAY[e.raw->'src_endpoint'->>'ip', e.raw->'dst_endpoint'->>'ip'])
-    FROM public.alerts a JOIN public.events e ON e.id = a.event_id AND e.asset_id = a.asset_id WHERE a.` + inGroup + `)`,
+    FROM public.alerts a JOIN public.events e ON e.id = a.event_id AND e.ts = a.ts AND e.asset_id = a.asset_id WHERE a.` + inGroup + `)`,
 		// 全平台已纳管主机的地址，只说是不是本组的，不给主机名与组名：AI 看不到别组资产，
 		// 会把别组纳管的主机报成「未纳管」；只透露「已纳管」，组隔离基本不破
 		`CREATE OR REPLACE VIEW ` + schema + `.managed_addresses WITH (security_barrier) AS
@@ -225,12 +225,13 @@ func ddl(group uuid.UUID, password string, fresh bool) []string {
   SELECT id, ts, last_ts, count, rule_id, severity, event_id, asset_id, incident_id, command_id, detail,
          automation_id, automation_watch
   FROM public.alerts WHERE ` + inGroup,
-		// 告警连同它的原始事件：在视图里按主键回查，跨视图 JOIN events 会全表扫描、必然超时
+		// 告警连同它的原始事件：在视图里按主键回查，跨视图 JOIN events 会全表扫描、必然超时。
+		// 告警 ts 就是事件 ts，带上它每条告警只探一个日分区，只按 id 要把几十个分区挨个探一遍
 		`CREATE OR REPLACE VIEW ` + schema + `.alert_events WITH (security_barrier) AS
   SELECT a.id AS alert_id, a.ts, a.last_ts, a.count, a.rule_id, a.severity, a.asset_id, a.incident_id, a.command_id,
          e.id AS event_id, e.ts AS event_ts, e.class_uid, e.username, e.conn_tuple, e.raw,
          a.automation_id, a.automation_watch
-  FROM public.alerts a JOIN public.events e ON e.id = a.event_id AND e.asset_id = a.asset_id
+  FROM public.alerts a JOIN public.events e ON e.id = a.event_id AND e.ts = a.ts AND e.asset_id = a.asset_id
   WHERE a.` + inGroup,
 		`CREATE OR REPLACE VIEW ` + schema + `.incidents WITH (security_barrier) AS
   SELECT i.id, i.created_at, i.status, i.title, i.ai_verdict, i.graph, i.triaged_at, i.triage_count,
@@ -295,6 +296,8 @@ func ddl(group uuid.UUID, password string, fresh bool) []string {
 		`ALTER ROLE ` + role + ` SET search_path = ` + schema,
 		`ALTER ROLE ` + role + ` SET default_transaction_read_only = on`,
 		`ALTER ROLE ` + role + ` SET statement_timeout = '5s'`,
+		// 分区多时规划器估价虚高会触发 JIT，编译一次就要几秒，5 秒上限的查询里纯亏
+		`ALTER ROLE ` + role + ` SET jit = off`,
 		`DO $$ BEGIN EXECUTE format('GRANT CONNECT ON DATABASE %I TO ` + role + `', current_database()); END $$`,
 		`GRANT USAGE ON SCHEMA ` + schema + ` TO ` + role,
 		`GRANT SELECT ON ALL TABLES IN SCHEMA ` + schema + ` TO ` + role,
