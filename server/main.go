@@ -35,6 +35,7 @@ import (
 	"openxdr/server/internal/beacon"
 	"openxdr/server/internal/cluster"
 	"openxdr/server/internal/commandgate"
+	"openxdr/server/internal/commandreview"
 	"openxdr/server/internal/correlate"
 	"openxdr/server/internal/enroll"
 	"openxdr/server/internal/eventarchive"
@@ -593,7 +594,7 @@ func startQueryRoles(ctx context.Context, db *sql.DB, client *ent.Client, dsn st
 
 // newPiRuntime 配了沙箱就让 Pi 在远端隔离容器里用默认工具干活；没配退回本机 runner 与平台自定义工具
 func newPiRuntime() piruntime.Runtime {
-	piRuntime := piruntime.Runtime{Runner: getenv("PI_RUNNER_PATH", "/app/pi-runtime/runner.mjs"), Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 1800)) * time.Second}
+	piRuntime := piruntime.Runtime{Runner: getenv("PI_RUNNER_PATH", "/app/pi-runtime/runner.mjs"), Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 14400)) * time.Second}
 	url := os.Getenv("SANDBOX_URL")
 	if url == "" {
 		return piRuntime
@@ -614,12 +615,16 @@ func newPiRuntime() piruntime.Runtime {
 // startChat Pi 会话服务，并恢复上次退出时未完成的会话。
 func startChat(ctx context.Context, client *ent.Client, rules sigma.Catalog, hub *response.Hub, webhook *notify.Webhook, conf func() aiconf.Config, queryRoles *queryrole.Provisioner) *agentchat.Service {
 	piRuntime := newPiRuntime()
-	chat := &agentchat.Service{Base: ctx, Rules: rules, Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 1800)) * time.Second, DB: client, Gate: &commandgate.Gate{DB: client, Hub: hub, ApprovalTimeout: time.Duration(getenvInt("PI_APPROVAL_TIMEOUT_SECONDS", 600)) * time.Second, Notify: webhook.Send},
+	chat := &agentchat.Service{Base: ctx, Rules: rules, Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 14400)) * time.Second, DB: client, Gate: &commandgate.Gate{DB: client, Hub: hub, ApprovalTimeout: time.Duration(getenvInt("PI_APPROVAL_TIMEOUT_SECONDS", 600)) * time.Second, Notify: webhook.Send},
 		Runtime: piRuntime, Sandboxed: piRuntime.Sandboxed(),
 		AI: func() (string, string, string) { c := conf(); return c.BaseURL, c.APIKey, c.PiModel }, Query: queryRoles,
-		GroupDailyTokens: getenvInt("PI_GROUP_DAILY_TOKENS", 0),
+		GroupDailyTokens: getenvInt("PI_GROUP_DAILY_TOKENS", 0), MaxTurns: getenvInt("PI_MAX_TURNS", 500),
 		// 长会话折叠较早的工具结果与思考过程再发给模型，库里与界面仍是原文
 		FoldAbove: getenvInt("PI_HISTORY_FOLD_KB", 64) * 1024}
+	// AI 发起的待批准命令由 AI 审计员当场评审（同一个推理端点、会话自己的模型），不再阻塞等人
+	reviewer := &commandreview.Reviewer{DB: client, OnUsage: aiconf.Recorder(client, "review"),
+		Endpoint: func() (string, string) { c := conf(); return c.BaseURL, c.APIKey }}
+	chat.Gate.Reviewer = reviewer.Review
 	go chat.Recover(ctx)
 	return chat
 }
@@ -637,7 +642,7 @@ func startScheduler(ctx context.Context, db *sql.DB, client *ent.Client, chat *a
 		Interval:     time.Duration(getenvInt("SCHEDULE_INTERVAL_SECONDS", 30)) * time.Second,
 		DefaultModel: func() string { return conf().PiModel },
 		Notify:       webhook.Send,
-		Timeout:      time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 1800)) * time.Second,
+		Timeout:      time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 14400)) * time.Second,
 		MaxRunning:   getenvInt("SCHEDULE_MAX_RUNNING", schedule.DefaultMaxRunning),
 	}
 	// 常驻：任务定义照常同步到库里，Pi 模型配上才运行

@@ -51,15 +51,6 @@ func TestCommandOutputBoundedWithoutChangingReceipt(t *testing.T) {
 	}
 }
 
-func TestTurnBudget(t *testing.T) {
-	cases := [][3]int{{0, 0, 32}, {1, 0, 52}, {2, 0, 72}, {2, 5, 77}, {50, 0, 256}}
-	for _, c := range cases {
-		if got := turnBudget(c[0], c[1]); got != c[2] {
-			t.Errorf("turnBudget(%d, %d) = %d, want %d", c[0], c[1], got, c[2])
-		}
-	}
-}
-
 func TestCommandReceiptsDoNotClaimEffectOrRetry(t *testing.T) {
 	for _, status := range []string{"succeeded", "failed", "unsupported"} {
 		id := uuid.New()
