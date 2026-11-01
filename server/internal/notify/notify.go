@@ -211,7 +211,7 @@ func (n *Notifier) message(ctx context.Context, inc *ent.Incident, linkBase stri
 	return m, nil
 }
 
-var severityText = []string{"-", "信息", "低危", "中危", "高危", "严重"}
+var severityText = []string{"-", "Info", "Low", "Medium", "High", "Critical"}
 
 var severityEmoji = []string{"⚪", "ℹ️", "🟢", "⚠️", "🔥", "🚨"}
 

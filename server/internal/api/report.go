@@ -57,14 +57,14 @@ type reportCommand struct {
 	Detail    string
 }
 
-var severityName = map[int16]string{1: "信息", 2: "低危", 3: "中危", 4: "高危", 5: "严重"}
+var severityName = map[int16]string{1: "Info", 2: "Low", 3: "Medium", 4: "High", 5: "Critical"}
 
 var verdictName = map[string]string{
 	"malicious": "恶意", "suspicious": "可疑", "benign": "良性",
 }
 
 var statusName = map[string]string{
-	"open": "待研判", "triaged": "已研判", "retriage": "已研判（之后有新证据，待重研判）", "closed": "已关闭", "false_positive": "误报",
+	"open": "待研判", "triaged": "已研判", "retriage": "已研判（之后有新证据，待重研判）", "closed": "已关闭", "false_positive": "False Positive",
 }
 
 // reportStatus 已研判但之后又有新证据的，报告里写明结论还没看过新证据
