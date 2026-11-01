@@ -27,7 +27,7 @@ type Reviewer struct {
 
 const prompt = `你是 OpenXDR 的命令审计员，独立于执行任务的 AI，替组管理员决定一条命令能不能在主机上执行。
 批准的条件，全部满足才批准：
-1. 与会话目标直接相关、确有必要；
+1. 与用户的请求直接相关、确有必要（以本轮用户的请求为准，会话最初的请求只作背景）；
 2. 改动范围最小，修改配置或文件前有备份、改完能校验或回滚；
 3. 不读取、打印或外传密钥、口令、私钥等凭据的内容；
 4. 不关闭或削弱安全防护、审计、日志与采集；
@@ -58,7 +58,7 @@ func (r *Reviewer) Review(ctx context.Context, req commandgate.Request) (bool, s
 	return verdict(reply.Content)
 }
 
-// material 待审材料：命令、目标主机、会话目标（标题与用户最初的请求）与执行前模型最后的说明
+// material 待审材料：命令、目标主机、会话标题、最初与本轮的用户请求，以及执行前模型最后的说明
 func (r *Reviewer) material(ctx context.Context, session *ent.AgentSession, req commandgate.Request) (string, error) {
 	host := req.Command.AssetID.String()
 	if a, err := r.DB.Asset.Get(ctx, req.Command.AssetID); err == nil {
@@ -76,19 +76,28 @@ func (r *Reviewer) material(ctx context.Context, session *ent.AgentSession, req 
 	if session.Title != nil {
 		title = *session.Title
 	}
-	var asked, intent string
+	// 多轮对话里用户会提新要求：只看第一条会把后来交代的事判成「与目标无关」
+	var first, current, intent string
 	for _, m := range messages {
-		switch {
-		case m.Role == "user" && asked == "":
-			asked = text(m.Content)
-		case m.Role == "assistant":
-			if t := text(m.Content); t != "" {
-				intent = t
+		t := text(m.Content)
+		if t == "" {
+			continue
+		}
+		switch m.Role {
+		case "user":
+			if first == "" {
+				first = t
 			}
+			current = t
+		case "assistant":
+			intent = t
 		}
 	}
-	return fmt.Sprintf("会话类型：%s\n会话标题：%s\n用户最初的请求：\n%s\n执行前模型最后的说明：\n%s\n目标主机：%s\n命令超时：%d 秒\n待审命令：\n%s",
-		session.Kind, clip(title, 200), clip(asked, 3000), clip(intent, 2000), host, req.Command.TimeoutMS/1000, *req.Command.Cmd), nil
+	if current == first {
+		current = "（同上）"
+	}
+	return fmt.Sprintf("会话类型：%s\n会话标题：%s\n会话最初的请求：\n%s\n本轮用户的请求（以它为准）：\n%s\n执行前模型最后的说明：\n%s\n目标主机：%s\n命令超时：%d 秒\n待审命令：\n%s",
+		session.Kind, clip(title, 200), clip(first, 2000), clip(current, 3000), clip(intent, 2000), host, req.Command.TimeoutMS/1000, *req.Command.Cmd), nil
 }
 
 // text 消息里的文字部分（工具调用与结果不算）
