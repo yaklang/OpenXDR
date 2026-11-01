@@ -19,6 +19,7 @@
 # 不可变版本目录，再原子切换 current 链接。
 # 回滚：在节点上 cd $HA_DIR，把 openxdr-ha-{server,web}:pre-<标签> 重新 tag 成 latest 后
 #   docker compose -f docker-compose.ha-node.yml up -d --no-build --no-deps server web
+# 节点存在 docker-compose.dygk.yml 时，发布与回滚均需追加 -f docker-compose.dygk.yml。
 set -eu
 
 [ $# -eq 2 ] || { sed -n '2,9p' "$0"; exit 2; }
@@ -84,11 +85,15 @@ for node in "$first" "$second"; do
   echo "== $node：切换到 $TAG"
   remote "$node" "set -eu
     cd '$HA_DIR'
+    compose='docker compose -f docker-compose.ha-node.yml'
+    if [ -f docker-compose.dygk.yml ]; then compose=\"\$compose -f docker-compose.dygk.yml\"; fi
+    if [ -f docker-compose.logs.yml ]; then compose=\"\$compose -f docker-compose.logs.yml\"; fi
+    \$compose config --quiet
     for c in server web; do
       docker tag openxdr-ha-\$c:latest openxdr-ha-\$c:pre-$TAG
       docker tag openxdr-ha-\$c:$TAG openxdr-ha-\$c:latest
     done
-    docker compose -f docker-compose.ha-node.yml up -d --no-build --no-deps --force-recreate server web
+    \$compose up -d --no-build --no-deps --force-recreate server web
     for i in \$(seq 1 60); do
       curl -fsS --max-time 3 http://127.0.0.1:18080/readyz >/dev/null 2>&1 && exit 0
       sleep 2

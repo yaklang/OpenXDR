@@ -1,6 +1,7 @@
 package assetmap
 
 import (
+	"context"
 	"encoding/json"
 	"net/netip"
 	"strings"
@@ -105,6 +106,8 @@ func TestDependencyFiltersNoise(t *testing.T) {
 		{"10.1.1.2", "127.0.0.1", false},
 		{"10.1.1.2", "224.0.0.251", false},
 		{"10.1.1.2", "169.254.169.254", false},
+		{"10.1.1.2", "100.100.100.200", false}, // 阿里云实例元数据
+		{"10.1.1.2", "100.100.100.201", true},  // 同在 CGNAT 段的其他地址照常算
 	}
 	for _, c := range cases {
 		got := dependency(conn{src: netip.MustParseAddr(c.src), dst: netip.MustParseAddr(c.dst), port: 80, proto: "tcp"}, own)
@@ -325,5 +328,20 @@ func TestServicePort(t *testing.T) {
 		if got := servicePort(in); got != want {
 			t.Errorf("%q → %q, want %q", in, got, want)
 		}
+	}
+}
+
+// 已携带名字的新版事件、入站事件和无效连接不应访问历史事件表。
+func TestProcessNamesAvoidsUnneededDatabaseLookup(t *testing.T) {
+	guid := uuid.New()
+	events := []*ent.Event{
+		{ClassUID: classNetwork, ProcessGUID: &guid, Raw: json.RawMessage(`{"dst_endpoint":{"ip":"8.8.8.8","port":443},"process":{"name":"curl"}}`)},
+		{ClassUID: classNetwork, ProcessGUID: &guid, Raw: json.RawMessage(`{"dst_endpoint":{"ip":"10.0.0.1","port":443},"connection_info":{"direction":"inbound"}}`)},
+		{ClassUID: classNetwork, ProcessGUID: &guid, Raw: json.RawMessage(`{"dst_endpoint":{"ip":"invalid","port":443}}`)},
+	}
+	e := &Engine{}
+	names, err := e.processNames(context.Background(), events)
+	if err != nil || len(names) != 0 {
+		t.Fatalf("无需回查却返回结果: %v %v", names, err)
 	}
 }

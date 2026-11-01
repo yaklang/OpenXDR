@@ -1,0 +1,960 @@
+diff --git a/docs/README.md b/docs/README.md
+index f8f4409..000a6b4 100644
+--- a/docs/README.md
++++ b/docs/README.md
+@@ -21,7 +21,7 @@
+ | [detection.md](detection.md) | 检测与降噪链路：Sigma 引擎、情报、去重、抑制、爆破升级、关联、UEBA、AI 研判、响应处置、通知、清理 | 改 `server/internal/` 任何检测相关包 |
+ | [api.md](api.md) | REST API 参考：端点、参数、权限约定、对接示例 | 对接外部系统；改 `server/internal/api` |
+ | [open-integrations-design.md](open-integrations-design.md) | 资产导出与系统联动详细设计（待实施）：集成身份、API、事件订阅、工单回写及验收 | 实施导出、CMDB 对接或工单联动前 |
+-| [roadmap.md](roadmap.md) | 路线图：现状快照、已完成项的教训、后续工作详细规划（P0/P1/P2）、不做清单 | 决定"接下来做什么"之前 |
++| [roadmap.md](roadmap.md) | 路线图：2026-10-29 实现/部署/验收状态、当前 P0/P1/P2 与完成条件、历史记录 | 决定"接下来做什么"之前 |
+ | [pi-backend.md](pi-backend.md) | AI 助手后端：会话与后台运行、命令名单与审批、只读查询、运维待办、预设任务 | 配置 AI 助手与巡检；改 `agentchat`、`commandgate` |
+ | [vulns.md](vulns.md) | 软件漏洞：dpkg 软件清单、OSV 漏洞库同步、版本比较与暴露服务标注、已知限制 | 看主机漏洞；改 `vuln` 或 agent 软件清单 |
+ | [temporal-detection.md](temporal-detection.md) | 时序检测（开发中）：计数与序列规则格式、加载约束、求值与存储 | 写时序规则；改 `temporal` |
+diff --git a/docs/detection.md b/docs/detection.md
+index 4657132..b3774d1 100644
+--- a/docs/detection.md
++++ b/docs/detection.md
+@@ -439,12 +439,17 @@ C2 心跳的样子是同一进程隔着差不多的时间反复连同一个公
+ ### 研判流程
+ 
+ - 周期轮询 `AI_INTERVAL_SECONDS` 默认 30s，每批最多 5 个，取法见下节「研判节奏」
+-- **主动调查式**：模型可调用三个有边界的调查工具（`tools.go:21-39`）：
++- **主动调查式**：模型可调用四个有边界的只读调查工具（`tools.go`）：
+   | 工具 | 参数边界 |
+   |---|---|
+-  | `query_events(keyword, hours, mode)` | 默认 indexed 搜索字段值（不保证纯 UUID/长哈希覆盖），查 UUID/哈希显式选 raw 完整原文；关键词转义 `% _ \`；hours 默认 24、超界回落；返回最近 15 条 |
++  | `query_events(keyword, hours, mode)` | 默认 indexed 搜索字段值（不保证纯 UUID/长哈希覆盖），查 UUID/哈希显式选 raw 搜索完整原文（返回正文仍会裁剪）；关键词转义 `% _ \`；hours 默认 24、超界回落；返回最近 15 条 |
+   | `process_lineage(process_guid)` | GUID 必须合法 UUID；祖先上溯 10 层、子进程最多 10 条 |
+-  | `host_alerts(asset_id, days)` | UUID 校验；days 默认 7、>90 回落；最多 20 条 |
++  | `host_alerts(asset_id, days)` | UUID 校验；days 默认 7、>90 回落；最多 20 条，并附最近采集状态快照 |
++  | `process_baseline(asset_id, exe_path)` | UUID 与完整路径校验；按资产匹配 UEBA 规范/旧版路径，返回已有基线首次记录；未命中为未知 |
++- 服务端把查询覆盖、事件结构化标识、最近采集快照与 UEBA 基线查询结果写入 `query_evidence`。
++  有工具证据时必须提交非空 `evidence_claims`，只能引用实际存在且值一致的字段，错误引用修正一次后仍不匹配则失败。
++  事件正文裁剪与查询条数截断分开记录；父进程缺失保持未知；采集快照不回推历史；基线时间不是安装或实际首次执行时间。
++  引用匹配只证明与存储记录一致，不保证自由文本推断正确。前端支持展开核对。
+ - 事件 raw 截断 300 字符；工具错误以 JSON 回给模型不中断
+   （`tools.go:41-61,188-199`）
+ - **最多 6 轮**（`maxToolTurns`，`engine.go:100`）；模型返回无 tool_calls
+@@ -454,6 +459,10 @@ C2 心跳的样子是同一进程隔着差不多的时间反复连同一个公
+   （近 90 天同规则被判 false_positive 的案例）（`engine.go` buildContext）。重研判时另加一节：此前研判过几次、
+   上次结论与摘要、上次之后新增的告警（按规则汇总加级别最高、最新的几条明细，不全量铺开；按告警主键 UUIDv7 的入库时间算，
+   往前多算一分钟，上次取上下文时还没归属进来的也算新增）
++- 新研判必须提交非空 `action_codes`，从服务端建议目录选择；不接受模型自写 `actions`。
++  服务端拒绝未知、重复、对象参数及结论不匹配的代码，再生成原有 `actions` 字符串数组供展示和存档。
++  结案审核只允许 benign，响应审核和关联排查只允许 malicious；建议代码不执行命令，也不替代响应权限、审批与审计。
++  无效建议仅允许一次格式修正，仍无效则退避，不落结论也不触发 OnVerdict。旧存档仍按原格式读取。
+ - verdict 格式：`{verdict: malicious|suspicious|benign, confidence 0-100,
+   summary, kill_chain[], actions[]}`；解析容错取首个 `{` 到末个 `}`，
+   不合法存档 `{"error":"unparseable"}`；结论写 `ai_verdict` 并把状态推进
+diff --git a/docs/roadmap.md b/docs/roadmap.md
+index 05fbc3d..85277bf 100644
+--- a/docs/roadmap.md
++++ b/docs/roadmap.md
+@@ -1,7 +1,142 @@
+ # 路线图
+ 
+-原则先行：**解决真实存在的问题，不为臆想的需求写代码。**
+-每一项都要回答"谁会因为没有它而受伤"。回答不了的，进"不做"清单。
++原则：解决已被证据确认的问题；实现、部署、验收分别记录。代码存在不等于生产已启用，
++隔离回放通过不等于自然事件验收完成。历史规划保留在文末，不再作为当前待办。
++
++## 当前基线（2026-10-29）
++
++最近一次现场验收：服务端 `b02492c`，前端 `9b90178`，两个 HA 节点均已部署。
++这是当日版本记录，不代表后来部署状态；发版时应重新核对实际镜像。
++
++| 方向 | 已实现 / 已部署 | 验收边界与剩余工作 |
++|---|---|---|
++| 纳管与采集 | Linux/Windows Agent、配置下发、升级、进程/文件/登录/网络等采集；流量探针和 syslog 接入 | 多条路径已有实机证据，并非“只有交叉编译”；具体覆盖与未验证项以 [实机矩阵](../validation/replay/README.md) 为准。批量异构纳管仍需验证 |
++| 检测与降噪 | Sigma、情报、UEBA、去重/抑制/关联、复核与批量结案；时序引擎已有实现 | 合成对拍不验证采集可见性；时序规则是否启用、身份来源是否接通须逐环境验收，见 [时序检测](temporal-detection.md)、[身份关联](identity-correlation.md) |
++| AI 研判 | 只读调查工具、记忆来源约束、覆盖/截断提示、DNS 结构化摘要；每次尝试和逐工具耗时持久化、前端展示；单工具 15 秒超时 | 已部署并完成隔离真实模型回放；自然事件的新版逐工具记录与耗时仍待积累，结论中仍发现绝对化推断 |
++| AI 助手与巡检 | Pi 会话、按组只读查询、命令名单/审批、运维待办、定时巡检和报告 | 保持与事件研判分工；不能用会话成功或模型可用代替业务任务验收，见 [Pi 后端](pi-backend.md) |
++| 响应处置 | 结束进程、隔离/解除隔离、审批与审计等控制 | 实机验证按主机与动作留证；具备自动响应代码不代表生产已开启，也不能因研判置信度高就扩大放行或处置范围 |
++| HA、存储与运维 | JetStream、Patroni/VIP、滚动发布、检索索引优化、指令历史优化、业务日志归档；备份/恢复工具 | 最近发布后主备和队列健康；已有数据库恢复实测，不等于整站灾难恢复，见 [备份恢复](../deploy/ha/backup-recovery.md)、[日志归档](../deploy/ha/logs/README.md) |
++| 欺骗引擎 | 独立 DYGK 引擎接入已合并、部署；管理器、修订、运行回报与停止状态已接通 | 已完成单节点生产回环验收；真实业务入口、故障切换、持久化恢复未由此覆盖，见 [引擎说明](../integrations/dygk/README.md) |
++| 导出与外部联动 | 资产导出、集成身份/API、可靠事件投递和外部工单关联代码已有实现 | 不再列为从零开发；真实厂商工单创建—回写—结案闭环应独立验收，不能把通用 API 可用当作外部接通 |
++| 控制台 | 已修复多处窄屏布局、跳转、空值与卡片展示问题；研判历史支持展开和分页 | 近期相关页面在 1440/390 宽度验收通过，不代表全站移动端覆盖 |
++
++### 最近研判测试说明
++
++- `9df86e2` 上线后的一条自然 DNS 事件：排队约 9.9 秒，执行约 222.3 秒；
++  模型约 35.5 秒，工具约 186.7 秒。该记录证明查询是这一个样本的主要耗时，不能作为总体 P95。
++- `b02492c`：索引字段值与完整原文搜索明确区分；保留控制台 UUID/哈希检索语义。
++  生产只读复查同一十六进制域名前缀，索引查询约 130 毫秒返回 10 条。
++- 使用 10 条真实 DNS 记录的独立测试库、当前 `deepseek-flash` 完整回放：执行约 28.7 秒，
++  4 次模型调用、9 次工具调用，工具合计约 166 毫秒；判为可疑，未建议白名单或抑制。
++  小样本库与生产全量库不可直接比较，不能据此宣称整体提速倍数。
++- 数据库锁测试约 15.01 秒返回查询失败；注入模型失败后再次执行成功，失败和成功两条尝试均保留。
++  这是隔离执行/重试验证，不是生产调度退避和自然失败恢复验收。
++- 真实落库记录暴露零值字段省略导致的 `NaN/undefined`；`9b90178` 已修复并部署。
++- 仍发现“无法承载信道”“出现某些特征立即升级恶意并封堵”等过度绝对措辞。
++  判定方向正确不代表解释和处置建议全部可信；这应进入下一轮回归，而非把测试标成全面通过。
++
++## 当前优先级与验收条件
++
++### P0-1：研判回归集与证据约束（已开工）
++
++**本轮进展**：已新增[六类脱敏回归集](../validation/triage/README.md)、20 项正反校准与独立建议审查，
++离线检查纳入 Go 测试。[续测报告](../validation/triage/runs/2026-10-29-followup/README.md)：
++14 个负对照全部识别，6 个正对照通过 4 个；同批 12 次输出复评自动通过 9 次。
++工程复核仍发现真实事实扩写及建议/评分歧义，质量验收未通过，候选提示词未部署。
++
++**结构化证据首批实现（本地，未部署）**：查询工具的状态、返回条数、截断、血缘缺失和查询范围
++由服务端写入 `query_evidence`，前端研判卡片可展开查看。返回条数截断与单条正文裁剪、DNS 字段省略分别记录，避免把“条数未超限”误解为完整证据。有工具证据时必须提交非空 `evidence_claims`，编号、字段和值
++必须与实际工具返回一致，错误引用只允许修正一次，仍无效则拒绝落库。旧结论兼容。
++已补事件级证据编号、事件/资产 ID、process GUID 与 parent GUID，直接取归一化事件列，
++可在前端展开核对；引用须与该条事件字段一致，不能借用相邻记录的父进程。字段缺失仍为未知。
++这证明的是与存储记录一致，不保证采集真实性或自由文本摘要正确；最近一次采集快照已接入 `host_alerts`，带接收时间、组件状态和路径；缺失为未知，不回推事发时状态。
++已新增只读 `process_baseline` 工具，按资产与完整程序路径查询规范/旧版路径，记录基线 ID 与首次记录时间；
++未命中为 unknown、数据库错误为失败。基线首次记录不能等同于程序刚安装或实际首次执行。
++[结构化回放探针](../validation/triage/runs/2026-10-29-structured/README.md)已使用真实模型验证一个样本：
++4 项正反对照通过，两次答案的各 4 项引用匹配；一次自动评分失败，另一次自动通过但工程复核发现工具能力误述。
++初版消息兼容性失败记录也保留。工具能力说明现已由生产生成器和离线生成/评分共用，并补齐两个错误能力反例与一个正对照，当前共 23 项校准。
++[完整六类复测](../validation/triage/runs/2026-10-29-tool-contract/README.md)已完成 12 次生成、23 项校准：
++自动通过 7/12；工程复核 7 通过、2 失败、3 待核；负对照 14/16、正对照 5/7，共 6 次评分调用错误。
++此前可选引用被省略时，仍发生缺失事实扩写和工具能力误述；精确评分诊断已补：区分完整/独立评分、完成原因、校验类别、超时与 HTTP 状态，且不记录敏感错误正文；历史失败不回填原因。
++建议结构已收紧为服务端目录中的 action_codes，生成兼容 actions 文案；无效或与结论不匹配的建议拒绝落库，旧存档仍可读。
++[结构化建议真实模型验证](../validation/triage/runs/2026-10-29-action-codes/README.md)已完成：12/12 一次通过结构校验、标签匹配，建议文案与服务端目录一致；工程复核 11 通过、1 项措辞待核。
++本轮未运行评分器或真实调查工具。关键事实和自由文本推断约束、整体语义门禁仍待完成。质量门禁仍未通过。
++补齐有工具证据时的非空引用校验；重研判明确上次摘要不是独立证据或人工确认，前端与通知标记模型判断。
++引用要求不证明摘要成立，旧模型评测报告不代表本次变更通过真实模型或生产验收。
++
++**当前问题**：回归工具已能暴露评分漏判，但提示词不能保证模型不补写事实。
++下一步将采集状态、覆盖范围、计数、首次出现和进程关系等可验证事实关联到证据字段，
++由服务端校验引用与值并生成对应文案；模型推断单独标记。引用存在不等于推断成立。
++评分分歧仍单列复核，不通过放宽规则或挑选最好一次来解除发布阻断。
++
++**最小交付**：
++
++1. 在仓库中保存脱敏样本、证据覆盖范围和预期边界，至少覆盖：共享 CDN 但应用未知、
++   AI 记忆唯一依据、查询截断/超时、多个客户端混淆、明确人工授权维护、明确恶意行为。
++2. 每个样本分别评估 verdict、事实引用、未知事项和 actions；断言语义边界，不比较整段固定措辞。
++   证据不足时不得升级为已证实，也不得扩大到网段/域名族放行或处置。
++3. 修正已发现的绝对化推断，同时保留良性维护对照和恶意对照，避免简单地“全判可疑”。
++4. 分开离线确定性测试与显式启用的真实模型评测；记录模型、版本、调用用量和完整失败结果。
++   密钥、生产凭据及未脱敏日志不进入仓库；普通 CI 不依赖真实模型密钥。
++
++**完成条件**：六类样本可重复执行；真实模型运行有明确通过/失败记录，不能只报告最佳一次；
++违规放行/处置建议或无依据的事实断言会使对应样本失败。通过不等于已经证明整体准确率。
++
++### P0-2：生产自然研判验收与失败可见性
++
++**问题**：执行明细已上线，但尚无足够自然样本说明生产延迟、失败原因与重试行为；
++已经具备的队列/基础设施告警不能代替研判失败的运营反馈。
++
++**交付与验收**：
++
++- 按首次/新增证据/重开分组，记录样本数、排队、模型、工具和总耗时；先建立基线，再定 SLO，
++  不用一条回放数据算 P95，也不先提高并发。
++- 逐次核对执行记录、事件状态、前端运行提示与心跳失效；自然失败恢复样本不足时明确留空。
++- 核查现有告警/待办覆盖，补上持续失败、长期无进展的研判提醒；重复提醒要合并，恢复后能解除。
++  保持组权限，不自动隔离、不自动改写历史结论、不新增未经配置的通知目标。
++- 根据工具明细优化已证实的慢查询。首次观察到的事件时间至 incident 创建约 11 分钟差距另行追踪；
++  缺少接收入库时间证据，尚不能归因于采集、时钟、队列或关联，更不能计入 AI 排队。
++
++**完成条件**：生产样本与指标可对账；失败/恢复在受控测试中可见且不重复制造待办；
++自然事件缺失的验收项仍标未验证。并发调整必须由排队与资源瓶颈证据驱动。
++
++### P1：覆盖、恢复与业务接通
++
++| 工作 | 开始条件 | 完成条件 |
++|---|---|---|
++| 采集和检测实机补验 | 从实机矩阵中挑与实际部署相关的未验证格子，使用授权测试主机 | 原始事件、规则命中、关联/研判各层留证，同时跑良性对照；不把一个系统通过推广到所有系统 |
++| 批量与异构纳管 | 明确客户/内部使用的系统与规模 | 干净安装、升级、断网重连、失败回滚与证书身份验证；失败可定位，不能只统计安装成功数 |
++| 备份和业务恢复 | 核实已有备份目的地、保留策略、最近恢复报告；另行安排隔离环境/维护窗口 | 验证数据、配置、密钥、队列及应用业务恢复，实测恢复时间与数据损失窗口；数据库导入成功不等于整站恢复 |
++| 欺骗引擎正式接入 | 明确业务入口和运行策略，先观察后评估处置 | 入口事实、事件回传、停止、断连补传、版本回退及持久化恢复逐项通过；回环访问不替代外部入口验收 |
++| 外部工单与身份来源 | 有真实目标系统、权限和配置 | 事件投递去重、工单回写、失败恢复及权限边界验证；目录身份只按强证据关联 |
++| 情报订阅 | 核实目标源当前接口及所需密钥 | 同步成功、失败原因、数据有效期和碰撞可核对；无密钥时明确不可用，不以 0 条伪装成功 |
++
++### P2：有需求和条件再启动
++
++- macOS Agent：先具备开发/CI/实机环境和明确用户需求。
++- 旧 Windows 与更多发行版覆盖：按真实部署需求排序，不承诺未验证兼容性。
++- 新时序规则、身份来源及边界设备接入：以真实数据和误报回测为前提，复用已有引擎。
++- 全站移动端一致性：沿用户常用流程补验，不把近期几个页面通过当作完成。
++
++## 暂不做
++
++多租户 SaaS 化、按业务包继续拆微服务、全量 PCAP 长期存储、自研检测规则语言。
++当前也不推进“因为模型更快就放开自动响应”或“因为已有时序/身份引擎就全面启用所有规则”。
++这些选择改变前，须有实际需求、成本和验收依据。
++
++## 执行顺序
++
++**先推进 P0-1 的可验证事实与证据引用，用已有回归集验收；同时只读观察 P0-2 的自然样本。**
++两者有稳定证据后，按实际风险选择 P1 的恢复演练或采集补验。不会先新增可视化编排器、
++重写研判架构或扩大自动处置权限。后续每个条目独立提交、验证，并补充部署与验收日期。
++
++## 历史规划（仅作背景）
++
++下面保留早期快照、完成记录和当时的已知缺口。旧日期的容量、规则/用例数量、
++“未部署”“未验证”和优先级只代表当时状态；与上文或当前实现冲突时，不用它们安排新任务。
++
++<details>
++<summary>展开 2026-10-17 及更早的路线图记录</summary>
+ 
+ ## 现状快照（2026-10-17，v0.1.0）
+ 
+@@ -278,3 +413,5 @@ proto `FlowRecord` 加 `tls_cert_*=22-26`，server 归一化进 `tls.cert`，
+ 
+ macOS agent（无 Mac 开发/CI 环境，写了也守不住编译）、多租户、微服务拆分、
+ 存 PCAP、自研规则 DSL。
++
++</details>
+diff --git a/server/internal/notify/notify.go b/server/internal/notify/notify.go
+index dfadad4..9d6100f 100644
+--- a/server/internal/notify/notify.go
++++ b/server/internal/notify/notify.go
+@@ -220,6 +220,9 @@ func text(m Message) string {
+ 	}
+ 	fmt.Fprintf(&b, "告警 %d 条，最高级别: %s\n", m.AlertCount, sev)
+ 	if m.Summary != "" {
++		if m.Verdict != "" {
++			b.WriteString("AI 摘要（模型判断）: ")
++		}
+ 		fmt.Fprintf(&b, "%s\n", m.Summary)
+ 	}
+ 	if len(m.RuleAuthors) > 0 {
+diff --git a/server/internal/notify/notify_test.go b/server/internal/notify/notify_test.go
+index bef6fcd..ead1514 100644
+--- a/server/internal/notify/notify_test.go
++++ b/server/internal/notify/notify_test.go
+@@ -85,7 +85,7 @@ func TestText(t *testing.T) {
+ 		Summary: "存在攻击链", AlertCount: 12, Severity: 4,
+ 		Link: "http://x/?incident=abc", RuleAuthors: []string{"Florian Roth (Nextron Systems)"},
+ 	})
+-	for _, want := range []string{"可疑进程链", "恶意", "85", "12 条", "高危", "存在攻击链", "http://x/?incident=abc", "规则作者: Florian Roth (Nextron Systems)"} {
++	for _, want := range []string{"可疑进程链", "恶意", "85", "AI 摘要（模型判断）: 存在攻击链", "12 条", "高危", "存在攻击链", "http://x/?incident=abc", "规则作者: Florian Roth (Nextron Systems)"} {
+ 		if !strings.Contains(got, want) {
+ 			t.Errorf("正文缺少 %q：\n%s", want, got)
+ 		}
+diff --git a/server/internal/triage/engine.go b/server/internal/triage/engine.go
+index 8d092db..1801b54 100644
+--- a/server/internal/triage/engine.go
++++ b/server/internal/triage/engine.go
+@@ -33,13 +33,15 @@ const systemPrompt = `你是资深安全分析师，负责研判 XDR 平台聚
+ 输入包含事件的实体关系图（主机/进程/告警）和按时间排序的告警明细。
+ 你可以调用工具主动调查：检索原始事件、追进程血缘、查主机告警前科。
+ 证据不足时先调查再下结论，证据已经充分时直接给结论，不要为了调查而调查。
++已有工具证据台账时，必须提交非空 evidence_claims 数组；未调用工具时可省略。引用只来自服务端证据台账，每项为 {"evidence_id":"query-1","field":"truncated","value":true}，字段必须实际存在且值完全一致。也可引用 records 中的事件编号与字段，如 query-1/items-1 的 parent_process_guid；父进程字段缺失表示未知，记录先后顺序不证明父子关系。query_evidence 由服务端生成，不要自行填写。引用不能证明摘要推断成立。
++禁止输出自由文本 actions，服务端会根据 action_codes 生成建议文案。不把建议或工具参数写入 summary/kill_chain 来绕过建议目录。
+ 最终结论只输出一个 JSON 对象，不要输出任何其他文字，结构如下：
+ {
+   "verdict": "malicious | suspicious | benign",
+   "confidence": 0 到 100 的整数,
+   "summary": "一段话说清这个事件是什么、为什么这样判定",
+   "kill_chain": ["按时间顺序还原的攻击链步骤，非攻击事件则为空数组"],
+-  "actions": ["建议的处置动作，按优先级排序"]
++  "action_codes": ["从服务端建议目录中选择代码，按优先级排序；不可为空"]
+ }
+ 三档结论的边界：
+ - malicious：有明确攻击链证据，如持久化加回连、凭据读取加外传。
+@@ -50,13 +52,21 @@ const systemPrompt = `你是资深安全分析师，负责研判 XDR 平台聚
+ 中危及以上的告警，"像测试或演练"本身不是 benign 的理由，查不到对应记录就按 suspicious；
+ summary 里写了"需确认来源"的，verdict 也不能是 benign。
+ 证据来源与覆盖约束：
++- 所有肯定和否定的个案事实都必须来自输入。快照未提供某类记录，只能写“本次证据未提供”，不能写该记录“不存在/没有”；只有输入明确说没有工单等，才能复述该具体缺失。不要把缺少工单扩大成没有任何人工确认。
+ - source=ai 的长期记忆是未经人工核实的线索，不能当作人工确认、白名单或良性结论的依据。不得把 AI 自己的历史判断循环引用为证明。
+ - 只有明确标记为 human 的具体记录才能称为人工记录；人工记录也只能覆盖它实际确认的主机、时间与行为，不能外推至整个域名族或未来活动。
+ - 工具返回 truncated、raw_truncated、dns_omitted、missing_ancestor 或 error 时必须说明限制，不得声称全量检索或完整血缘。
+ - 未查到不等于未发生。未采集客户端进程或 HTTP 日志时，不得用宿主机没有记录证明客户端没有外联或入口没有请求。
+ - 中高危事件若良性判断仅依赖 AI 记忆、有限查询的阴性结果或来源猜测，应判 suspicious 并说明待核实证据；不要凭重复标签或域名复用排除攻击。
+ - 共享 CDN/IP、国内地址、长 TTL、低频 DNS、固定标签和同机常见应用，只能描述背景，不能证明待查域名或客户端应用合法。需确认应用归属的中高危事件应为 suspicious，不能用这些弱特征替代归属证据。
+-- actions 与 verdict 使用同一证据标准：没有明确人工批准和精确业务归属时，不建议加入白名单/已知清单、抑制、降低告警级别或良性结案；尤其不得从单个共享 IP 推广到整个网段、域名族或未来活动。可建议核实和监测；suspicious 本身不要求隔离或封禁。
++- 低频、长 TTL、没有 TXT 等特征不能证明隧道或外传不可能。数量、客户端归属与行为链只能按实际返回的证据描述。
++- 严格区分“本次证据未提供”“查询未命中”“明确未采集/采集关闭”：前两者不能推出第三者。只有输入明确给出采集状态时才能写“未采集”；否则只写“现有证据未提供”，包括 kill_chain 与否定句也不能擅自补充采集状态。
++- 域名中出现 nonce、random、token、telemetry 等字面片段，不证明随机生成、DGA、周期性信标或隧道。没有生成过程、统计基线或行为证据时只描述字面查询与待核实归属，不扩写成“随机/DGA/信标形态”。
++- “陌生/来源未知”不等于“首次出现”；没有历史基线与首次时间，不添加首次、首次执行等描述。同一操作链不等于父子进程关系，缺少父 PID 证据不写 SSH→systemctl→systemd 等血缘箭头，改为分别叙述已知动作。
++- action_codes 对应的建议与 verdict 使用同一证据标准：没有明确人工批准和精确业务归属时，不建议加入白名单/已知清单、抑制、降低告警级别或良性结案；尤其不得从单个共享 IP 推广到整个网段、域名族或未来活动。可建议核实和监测；suspicious 本身不要求隔离或封禁。
++- 仅因来源未确认或后来出现 TXT、短 TTL、随机标签等线索，不建议临时封堵或立即升级为 malicious；先补充进程、连接及攻击链证据。确有凭据读取与外传等攻击链时可建议针对已确认主机/目标的处置，并遵守审批与授权范围，不外推到共享地址或网段。
++- verdict=suspicious 时，action_codes 仅选择核实、补证和监测，不附带未来触发隔离、封禁、清除或申请处置的条件。未来证据改变时由下一次研判独立决定是否提出处置；当前答案不要预先授权。
++- 条件性处置建议也必须逐个分支满足证据门槛；“未知应用或出现恶意行为”中的未知应用分支不能触发隔离。单独的进程异常、未知应用、普通外联或凭据访问不自动证明恶意；不把这些线索接到“申请授权处置”上。新增弱线索只建议补证与重新研判，确认攻击链后再单独提出经授权的处置，不能将两者写成一个自动推进的步骤。
+ - 调查 query_events 默认 indexed 模式不包含纯 UUID/长哈希值；需要查这些标识符时显式使用 raw 模式。查询超时不是阴性结果，不重复用相同大范围查询消耗预算。
+ 告警里的 severity：1 信息、2 低、3 中、4 高、5 严重。`
+ 
+@@ -280,12 +290,15 @@ func (e *Engine) toolLoop(ctx context.Context, msgs []Message, nudge string) (st
+ 		if len(msg.ToolCalls) == 0 {
+ 			return e.finishVerdict(ctx, msgs, msg)
+ 		}
++		previousQueries := len(queryEvidenceFrom(msgs))
+ 		msgs = append(msgs, msg)
+ 		for _, tc := range msg.ToolCalls {
+ 			result := e.execTool(ctx, tc.Function.Name, tc.Function.Arguments)
+ 			slog.Info("调查", "tool", tc.Function.Name, "args", tc.Function.Arguments)
+ 			msgs = append(msgs, Message{Role: "tool", ToolCallID: tc.ID, Content: result})
+ 		}
++		ledger, _ := json.Marshal(queryEvidenceFrom(msgs)[previousQueries:])
++		msgs = append(msgs, Message{Role: "system", Content: "服务端证据台账（查询范围与事件记录，不证明攻击结论）：" + string(ledger)})
+ 	}
+ 	// 轮数用尽：收走工具，强制收口
+ 	msgs = append(msgs, Message{Role: "user", Content: nudge})
+@@ -298,19 +311,25 @@ func (e *Engine) toolLoop(ctx context.Context, msgs []Message, nudge string) (st
+ 
+ // finishVerdict 只修正一次输出格式，不重新执行调查工具；失败交给队列退避重试。
+ func (e *Engine) finishVerdict(ctx context.Context, msgs []Message, msg Message) (string, error) {
+-	if err := validateVerdict(msg); err == nil {
+-		return msg.Content, nil
++	return e.finishVerdictWithEvidence(ctx, msgs, msg, msgs)
++}
++
++// 离线回放分离模型输入与校验台账，不伪造供应商的历史工具调用协议。
++func (e *Engine) finishVerdictWithEvidence(ctx context.Context, msgs []Message, msg Message, evidenceMessages []Message) (string, error) {
++	if answer, err := bindEvidence(msg, evidenceMessages); err == nil {
++		return answer, nil
+ 	}
+-	msgs = append(msgs, msg, Message{Role: "user", Content: `上一条结论格式无效或输出不完整。基于已有调查证据重新输出一个完整、简洁的 JSON 对象，不调用工具，不续写片段，不增加未经证实的事实。
+-字段：verdict（malicious/suspicious/benign）、confidence（0 到 100 的数字）、summary（非空字符串）、kill_chain（字符串数组）、actions（字符串数组）。字符串中的反斜杠、引号和换行必须按 JSON 转义；命令无需逐字抄录，可用中文概述。只输出 JSON。`})
++	msgs = append(msgs, msg, Message{Role: "user", Content: `上一条结论格式、证据引用、建议代码无效或输出不完整。基于已有调查证据重新输出一个完整、简洁的 JSON 对象，不调用工具，不续写片段，不增加未经证实的事实。
++字段：verdict（malicious/suspicious/benign）、confidence（0 到 100 的数字）、summary（非空字符串）、kill_chain（字符串数组）、action_codes（建议目录中的非空代码数组，不提交 actions 文案）。字符串中的反斜杠、引号和换行必须按 JSON 转义；命令无需逐字抄录，可用中文概述。已有工具证据时 evidence_claims 必须为非空数组，引用必须与查询台账中的编号、字段和值完全一致；缺失字段不可推断为 false。只输出 JSON。`})
+ 	corrected, err := e.chat(ctx, msgs, nil)
+ 	if err != nil {
+ 		return "", fmt.Errorf("研判格式修正失败: %w", err)
+ 	}
+-	if err := validateVerdict(corrected); err != nil {
++	answer, err := bindEvidence(corrected, evidenceMessages)
++	if err != nil {
+ 		return "", fmt.Errorf("研判结论无效，等待重试: %w", err)
+ 	}
+-	return corrected.Content, nil
++	return answer, nil
+ }
+ 
+ func validateVerdict(msg Message) error {
+@@ -345,7 +364,7 @@ func validateVerdict(msg Message) error {
+ 
+ func (e *Engine) investigate(ctx context.Context, incidentContext string) (string, error) {
+ 	answer, err := e.toolLoop(ctx, []Message{
+-		{Role: "system", Content: systemPrompt},
++		{Role: "system", Content: investigationPrompt()},
+ 		{Role: "user", Content: incidentContext},
+ 	}, "调查轮数已用尽，基于以上全部信息立即输出最终 JSON 结论。")
+ 	return answer, err
+@@ -477,7 +496,7 @@ func (e *Engine) appendRetriage(ctx context.Context, sb *strings.Builder, inc *e
+ 		when = "于 " + inc.TriagedAt.Format(time.RFC3339)
+ 	}
+ 	fmt.Fprintf(sb, "上次研判%s，结论 %s（置信度 %d）：%s\n", when, cmp.Or(last.Verdict, "无法解析"), last.Confidence, excerpt(last.Summary, 300))
+-	sb.WriteString("上次结论没看过下面的新增告警；判断它们是否改变结论，仍输出完整的 JSON 结论。\n")
++	sb.WriteString("上次摘要是模型判断，不是独立证据或人工确认；不得仅凭上次摘要认定授权、排除攻击或补写缺失事实。引用匹配也不证明摘要成立，须回到实际事件与来源核实。上次结论没看过下面的新增告警；判断它们是否改变结论，仍输出完整的 JSON 结论。\n")
+ 	if inc.TriagedAt == nil {
+ 		return nil
+ 	}
+diff --git a/server/internal/triage/investigate_integration_test.go b/server/internal/triage/investigate_integration_test.go
+index 615033d..c633160 100644
+--- a/server/internal/triage/investigate_integration_test.go
++++ b/server/internal/triage/investigate_integration_test.go
+@@ -44,22 +44,26 @@ func TestInvestigateWithTools(t *testing.T) {
+ 		turns++
+ 		switch turns {
+ 		case 1:
+-			if len(req.Tools) != 3 {
+-				t.Errorf("第一轮应带 3 个工具，实际 %d", len(req.Tools))
++			if len(req.Tools) != 4 {
++				t.Errorf("第一轮应带 4 个工具，实际 %d", len(req.Tools))
+ 			}
+ 			// 模型要求调查 6.6.6.6
+ 			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"",
+ 				"tool_calls":[{"id":"call-1","type":"function",
+ 				"function":{"name":"query_events","arguments":"{\"keyword\":\"6.6.6.6\"}"}}]}}]}`))
+ 		default:
+-			// 第二轮应收到 tool 角色消息，内容是真实查询结果
++			// 工具结果后附服务端台账；两者都必须保留。
++			for _, msg := range req.Messages {
++				if msg.Role == "tool" && msg.ToolCallID == "call-1" {
++					sawToolResult = msg.Content
++				}
++			}
+ 			last := req.Messages[len(req.Messages)-1]
+-			if last.Role != "tool" || last.ToolCallID != "call-1" {
+-				t.Errorf("第二轮末条消息应为 tool 结果，实际 %+v", last)
++			if last.Role != "system" || !strings.Contains(last.Content, `"id":"query-1"`) || !strings.Contains(last.Content, `"event_id"`) {
++				t.Errorf("第二轮应有服务端事件台账，实际 %+v", last)
+ 			}
+-			sawToolResult = last.Content
+ 			w.Write([]byte(`{"choices":[{"message":{"role":"assistant",
+-				"content":"{\"verdict\":\"malicious\",\"confidence\":90,\"summary\":\"C2 外连\"}"}}]}`))
++				"content":"{\"verdict\":\"malicious\",\"action_codes\":[\"monitor\"],\"confidence\":90,\"summary\":\"C2 外连\",\"evidence_claims\":[{\"evidence_id\":\"query-1\",\"field\":\"status\",\"value\":\"ok\"}]}"}}]}`))
+ 		}
+ 	}))
+ 	t.Cleanup(llmSrv.Close)
+@@ -79,11 +83,15 @@ func TestInvestigateWithTools(t *testing.T) {
+ 		t.Errorf("工具结果应包含库里的事件，实际 %s", sawToolResult)
+ 	}
+ 	var v struct {
+-		Verdict string `json:"verdict"`
++		Verdict  string          `json:"verdict"`
++		Evidence []queryEvidence `json:"query_evidence"`
+ 	}
+ 	if err := json.Unmarshal(parseVerdict("t", answer), &v); err != nil || v.Verdict != "malicious" {
+ 		t.Errorf("最终结论解析失败：%s", answer)
+ 	}
++	if len(v.Evidence) != 1 || len(v.Evidence[0].Records) != 1 {
++		t.Fatalf("结论缺少查询与事件台账: %s", answer)
++	}
+ }
+ 
+ // 模型不调用工具时一轮出结论——不支持 tool calling 的模型走同一条路径。
+@@ -91,7 +99,7 @@ func TestInvestigateWithoutTools(t *testing.T) {
+ 	ctx, client := testdb.New(t)
+ 
+ 	llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"verdict\":\"benign\",\"confidence\":80,\"summary\":\"例行维护\"}"}}]}`))
++		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"verdict\":\"benign\",\"action_codes\":[\"monitor\"],\"confidence\":80,\"summary\":\"例行维护\"}"}}]}`))
+ 	}))
+ 	t.Cleanup(llmSrv.Close)
+ 
+@@ -118,7 +126,7 @@ func TestBatchTriagesAndPersistsVerdict(t *testing.T) {
+ 
+ 	var onVerdict atomic.Int32
+ 	e := &Engine{DB: client}
+-	e.LLM = oneShotLLM(t, `{"verdict":"malicious","confidence":88,"summary":"确认外连"}`)
++	e.LLM = oneShotLLM(t, `{"action_codes":["monitor"],"verdict":"malicious","confidence":88,"summary":"确认外连"}`)
+ 	e.OnVerdict = func(_ context.Context, id uuid.UUID, v json.RawMessage) {
+ 		onVerdict.Add(1)
+ 	}
+@@ -167,7 +175,7 @@ func TestBatchVerdictFlipClearsNotified(t *testing.T) {
+ 		return inc
+ 	}
+ 	flip, same := mk("benign"), mk("suspicious")
+-	e := &Engine{DB: client, LLM: oneShotLLM(t, `{"verdict":"malicious","confidence":90,"summary":"复发后确认外连"}`)}
++	e := &Engine{DB: client, LLM: oneShotLLM(t, `{"action_codes":["monitor"],"verdict":"malicious","confidence":90,"summary":"复发后确认外连"}`)}
+ 	if err := e.batch(ctx); err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -179,7 +187,7 @@ func TestBatchVerdictFlipClearsNotified(t *testing.T) {
+ 	}
+ 
+ 	stay := mk("benign")
+-	e.LLM = oneShotLLM(t, `{"verdict":"benign","confidence":80,"summary":"仍是例行探测"}`)
++	e.LLM = oneShotLLM(t, `{"action_codes":["monitor"],"verdict":"benign","confidence":80,"summary":"仍是例行探测"}`)
+ 	if err := e.batch(ctx); err != nil {
+ 		t.Fatal(err)
+ 	}
+diff --git a/server/internal/triage/llm.go b/server/internal/triage/llm.go
+index 2bd7aba..9381549 100644
+--- a/server/internal/triage/llm.go
++++ b/server/internal/triage/llm.go
+@@ -152,7 +152,7 @@ func (l *LLM) Chat(ctx context.Context, msgs []Message, tools []Tool) (Message,
+ 	}
+ 	defer resp.Body.Close()
+ 	if resp.StatusCode != http.StatusOK {
+-		return Message{}, fmt.Errorf("LLM 返回 %s", resp.Status)
++		return Message{}, &LLMHTTPError{StatusCode: resp.StatusCode}
+ 	}
+ 
+ 	var out struct {
+@@ -177,3 +177,10 @@ func (l *LLM) Chat(ctx context.Context, msgs []Message, tools []Tool) (Message,
+ 	out.Choices[0].Message.FinishReason = out.Choices[0].FinishReason
+ 	return out.Choices[0].Message, nil
+ }
++
++// LLMHTTPError 保留状态码供诊断，不携带响应正文与请求凭据。
++type LLMHTTPError struct{ StatusCode int }
++
++func (e *LLMHTTPError) Error() string {
++	return fmt.Sprintf("LLM 返回 %d %s", e.StatusCode, http.StatusText(e.StatusCode))
++}
+diff --git a/server/internal/triage/retriage_integration_test.go b/server/internal/triage/retriage_integration_test.go
+index 767450c..a2b495a 100644
+--- a/server/internal/triage/retriage_integration_test.go
++++ b/server/internal/triage/retriage_integration_test.go
+@@ -52,7 +52,7 @@ func (s *stubLLM) llm(t *testing.T) *LLM {
+ 			return
+ 		}
+ 		resp, _ := json.Marshal(map[string]any{"choices": []map[string]any{
+-			{"message": map[string]any{"role": "assistant", "content": `{"verdict":"benign","confidence":80,"summary":"系统例行变更"}`}},
++			{"message": map[string]any{"role": "assistant", "content": `{"verdict":"benign","confidence":80,"action_codes":["monitor"],"summary":"系统例行变更"}`}},
+ 		}})
+ 		w.Write(resp)
+ 	}))
+@@ -160,7 +160,7 @@ func TestRetriageCooldown(t *testing.T) {
+ 		t.Errorf("重研判后应清待重研判、计数加一、记研判时刻：%+v", got)
+ 	}
+ 	c := stub.contexts[0]
+-	for _, want := range []string{"重新研判（此前已研判 1 次）", "上次的结论", "上次研判之后新增的告警", "rule-a：2 条告警", "rule-b：1 条告警"} {
++	for _, want := range []string{"重新研判（此前已研判 1 次）", "上次摘要是模型判断，不是独立证据或人工确认", "上次的结论", "上次研判之后新增的告警", "rule-a：2 条告警", "rule-b：1 条告警"} {
+ 		if !strings.Contains(c, want) {
+ 			t.Errorf("重研判上下文缺少 %q：\n%s", want, c)
+ 		}
+diff --git a/server/internal/triage/runs_integration_test.go b/server/internal/triage/runs_integration_test.go
+index 5689f96..1f54b54 100644
+--- a/server/internal/triage/runs_integration_test.go
++++ b/server/internal/triage/runs_integration_test.go
+@@ -29,7 +29,7 @@ func TestRunLedgerFailureRecoveryAndUsage(t *testing.T) {
+ 			http.Error(w, "unavailable", 503)
+ 			return
+ 		}
+-		msg := Message{Role: "assistant", Content: `{"verdict":"suspicious","confidence":60,"summary":"证据不足，需核实来源"}`}
++		msg := Message{Role: "assistant", Content: `{"verdict":"suspicious","confidence":60,"action_codes":["monitor"],"summary":"证据不足，需核实来源","evidence_claims":[{"evidence_id":"query-1","field":"returned","value":0}]}`}
+ 		if call == 2 {
+ 			msg.Content = ""
+ 			var tc ToolCall
+diff --git a/server/internal/triage/tools.go b/server/internal/triage/tools.go
+index 24ff73b..0085c34 100644
+--- a/server/internal/triage/tools.go
++++ b/server/internal/triage/tools.go
+@@ -16,22 +16,26 @@ import (
+ )
+ 
+ // 调查工具集：模型像分析师一样主动查证，而不是只看摘要。
+-// 三个就够——检索、血缘、前科，对应人工研判的三个基本动作。
++// 检索、血缘、主机历史与进程基线均为只读查询。
++const eventExcerptBytes = 300
++
+ var investigationTools = []Tool{
++	makeTool("process_baseline", "按资产 ID 和可执行文件完整路径查询 UEBA 基线首次记录。不是安装时间、实际首次执行时间或恶意证明；未命中表示平台基线未知。",
++		`{"type":"object","properties":{"asset_id":{"type":"string"},"exe_path":{"type":"string","description":"事件中的完整程序路径，不接受进程名猜测"}},"required":["asset_id","exe_path"]}`),
+ 	makeTool("query_events",
+-		"按关键词检索原始事件（对事件里的字段值做子串匹配）。可用于追查某个 IP、域名、命令行、文件路径出现在哪些事件里。",
++		fmt.Sprintf("按关键词搜索事件。indexed 与 raw 都只返回最近 15 条，每条 raw 正文最多 %d 字节（另加省略标记）；raw 模式只改变搜索范围，不能取消正文裁剪，不支持分页或调大返回上限。", eventExcerptBytes),
+ 		`{"type":"object","properties":{
+ 			"keyword":{"type":"string","description":"要搜索的子串，如 IP、域名、命令片段"},
+ 			"hours":{"type":"integer","description":"回溯小时数，默认 24，最大 168"},
+-            "mode":{"type":"string","enum":["indexed","raw"],"description":"默认 indexed：搜索字段值，不含纯 UUID/32 位以上十六进制哈希值；raw：完整原文，查 UUID/哈希时使用，最多等待 15 秒"}
++            "mode":{"type":"string","enum":["indexed","raw"],"description":"默认 indexed：搜索字段值，不含纯 UUID/32 位以上十六进制哈希值；raw：搜索完整原文，查 UUID/哈希时使用；返回正文仍会裁剪，最多等待 15 秒"}
+ 		},"required":["keyword"]}`),
+ 	makeTool("process_lineage",
+-		"查询进程的血缘：祖先链与直接子进程。用于还原攻击链的来龙去脉。",
++		"仅按 process_guid 查询祖先链（最多 10 层）与直接子进程（最多 10 条）。不接受时间窗口、主机或额外进程范围筛选，不提供取消裁剪选项。",
+ 		`{"type":"object","properties":{
+ 			"process_guid":{"type":"string","description":"事件里的进程 GUID（process.uid）"}
+ 		},"required":["process_guid"]}`),
+ 	makeTool("host_alerts",
+-		"查询某主机最近的告警历史（含已关闭事件）。用于判断该主机是初犯还是惯犯、当前事件是否是更大活动的一部分。",
++		"查询某主机最近的告警历史（含已关闭事件）与最近一次 agent 采集状态快照（不代表事发时状态）。用于判断该主机是初犯还是惯犯、当前事件是否是更大活动的一部分。",
+ 		`{"type":"object","properties":{
+ 			"asset_id":{"type":"string","description":"主机的 asset ID（事件里的 asset_id，或图里 asset 节点的 id 后缀）"},
+ 			"days":{"type":"integer","description":"回溯天数，默认 7"}
+@@ -52,7 +56,7 @@ func (e *Engine) execTool(ctx context.Context, name, args string) string {
+ 			elapsed := time.Since(started).Milliseconds()
+ 			run.toolMS += elapsed
+ 			tool := name
+-			if tool != "query_events" && tool != "host_alerts" && tool != "process_lineage" {
++			if tool != "query_events" && tool != "host_alerts" && tool != "process_lineage" && tool != "process_baseline" {
+ 				tool = "unknown"
+ 			}
+ 			detail := map[string]any{"tool": tool, "duration_ms": elapsed, "failed": failed}
+@@ -73,6 +77,8 @@ func (e *Engine) execTool(ctx context.Context, name, args string) string {
+ 	var err error
+ 	out, err = func() (any, error) {
+ 		switch name {
++		case "process_baseline":
++			return e.toolProcessBaseline(ctx, args)
+ 		case "query_events":
+ 			return e.toolQueryEvents(ctx, args)
+ 		case "process_lineage":
+@@ -92,15 +98,18 @@ func (e *Engine) execTool(ctx context.Context, name, args string) string {
+ }
+ 
+ type eventBrief struct {
+-	Ts           string                     `json:"ts"`
+-	Class        int                        `json:"class"`
+-	Source       string                     `json:"source"`
+-	AssetID      string                     `json:"asset_id,omitempty"`
+-	Host         string                     `json:"host,omitempty"`
+-	Raw          string                     `json:"raw"`
+-	RawTruncated bool                       `json:"raw_truncated"`
+-	DNS          map[string]json.RawMessage `json:"dns,omitempty"`
+-	DNSOmitted   []string                   `json:"dns_omitted,omitempty"`
++	EventID           string                     `json:"event_id"`
++	ProcessGUID       string                     `json:"process_guid,omitempty"`
++	ParentProcessGUID string                     `json:"parent_process_guid,omitempty"`
++	Ts                string                     `json:"ts"`
++	Class             int                        `json:"class"`
++	Source            string                     `json:"source"`
++	AssetID           string                     `json:"asset_id,omitempty"`
++	Host              string                     `json:"host,omitempty"`
++	Raw               string                     `json:"raw"`
++	RawTruncated      bool                       `json:"raw_truncated"`
++	DNS               map[string]json.RawMessage `json:"dns,omitempty"`
++	DNSOmitted        []string                   `json:"dns_omitted,omitempty"`
+ }
+ 
+ func (e *Engine) toolQueryEvents(ctx context.Context, args string) (any, error) {
+@@ -145,7 +154,7 @@ func (e *Engine) toolQueryEvents(ctx context.Context, args string) (any, error)
+ 	for i, ev := range rows {
+ 		out[i] = brief(ev)
+ 	}
+-	return map[string]any{"status": "ok", "mode": in.Mode, "items": out, "limit": 15, "returned": len(out), "truncated": truncated, "from": since, "to": until, "coverage": "仅覆盖已采集且仍保留的数据；indexed 不保证纯 UUID/32 位以上十六进制哈希值的覆盖，查这些值需用 raw。未发现不代表没有发生，截断时不能声称全量检索"}, nil
++	return map[string]any{"status": "ok", "mode": in.Mode, "raw_mode_scope": "search_only", "raw_excerpt_limit_bytes": eventExcerptBytes, "items": out, "limit": 15, "returned": len(out), "truncated": truncated, "from": since, "to": until, "coverage": "仅覆盖已采集且仍保留的数据；indexed 不保证纯 UUID/32 位以上十六进制哈希值的覆盖，查这些值需用 raw。未发现不代表没有发生，截断时不能声称全量检索"}, nil
+ }
+ 
+ func (e *Engine) toolProcessLineage(ctx context.Context, args string) (any, error) {
+@@ -246,14 +255,18 @@ func (e *Engine) toolHostAlerts(ctx context.Context, args string) (any, error) {
+ 		}
+ 		out[i] = alertBrief{Ts: a.Ts.Format(time.RFC3339), Rule: rule, Severity: a.Severity, Count: a.Count}
+ 	}
+-	host := ""
+-	if as, err := e.DB.Asset.Get(ctx, assetID); err == nil {
+-		host = as.Hostname
++	as, err := e.DB.Asset.Get(ctx, assetID)
++	if err != nil {
++		return nil, err
+ 	}
+-	return map[string]any{"host": host, "alerts": out, "status": "ok", "limit": 20, "returned": len(out), "truncated": truncated, "from": since, "to": until, "coverage": "按告警首次出现时间筛选；无告警不代表没有事件或没有攻击"}, nil
++	result := map[string]any{"host": as.Hostname, "asset_id": assetID.String(), "alerts": out, "status": "ok", "limit": 20, "returned": len(out), "truncated": truncated, "from": since, "to": until, "coverage": "按告警首次出现时间筛选；无告警不代表没有事件或没有攻击"}
++	for key, value := range collectionEvidence(as.CollectorHealth) {
++		result[key] = value
++	}
++	return result, nil
+ }
+ 
+-func brief(ev *ent.Event) eventBrief { return briefLimit(ev, 300) }
++func brief(ev *ent.Event) eventBrief { return briefLimit(ev, eventExcerptBytes) }
+ 
+ func briefLimit(ev *ent.Event, limit int) eventBrief {
+ 	raw := string(ev.Raw)
+@@ -266,6 +279,7 @@ func briefLimit(ev *ent.Event, limit int) eventBrief {
+ 		raw = raw[:end] + "…"
+ 	}
+ 	b := eventBrief{
++		EventID:      ev.ID.String(),
+ 		Ts:           ev.Ts.Format(time.RFC3339),
+ 		Class:        ev.ClassUID,
+ 		Source:       ev.Source,
+@@ -276,6 +290,12 @@ func briefLimit(ev *ent.Event, limit int) eventBrief {
+ 	if ev.AssetID != nil {
+ 		b.AssetID = ev.AssetID.String()
+ 	}
++	if ev.ProcessGUID != nil {
++		b.ProcessGUID = ev.ProcessGUID.String()
++	}
++	if ev.ParentProcessGUID != nil {
++		b.ParentProcessGUID = ev.ParentProcessGUID.String()
++	}
+ 	var fields map[string]json.RawMessage
+ 	if json.Unmarshal(ev.Raw, &fields) == nil && fields["query"] != nil {
+ 		b.DNS = make(map[string]json.RawMessage)
+@@ -292,3 +312,13 @@ func briefLimit(ev *ent.Event, limit int) eventBrief {
+ 	}
+ 	return b
+ }
++
++// InvestigationContract 供生产研判与离线生成、评分共用，避免离线猜测工具能力。
++func InvestigationContract() string {
++	raw, _ := json.Marshal(investigationTools)
++	return string(raw)
++}
++
++func investigationPrompt() string {
++	return systemPrompt + "\n调查工具能力说明（不代表已执行，建议不得假设未提供的参数或能力）：\n" + InvestigationContract() + "\n服务端建议目录（未指定 verdict 的代码适用于所有结论；指定 verdict 必须匹配）：\n" + ActionContract()
++}
+diff --git a/server/internal/triage/tools_llm_test.go b/server/internal/triage/tools_llm_test.go
+index 443a9fe..8e15c37 100644
+--- a/server/internal/triage/tools_llm_test.go
++++ b/server/internal/triage/tools_llm_test.go
+@@ -125,3 +125,28 @@ func TestLLMChatErrors(t *testing.T) {
+ 		t.Error("空 choices 应返回错误")
+ 	}
+ }
++
++func TestBriefUsesNormalizedProcessIdentity(t *testing.T) {
++	id, asset, process, parent := uuid.New(), uuid.New(), uuid.New(), uuid.New()
++	ev := &ent.Event{ID: id, AssetID: &asset, ProcessGUID: &process, ParentProcessGUID: &parent, Raw: []byte(`{"process_guid":"forged","parent_process_guid":"forged"}`)}
++	b := briefLimit(ev, 4)
++	if b.EventID != id.String() || b.ProcessGUID != process.String() || b.ParentProcessGUID != parent.String() || !b.RawTruncated {
++		t.Fatalf("%+v", b)
++	}
++	ev.ParentProcessGUID = nil
++	b = brief(ev)
++	if b.ParentProcessGUID != "" {
++		t.Fatal("不能从 raw 补写父进程")
++	}
++	raw, err := json.Marshal(b)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var fields map[string]any
++	if err := json.Unmarshal(raw, &fields); err != nil {
++		t.Fatal(err)
++	}
++	if _, exists := fields["parent_process_guid"]; exists {
++		t.Fatal("未知父进程必须保持缺失")
++	}
++}
+diff --git a/server/internal/triage/verdict_integration_test.go b/server/internal/triage/verdict_integration_test.go
+index 87b2cd9..d546c5b 100644
+--- a/server/internal/triage/verdict_integration_test.go
++++ b/server/internal/triage/verdict_integration_test.go
+@@ -6,6 +6,8 @@ import (
+ 	"bytes"
+ 	"context"
+ 	"encoding/json"
++	"net/http"
++	"net/http/httptest"
+ 	"testing"
+ 	"time"
+ 
+@@ -41,3 +43,46 @@ func TestInvalidVerdictBackoffPreservesConclusion(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestInvalidActionsDoNotPersistOrNotify(t *testing.T) {
++	ctx, client := testdb.New(t)
++	f := &retriageFixture{t: t, ctx: ctx, client: client}
++	inc := f.fresh("无效建议", time.Now().Add(-time.Hour))
++	llm, calls := verdictLLM(t, []Message{{Role: "assistant", Content: `{"verdict":"malicious","confidence":99,"summary":"待核实","action_codes":["remove_raw_limit"]}`}})
++	notified := false
++	e := Engine{DB: client, LLM: llm, OnVerdict: func(context.Context, uuid.UUID, json.RawMessage) { notified = true }}
++	if err := e.batch(ctx); err != nil {
++		t.Fatal(err)
++	}
++	got := f.get(inc)
++	if *calls != 2 || notified || len(got.AiVerdict) != 0 || got.TriageCount != 0 || got.TriageFailures != 1 || got.TriageRetryAt == nil {
++		t.Fatalf("无效建议被落库或触发回调：calls=%d notified=%v incident=%+v", *calls, notified, got)
++	}
++}
++
++func TestMissingEvidenceClaimsDoNotPersistOrNotify(t *testing.T) {
++	ctx, client := testdb.New(t)
++	f := &retriageFixture{t: t, ctx: ctx, client: client}
++	inc := f.fresh("缺少证据引用", time.Now().Add(-time.Hour))
++	calls := 0
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		calls++
++		msg := Message{Role: "assistant", Content: `{"verdict":"malicious","confidence":99,"summary":"可疑进程","action_codes":["review_response"]}`}
++		if calls == 1 {
++			if err := json.Unmarshal([]byte(`{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"process_lineage","arguments":"{\"process_guid\":\"invalid\"}"}}]}`), &msg); err != nil {
++				t.Error(err)
++			}
++		}
++		json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": msg}}})
++	}))
++	defer srv.Close()
++	notified := false
++	e := Engine{DB: client, LLM: NewLLM(srv.URL, "test", "", time.Second), OnVerdict: func(context.Context, uuid.UUID, json.RawMessage) { notified = true }}
++	if err := e.batch(ctx); err != nil {
++		t.Fatal(err)
++	}
++	got := f.get(inc)
++	if calls != 3 || notified || len(got.AiVerdict) != 0 || got.TriageCount != 0 || got.TriageFailures != 1 || got.TriageRetryAt == nil || got.TriageStartedAt != nil {
++		t.Fatalf("缺少引用仍落库或触发回调：calls=%d notified=%v incident=%+v", calls, notified, got)
++	}
++}
+diff --git a/server/internal/triage/verdict_test.go b/server/internal/triage/verdict_test.go
+index b4aba23..a9d2c21 100644
+--- a/server/internal/triage/verdict_test.go
++++ b/server/internal/triage/verdict_test.go
+@@ -5,12 +5,13 @@ import (
+ 	"encoding/json"
+ 	"net/http"
+ 	"net/http/httptest"
++	"reflect"
+ 	"strings"
+ 	"testing"
+ 	"time"
+ )
+ 
+-const validVerdict = `{"verdict":"benign","confidence":88,"summary":"系统维护","kill_chain":[],"actions":[]}`
++const validVerdict = `{"verdict":"benign","confidence":88,"summary":"系统维护","kill_chain":[],"action_codes":["monitor"]}`
+ 
+ func verdictLLM(t *testing.T, answers []Message) (*LLM, *int) {
+ 	t.Helper()
+@@ -55,8 +56,24 @@ func TestVerdictCorrection(t *testing.T) {
+ 			if (err != nil) != tc.wantErr || *calls != tc.calls {
+ 				t.Fatalf("calls=%d err=%v", *calls, err)
+ 			}
+-			if !tc.wantErr && got != validVerdict {
+-				t.Fatalf("结论=%s", got)
++			if !tc.wantErr {
++				var actual, expected map[string]any
++				if err := json.Unmarshal([]byte(got), &actual); err != nil {
++					t.Fatal(err)
++				}
++				_ = json.Unmarshal([]byte(validVerdict), &expected)
++				ledger, ok := actual["query_evidence"].([]any)
++				if !ok || len(ledger) != 0 {
++					t.Fatalf("没有执行工具却出现查询证据: %s", got)
++				}
++				delete(actual, "query_evidence")
++				if actions, ok := actual["actions"].([]any); !ok || len(actions) != 1 {
++					t.Fatalf("缺少服务端建议: %s", got)
++				}
++				delete(actual, "actions")
++				if !reflect.DeepEqual(actual, expected) {
++					t.Fatalf("结论=%s", got)
++				}
+ 			}
+ 		})
+ 	}
+diff --git a/server/internal/ueba/engine.go b/server/internal/ueba/engine.go
+index 6dcba4b..ab215e1 100644
+--- a/server/internal/ueba/engine.go
++++ b/server/internal/ueba/engine.go
+@@ -114,7 +114,7 @@ func (e *Engine) batch(ctx context.Context) (int, error) {
+ 	assets := map[uuid.UUID]bool{}
+ 	for k := range fresh {
+ 		// 旧版基线可能存着合并前的写法，一并查出来
+-		paths = append(paths, k.exe, legacyPath(k.exe))
++		paths = append(paths, BaselinePaths(k.exe)...)
+ 		assets[k.asset] = true
+ 	}
+ 	known, err := e.DB.ProcessBaseline.Query().
+@@ -246,3 +246,9 @@ func legacyPath(p string) string {
+ 	}
+ 	return p
+ }
++
++// BaselinePaths 返回与检测引擎一致的规范路径及旧版基线路径，供只读查证复用。
++func BaselinePaths(path string) []string {
++	canonical := canonicalPath(path)
++	return []string{canonical, legacyPath(canonical)}
++}
+diff --git a/web/src/api.ts b/web/src/api.ts
+index 0520397..12a0e7f 100644
+--- a/web/src/api.ts
++++ b/web/src/api.ts
+@@ -1,4 +1,17 @@
++export interface RecordEvidence {
++  id: string
++  facts: { event_id: string; asset_id?: string; ts?: string; process_guid?: string; parent_process_guid?: string }
++}
++
++export interface QueryEvidence {
++  records?: RecordEvidence[]
++  id: string
++  tool: string
++  facts: { status?: string; returned?: number; truncated?: boolean; missing_ancestor?: boolean; raw_truncated_records?: number; dns_omitted_records?: number; baseline_status?: string; baseline_id?: string; baseline_path?: string; exe_path?: string; baseline_first_recorded_at?: string; collection_status?: string; collection_received_at?: string; collection_states?: Record<string, string> }
++}
++
+ export interface Verdict {
++  query_evidence?: QueryEvidence[]
+   verdict?: 'malicious' | 'suspicious' | 'benign'
+   confidence?: number
+   summary?: string
+diff --git a/web/src/components/VerdictCard.tsx b/web/src/components/VerdictCard.tsx
+index 41cf350..cd450d3 100644
+--- a/web/src/components/VerdictCard.tsx
++++ b/web/src/components/VerdictCard.tsx
+@@ -1,7 +1,7 @@
+ import { CheckCircleFilled, ExclamationCircleFilled, RobotOutlined, WarningFilled } from '@ant-design/icons'
+-import { Alert, Card, Col, Empty, Flex, Row, Timeline, Typography, theme } from 'antd'
++import { Alert, Card, Col, Collapse, Empty, Flex, Row, Table, Timeline, Typography, theme } from 'antd'
+ import type { ReactNode } from 'react'
+-import type { Verdict } from '../api'
++import type { RecordEvidence, Verdict } from '../api'
+ import { useI18n, type MsgKey } from '../i18n'
+ 
+ // 研判结论放在详情页最上面：先看结论与置信度，再看攻击链与处置建议
+@@ -35,7 +35,40 @@ export function VerdictCard({ verdict }: { verdict: Verdict | null }) {
+         )}
+       </Flex>
+       <div style={{ padding: '18px 24px 8px' }}>
+-        {verdict.summary && <Typography.Paragraph style={{ lineHeight: 1.8 }}>{verdict.summary}</Typography.Paragraph>}
++        {verdict.summary && <>
++          <Typography.Text type="secondary">{t('triageModelSummary')}</Typography.Text>
++          <Typography.Paragraph style={{ lineHeight: 1.8 }}>{verdict.summary}</Typography.Paragraph>
++        </>}
++        {!!verdict.query_evidence?.length && <Collapse size="small" style={{ marginBottom: 16 }} items={[{
++          key: 'coverage', label: t('triageQueryEvidence'), children: <>
++            <Typography.Paragraph type="secondary">{t('triageQueryEvidenceHint')}</Typography.Paragraph>
++            <ul style={{ paddingInlineStart: 20 }}>{verdict.query_evidence.map(e => <li key={e.id}>
++              <Typography.Text code>{e.id} · {e.tool}</Typography.Text>{' '}
++              {e.facts.status === 'ok' ? t('triageQueryOK') : t('triageQueryUnknown')}
++              {e.facts.returned != null && ` · ${t('triageQueryReturned', { n: e.facts.returned })}`}
++              {` · ${e.facts.truncated === true ? t('triageQueryTruncated') : e.facts.truncated === false ? t('triageQueryNotTruncated') : t('triageQueryTruncationUnknown')}`}
++              {(e.facts.raw_truncated_records ?? 0) > 0 && ` · ${t('triageQueryRawTruncated', { n: e.facts.raw_truncated_records! })}`}
++              {(e.facts.dns_omitted_records ?? 0) > 0 && ` · ${t('triageQueryDNSOmitted', { n: e.facts.dns_omitted_records! })}`}
++              {e.facts.missing_ancestor === true && ` · ${t('triageQueryMissingAncestor')}`}
++              {e.facts.baseline_status && <div style={{ marginBlock: 8 }}>
++                <Typography.Text strong>{t('triageBaseline')}</Typography.Text>{' '}
++                {e.facts.baseline_first_recorded_at || t('triageRecordUnknown')}
++                <div><Typography.Text code>{e.facts.baseline_path || e.facts.exe_path}</Typography.Text></div>
++                {e.facts.baseline_id && <Typography.Text type="secondary">ID: {e.facts.baseline_id}</Typography.Text>}
++                <Typography.Paragraph type="secondary">{t('triageBaselineScope')}</Typography.Paragraph>
++              </div>}
++              {e.facts.collection_status && <div style={{ marginBlock: 8 }}>
++                <Typography.Text strong>{t('triageCollectionSnapshot')}</Typography.Text>{' '}
++                {e.facts.collection_received_at || t('triageRecordUnknown')}
++                <Typography.Paragraph type="secondary">{t('triageCollectionScope')}</Typography.Paragraph>
++                {Object.entries(e.facts.collection_states ?? {}).map(([name, state]) => <div key={name}>
++                  <Typography.Text code>{name}</Typography.Text>: {state}
++                </div>)}
++              </div>}
++              {!!e.records?.length && <EvidenceRecords records={e.records} />}
++            </li>)}</ul>
++          </>,
++        }]} />}
+         <Row gutter={[32, 8]}>
+           {!!chain.length && (
+             <Col xs={24} lg={actions.length ? 13 : 24}>
+@@ -54,3 +87,18 @@ export function VerdictCard({ verdict }: { verdict: Verdict | null }) {
+     </Card>
+   )
+ }
++
++function EvidenceRecords({ records }: { records: RecordEvidence[] }) {
++  const { t } = useI18n()
++  const text = (value?: string) => <Typography.Text style={{ overflowWrap: 'anywhere' }}>{value || t('triageRecordUnknown')}</Typography.Text>
++  return <details style={{ marginBlock: 8 }}>
++    <summary style={{ cursor: 'pointer' }}>{t('triageRecordDetails', { n: records.length })}</summary>
++    <Table<RecordEvidence> size="small" rowKey="id" pagination={false} dataSource={records} scroll={{ x: 900 }} columns={[
++      { title: t('triageRecordReference'), width: 170, render: (_, r) => text(r.id) },
++      { title: t('triageRecordEvent'), width: 240, render: (_, r) => <>{text(r.facts.event_id)}<br />{text(r.facts.ts)}</> },
++      { title: t('triageRecordAsset'), width: 220, render: (_, r) => text(r.facts.asset_id) },
++      { title: 'Process GUID', width: 220, render: (_, r) => text(r.facts.process_guid) },
++      { title: 'Parent GUID', width: 220, render: (_, r) => text(r.facts.parent_process_guid) },
++    ]} />
++  </details>
++}
+diff --git a/web/src/i18n.tsx b/web/src/i18n.tsx
+index 935c17f..c5c8edb 100644
+--- a/web/src/i18n.tsx
++++ b/web/src/i18n.tsx
+@@ -748,6 +748,27 @@ const zh = {
+   confidence: '置信度',
+   killChain: '攻击链',
+   suggestedActions: '处置建议',
++  triageModelSummary: '模型分析（证据引用匹配不代表推断已证实）',
++  triageQueryEvidence: '查询覆盖与事件证据（服务端记录）',
++  triageQueryEvidenceHint: '字段来自本轮工具查询与已存事件，不证明模型推断成立；父进程缺失表示未知，记录先后顺序不证明父子关系。',
++  triageBaseline: 'UEBA 基线首次记录',
++  triageBaselineScope: '仅该资产与路径组合的平台基线时间，不是安装时间或实际首次执行时间；未命中不代表从未运行。',
++  triageCollectionSnapshot: '最近一次采集快照（接收时间）',
++  triageCollectionScope: '仅代表该次 agent 自报状态，不能回推事发时状态；组件缺失为未知，active 不证明没有漏采，过旧快照需重新核实。',
++  triageRecordUnknown: '未提供 / 未知',
++  triageRecordDetails: '查看 {n} 条事件的结构化字段',
++  triageRecordReference: '证据编号',
++  triageRecordEvent: '事件 ID / 时间',
++  triageRecordAsset: '资产 ID',
++  triageQueryOK: '查询成功',
++  triageQueryUnknown: '查询失败或状态未知',
++  triageQueryReturned: '返回 {n} 条',
++  triageQueryTruncated: '结果已截断',
++  triageQueryNotTruncated: '返回条数未超限（不代表正文完整或采集完整）',
++  triageQueryTruncationUnknown: '截断状态未知',
++  triageQueryMissingAncestor: '祖先进程记录缺失',
++  triageQueryRawTruncated: '{n} 条事件正文已裁剪',
++  triageQueryDNSOmitted: '{n} 条事件省略了 DNS 字段',
+   unparsableVerdict: '研判结果无法解析：{e}',
+   graphTitle: '实体关系图',
+   graphOverflow: '还有 {n} 个节点未显示',
+@@ -2479,6 +2500,27 @@ const en = {
+   confidence: 'Confidence',
+   killChain: 'Kill chain',
+   suggestedActions: 'Suggested actions',
++  triageModelSummary: 'Model analysis (matching evidence references does not establish inferences)',
++  triageQueryEvidence: 'Query coverage and event evidence (server recorded)',
++  triageQueryEvidenceHint: 'Fields come from this investigation and stored events, not proof of model inferences. A missing parent is unknown; record order does not establish parentage.',
++  triageBaseline: 'First UEBA baseline record',
++  triageBaselineScope: 'Platform baseline time for this asset and path, not installation or first execution time. No match does not mean never executed.',
++  triageCollectionSnapshot: 'Latest collection snapshot (received at)',
++  triageCollectionScope: 'Agent-reported snapshot only, not historical coverage. Missing components are unknown; active does not prove no data loss. Old snapshots require rechecking.',
++  triageRecordUnknown: 'Not provided / unknown',
++  triageRecordDetails: 'View structured fields of {n} events',
++  triageRecordReference: 'Evidence reference',
++  triageRecordEvent: 'Event ID / time',
++  triageRecordAsset: 'Asset ID',
++  triageQueryOK: 'Query succeeded',
++  triageQueryUnknown: 'Query failed or status unknown',
++  triageQueryReturned: '{n} records returned',
++  triageQueryTruncated: 'Results truncated',
++  triageQueryNotTruncated: 'Result count within limit (not proof of complete content or collection)',
++  triageQueryTruncationUnknown: 'Truncation unknown',
++  triageQueryMissingAncestor: 'Ancestor process records missing',
++  triageQueryRawTruncated: 'Event content shortened in {n} records',
++  triageQueryDNSOmitted: 'DNS fields omitted in {n} records',
+   unparsableVerdict: 'Unparsable verdict: {e}',
+   graphTitle: 'Entity graph',
+   graphOverflow: '{n} more nodes not shown',

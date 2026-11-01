@@ -45,6 +45,9 @@ type Report struct {
 // Match 软件清单对漏洞库。listening 里带包名的监听服务用来标暴露面（只算非回环监听）
 func Match(ctx context.Context, db *sql.DB, sw *assetmap.Software, listening []assetmap.Listener) (Report, error) {
 	rep := Report{Ecosystem: Ecosystem(sw.OS, sw.Version), Packages: len(sw.Packages)}
+	if sw.Manager != "dpkg" {
+		rep.Ecosystem = ""
+	}
 	if rep.Ecosystem == "" {
 		return rep, nil
 	}

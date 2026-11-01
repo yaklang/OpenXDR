@@ -42,8 +42,8 @@ export function Page({ title, subtitle, extra, crumb, children }: {
 export const WIDE_ONLY: Breakpoint[] = ['md']
 export const useWideTable = () => !!Grid.useBreakpoint().md
 
-// 长列表的表头吸在顶栏下面（顶栏高 56），往下翻也知道每列是什么
-export const STICKY_HEADER = { offsetHeader: 56 }
+// 长列表的表头吸在顶栏下面（顶栏高 60），往下翻也知道每列是什么
+export const STICKY_HEADER = { offsetHeader: 60 }
 
 // 表格卡片统一保留边缘与底部留白；不裁剪容器，避免破坏吸顶表头和焦点轮廓。
 export function TableCard({ children, toolbar, className, ...props }: Omit<CardProps, 'styles'> & { toolbar?: ReactNode }) {

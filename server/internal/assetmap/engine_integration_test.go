@@ -5,9 +5,11 @@ package assetmap
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -60,7 +62,7 @@ func TestEngineMaterializesLinksAndInventory(t *testing.T) {
 		SetRaw(json.RawMessage(`{"device":{"listening":[]}}`)))
 
 	e := &Engine{DB: client, SQL: db, Interval: time.Second}
-	e.cursor = e.loadCursor(ctx)
+	e.cursor, e.cursorID = e.loadCursor(ctx)
 	if _, err := e.batch(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +82,7 @@ func TestEngineMaterializesLinksAndInventory(t *testing.T) {
 	mustEvent(client.Event.Create().SetTs(now).SetClassUID(classNetwork).SetSource("agent").SetAssetID(web.ID).SetProcessGUID(guid).
 		SetRaw(json.RawMessage(`{"src_endpoint":{"ip":"10.0.0.1","port":40001},"dst_endpoint":{"ip":"10.0.0.2","port":5432}}`)))
 	e2 := &Engine{DB: client, SQL: db, Interval: time.Second}
-	e2.cursor = e2.loadCursor(ctx)
+	e2.cursor, e2.cursorID = e2.loadCursor(ctx)
 	if n, err := e2.batch(ctx); err != nil || n != 1 {
 		t.Fatalf("续扫应只读到新事件: n=%d err=%v", n, err)
 	}
@@ -126,7 +128,7 @@ func TestEngineInboundLinks(t *testing.T) {
 		SetRaw(json.RawMessage(`{"connection_info":{"direction":"inbound"},"src_endpoint":{"ip":"172.18.0.3","port":1},"dst_endpoint":{"ip":"172.18.0.2","port":5432}}`)).
 		SaveX(ctx)
 	e := &Engine{DB: client, SQL: db, Interval: time.Second}
-	e.cursor = e.loadCursor(ctx)
+	e.cursor, e.cursorID = e.loadCursor(ctx)
 	if _, err := e.batch(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -214,6 +216,7 @@ func TestEngineUnspecifiedSource(t *testing.T) {
 	mkLink("0.0.0.0", "110.42.47.158", 5)
 	mkLink("::", "2001:db8::9", 1)
 	mkLink("10.1.1.2", "110.42.47.158", 2)
+	mkLink("10.1.1.2", "100.100.100.200", 1) // agent 启动探阿里云实例元数据
 
 	// 新事件：旧 agent 报 0.0.0.0，新 agent 省略源地址
 	for i, src := range []string{`"ip":"0.0.0.0",`, ``} {
@@ -225,9 +228,9 @@ func TestEngineUnspecifiedSource(t *testing.T) {
 	}
 
 	e := &Engine{DB: client, SQL: db, Interval: time.Second}
-	e.cursor = e.loadCursor(ctx)
+	e.cursor, e.cursorID = e.loadCursor(ctx)
 	for range 2 { // 幂等：第二次没有脏数据
-		if err := e.dropUnspecified(ctx); err != nil {
+		if err := e.dropNonDependencies(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -259,6 +262,125 @@ func TestEngineUnspecifiedSource(t *testing.T) {
 	for _, n := range g.Graph(now).Nodes {
 		if n.Label == "0.0.0.0" || n.Label == "::" {
 			t.Errorf("图谱出现未指定地址节点: %+v", n)
+		}
+	}
+}
+
+// 详情页的连接次数：同一对端多个端口、多个进程的边合计次数，最近时间取最晚；
+// 次数只进统计不进事实，涨了也不改指纹
+func TestFactsPeerStats(t *testing.T) {
+	ctx, client := testdb.New(t)
+	group := client.Group.Create().SetName("prod").SaveX(ctx)
+	web := client.Asset.Create().SetHostname("web-01").SetIPAddrs([]string{"10.0.0.1"}).SetGroupID(group.ID).SaveX(ctx)
+	client.Asset.Create().SetHostname("db-01").SetIPAddrs([]string{"10.0.0.2"}).SetGroupID(group.ID).SaveX(ctx)
+	now := time.Now().Truncate(time.Second)
+	link := func(src, dst string, port int, count int64, at time.Time) {
+		q := client.AssetLink.Create().SetSrcIP(src).SetDstIP(dst).SetDstPort(port).SetProto("tcp").
+			SetCount(count).SetFirstSeen(at).SetLastSeen(at)
+		if src == "10.0.0.1" {
+			q.SetSrcAssetID(web.ID)
+		}
+		q.ExecX(ctx)
+	}
+	link("10.0.0.1", "10.0.0.2", 5432, 30, now.Add(-time.Hour))
+	link("10.0.0.1", "10.0.0.2", 6379, 12, now)
+	link("10.0.0.9", "10.0.0.1", 443, 7, now)
+
+	g, err := LoadGroup(ctx, client, group.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := FactsOf(ctx, client, g.World, web)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := f.OutboundStats["db-01"]; s.Count != 42 || !s.LastSeen.Equal(now) {
+		t.Fatalf("出向统计不对: %+v", f.OutboundStats)
+	}
+	if s := f.InboundStats["10.0.0.9"]; s.Count != 7 {
+		t.Fatalf("入向统计不对: %+v", f.InboundStats)
+	}
+	before := f.fingerprint()
+	client.AssetLink.Update().Where(assetlink.DstPortEQ(5432)).AddCount(1000).ExecX(ctx)
+	if f, _ = FactsOf(ctx, client, g.World, web); f.fingerprint() != before {
+		t.Fatal("连接次数变化不该改变事实指纹")
+	}
+}
+
+// 详情页不能沿用模型的40条事实限额，否则按连接次数排序会漏掉名称靠后的高频对端。
+func TestFactsDetailsRetainPeersBeyondModelLimit(t *testing.T) {
+	ctx, client := testdb.New(t)
+	host := client.Asset.Create().SetHostname("host").SetIPAddrs([]string{"10.0.0.1"}).SaveX(ctx)
+	now := time.Now()
+	for i := 100; i <= 100+maxPeers; i++ {
+		ip := fmt.Sprintf("10.2.%d.1", i)
+		count := int64(i)
+		if i == 100+maxPeers {
+			count = 100000
+		}
+		client.AssetLink.Create().SetSrcAssetID(host.ID).SetSrcIP("10.0.0.1").SetDstIP(ip).
+			SetDstPort(443).SetProto("tcp").SetCount(count).SetFirstSeen(now).SetLastSeen(now).ExecX(ctx)
+		client.AssetLink.Create().SetSrcIP(ip).SetDstIP("10.0.0.1").
+			SetDstPort(443).SetProto("tcp").SetCount(count).SetFirstSeen(now).SetLastSeen(now).ExecX(ctx)
+	}
+	world, err := LoadWorld(ctx, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := FactsOf(ctx, client, world, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Outbound) != maxPeers || len(f.Inbound) != maxPeers ||
+		len(f.OutboundDetails) != maxPeers+1 || len(f.InboundDetails) != maxPeers+1 {
+		t.Fatalf("模型/详情条数错误: %d/%d %d/%d", len(f.Outbound), len(f.OutboundDetails), len(f.Inbound), len(f.InboundDetails))
+	}
+	peer := fmt.Sprintf("10.2.%d.1", 100+maxPeers)
+	if !slices.Contains(f.OutboundDetails, peer+":443 ← ?") || !slices.Contains(f.InboundDetails, peer+" → 443") ||
+		f.OutboundStats[peer].Count != 100000 || f.InboundStats[peer].Count != 100000 {
+		t.Fatal("详情丢失最高频对端")
+	}
+	before := f.fingerprint()
+	client.AssetLink.Update().AddCount(1).ExecX(ctx)
+	after, err := FactsOf(ctx, client, world, host)
+	if err != nil || after.fingerprint() != before {
+		t.Fatalf("计数改变事实指纹: %v", err)
+	}
+}
+
+// 跨组连接：按组看对端只是不露主机名的别组资产；全部组视图里连成主机到主机的边，节点带各自的组
+func TestLoadAllJoinsGroups(t *testing.T) {
+	ctx, client := testdb.New(t)
+	now := time.Now()
+	ga := client.Group.Create().SetName("业务").SaveX(ctx)
+	gb := client.Group.Create().SetName("基础设施").SaveX(ctx)
+	app := client.Asset.Create().SetHostname("app-01").SetGroupID(ga.ID).SetIPAddrs([]string{"10.0.0.1"}).SetLastSeen(now).SaveX(ctx)
+	db := client.Asset.Create().SetHostname("db-01").SetGroupID(gb.ID).SetIPAddrs([]string{"10.0.0.2"}).SetLastSeen(now).SaveX(ctx)
+	client.AssetLink.Create().SetSrcIP("10.0.0.1").SetSrcAssetID(app.ID).SetDstIP("10.0.0.2").SetDstPort(5432).SetProto("tcp").
+		SetProcess("java").SetCount(5).SetFirstSeen(now).SetLastSeen(now).SaveX(ctx)
+
+	byGroup, err := LoadGroup(ctx, client, ga.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := byGroup.Graph(now)
+	peer := slices.IndexFunc(g.Nodes, func(n Node) bool { return n.ID == "ip:10.0.0.2" })
+	if len(g.Nodes) != 2 || peer < 0 || g.Nodes[peer].Kind != "managed" || g.Nodes[peer].Label != "10.0.0.2" {
+		t.Fatalf("按组看别组资产只露地址: %+v", g.Nodes)
+	}
+
+	all, err := LoadAll(ctx, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g = all.Graph(now)
+	if len(g.Nodes) != 2 || len(g.Edges) != 1 || g.Edges[0].From != app.ID.String() || g.Edges[0].To != db.ID.String() {
+		t.Fatalf("全部组视图应连成主机到主机: %+v %+v", g.Nodes, g.Edges)
+	}
+	for _, n := range g.Nodes {
+		want := map[string]uuid.UUID{app.ID.String(): ga.ID, db.ID.String(): gb.ID}[n.ID]
+		if n.Kind != "asset" || n.GroupID == nil || *n.GroupID != want {
+			t.Fatalf("节点应是带自身组的资产: %+v", n)
 		}
 	}
 }

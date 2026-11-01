@@ -39,12 +39,15 @@ pre{background:#f6f8fa;padding:1em;overflow-x:auto}pre code{background:none;padd
 .level{display:inline-block;padding:0 .5em;border-radius:4px;font-size:90%;color:#fff}
 .level-ok{background:#1a7f37}.level-attention{background:#9a6700}.level-urgent{background:#cf222e}
 .summary{border-left:4px solid #0969da;background:#f6f8fa;padding:.6em 1em;margin:1em 0;font-weight:600}
+details.evidence-fold{margin-top:1.5em;border:1px solid #d0d7de;border-radius:6px;padding:.6em 1em;background:#fafbfc}
+details.evidence-fold>summary{cursor:pointer;font-weight:600;color:#0969da;user-select:none}
 @media print{body{margin:0;max-width:none}pre{white-space:pre-wrap}}
 </style></head><body>
 <h1>{{.Title}}</h1>
 <p class="meta">{{with .LevelText}}<span class="level level-{{$.Level}}">{{.}}</span> {{end}}{{with .Source}}{{.}} · {{end}}生成时间 {{.CreatedAt.Format "2006-01-02 15:04:05"}}</p>
 {{with .Summary}}<p class="summary">{{.}}</p>{{end}}
 {{.Body}}
+{{with .FoldBody}}<details class="evidence-fold"><summary>🔍 展开详细取证、推断与未验证边界</summary>{{.}}</details>{{end}}
 </body></html>
 `))
 
@@ -58,16 +61,23 @@ var levelText = map[string]string{"ok": "无需处理", "attention": "需处理"
 
 // HTML 渲染成独立页面。
 func HTML(p Page) ([]byte, error) {
-	var body bytes.Buffer
-	if err := md.Convert([]byte(stripTitle(p.Markdown)), &body); err != nil {
+	topMD, foldMD := SplitFold(p.Markdown)
+	var body, foldBody bytes.Buffer
+	if err := md.Convert([]byte(topMD), &body); err != nil {
 		return nil, err
+	}
+	if foldMD != "" {
+		if err := md.Convert([]byte(foldMD), &foldBody); err != nil {
+			return nil, err
+		}
 	}
 	var out bytes.Buffer
 	err := page.Execute(&out, struct {
 		Page
 		LevelText string
 		Body      template.HTML // goldmark 已转义，原始 HTML 被省略
-	}{p, levelText[p.Level], template.HTML(body.String())})
+		FoldBody  template.HTML
+	}{p, levelText[p.Level], template.HTML(body.String()), template.HTML(foldBody.String())})
 	return out.Bytes(), err
 }
 
@@ -95,7 +105,8 @@ func PDF(ctx context.Context, html []byte) ([]byte, error) {
 	}
 	defer os.RemoveAll(dir)
 	in, out := filepath.Join(dir, "report.html"), filepath.Join(dir, "report.pdf")
-	if err := os.WriteFile(in, html, 0o600); err != nil {
+	printHTML := bytes.ReplaceAll(html, []byte(`<details class="evidence-fold">`), []byte(`<details class="evidence-fold" open>`))
+	if err := os.WriteFile(in, printHTML, 0o600); err != nil {
 		return nil, err
 	}
 

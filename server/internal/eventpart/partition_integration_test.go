@@ -166,6 +166,12 @@ func TestRetireKeepsEvidenceAndDropsTheRest(t *testing.T) {
 	if partitionOf(t, db, stray.ID) != eventpart.DefaultName {
 		t.Fatal("没有日分区的历史事件应在默认分区")
 	}
+	for _, ev := range []*ent.Event{plain, alerted} {
+		client.Event.UpdateOneID(ev.ID).SetClassUID(4001).SaveX(ctx)
+		if _, err := db.ExecContext(ctx, `INSERT INTO assetmap_queue(event_id,event_ts) VALUES($1,$2)`, ev.ID, ev.Ts); err != nil {
+			t.Fatal(err)
+		}
+	}
 	alert := client.Alert.Create().SetTs(alerted.Ts).SetRuleID("r").SetSeverity(3).SetEventID(alerted.ID).SaveX(ctx)
 	group := uuid.New()
 	for _, stmt := range []struct {
@@ -200,6 +206,9 @@ func TestRetireKeepsEvidenceAndDropsTheRest(t *testing.T) {
 	}
 	if got := partitionOf(t, db, kept.ID); got != eventpart.DailyName(d10.AddDate(0, 0, 2)) {
 		t.Fatalf("未到期分区不应退役: %q", got)
+	}
+	if exists(t, db, `SELECT 1 FROM assetmap_queue WHERE event_id=$1`, plain.ID) || !exists(t, db, `SELECT 1 FROM assetmap_queue WHERE event_id=$1`, alerted.ID) {
+		t.Fatal("退役应清理被删除事件的图谱待办，并保留归档事件待办")
 	}
 	if exists(t, db, `SELECT 1 FROM temporal_matches WHERE event_id = $1`, plain.ID) || !exists(t, db, `SELECT 1 FROM temporal_matches WHERE event_id = $1`, alerted.ID) {
 		t.Fatal("派生状态应只随被删事件清理")
@@ -269,5 +278,60 @@ func TestReleaseTriggersReplaceForeignKeys(t *testing.T) {
 	}
 	if exists(t, db, `SELECT 1 FROM temporal_evidence WHERE event_id = $1`, evidence.ID) {
 		t.Fatal("证据应随锚点级联删除")
+	}
+}
+
+// 父表上一直有读事务时，退役不排队等锁：等待期间别的写入照常进行，读一结束就拿到锁完成；
+// 超过尝试时长明确报错，不留半截状态。
+func TestRetireWaitsForParentLockWithoutQueueing(t *testing.T) {
+	ctx, client, db := open(t)
+	d10 := time.Date(2020, 1, 10, 0, 0, 0, 0, time.UTC)
+	if _, err := eventpart.EnsureDays(ctx, db, eventpart.Parent, d10, 0); err != nil {
+		t.Fatal(err)
+	}
+	old := newEvent(t, ctx, client, d10.Add(time.Hour))
+
+	hold := func() *sql.Tx {
+		reader, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := reader.ExecContext(ctx, `SELECT count(*) FROM events`); err != nil {
+			t.Fatal(err)
+		}
+		return reader
+	}
+
+	defer eventpart.SetParentLockWait(200 * time.Millisecond)()
+	reader := hold()
+	if _, _, err := eventpart.Retire(ctx, db, d10.AddDate(0, 0, 1)); err == nil {
+		t.Fatal("父表一直被占用时退役应在尝试时长后报错")
+	}
+	_ = reader.Rollback()
+	if !exists(t, db, `SELECT 1 FROM events WHERE id = $1`, old.ID) {
+		t.Fatal("失败的退役不应删掉任何事件")
+	}
+
+	eventpart.SetParentLockWait(10 * time.Second)
+	reader = hold()
+	done := make(chan error, 1)
+	go func() { _, _, err := eventpart.Retire(ctx, db, d10.AddDate(0, 0, 1)); done <- err }()
+	time.Sleep(500 * time.Millisecond)
+	start := time.Now()
+	newEvent(t, ctx, client, time.Now())
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("退役等锁期间写入被堵了 %s", waited)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("读事务没结束，退役不应完成: %v", err)
+	default:
+	}
+	_ = reader.Rollback()
+	if err := <-done; err != nil {
+		t.Fatalf("读事务结束后退役应完成: %v", err)
+	}
+	if exists(t, db, `SELECT 1 FROM events WHERE id = $1`, old.ID) {
+		t.Fatal("无引用的过期事件应随分区退役删掉")
 	}
 }

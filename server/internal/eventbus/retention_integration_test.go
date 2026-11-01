@@ -84,7 +84,7 @@ func (p *heldProcessor) Process(context.Context, ingest.Envelope) error {
 func TestQueueFullPreservesAcknowledgedEvents(t *testing.T) {
 	url := isolatedNATS(t)
 	processor := &heldProcessor{}
-	bus, err := NewJetStream(url, "retention-test", 1, 1, 2048, 0, processor, testMetrics{})
+	bus, err := NewJetStream(url, "retention-test", 1, 1, 2048, 0, processor, testMetrics{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestQueueFullPreservesAcknowledgedEvents(t *testing.T) {
 			t.Fatal("已确认消息发生变化", err)
 		}
 	}
-	if other, err := NewJetStream(url, "shrink-test", 1, 1, 1, 0, processor, testMetrics{}); err == nil {
+	if other, err := NewJetStream(url, "shrink-test", 1, 1, 1, 0, processor, testMetrics{}, 1); err == nil {
 		other.Close()
 		t.Fatal("接受会丢弃积压的缩容")
 	}
@@ -172,7 +172,7 @@ func TestQueueMigratesOldRetentionWithoutDroppingBacklog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bus, err := NewJetStream(url, "migration", 1, 1, 4096, 0, &heldProcessor{}, testMetrics{})
+	bus, err := NewJetStream(url, "migration", 1, 1, 4096, 0, &heldProcessor{}, testMetrics{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestQueueMigratesOldRetentionWithoutDroppingBacklog(t *testing.T) {
 }
 
 func TestQueueAcceptsAgentSizedEvent(t *testing.T) {
-	bus, err := NewJetStream(isolatedNATS(t), "large-event", 1, 1, 8<<20, 0, &heldProcessor{}, testMetrics{})
+	bus, err := NewJetStream(isolatedNATS(t), "large-event", 1, 1, 8<<20, 0, &heldProcessor{}, testMetrics{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

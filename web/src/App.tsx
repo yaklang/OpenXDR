@@ -31,6 +31,17 @@ function NotFound() {
   )
 }
 
+function RouteError() {
+  const { t } = useI18n()
+  return (
+    <Result status="error" title={t('pageErrorTitle')} subTitle={t('pageErrorHint')}
+      extra={[
+        <Button key="reload" type="primary" onClick={() => window.location.reload()}>{t('reloadPage')}</Button>,
+        <Button key="home" href="/chat">{t('backHome')}</Button>,
+      ]} />
+  )
+}
+
 // 管理页：后端同样拦着，这里只是别让人点进一个满屏 403 的页面
 function AdminOnly({ children }: { children: ReactNode }) {
   const { t } = useI18n()
@@ -41,9 +52,15 @@ function AdminOnly({ children }: { children: ReactNode }) {
 // 页面按路由懒加载：首屏只带外壳与登录页，其余页面进入时再取
 type Pages = Record<string, ComponentType>
 const page = (load: () => Promise<Pages>, name: string, admin = false) => ({
+  errorElement: <RouteError />,
   lazy: async () => {
-    const C = (await load())[name]
-    return { Component: admin ? () => <AdminOnly><C /></AdminOnly> : C }
+    try {
+      const C = (await load())[name]
+      return { Component: admin ? () => <AdminOnly><C /></AdminOnly> : C }
+    } catch (error) {
+      console.error('页面资源加载失败', error)
+      return { Component: RouteError }
+    }
   },
 })
 
@@ -51,6 +68,7 @@ const router = createBrowserRouter([
   {
     path: '/',
     element: <Layout />,
+    errorElement: <RouteError />,
     // 首屏懒加载页面时的占位
     hydrateFallbackElement: <Spin fullscreen />,
     children: [

@@ -52,7 +52,7 @@ func (s *stubLLM) llm(t *testing.T) *LLM {
 			return
 		}
 		resp, _ := json.Marshal(map[string]any{"choices": []map[string]any{
-			{"message": map[string]any{"role": "assistant", "content": `{"verdict":"benign","confidence":80,"summary":"系统例行变更"}`}},
+			{"message": map[string]any{"role": "assistant", "content": `{"verdict":"benign","confidence":80,"action_codes":["monitor"],"summary":"系统例行变更"}`}},
 		}})
 		w.Write(resp)
 	}))
@@ -160,7 +160,7 @@ func TestRetriageCooldown(t *testing.T) {
 		t.Errorf("重研判后应清待重研判、计数加一、记研判时刻：%+v", got)
 	}
 	c := stub.contexts[0]
-	for _, want := range []string{"重新研判（此前已研判 1 次）", "上次的结论", "上次研判之后新增的告警", "rule-a：2 条告警", "rule-b：1 条告警"} {
+	for _, want := range []string{"重新研判（此前已研判 1 次）", "上次摘要是模型判断，不是独立证据或人工确认", "上次的结论", "上次研判之后新增的告警", "rule-a：2 条告警", "rule-b：1 条告警"} {
 		if !strings.Contains(c, want) {
 			t.Errorf("重研判上下文缺少 %q：\n%s", want, c)
 		}

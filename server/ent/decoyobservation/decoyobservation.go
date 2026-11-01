@@ -23,6 +23,18 @@ const (
 	FieldGeneration = "generation"
 	// FieldReceivedAt holds the string denoting the received_at field in the database.
 	FieldReceivedAt = "received_at"
+	// FieldRevisionID holds the string denoting the revision_id field in the database.
+	FieldRevisionID = "revision_id"
+	// FieldSessionID holds the string denoting the session_id field in the database.
+	FieldSessionID = "session_id"
+	// FieldTriggerKey holds the string denoting the trigger_key field in the database.
+	FieldTriggerKey = "trigger_key"
+	// FieldPayloadHash holds the string denoting the payload_hash field in the database.
+	FieldPayloadHash = "payload_hash"
+	// FieldOccurredAt holds the string denoting the occurred_at field in the database.
+	FieldOccurredAt = "occurred_at"
+	// FieldDetails holds the string denoting the details field in the database.
+	FieldDetails = "details"
 	// Table holds the table name of the decoyobservation in the database.
 	Table = "decoy_observations"
 )
@@ -35,6 +47,12 @@ var Columns = []string{
 	FieldKind,
 	FieldGeneration,
 	FieldReceivedAt,
+	FieldRevisionID,
+	FieldSessionID,
+	FieldTriggerKey,
+	FieldPayloadHash,
+	FieldOccurredAt,
+	FieldDetails,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -52,6 +70,12 @@ var (
 	DefaultGeneration string
 	// DefaultReceivedAt holds the default value on creation for the "received_at" field.
 	DefaultReceivedAt func() time.Time
+	// DefaultSessionID holds the default value on creation for the "session_id" field.
+	DefaultSessionID string
+	// DefaultTriggerKey holds the default value on creation for the "trigger_key" field.
+	DefaultTriggerKey string
+	// DefaultPayloadHash holds the default value on creation for the "payload_hash" field.
+	DefaultPayloadHash string
 )
 
 // OrderOption defines the ordering options for the DecoyObservation queries.
@@ -85,4 +109,29 @@ func ByGeneration(opts ...sql.OrderTermOption) OrderOption {
 // ByReceivedAt orders the results by the received_at field.
 func ByReceivedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldReceivedAt, opts...).ToFunc()
+}
+
+// ByRevisionID orders the results by the revision_id field.
+func ByRevisionID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRevisionID, opts...).ToFunc()
+}
+
+// BySessionID orders the results by the session_id field.
+func BySessionID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSessionID, opts...).ToFunc()
+}
+
+// ByTriggerKey orders the results by the trigger_key field.
+func ByTriggerKey(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTriggerKey, opts...).ToFunc()
+}
+
+// ByPayloadHash orders the results by the payload_hash field.
+func ByPayloadHash(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPayloadHash, opts...).ToFunc()
+}
+
+// ByOccurredAt orders the results by the occurred_at field.
+func ByOccurredAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldOccurredAt, opts...).ToFunc()
 }

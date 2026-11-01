@@ -2,6 +2,8 @@ package automation
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"net/netip"
 	"sort"
 	"time"
@@ -154,7 +156,7 @@ func classify(a *ent.Alert, maxSev map[uuid.UUID]int16) conclusion {
 }
 
 // Assess 窗口内各登录身份的表现。group 为空时看全部组
-func Assess(ctx context.Context, db *ent.Client, c Config, group *uuid.UUID, now time.Time) ([]*Assessment, []fact, error) {
+func Assess(ctx context.Context, db *ent.Client, sqlDB *sql.DB, c Config, group *uuid.UUID, now time.Time) ([]*Assessment, []fact, error) {
 	since := now.AddDate(0, 0, -c.WindowDays)
 	lq := db.SSHLogin.Query().Where(sshlogin.TsGT(since))
 	if group != nil {
@@ -164,7 +166,7 @@ func Assess(ctx context.Context, db *ent.Client, c Config, group *uuid.UUID, now
 	if err != nil {
 		return nil, nil, err
 	}
-	facts, err := loadFacts(ctx, db, group, now.AddDate(0, 0, -max(c.WindowDays, c.TTLDays)))
+	facts, err := loadFacts(ctx, db, sqlDB, group, now.AddDate(0, 0, -max(c.WindowDays, c.TTLDays)))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -288,16 +290,19 @@ func (c Config) reason(a *Assessment) string {
 
 // loadFacts 窗口内 agent 事件触发、带登录归属的告警，连同它所在事件的结论。
 // 告警表很小，按资产与时间取出后在内存里筛登录归属，比按 JSON 条件扫事件便宜得多
-func loadFacts(ctx context.Context, db *ent.Client, group *uuid.UUID, since time.Time) ([]fact, error) {
+func loadFacts(ctx context.Context, db *ent.Client, sqlDB *sql.DB, group *uuid.UUID, since time.Time) ([]fact, error) {
 	q := db.Alert.Query().Where(alert.TsGT(since), alert.CommandIDIsNil(), alert.EventIDNotNil(), alert.AssetIDNotNil())
 	if group != nil {
 		q = q.Where(alert.HasAssetWith(asset.GroupIDEQ(*group)))
 	}
 	alerts, err := q.
-		WithEvent(func(q *ent.EventQuery) { q.Select(event.FieldID, event.FieldSource, event.FieldRaw) }).
 		WithIncident().
 		WithAsset(func(q *ent.AssetQuery) { q.Select(asset.FieldID, asset.FieldGroupID) }).
 		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	events, err := alertEvents(ctx, db, sqlDB, alerts)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +328,7 @@ func loadFacts(ctx context.Context, db *ent.Client, group *uuid.UUID, since time
 	}
 	var out []fact
 	for _, a := range alerts {
-		ev, as := a.Edges.Event, a.Edges.Asset
+		ev, as := events[*a.EventID], a.Edges.Asset
 		if ev == nil || as == nil || as.GroupID == nil || ev.Source != "agent" {
 			continue
 		}
@@ -333,6 +338,53 @@ func loadFacts(ctx context.Context, db *ent.Client, group *uuid.UUID, since time
 		}
 		out = append(out, fact{group: *as.GroupID, login: login, ts: a.Ts, source: a.AutomationID,
 			incident: a.IncidentID, verdict: classify(a, maxSev)})
+	}
+	return out, nil
+}
+
+// alertEvents 取告警所在事件的来源与原文。events 按天分区，只按 id 查要在每个分区上各探一次（生产 41 个分区、
+// 几千条告警要 3–6 秒，还会挡住分区退役拿锁）；告警时间就是事件时间，按 (id, ts) 逐对查只碰一个分区。
+// 个别对不上时间的（告警时间取自别处的路径）再按 id 补查
+func alertEvents(ctx context.Context, db *ent.Client, sqlDB *sql.DB, alerts []*ent.Alert) (map[uuid.UUID]*ent.Event, error) {
+	ids := make([]uuid.UUID, len(alerts))
+	tss := make([]time.Time, len(alerts))
+	for i, a := range alerts {
+		ids[i], tss[i] = *a.EventID, a.Ts
+	}
+	rows, err := sqlDB.QueryContext(ctx, `SELECT k.id, e.source, e.raw FROM unnest($1::uuid[], $2::timestamptz[]) AS k(id, ts)
+ JOIN LATERAL (SELECT source, raw FROM events WHERE id = k.id AND ts = k.ts) e ON true`, ids, tss)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]*ent.Event{}
+	for rows.Next() {
+		ev := &ent.Event{}
+		var raw []byte
+		if err := rows.Scan(&ev.ID, &ev.Source, &raw); err != nil {
+			return nil, err
+		}
+		ev.Raw = json.RawMessage(raw)
+		out[ev.ID] = ev
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var missing []uuid.UUID
+	for _, id := range ids {
+		if out[id] == nil {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return out, nil
+	}
+	rest, err := db.Event.Query().Where(event.IDIn(missing...)).Select(event.FieldID, event.FieldSource, event.FieldRaw).All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, ev := range rest {
+		out[ev.ID] = ev
 	}
 	return out, nil
 }

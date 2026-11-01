@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"openxdr/server/deception/sdk"
 	"path"
 	"regexp"
 	"strings"
@@ -25,7 +26,7 @@ func ServiceUnit(platform, deployment, kind, listenHost, fileRoot string) (strin
 	if net.ParseIP(listenHost) == nil {
 		return "", fmt.Errorf("监听地址必须为 IP")
 	}
-	if _, err = NewClient(strings.TrimSuffix(platform, "/"), deployment, strings.Repeat("0", 64)); err != nil {
+	if _, err = sdk.NewClient(strings.TrimSuffix(platform, "/"), deployment, strings.Repeat("0", 64)); err != nil {
 		return "", err
 	}
 	base := "/etc/aidr-decoy/" + deployment

@@ -40,7 +40,7 @@ func (testMetrics) SetQueueReplicasUnhealthy(int)  {}
 // 流恢复后照常写入；一直不恢复则超限后原样报错。
 func TestJetStreamPublishAbsorbsLeaderGap(t *testing.T) {
 	url := isolatedNATS(t)
-	bus, err := NewJetStream(url, "integration", 1, 1, 1<<30, 0, &testProcessor{done: make(chan struct{})}, testMetrics{})
+	bus, err := NewJetStream(url, "integration", 1, 1, 1<<30, 0, &testProcessor{done: make(chan struct{})}, testMetrics{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestJetStreamPublishAbsorbsLeaderGap(t *testing.T) {
 func TestJetStreamPublishConsumeAndDeduplicate(t *testing.T) {
 	url := isolatedNATS(t)
 	p := &testProcessor{done: make(chan struct{})}
-	bus, err := NewJetStream(url, "integration", 4, 1, 1<<30, 0, p, testMetrics{})
+	bus, err := NewJetStream(url, "integration", 4, 1, 1<<30, 0, p, testMetrics{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,5 +102,38 @@ func TestJetStreamPublishConsumeAndDeduplicate(t *testing.T) {
 	time.Sleep(250 * time.Millisecond)
 	if got := p.seen.Load(); got != 1 {
 		t.Fatalf("相同 Msg-Id 应只消费一次，实际 %d", got)
+	}
+}
+
+func (m testMetrics) SetQueueSampleTimestamp(string, float64) {}
+
+func TestJetStreamMonitorSample(t *testing.T) {
+	nc, err := nats.Connect(isolatedNATS(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := js.AddStream(&nats.StreamConfig{Name: streamName, Subjects: []string{subjectAll}, Storage: nats.FileStorage}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := js.AddConsumer(streamName, &nats.ConsumerConfig{Durable: "ingest-00", FilterSubject: "openxdr.events.00", AckPolicy: nats.AckExplicitPolicy}); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if _, err := js.Publish("openxdr.events.00", []byte("test")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := &monitorMetrics{}
+	b := &JetStream{js: js, shards: 1, replicas: 1, metrics: m, monitorEnd: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	b.sampleQueue(ctx)
+	if m.pending != 3 || m.unhealthy != 0 || m.sampled == 0 {
+		t.Fatalf("真实 JetStream 采样错误: %+v", m)
 	}
 }

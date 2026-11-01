@@ -11,7 +11,7 @@ import { HostLink } from '../components/HostLink'
 import { AccountKindTag, AccountName, BasisTag, Evidence, IdentityKindTag, LoginSummary } from '../components/IdentityParts'
 import { accountLabel, linkSource } from '../components/identityText'
 import { LoadError } from '../components/LoadError'
-import { Page } from '../components/Page'
+import { Page, TableCard } from '../components/Page'
 import { errText, fmtTime } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
 
@@ -62,8 +62,8 @@ export function IdentityDetailPage() {
 
   return (
     <Page title={title} crumb={title} subtitle={t('identityDetailHint')}>
-      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-        <Card size="small">
+      <Space orientation="vertical" size={20} style={{ width: '100%' }}>
+        <Card>
           <Descriptions column={{ xs: 1, md: 3 }} size="small" items={[
             { key: 'kind', label: t('identityKind'), children: <IdentityKindTag kind={identity.kind} /> },
             { key: 'anchor', label: t('identityAnchor'), children: <Space size={4} wrap><AccountKindTag kind={identity.anchorKind} />{host(identity)}</Space> },
@@ -72,7 +72,7 @@ export function IdentityDetailPage() {
           ]} />
         </Card>
 
-        <Card size="small" title={t('identityLinkedAccounts')} extra={<Select aria-label={t('thTime')} value={hours} style={{ width: 150 }} onChange={setHours}
+        <TableCard title={t('identityLinkedAccounts')} extra={<Select aria-label={t('thTime')} value={hours} style={{ width: 150 }} onChange={setHours}
           options={[24, 72, 168, 720].map(n => ({ value: n, label: t('lastHours', { n }) }))} />}>
           {truncated && <Alert type="info" showIcon title={t('identityAccountsTruncated')} style={{ marginBottom: 12 }} />}
           <Table<IdentityAccount> size="small" rowKey="id" dataSource={accounts} scroll={{ x: 820 }}
@@ -98,9 +98,9 @@ export function IdentityDetailPage() {
               { key: 'linked', label: t('identityLinkedAt'), children: fmtTime(a.linkedAt) },
               { key: 'evidence', label: t('identityEvidence'), children: <Evidence value={a.evidence} /> },
             ]} /> }} />
-        </Card>
+        </TableCard>
 
-        <Card size="small" title={t('identityCandidates')}>
+        <TableCard title={t('identityCandidates')}>
           <Typography.Paragraph type="secondary">{t('identityCandidatesGuide')}</Typography.Paragraph>
           {candidates.isError ? <LoadError error={candidates.error} onRetry={() => candidates.refetch()} /> : <>
             {candidates.data?.truncated && <Alert type="info" showIcon title={t('identityCandidatesTruncatedN')} style={{ marginBottom: 12 }} />}
@@ -137,9 +137,9 @@ export function IdentityDetailPage() {
                 }]),
               ]} />
           </>}
-        </Card>
+        </TableCard>
 
-        <Card size="small" title={t('identityHistory')}>
+        <TableCard title={t('identityHistory')}>
           <Table<IdentityLinkHistory> size="small" rowKey="id" dataSource={history} scroll={{ x: 820 }}
             pagination={{ pageSize: 10, hideOnSinglePage: true, showSizeChanger: false }}
             locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('identityHistoryEmpty')} /> }}
@@ -151,7 +151,7 @@ export function IdentityDetailPage() {
               { title: t('identityRevokedAt'), key: 'revoked', width: 260, render: (_, h) => <>{fmtTime(h.revokedAt)} · {linkSource(h.revokedBy, t)} · {h.revokeReason ? t(REVOKE_REASON[h.revokeReason] ?? 'identityUnknown') : '—'}</> },
             ]}
             expandable={{ expandedRowRender: h => <Evidence value={h.evidence} /> }} />
-        </Card>
+        </TableCard>
       </Space>
     </Page>
   )

@@ -28,7 +28,7 @@ const columnDDL = `id uuid NOT NULL, ts timestamptz NOT NULL, class_uid bigint N
 var indexes = []struct{ name, method string }{
 	{"event_ts", "btree (ts)"},
 	{"event_asset_id_ts", "btree (asset_id, ts)"},
-	{"event_process_guid", "btree (process_guid)"},
+	{"event_process_creation_guid", "btree (process_guid) WHERE class_uid = 1007 AND process_guid IS NOT NULL"},
 	{"event_process_guid_ts", "btree (process_guid, ts) WHERE process_guid IS NOT NULL"},
 	{"event_parent_process_guid", "btree (parent_process_guid)"},
 	{"event_conn_tuple_ts", "btree (conn_tuple, ts) WHERE conn_tuple IS NOT NULL"},
@@ -156,9 +156,12 @@ const releaseFunctions = `CREATE OR REPLACE FUNCTION openxdr_events_release() RE
 BEGIN
 ` + skipWhenMoving + ` IF to_regclass('temporal_matches') IS NOT NULL THEN DELETE FROM temporal_matches WHERE event_id = OLD.id; END IF;
  IF to_regclass('temporal_candidates') IS NOT NULL THEN DELETE FROM temporal_candidates WHERE event_id = OLD.id; END IF;
- IF to_regclass('temporal_evaluation_gaps') IS NOT NULL THEN DELETE FROM temporal_evaluation_gaps WHERE event_id = OLD.id; END IF;
+ -- temporal_evaluation_gaps 不在这里删：它是诊断记录，按自身 created_at 的独立保留期
+ -- 由 janitor 的 temporal.PruneGaps 清理（TEMPORAL_GAP_RETENTION_DAYS），与事件的生命
+ -- 周期脱钩——swap/retire/逐行删除都不再连带删除尚未到期的诊断缺口。
  IF to_regclass('temporal_detections') IS NOT NULL THEN DELETE FROM temporal_detections WHERE anchor_id = OLD.id; END IF;
  IF to_regclass('identity_observations') IS NOT NULL THEN DELETE FROM identity_observations WHERE event_id = OLD.id; END IF;
+ IF OLD.class_uid IN (4001,5001,5020) AND to_regclass('assetmap_queue') IS NOT NULL THEN DELETE FROM assetmap_queue WHERE event_id = OLD.id; END IF;
  IF to_regclass('identity_local_snapshots') IS NOT NULL THEN DELETE FROM identity_local_snapshots WHERE event_id = OLD.id; END IF;
  RETURN NULL;
 END $$;
@@ -174,14 +177,19 @@ END $$`
 var derived = []struct{ table, column string }{
 	{"temporal_matches", "event_id"},
 	{"temporal_candidates", "event_id"},
-	{"temporal_evaluation_gaps", "event_id"},
+	// temporal_evaluation_gaps 不在派生清理清单里：诊断记录按自身 created_at 的独立保留期
+	// 由 temporal.PruneGaps 清理（TEMPORAL_GAP_RETENTION_DAYS），与事件是否仍在分区/热表
+	// 脱钩（swap 移走、retire 差集、restore 后再清理都连带不到它）。资产删除的
+	// ON DELETE CASCADE 是唯一例外，属资产生命周期。
 	{"temporal_detections", "anchor_id"},
 	{"identity_observations", "event_id"},
 	{"identity_local_snapshots", "event_id"},
+	{"assetmap_queue", "event_id"},
 }
 
-// pinnedIDs 是不随保留期删除的事件：告警、时序证据与已出告警的时序锚点（与 janitor 逐行清理同一口径）。
-const pinnedIDs = `SELECT event_id FROM alerts WHERE event_id IS NOT NULL
+// PinnedIDs 是不随保留期删除的事件：告警、时序证据与已出告警的时序锚点（与 janitor 逐行清理同一口径）。
+// 导出给冷归档（eventarchive）复用同一口径：被钉住的事件不删，也不进冷块。
+const PinnedIDs = `SELECT event_id FROM alerts WHERE event_id IS NOT NULL
  UNION ALL SELECT event_id FROM temporal_evidence
  UNION ALL SELECT anchor_id FROM temporal_detections WHERE alert_id IS NOT NULL`
 

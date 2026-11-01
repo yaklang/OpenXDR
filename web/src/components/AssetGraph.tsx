@@ -158,13 +158,13 @@ export function AssetGraph({ graph, search, selected, onSelect, height = 640 }: 
   const edgeColor = token.colorTextQuaternary
 
   return (
-    <div ref={box} style={{ position: 'relative', height, overflow: 'hidden', cursor: 'grab', touchAction: 'none' }}
+    <div ref={box} style={{ position: 'relative', height, overflow: 'hidden', cursor: 'grab', touchAction: 'none', borderRadius: 18 }}
       onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={() => { drag.current = null }}>
       <svg width="100%" height={height} role="img" aria-label={t('navAssetMap')}>
         <g transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
           {lanes.map(l => (
             <g key={l.kind} pointerEvents="none">
-              <rect x={l.x - l.w / 2} y={laneTop} width={l.w} height={area.h - 6} rx={16}
+              <rect x={l.x - l.w / 2} y={laneTop} width={l.w} height={area.h - 6} rx={20}
                 fill={l.kind === 'wan' ? token.colorFillTertiary : zoneColor(l.kind)} fillOpacity={l.kind === 'wan' ? 0.5 : 0.05}
                 stroke={l.kind === 'wan' ? token.colorBorderSecondary : zoneColor(l.kind)} strokeOpacity={0.25} strokeDasharray="4 4" />
               <text x={l.x} y={laneTop + 22} textAnchor="middle" fontSize={12} fill={token.colorTextTertiary} letterSpacing={2}>{t(l.key)}</text>

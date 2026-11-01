@@ -3,9 +3,11 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +42,7 @@ func TestTrustedSourcesAPI(t *testing.T) {
 	client.Event.Create().SetTs(time.Now().Add(-time.Hour)).SetClassUID(3002).SetSource("agent").SetAssetID(host.ID).
 		SetRaw(json.RawMessage(`{"status_id":1}`)).SaveX(ctx)
 
-	h := Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
+	h := Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
 	asAnalyst := httptest.NewServer(as(analyst, h))
 	t.Cleanup(asAnalyst.Close)
 	asLead := httptest.NewServer(as(lead, h))
@@ -115,7 +117,14 @@ func TestTrustedSourcesAPI(t *testing.T) {
 	// 候选：来自后台收进 ssh_logins 的核对过出处的登录，标出已被刚登记的来源覆盖
 	client.SSHLogin.Create().SetID(uuid.New()).SetTs(time.Now().Add(-time.Hour)).SetGroupID(g.ID).SetAssetID(host.ID).
 		SetLoginUser("root").SetSrcIP("10.1.1.35").SetAuthMethod("publickey").SetKeyFp(fp).SetKeyType("ED25519").ExecX(ctx)
-	cresp, err := http.Get(asLead.URL + "/api/trusted-sources/candidates?groupId=" + g.ID.String())
+	raw, err := sql.Open("pgx", os.Getenv("INTEGRATION_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { raw.Close() })
+	candidates := httptest.NewServer(as(lead, TrustedCandidates(client, raw)))
+	t.Cleanup(candidates.Close)
+	cresp, err := http.Get(candidates.URL + "/api/trusted-sources/candidates?groupId=" + g.ID.String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,12 +148,15 @@ func TestTrustedSourcesAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eresp.Body.Close()
-	var events []eventRow
+	// /api/events 是对象契约 {items, truncated, coverage}：取 items 再断言标注
+	var events struct {
+		Items []eventRow `json:"items"`
+	}
 	if err := json.NewDecoder(eresp.Body).Decode(&events); err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].Automation == nil || events[0].Automation.Name != "Termix" {
-		t.Fatalf("事件应标注可信来源: %+v", events)
+	if len(events.Items) != 1 || events.Items[0].Automation == nil || events.Items[0].Automation.Name != "Termix" {
+		t.Fatalf("事件应标注可信来源: %+v", events.Items)
 	}
 
 	revoke := "/api/trusted-sources/" + created.ID.String() + "/revoke"

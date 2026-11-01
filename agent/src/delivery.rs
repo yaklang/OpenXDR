@@ -191,17 +191,22 @@ pub async fn upload(
             ));
         }
         let sequence = batch.sequence;
-        let mut request = tonic::Request::new(tokio_stream::iter(batch.events));
-        request.set_timeout(Duration::from_secs(30));
-        let ack = tokio::time::timeout(Duration::from_secs(35), client.report_events(request))
-            .await
-            .map_err(io::Error::other)?
-            .map_err(io::Error::other)?
-            .into_inner();
-        access(queue, move |spool| {
-            spool.acknowledge(sequence, ack.received)
-        })
-        .await?;
+        // 落盘批次可能有 500 条；逐条持久入队时整批容易超时。分段传输，
+        // 所有分段确认后才删落盘批次，失败重放仍保留原事件身份。
+        for events in batch.events.chunks(64) {
+            let mut request = tonic::Request::new(tokio_stream::iter(events.to_vec()));
+            request.set_timeout(Duration::from_secs(30));
+            let ack = tokio::time::timeout(Duration::from_secs(35), client.report_events(request))
+                .await
+                .map_err(io::Error::other)?
+                .map_err(io::Error::other)?
+                .into_inner();
+            if ack.received != events.len() as u64 {
+                return Err(io::Error::other("分段确认数量不符，保留原批次"));
+            }
+        }
+        let received = batch.events.len() as u64;
+        access(queue, move |spool| spool.acknowledge(sequence, received)).await?;
     }
 }
 
@@ -214,6 +219,7 @@ mod tests {
     use tonic::{Request, Response, Status, Streaming};
 
     struct Server {
+        short_ack: bool,
         calls: Arc<AtomicUsize>,
         seen: Arc<Mutex<Vec<Vec<pb::AgentEvent>>>>,
     }
@@ -249,7 +255,12 @@ mod tests {
             }
             let count = events.len() as u64;
             self.seen.lock().unwrap().push(events);
-            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                if self.short_ack {
+                    return Ok(Response::new(pb::ReportAck {
+                        received: count - 1,
+                    }));
+                }
                 return Err(Status::unavailable("模拟接收成功后 ACK 丢失"));
             }
             Ok(Response::new(pb::ReportAck { received: count }))
@@ -322,18 +333,29 @@ mod tests {
 
     #[tokio::test]
     async fn lost_ack_replays_identical_batch_after_restart() {
+        replay_after_failed_chunk(false).await;
+    }
+
+    #[tokio::test]
+    async fn short_chunk_ack_preserves_entire_batch_after_restart() {
+        replay_after_failed_chunk(true).await;
+    }
+
+    async fn replay_after_failed_chunk(short_ack: bool) {
         let dir =
             std::env::temp_dir().join(format!("openxdr-delivery-test-{}", uuid::Uuid::new_v4()));
         let queue = Queue::new(
             Spool::open(&dir, 8 << 20).unwrap(),
             crate::health::Health::new(),
         );
-        let events = vec![pb::AgentEvent {
-            agent_id: "identity".into(),
-            ts_unix_ns: 123456,
-            raw_json: "{}".into(),
-            ..Default::default()
-        }];
+        let events: Vec<_> = (0..130)
+            .map(|i| pb::AgentEvent {
+                agent_id: "identity".into(),
+                ts_unix_ns: 123456 + i,
+                raw_json: "{}".into(),
+                ..Default::default()
+            })
+            .collect();
         queue.spool.lock().unwrap().append(events.clone()).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -353,6 +375,7 @@ mod tests {
         let server = tokio::spawn(
             tonic::transport::Server::builder()
                 .add_service(AgentServiceServer::new(Server {
+                    short_ack,
                     calls: Arc::new(AtomicUsize::new(0)),
                     seen: seen.clone(),
                 }))
@@ -380,7 +403,16 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(*seen.lock().unwrap(), vec![events.clone(), events]);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                events[..64].to_vec(),
+                events[64..128].to_vec(),
+                events[..64].to_vec(),
+                events[64..128].to_vec(),
+                events[128..].to_vec(),
+            ]
+        );
         upload.abort();
         let _ = upload.await;
         server.abort();

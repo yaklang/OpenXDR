@@ -115,7 +115,8 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
 - `ueba`：首次出现检测（先学习后告警）
 - `triage`：旧 AI 研判引擎（带只读调查工具逐个研判 incident）
 - `piruntime` / `agentchat`：Pi 子进程（配置 `SANDBOX_URL` 时经 `cmd/sandboxd` 的隔离容器）、会话消息、exec/query/report 与后台运行、停止
-- `commandgate`：人工与 AI exec 的组权限、命令名单、阻塞审批与审计
+- `commandgate`：人工与 AI exec 的组权限、命令名单、审批（人工发起的阻塞等组管理员，AI 发起的交 AI 审计员）、硬拒绝清单与审计
+- `commandreview`：AI 审计员——AI 发起、命中名单的命令用会话自己的模型当场评审，结果记审批与审计
 - `schedule` / `report`：`tasks/*.yml` 预设任务按组定时拉起 Pi 会话（系统身份），报告 HTML/PDF 渲染
 - `response`：响应处置（结束进程 / 主机隔离），含自动响应钩子
 - `natsretry`：NATS 选主瞬断的有界重试，只用于调用方能证明对端没收下的错误（事件发布、跨节点指令投递）
@@ -144,13 +145,14 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
   Linux 资产上求值；坏采集配置一律退回内置默认；TLS 三个变量（CA/证书/私钥）
   必须同时配置，否则报错而不是降级明文。
 - **安全优先于便利**：危险能力默认关闭且多道闸门（`RESPONSE_ENABLED`、`ISOLATION_ALLOW` 隔离自保、
-  AI exec 的组权限 + 命令名单 + 阻塞式人工审批）；指令一律真执行，不提供演练模式；
+  AI exec 的组权限 + 命令名单 + AI 审计员评审 + 硬拒绝清单）；指令一律真执行，不提供演练模式；
   抑制与情报都可撤销、有有效期、持续累计命中计数；所有登录与处置操作落审计日志。
 - **AI 边界**：旧 triage 仍使用受限调查工具与最多 6 轮研判；Pi 会话使用
   `agentchat` / `commandgate`：exec 绑定组、名单与审批，query 仅使用组专属只读视图身份，
   report、track（运维待办）、identify（服务调查结论）与 remember / forget（组内长期记忆，人工优先、AI 只能删自己写的）绑定会话归组；suppress 只提交抑制草案，组管理员批准才生效；propose_close 只写结案建议，结案由人采纳。Pi 不注册本机 shell/文件工具，模型不能改写身份或来源。
-  定时任务里命中名单、但经 `commandgate.ReadOnly` 判定为只读的 Linux 命令自动批准（留审批记录与审计），
-  这是有意的窄例外：判定只能收紧不能放宽，会改东西或读密钥内容的命令始终等人。
+  AI 发起、命中名单的命令不等人：由 AI 审计员（`commandreview`）当场评审，批准或拒绝都留审批记录与审计，评审出错按拒绝；
+  停 agent、关机重启、清日志审计、清防火墙、格式化磁盘在硬拒绝清单里，AI 发起的一律不执行、不送评审。
+  定时任务里经 `commandgate.ReadOnly` 判定为只读的 Linux 命令仍直接自动批准，省一次模型调用。
   模型输出与工具结果视为不可信输入；配置和接口见 `docs/pi-backend.md`。
 - **Rust 特性**：默认构建不依赖任何外部二进制（protoc 由 crate 分发）；
   `ebpf`/`xdp` 是可选特性，CI 单独构建。写采集端代码注意 `cfg(target_os)` 分支，
@@ -181,6 +183,6 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
 - 响应处置（结束进程、隔离主机）是系统中唯一能影响被监控主机的功能：
   改 `response/`、`grpcsvc/commands.go` 或 agent `respond/` 时，必须保持
   闸门（全局开关 `RESPONSE_ENABLED`、隔离放行清单 `ISOLATION_ALLOW`、exec 的组权限 /
-  命令名单 / 人工审批、审计落库）不被绕过。指令一律真执行，不要重新引入演练模式。
+  命令名单 / 审批（AI 审计员或人工）/ 硬拒绝清单、审计落库）不被绕过。指令一律真执行，不要重新引入演练模式。
 - 不要把密钥、证书提交进仓库；`certs/` 等产物只应存在于本地。
 - 推理服务在内网时注意 `NO_PROXY`：Go 默认读 `HTTP_PROXY`，内网 LLM 端点可能被错误代理。

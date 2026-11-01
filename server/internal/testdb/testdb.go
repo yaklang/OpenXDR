@@ -21,6 +21,7 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/internal/aijob"
 	"openxdr/server/internal/eventpart"
+	"openxdr/server/internal/graphqueue"
 	"openxdr/server/internal/temporal"
 )
 
@@ -48,6 +49,9 @@ func New(t *testing.T) (context.Context, *ent.Client) {
 	if err := temporal.EnsureSchema(ctx, db); err != nil {
 		t.Fatalf("时序处理状态初始化失败: %v", err)
 	}
+	if err := graphqueue.EnsureSchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
 	truncateRaw(ctx, t, db)
 	truncate(ctx, t, client)
 	return ctx, client
@@ -57,7 +61,7 @@ func New(t *testing.T) (context.Context, *ent.Client) {
 // 游标表也要清，否则上一个测试的增量游标会让新数据被跳过。
 func truncateRaw(ctx context.Context, t *testing.T, db *sql.DB) {
 	t.Helper()
-	for _, table := range []string{"identity_login_matches", "identity_candidate_rejections", "identity_links", "identities", "identity_accounts", "identity_graph_cursors"} {
+	for _, table := range []string{"assetmap_queue", "identity_login_matches", "identity_candidate_rejections", "identity_links", "identities", "identity_accounts", "identity_graph_cursors"} {
 		if _, err := db.ExecContext(ctx, `DO $$ BEGIN IF to_regclass('`+table+`') IS NOT NULL THEN DELETE FROM `+table+`; END IF; END $$`); err != nil {
 			t.Fatalf("清空表 %s 失败: %v", table, err)
 		}
@@ -68,6 +72,7 @@ func truncateRaw(ctx context.Context, t *testing.T, db *sql.DB) {
 func truncate(ctx context.Context, t *testing.T, c *ent.Client) {
 	t.Helper()
 	dels := []func(context.Context) (int, error){
+		func(ctx context.Context) (int, error) { return c.TriageRun.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.IntegrationIdempotency.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.ExternalTicket.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.IntegrationAttempt.Delete().Exec(ctx) },
@@ -78,6 +83,8 @@ func truncate(ctx context.Context, t *testing.T, c *ent.Client) {
 		func(ctx context.Context) (int, error) { return c.IntegrationGroup.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.Integration.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.DecoyObservation.Delete().Exec(ctx) },
+		func(ctx context.Context) (int, error) { return c.DecoyRevision.Delete().Exec(ctx) },
+		func(ctx context.Context) (int, error) { return c.DecoyEngineRelease.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.DecoyDeployment.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.AIJob.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.HostCredential.Delete().Exec(ctx) },

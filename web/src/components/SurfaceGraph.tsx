@@ -28,11 +28,15 @@ const SOURCE_KEY: Record<string, MsgKey> = { ai: 'noteSourceAi', investigation: 
 type Box = { x: number; y: number; w: number; h: number; col: number }
 type Card = { id: string; label: string; peer?: SurfacePeer; rows: ExposedService[]; box: Box }
 
+// 低危要有依据才藏：端口表认得出的服务，或调查与人工给了低危。认不出又没查过的（docker-proxy 映射出来的端口多是这样）
+// 端口表只能默认算低危，藏起来就看不到暴露面里最该查的那部分
+const knownLow = (e: ExposedService) => e.service.risk === 'low' && (e.service.category !== 'other' || e.note?.risk === 'low')
+
 // 卡片按最高风险分排在本栏上方；只作为访问方出现的节点（未纳管地址、别组资产、没有暴露面的本组资产）收成小标签
 function layout(surface: AttackSurface, hideLow: boolean) {
   const rowsOf = new Map<string, ExposedService[]>()
   for (const e of surface.exposures) {
-    if (hideLow && e.service.risk === 'low' && !e.fromPublic) continue
+    if (hideLow && knownLow(e) && !e.fromPublic) continue
     rowsOf.set(e.assetId, [...(rowsOf.get(e.assetId) ?? []), e])
   }
   const peerOf = new Map(surface.peers.map(p => [p.id, p]))
@@ -139,9 +143,9 @@ export function SurfaceGraph({ surface, hideLow, onPick }: { surface: AttackSurf
           }
           const asset = c.rows[0]
           return (
-            <div key={c.id} style={{ position: 'absolute', left, top: c.box.y, width: CARD_W, height: c.box.h, borderRadius: 10, overflow: 'hidden',
+            <div key={c.id} style={{ position: 'absolute', left, top: c.box.y, width: CARD_W, height: c.box.h, borderRadius: 16, overflow: 'hidden',
               background: token.colorBgContainer, border: `1px solid ${token.colorBorderSecondary}`, boxShadow: token.boxShadowTertiary, borderTop: `3px solid ${zoneColor(asset.zone.kind)}` }}>
-              <div style={{ height: HEAD_H - 3, padding: '6px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${token.colorBorderSecondary}` }}
+              <div style={{ height: HEAD_H - 3, padding: '6px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${token.colorBorderSecondary}` }}
                 onMouseEnter={() => setHover(c.id)} onMouseLeave={() => setHover(null)}>
                 <Link to={`/assets/${c.id}`} style={{ fontWeight: 600 }}>{c.label}</Link>
                 <CritTag value={asset.criticality} />
@@ -152,7 +156,7 @@ export function SurfaceGraph({ surface, hideLow, onPick }: { surface: AttackSurf
                 return (
                   <div key={key} role="button" tabIndex={0} onClick={() => onPick(e)} onKeyDown={ev => ev.key === 'Enter' && onPick(e)}
                     onMouseEnter={() => setHover(key)} onMouseLeave={() => setHover(null)}
-                    style={{ height: ROW_H, display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px', cursor: 'pointer', fontSize: 12,
+                    style={{ height: ROW_H, display: 'flex', alignItems: 'center', gap: 6, padding: '0 12px', cursor: 'pointer', fontSize: 12,
                       background: hover === key ? token.colorFillTertiary : undefined, borderLeft: `3px solid ${riskColor(e.service.risk)}` }}>
                     <span className="mono" style={{ width: 70, flexShrink: 0 }}>{e.proto}/{e.port}</span>
                     <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: unknown ? token.colorWarning : undefined }}>

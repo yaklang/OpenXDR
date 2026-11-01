@@ -29,16 +29,18 @@ export function LocalAccounts({ asset }: { asset: Asset }) {
   const [hours, setHours] = useState(24)
   const scope = `${me.username}:${me.role}:${groups.map(g => `${g.id}:${g.role}`).sort().join(',')}:${asset.id}:${asset.groupId}`
   const query = useQuery({ queryKey: ['localAccountSnapshots', scope, hours], queryFn: () => fetchLocalAccountSnapshots(asset.id, hours), gcTime: 0, refetchInterval: 15000 })
-  return <Space orientation="vertical" style={{ width: '100%' }}>
+  return <Space orientation="vertical" size={16} style={{ width: '100%' }}>
     <AssetIdentityAccounts asset={asset} />
     <Divider style={{ margin: '8px 0' }} />
     <Typography.Title level={5} style={{ margin: 0 }}>{t('localAccountsSnapshots')}</Typography.Title>
     <Typography.Text type="secondary">{t('localAccountsHint')}</Typography.Text>
-    <Space wrap>
-      <Select aria-label={t('thTime')} value={hours} style={{ width: 170 }} onChange={setHours}
-        options={[1, 6, 24, 72, 168].map(n => ({ value: n, label: t('lastHours', { n }) }))} />
-      <Button loading={query.isFetching} onClick={() => query.refetch()}>{t('refresh')}</Button>
-    </Space>
+    <div className="filter-bar" style={{ padding: '10px 14px' }}>
+      <Space wrap className="filter-controls">
+        <Select aria-label={t('thTime')} value={hours} style={{ width: 170 }} onChange={setHours}
+          options={[1, 6, 24, 72, 168].map(n => ({ value: n, label: t('lastHours', { n }) }))} />
+        <Button loading={query.isFetching} onClick={() => query.refetch()}>{t('refresh')}</Button>
+      </Space>
+    </div>
     {query.isError ? <LoadError error={query.error} onRetry={() => query.refetch()} /> : <>
       {query.data?.truncated && <Alert type="info" showIcon title={t('identityTruncated', { n: query.data.items.length })} />}
       <Table<LocalAccountSnapshot> key={`${scope}:${hours}`} size="small" rowKey="eventId" loading={query.isPending} dataSource={query.data?.items ?? []}
@@ -50,11 +52,11 @@ export function LocalAccounts({ asset }: { asset: Asset }) {
           { title: t('localAccountsCount'), dataIndex: 'accountCount', render: v => v ?? '—' },
           { title: t('identityHistoricalGroup'), dataIndex: 'groupId', render: v => v ? groups.find(g => g.id === v)?.name ?? v : t('ungrouped') },
         ]}
-        expandable={{ expandedRowRender: row => <Space orientation="vertical" style={{ width: '100%' }}>
+        expandable={{ expandedRowRender: row => <div className="ev-expand"><Space orientation="vertical" style={{ width: '100%' }}>
           <Typography.Text>{t('directorySource')}: {row.source}</Typography.Text>
           <Typography.Text copyable>{row.eventId}</Typography.Text>
           <SnapshotAccounts key={`${scope}:${row.eventId}`} eventId={row.eventId} scope={scope} />
-        </Space> }} />
+        </Space></div> }} />
     </>}
   </Space>
 }

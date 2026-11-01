@@ -26,7 +26,7 @@ const IFACE_RE = /^[A-Za-z0-9._-]{1,15}$/
 
 function Command({ text }: { text: string }) {
   return (
-    <Typography.Paragraph className="mono" copyable={{ text }} style={{ margin: 0, padding: 12, borderRadius: 6, background: 'var(--ant-color-fill-tertiary)', wordBreak: 'break-all' }}>
+    <Typography.Paragraph className="mono" copyable={{ text }} style={{ margin: 0, padding: '14px 16px', borderRadius: 14, background: 'var(--ant-color-fill-tertiary)', border: '1px solid var(--ant-color-border-secondary)', wordBreak: 'break-all' }}>
       {text}
     </Typography.Paragraph>
   )
@@ -106,15 +106,21 @@ export function AddHostModal({ open, onClose }: { open: boolean; onClose: () => 
           )}
           {kind === 'sensor' && <Typography.Text type="secondary">{t('addSensorIntro')}</Typography.Text>}
           {!kindEnabled && <Alert type="warning" showIcon title={t('addHostDisabled')} description={kindReason} />}
-          <Space wrap>
-            <span>{t('addHostGroup')}</span>
-            <Select aria-label={t('addHostGroup')} showSearch optionFilterProp="label" disabled={busy} style={{ width: 200 }} value={groupId} onChange={g => { setGroupId(g); setIssued(undefined) }}
-              options={adminGroups.map(g => ({ value: g.id, label: g.name }))} />
-            <span>{t('addHostDays')}</span>
-            <Select aria-label={t('addHostDays')} disabled={busy} style={{ width: 100 }} value={days} onChange={setDays}
-              options={[1, 7, 30].map(n => ({ value: n, label: t('addHostDaysUnit', { n }) }))} />
-            <Button type="primary" loading={generate.isPending} disabled={busy || !groupId || !kindEnabled} onClick={() => generate.mutate()}>{t('addHostGenerate')}</Button>
-          </Space>
+          <div className="filter-bar" style={{ padding: '12px 18px' }}>
+            <Space wrap size={14} className="filter-controls">
+              <Space size={8}>
+                <span>{t('addHostGroup')}</span>
+                <Select aria-label={t('addHostGroup')} showSearch optionFilterProp="label" disabled={busy} style={{ width: 200 }} value={groupId} onChange={g => { setGroupId(g); setIssued(undefined) }}
+                  options={adminGroups.map(g => ({ value: g.id, label: g.name }))} />
+              </Space>
+              <Space size={8}>
+                <span>{t('addHostDays')}</span>
+                <Select aria-label={t('addHostDays')} disabled={busy} style={{ width: 100 }} value={days} onChange={setDays}
+                  options={[1, 7, 30].map(n => ({ value: n, label: t('addHostDaysUnit', { n }) }))} />
+              </Space>
+              <Button type="primary" loading={generate.isPending} disabled={busy || !groupId || !kindEnabled} onClick={() => generate.mutate()}>{t('addHostGenerate')}</Button>
+            </Space>
+          </div>
           {kind === 'sensor' && (
             <Space wrap>
               <span>{t('addSensorIface')}</span>

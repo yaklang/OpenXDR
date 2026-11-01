@@ -16,12 +16,20 @@ type node interface {
 
 // evalCtx 单条规则对单条事件的求值上下文。memo 由调用方复用，避免每次分配。
 type evalCtx struct {
-	sels []selection
-	raw  map[string]any
-	memo []int8 // 0=未算 1=真 2=假
+	sels   []selection
+	raw    map[string]any
+	memo   []int8 // 0=未算 1=真 2=假
+	fields []fieldValue
 	// 关键字匹配用的事件平铺串，整条事件算一次，跨规则复用
 	flat     string
 	flatDone bool
+}
+
+type fieldValue struct {
+	value   string
+	lower   string
+	present bool
+	loaded  bool
 }
 
 func (c *evalCtx) value(i int) bool {

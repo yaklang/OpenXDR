@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	stdsql "database/sql"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -117,7 +118,9 @@ type incidentDetail struct {
 	Alerts  []alertRow `json:"alerts"`
 }
 
-func Handler(db *ent.Client, rules sigma.Catalog, hub *response.Hub, suppressions *suppress.Store, intelStore *intel.Store, selfEndpoints []string, chats ...*agentchat.Service) http.Handler {
+// Handler 组装控制台的 REST 路由。conn 是冷归档读取用的原始连接（与 ent 共用同一个池），
+// 为 nil 时冷层整体不参与：没有冷库连接的部署（比如绝大多数集成测试）行为与没有冷归档时一致。
+func Handler(db *ent.Client, conn *stdsql.DB, rules sigma.Catalog, hub *response.Hub, suppressions *suppress.Store, intelStore *intel.Store, selfEndpoints []string, chats ...*agentchat.Service) http.Handler {
 	mux := http.NewServeMux()
 	gate := &commandgate.Gate{DB: db, Hub: hub}
 	var chat *agentchat.Service
@@ -135,8 +138,8 @@ func Handler(db *ent.Client, rules sigma.Catalog, hub *response.Hub, suppression
 	mapTrustedSourceEdits(mux, db)
 	mapIntel(mux, db, intelStore)
 	mapStats(mux, db, rules)
-	mapEvents(mux, db)
-	mapRules(mux, rules)
+	mapEvents(mux, db, conn)
+	mapRules(mux, db, rules)
 	mapAttack(mux, rules)
 	mapReport(mux, db, rules)
 	mapAgentConfig(mux, db)
@@ -165,6 +168,7 @@ func mapIncidents(mux *http.ServeMux, db *ent.Client, rules sigma.Catalog) {
 	mux.HandleFunc("GET /api/incidents/groups", listIncidentGroups(db, rules))
 	mux.HandleFunc("POST /api/incidents/batch-status", resolveIncidents(db))
 	mux.HandleFunc("GET /api/incidents/{id}", getIncident(db, rules))
+	mux.HandleFunc("GET /api/incidents/{id}/triage-runs", incidentTriageRuns(db))
 	mux.HandleFunc("POST /api/incidents/{id}/status", setIncidentStatus(db))
 	mux.HandleFunc("GET /api/incidents/{id}/tickets", incidentTickets(db))
 	mux.HandleFunc("DELETE /api/incidents/{id}/closure-proposal", dismissClosureProposal(db))

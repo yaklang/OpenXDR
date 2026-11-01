@@ -29,7 +29,7 @@ type vulnReport struct {
 	Sync       *vuln.Status `json:"sync"`
 }
 
-// vulnReportOf 一台资产的漏洞报告；没有软件清单（旧 agent、非 dpkg 系统）返回 nil
+// vulnReportOf 一台资产的漏洞报告；没有软件清单返回 nil；未支持的生态保留包数，Ecosystem 为空
 func vulnReportOf(r *http.Request, sqlDB *sql.DB, db *ent.Client, a *ent.Asset) (*vulnReport, error) {
 	if len(a.Software) == 0 {
 		return nil, nil
@@ -103,7 +103,7 @@ func Vulns(db *ent.Client, sqlDB *sql.DB) http.Handler {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			if rep == nil {
+			if rep == nil || rep.Ecosystem == "" {
 				continue
 			}
 			x := row{AssetID: a.ID, Fixable: len(rep.Fixable), Unfixed: len(rep.Unfixed)}

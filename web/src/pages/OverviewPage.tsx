@@ -5,12 +5,13 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Card, Col, Empty, Flex, Row, Segmented, Space, Table, Typography, theme } from 'antd'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
-import { fetchAgentReports, fetchApprovals, fetchAssets, fetchFindings, fetchIncidents, fetchStats, fetchTaskRuns, fetchTasks, type IncidentSummary } from '../api'
+import { fetchAgentReports, fetchApprovals, fetchAssets, fetchFindingsPage, fetchIncidents, fetchStats, fetchTaskRuns, fetchTasks, type IncidentSummary } from '../api'
 import { useSession } from '../app/session'
 import { useTheme } from '../app/theme'
 import { Ago } from '../components/Ago'
 import { GettingStarted } from '../components/GettingStarted'
 import { LoadError } from '../components/LoadError'
+import { GeminiSparkle } from '../components/Logo'
 import { Page, TableCard, WIDE_ONLY, useWideTable } from '../components/Page'
 import { saveQueue } from '../components/incidentQueue'
 import { useRowLink } from '../components/rowLink'
@@ -18,7 +19,7 @@ import { BarList, ColumnChart, SEVERITY_COLOR, compact, useSeriesColor } from '.
 import { HostStateBadge, IncidentStatusTag, SessionStatusTag, SeverityTag, fmtTime, hostState } from '../components/format'
 import { useI18n } from '../i18n'
 
-// 降噪漏斗：产品的核心叙事"一万条进，三个出"。三级同为 24 小时口径，箭头上标每一级压掉的比例
+// 采集量按 24 小时统计，待复核是全部未结案存量；不同口径不计算降噪百分比。
 function Funnel({ events, alerts, incidents, foot }: { events: number; alerts: number; incidents: number; foot: ReactNode }) {
   const { t } = useI18n()
   const { token } = theme.useToken()
@@ -26,9 +27,8 @@ function Funnel({ events, alerts, incidents, foot }: { events: number; alerts: n
   const stages = [
     { label: t('funnelEvents'), value: events, to: '/events' },
     { label: t('funnelAlerts'), value: alerts },
-    { label: t('reviewIncidents'), value: incidents, to: '/incidents' },
+    { label: t('funnelReview'), value: incidents, to: '/incidents' },
   ]
-  const squeeze = (from: number, to: number) => (from ? ((1 - to / from) * 100).toFixed(from > 1000 ? 2 : 1) : '-')
   return (
     <Card title={t('funnelTitle')} style={{ height: '100%' }}>
       <div className="funnel">
@@ -36,42 +36,46 @@ function Funnel({ events, alerts, incidents, foot }: { events: number; alerts: n
           ...(i > 0 ? [
             <div key={`a${i}`} className="funnel-arrow" style={{ color: token.colorTextTertiary }}>
               <RightOutlined />
-              <span>{t('funnelSqueeze', { p: squeeze(stages[i - 1].value, s.value) })}</span>
             </div>,
           ] : []),
           // 最后一级是结论：浅主色底加一圈细边。暗色算法里主色边框与底色同值、主色文字偏暗，换亮一档才压得住底色
           <div key={s.label} className="funnel-stage" style={i === 2
             ? { background: token.colorPrimaryBg, boxShadow: `inset 0 0 0 1px ${dark ? token.colorPrimary : token.colorPrimaryBorder}` }
             : { background: token.colorFillQuaternary }}>
-            <Typography.Text type="secondary">{s.label}</Typography.Text>
+            <Space size={6} align="center">
+              {i === 2 && <GeminiSparkle size={14} />}
+              <Typography.Text type="secondary">{s.label}</Typography.Text>
+            </Space>
             <div className="funnel-value" style={{ color: i === 2 ? (dark ? token.colorPrimaryTextHover : token.colorPrimary) : token.colorText }}>
               {s.to ? <Link to={s.to} style={{ color: 'inherit' }}>{compact(s.value)}</Link> : compact(s.value)}
             </div>
           </div>,
         ])}
       </div>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 12 }}>{t('funnelScopeHint')}</Typography.Paragraph>
       <div className="funnel-foot">{foot}</div>
     </Card>
   )
 }
 
 // 需要人处理的事：每项一个入口，全部清零时给一句定心话
-function ActionCenter({ items }: { items: { icon: ReactNode; label: string; count: number; to: string; color: string }[] }) {
+function ActionCenter({ items }: { items: { icon: ReactNode; label: string; count: number | undefined; to: string; color: string }[] }) {
   const { t } = useI18n()
   const { token } = theme.useToken()
-  const pending = items.filter(i => i.count > 0)
   return (
-    <Card title={t('actionCenter')} style={{ height: '100%' }} styles={{ body: { padding: '8px 12px' } }}>
-      {items.map(i => (
-        <Link key={i.to} to={i.to} className="action-row">
-          <span className="action-icon" style={{ color: i.count ? i.color : token.colorTextQuaternary, background: i.count ? `${i.color}1a` : token.colorFillQuaternary }}>{i.icon}</span>
-          <Typography.Text style={{ flex: 1 }}>{i.label}</Typography.Text>
-          <span className="action-count" style={{ color: i.count ? token.colorText : token.colorTextQuaternary }}>{i.count}</span>
-          <RightOutlined style={{ color: token.colorTextQuaternary, fontSize: 12 }} />
-        </Link>
-      ))}
-      {pending.length === 0 && (
-        <Flex align="center" gap={6} style={{ padding: '10px 8px 4px', color: token.colorSuccess }}>
+    <Card title={t('actionCenter')} style={{ height: '100%' }} styles={{ body: { padding: '12px 20px 20px' } }}>
+      <div className="action-list-wrap">
+        {items.map(i => (
+          <Link key={i.to} to={i.to} className="action-row">
+            <span className="action-icon" style={{ color: i.count ? i.color : token.colorTextQuaternary, background: i.count ? `${i.color}1a` : token.colorFillTertiary }}>{i.icon}</span>
+            <Typography.Text style={{ flex: 1 }}>{i.label}</Typography.Text>
+            <span className="action-count" style={{ color: i.count ? token.colorText : token.colorTextQuaternary }}>{i.count ?? '-'}</span>
+            <RightOutlined style={{ color: token.colorTextQuaternary, fontSize: 12 }} />
+          </Link>
+        ))}
+      </div>
+      {items.every(i => i.count === 0) && (
+        <Flex align="center" gap={6} style={{ padding: '12px 8px 2px', color: token.colorSuccess }}>
           <CheckCircleOutlined />{t('allClear')}
         </Flex>
       )}
@@ -96,10 +100,10 @@ function AiOps() {
   const reports = useQuery({ queryKey: ['reports', group?.id], queryFn: () => fetchAgentReports(group!.id), enabled: !!group })
 
   return (
-    <Card title={t('aiOpsTitle')} style={{ height: '100%' }} extra={<Link to="/chat">{t('navChat')} <ArrowRightOutlined /></Link>}>
+    <Card title={<Space size={8}><GeminiSparkle size={16} />{t('aiOpsTitle')}</Space>} style={{ height: '100%' }} extra={<Link to="/chat">{t('navChat')} <ArrowRightOutlined /></Link>}>
       <Typography.Text type="secondary" strong>{t('recentRuns')}</Typography.Text>
       <div className="mini-list">
-        {(runs.data ?? []).length === 0 && <Typography.Text type="secondary">{t('noTaskRuns')}</Typography.Text>}
+        {(runs.data ?? []).length === 0 && <div className="mini-row"><Typography.Text type="secondary">{t('noTaskRuns')}</Typography.Text></div>}
         {runs.data?.map(r => (
           <Flex key={r.id} justify="space-between" align="center" className="mini-row">
             <Typography.Text ellipsis style={{ maxWidth: '55%' }}>{locale === 'en' && r.nameEn ? r.nameEn : r.name}</Typography.Text>
@@ -112,7 +116,7 @@ function AiOps() {
       </div>
       <Typography.Text type="secondary" strong>{t('recentReports')}</Typography.Text>
       <div className="mini-list">
-        {(reports.data ?? []).length === 0 && <Typography.Text type="secondary">{t('noReports')}</Typography.Text>}
+        {(reports.data ?? []).length === 0 && <div className="mini-row"><Typography.Text type="secondary">{t('noReports')}</Typography.Text></div>}
         {reports.data?.slice(0, 4).map(r => (
           <Flex key={r.id} justify="space-between" align="center" className="mini-row">
             <Link to="/reports" style={{ maxWidth: '65%' }}><Typography.Text ellipsis><FileTextOutlined /> {r.title}</Typography.Text></Link>
@@ -133,7 +137,7 @@ export function OverviewPage() {
   const [trendView, setTrendView] = useState<'chart' | 'table'>('chart')
   const stats = useQuery({ queryKey: ['stats'], queryFn: fetchStats, refetchInterval: 30_000, placeholderData: keepPreviousData })
   const incidents = useQuery({ queryKey: ['incidents', 'review', 'overview'], queryFn: () => fetchIncidents({ status: 'review', limit: 6 }), refetchInterval: 30_000 })
-  const findings = useQuery({ queryKey: ['findings', 'open'], queryFn: () => fetchFindings('open'), refetchInterval: 60_000 })
+  const findings = useQuery({ queryKey: ['findings', 'count', 'open'], queryFn: () => fetchFindingsPage({ status: 'open', limit: 1 }), refetchInterval: 60_000 })
   const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets, refetchInterval: 30_000 })
   // 手机上标题换行完整显示，不截断成看不出是什么的半句
   const wideTable = useWideTable()
@@ -157,7 +161,7 @@ export function OverviewPage() {
   return (
     <Page title={t('navOverview')} subtitle={t('overviewSubtitle')}>
       <GettingStarted />
-      <Row gutter={[16, 16]}>
+      <Row gutter={[20, 20]}>
         <Col xs={24} xl={16}>
           <Funnel events={s?.events24h ?? 0} alerts={s?.alerts24h ?? 0} incidents={s?.reviewIncidents ?? 0}
             foot={[
@@ -169,10 +173,10 @@ export function OverviewPage() {
         </Col>
         <Col xs={24} xl={8}>
           <ActionCenter items={[
-            { icon: <AlertOutlined />, label: t('reviewIncidents'), count: s?.reviewIncidents ?? 0, to: '/incidents', color: token.colorError },
-            { icon: <ToolOutlined />, label: t('navFindings'), count: findings.data?.length ?? 0, to: '/findings', color: token.colorWarning },
-            ...(isGroupAdmin ? [{ icon: <CheckCircleOutlined />, label: t('navApprovals'), count: approvals.data?.filter(a => a.status === 'pending').length ?? 0, to: '/approvals', color: token.colorPrimary }] : []),
-            { icon: <CloudServerOutlined />, label: t('offlineHosts'), count: offline.length, to: '/assets', color: token.colorError },
+            { icon: <AlertOutlined />, label: t('reviewIncidents'), count: stats.isError ? undefined : s?.reviewIncidents, to: '/incidents', color: token.colorError },
+            { icon: <ToolOutlined />, label: t('navFindings'), count: findings.isError ? undefined : findings.data?.total, to: '/findings', color: token.colorWarning },
+            ...(isGroupAdmin ? [{ icon: <CheckCircleOutlined />, label: t('navApprovals'), count: approvals.isError ? undefined : approvals.data?.filter(a => a.status === 'pending').length, to: '/approvals', color: token.colorPrimary }] : []),
+            { icon: <CloudServerOutlined />, label: t('offlineHosts'), count: assets.isError || !assets.data ? undefined : offline.length, to: '/assets', color: token.colorError },
           ]} />
         </Col>
 

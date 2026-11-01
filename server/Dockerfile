@@ -40,7 +40,8 @@ FROM alpine:3.22.6
 # 国内构建可传 ALPINE_MIRROR（如 https://mirrors.ustc.edu.cn），默认官方源
 ARG ALPINE_MIRROR=
 RUN if [ -n "$ALPINE_MIRROR" ]; then sed -i -E "s#https?://dl-cdn.alpinelinux.org#$ALPINE_MIRROR#" /etc/apk/repositories; fi && \
-    apk add --no-cache libstdc++ chromium font-noto-cjk poppler-utils && adduser -D -u 10001 openxdr
+    apk add --no-cache libstdc++ chromium font-noto-cjk poppler-utils && adduser -D -u 10001 openxdr && \
+    mkdir -p /run/openxdr/deception && chown openxdr:openxdr /run/openxdr/deception && chmod 700 /run/openxdr/deception
 COPY --from=build /openxdr-server /usr/local/bin/openxdr-server
 COPY --from=build /openxdr-gencerts /usr/local/bin/openxdr-gencerts
 COPY --from=build /openxdr-ipdb /usr/local/bin/openxdr-ipdb

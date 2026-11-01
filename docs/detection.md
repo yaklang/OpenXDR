@@ -88,6 +88,8 @@ sensor 与 syslog 路径结构相同，仅去重指纹与资产归属不同
 - **OS 过滤**：`product` 与资产 OS 不一致则跳过（Windows 规则不在 Linux
   资产上求值）；资产 OS 未知（空串）时不过滤（`engine.go:466-486`）
 - **规则索引**：按 class_uid 分桶 + anyClass 桶（`engine.go:325-337`）
+- **字段缓存**：同一事件跨规则复用字段解析与小写结果；求值缓冲按规则快照复用，
+  并发调用各自独占，结束后清除原始事件、字段值与全文缓存，不跨事件沿用证据。
 - **热重载**：周期扫描（`RULES_RELOAD_SECONDS` 默认 30s，0 关闭），指纹=
   全部 yml 文件的路径+内容 SHA-256，变化则整体重载、`atomic.Pointer` 原子
   切换；编译失败的规则只跳过该条，不影响旧规则集（`engine.go:399-439`）
@@ -143,16 +145,43 @@ sensor 与 syslog 路径结构相同，仅去重指纹与资产归属不同
 - **导入**：`detectKind` 自动识别——IP 字面量→ip；32/40/64 位十六进制
   →hash；其余→domain；重复条目跳过（`api/intel.go:205-214`）
 - **订阅**（`intel/feeds.go`）：内置 `Catalog` 四个公开源（Feodo / ThreatFox /
-  URLhaus / ET compromised），开关存 `settings.intel_feeds`（从未保存过时全开），
-  同步结果存 `settings.intel_feed_status`。`RunLeader("intel-feeds")` 启动即同步、之后
+  URLhaus / ET compromised）；ThreatFox 与 URLhaus 使用认证导出，前者读取单 CSV 的 ZIP，
+  压缩包与解压内容各限 50 MiB，拒绝多文件或损坏包。密钥来自外部情报配置或 `ABUSE_CH_AUTH_KEY`。开关存 `settings.intel_feeds`（从未保存过时全开），
+  同步结果存 `settings.intel_feed_status`。仅配置记录不存在时采用默认值；读取失败、`null`、缺少 `enabled` 数组、字段类型损坏或存在未知源 ID 时终止同步，
+  不请求外部源、不删除旧情报，列表接口明确返回错误。`RunLeader("intel-feeds")` 启动即同步、之后
   每 `INTEL_FEED_INTERVAL_HOURS`（默认 6）小时一次；控制台改开关或「立即同步」走同一
   `Sync`，以 `WithLock("intel-feeds-sync")` 串行。条目以 `source=feed:<id>` 一条
   `INSERT … ON CONFLICT (kind,value) DO UPDATE … WHERE source LIKE 'feed:%'` 批量写入，
   手工情报不被覆盖；有效期为周期的 8 倍，源里撤下的条目到期失效、拉取暂时失败不断情报；
   关掉的源立即删除，过期订阅条目每次同步清理。外部数据不可信：内网/保留地址剔除，域名与
-  哈希逐条校验，源内去重，单源 50 MiB / 10 万条封顶；源返回零条视为异常而非全部撤销。
+  哈希逐条校验，解析时按类型和值去重并保留首次备注，唯一 IOC 达到 10 万条后只接受重复项，新增唯一项立即拒绝；
+  纯文本源在超限时停止读取，CSV 仍先做最多 50 MiB 的文本预处理。单源下载与解压大小各限 50 MiB；断流、解析失败或超限均拒绝本次更新，不续期旧条目；
+  源返回零条视为异常而非全部撤销。
+  离线测试覆盖认证请求构造、ZIP/CSV 解析与失败保留，不代表已接通外部源。实际导出路径、账户权限及数据量是否落在上限内，
+  仍需有效 Auth-Key 验收；URLhaus 的完整 hostfile 下载说明仅登录后可见（[官方文档](https://urlhaus.abuse.ch/api/)）。
   ThreatFox 的 `url` 只取主机为 IP 的，避免公共平台主机名误伤。情报列表接口默认不含
-  订阅条目，订阅状态与命中过的订阅情报走 `/api/intel/feeds`
+  订阅条目，订阅状态与命中过的订阅情报走 `/api/intel/feeds`；`syncedAt` 仅记录最近成功，
+  `attemptedAt` 记录最近尝试，失败不会刷新成功时间。旧版失败记录的成功时间无法还原时留空。
+
+### 情报订阅离线验证
+
+以下命令在仓库根目录执行，使用本地样例与临时 HTTP 服务，不需要 Auth-Key。
+模糊测试验证文本与 ZIP 输入不能导致崩溃、重复 IOC、越过条目上限或在失败时返回部分情报。
+
+```bash
+go -C server test -race ./internal/intel
+go -C server test ./internal/intel -run '^$' -fuzz '^FuzzFeedText$' -fuzztime=30s -parallel=2
+go -C server test ./internal/intel -run '^$' -fuzz '^FuzzThreatFoxZIP$' -fuzztime=30s -parallel=2
+```
+
+配置 `INTEGRATION_DATABASE_URL` 指向专用测试库后，可运行订阅配置损坏、失败保留与 API 回归。
+测试会清理数据库，不能指向业务库：
+
+```bash
+go -C server test -tags integration -p 1 ./internal/intel ./internal/api -run 'TestFeeds|TestFeedStatus|TestIntelFeedsAPI'
+```
+
+控制台的密钥输入、清空、恢复默认值及同步失败显示由[离线浏览器回归](../validation/web/README.md)覆盖。
 
 ## 持久去重（`server/internal/ingest`）
 
@@ -410,12 +439,26 @@ C2 心跳的样子是同一进程隔着差不多的时间反复连同一个公�
 ### 研判流程
 
 - 周期轮询 `AI_INTERVAL_SECONDS` 默认 30s，每批最多 5 个，取法见下节「研判节奏」
-- **主动调查式**：模型可调用三个有边界的调查工具（`tools.go:21-39`）：
+- **主动调查式**：模型可调用四个有边界的只读调查工具（`tools.go`）：
   | 工具 | 参数边界 |
   |---|---|
-  | `query_events(keyword, hours)` | raw 全文 ILIKE，关键词转义 `% _ \`；hours 默认 24、超界回落；返回最近 15 条 |
+  | `query_events(keyword, hours, mode)` | 默认 indexed 搜索字段值（不保证纯 UUID/长哈希覆盖），查 UUID/哈希显式选 raw 搜索完整原文（返回正文仍会裁剪）；关键词转义 `% _ \`；hours 默认 24、超界回落；返回最近 15 条 |
   | `process_lineage(process_guid)` | GUID 必须合法 UUID；祖先上溯 10 层、子进程最多 10 条 |
-  | `host_alerts(asset_id, days)` | UUID 校验；days 默认 7、>90 回落；最多 20 条 |
+  | `host_alerts(asset_id, days)` | UUID 校验；days 默认 7、>90 回落；最多 20 条，并附最近采集状态快照 |
+  | `process_baseline(asset_id, exe_path)` | UUID 与完整路径校验；按资产匹配 UEBA 规范/旧版路径，返回已有基线首次记录；未命中为未知 |
+- 历史结案参考仅使用有结案人、结案时间和非空独立备注的记录；排除系统结案、采纳 AI 研判/建议以及来源不完整的旧记录。
+  上下文按 JSON 分开列出事件 ID、结案人、时间、状态、备注摘录与 `previous_ai_verdict`，注明备注是否截断。
+  检索先按当前事件全部资产的现有归组限定范围（未分组资产单独处理），历史案例的全部告警都必须在范围内，防止同规则或混合组案例带入别组备注。资产归属未知则不检索，不能退回全局搜索；资产转组后重新计算范围，不使用被截断的明细推断归组。
+  范围内再筛同规则或同主机、相关告警在近 90 天内、最多 8 条；空结果或查询失败均不表示不存在人工确认或工单。
+- 四个调查工具均由服务端绑定本轮 incident ID，以完整事件资产的现有归组限制读取；模型参数不能覆盖绑定。
+  `query_events` 两种模式及进程血缘的祖先、子进程查询均在 SQL 中过滤；主机告警和 UEBA 基线先检查资产范围。
+  未绑定事件、无可确认资产归属或组外资产不退回全局搜索。范围内缺失仍为未知，不能外推到全局。
+  每轮研判记录事件资产与归组快照，在后续模型调用、工具范围查询及落库前复核；发现变化则本轮失败，不保存旧结论、不触发结果回调。最终落库事务依次锁定事件、既有关联告警及其资产，再核对快照，使这些关联与归组在检查后至提交间保持稳定；模型推理期间不持锁。四个工具实际返回的资产，以及已提供历史案例的相关资产，也记录引用时的归组：转组或删除会中止本轮，最终事务一并锁定；不引用的同组资产不加入锁集合。仍不覆盖两次检查间转组后又转回、历史案例读出后新增或改挂告警，以及成功提交后的历史结论撤销；不能作为整个权限生命周期已闭环的证明。
+- 服务端把查询覆盖、事件结构化标识、最近采集快照与 UEBA 基线查询结果写入 `query_evidence`。
+  有工具证据时必须提交非空 `evidence_claims`，只能引用实际存在且值一致的字段，错误引用修正一次后仍不匹配则失败。
+  事件正文裁剪与查询条数截断分开记录；父进程缺失保持未知；采集快照不回推历史；基线时间不是安装或实际首次执行时间。
+  引用匹配只证明与存储记录一致，不保证自由文本推断正确。服务端根据已匹配引用生成 `evidence_observations`（evidence_id、field、text），覆盖模型伪造的同名字段；无引用时为空数组，同一字段重复引用只展示一次。
+  前端在摘要前展示字段摘录及适用边界，完整台账仍可展开；摘要与攻击链明确标为模型判断。摘录不是完整调查结论，也不证明原始数据真实性。旧结论缺少该字段时不补造。
 - 事件 raw 截断 300 字符；工具错误以 JSON 回给模型不中断
   （`tools.go:41-61,188-199`）
 - **最多 6 轮**（`maxToolTurns`，`engine.go:100`）；模型返回无 tool_calls
@@ -425,6 +468,10 @@ C2 心跳的样子是同一进程隔着差不多的时间反复连同一个公�
   （近 90 天同规则被判 false_positive 的案例）（`engine.go` buildContext）。重研判时另加一节：此前研判过几次、
   上次结论与摘要、上次之后新增的告警（按规则汇总加级别最高、最新的几条明细，不全量铺开；按告警主键 UUIDv7 的入库时间算，
   往前多算一分钟，上次取上下文时还没归属进来的也算新增）
+- 新研判必须提交非空 `action_codes`，从服务端建议目录选择；不接受模型自写 `actions`。
+  服务端拒绝未知、重复、对象参数及结论不匹配的代码，再生成原有 `actions` 字符串数组供展示和存档。
+  结案审核只允许 benign，响应审核和关联排查只允许 malicious；建议代码不执行命令，也不替代响应权限、审批与审计。
+  无效建议仅允许一次格式修正，仍无效则退避，不落结论也不触发 OnVerdict。旧存档仍按原格式读取。
 - verdict 格式：`{verdict: malicious|suspicious|benign, confidence 0-100,
   summary, kill_chain[], actions[]}`；解析容错取首个 `{` 到末个 `}`，
   不合法存档 `{"error":"unparseable"}`；结论写 `ai_verdict` 并把状态推进
@@ -666,3 +713,31 @@ POST /api/commands → Hub.Issue 落 command 行并发往 agent 指令通道
 | `WEBHOOK_MIN_SEVERITY` | `0`（全推） | 通知最低严重度（1 信息 ~ 5 严重） |
 
 采集端环境变量见 [collection.md](collection.md)（agent 与 sensor 各一张表）。
+
+### 研判证据边界与执行记录
+
+调查工具会返回时间范围、返回上限及 `truncated`；事件原文摘要另带
+`raw_truncated`，血缘另带 `missing_ancestor` 和祖先/子进程截断标记。
+查询错误返回 `status=error`，不能当成“没有记录”。未发现只说明在已采集、
+仍保留的数据及查询范围内未发现，不证明客户端无行为，也不证明外部入口没有请求。
+AI 长期记忆明确标记为未经人工核实的线索，不允许当作人工确认或良性证明；
+人工记录也只在它实际确认的主机、时间及行为范围内有效。
+这些约束与回归用于减少不受证据支持的判断，不代表模型准确率保证。
+
+事件详情的“研判执行记录”对应 `triage_runs`：从本版本起，每次抢到执行身份
+就记录一条，成功、失败和取消分别留存。成功记录与结论同事务提交；进程崩溃
+未能写退出结果时，旧记录在下一次接管时标为 `interrupted/lease_replaced`，
+其真实停止时间与未保存的耗时不可恢复，不能拿接管时间当作执行耗时。
+记录实际固定的模型、模型调用/工具调用次数与耗时、工具错误数、模型返回的 token
+用量。未返回用量的失败请求可能仍被模型服务计费，不能据此推导账单。
+`ready_at` 是可排队时刻，扣除了普通新证据冷却和已知失败退避；旧版重开事件缺少
+准确时刻时为空。历史尝试不补造，失败率统计须明确起算版本与观测窗口。
+
+调查工具单次最多 15 秒，超时作为查询失败返回而非无匹配；执行记录的 `tool_details`
+按调用顺序记录工具名、耗时、失败标记，以及检索/告警工具的返回条数与截断状态。
+不保存查询参数或工具返回原文。旧记录无工具明细时不回填。
+
+DNS 事件摘要额外提供 query、requester、answers、进程与端点等结构化字段；单字段超过
+2048 字节时省略并列在 `dns_omitted`，原文截断另标记 `raw_truncated`。
+共享 CDN/IP、低频 DNS、固定前缀和长 TTL 不能替代应用归属证据，也不能据此建议
+放行整个网段、域名族或抑制告警。需核实客户端归属的中高危事件应保留可疑结论。

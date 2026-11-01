@@ -25,6 +25,8 @@ type Gate struct {
 	ApprovalTimeout time.Duration
 	// Notify 新审批创建时推给组管理员，nil 表示不外发；签名同 schedule.Notifier
 	Notify func(ctx context.Context, title, text, path string) error
+	// Reviewer 非空时 AI 发起的待批准命令由 AI 审计员当场评审，不再等人；人发起的照旧等组管理员
+	Reviewer Reviewer
 }
 type Request struct {
 	UserID uuid.UUID
@@ -152,6 +154,9 @@ func (g *Gate) Issue(ctx context.Context, req Request) (out *ent.Command, retErr
 	if err != nil {
 		return nil, err
 	}
+	if why := hardDenied(*req.Command.Cmd); why != "" && req.Origin == "ai" {
+		return nil, fmt.Errorf("这条命令属于平台硬拒绝的操作（%s），不执行也不送审计；不要换写法重试，确有必要在回复里说明，由人处理", why)
+	}
 	if g.Hub == nil || !g.Hub.Enabled {
 		return nil, errors.New("响应能力未启用")
 	}
@@ -161,8 +166,11 @@ func (g *Gate) Issue(ctx context.Context, req Request) (out *ent.Command, retErr
 	}
 	if required {
 		wait := g.await
-		if req.System && g.linux(ctx, req) && ReadOnly(*req.Command.Cmd) {
+		switch {
+		case req.System && g.linux(ctx, req) && ReadOnly(*req.Command.Cmd):
 			wait = g.autoApprove
+		case req.Origin == "ai" && g.Reviewer != nil:
+			wait = g.review
 		}
 		if err := wait(ctx, req, actor); err != nil {
 			return nil, err

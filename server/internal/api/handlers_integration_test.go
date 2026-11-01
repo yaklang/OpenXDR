@@ -196,7 +196,7 @@ func TestAPICommandIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules := sigma.LoadDir(t.TempDir())
-	ts := httptest.NewServer(asAdmin(Handler(client, rules, response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)))
+	ts := httptest.NewServer(asAdmin(Handler(client, nil, rules, response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)))
 	t.Cleanup(ts.Close)
 
 	// 非法 kind → 400
@@ -211,6 +211,37 @@ func TestAPICommandIssue(t *testing.T) {
 	r2.Body.Close()
 	if r2.StatusCode != 409 {
 		t.Errorf("响应未启用应 409，得到 %d", r2.StatusCode)
+	}
+}
+
+// 规则回测：在热表事件上独立求值目标规则，返回扫描数、命中数与样本；未知规则返回 404。
+func TestAPIRuleBacktest(t *testing.T) {
+	ts, _ := seed(t)
+
+	r404, err := postJSON(ts, "/api/rules/no-such-rule/backtest", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r404.Body.Close()
+	if r404.StatusCode != 404 {
+		t.Fatalf("未知规则应返回 404，得到 %d", r404.StatusCode)
+	}
+
+	resp, err := postJSON(ts, "/api/rules/6e0c8f0e-9a44-4b4d-9b6e-1f2a5d9c8b7a/backtest?hours=24", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("backtest status = %d: %s", resp.StatusCode, body)
+	}
+	var out backtestResult
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ScannedEvents != 1 || out.MatchedCount != 1 || len(out.Samples) != 1 {
+		t.Fatalf("期望扫描 1 条、命中 1 条、样本 1 条，实际: %+v", out)
 	}
 }
 

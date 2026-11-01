@@ -1,5 +1,7 @@
 # 三层诱饵防御：策略来源与接入边界
 
+运行实现已抽离至独立引擎，统一接入与云端部署见 [运行包说明](../integrations/dygk/README.md)。
+
 最新平台实现见 [多载体诱饵](multi-carrier-decoys.md)：已扩展统一登记、HTTP/HTML、Linux 文件打开监视、模拟 Shell 与认证事件回传。下文 SSH 实验证据保持原适用范围。
 
 当前开发分支为 `ssh-decoy`，工作区 `/home/Kei/OpenXDR-decoy`。这里提供独立 SSH 诱饵、固定策略目录和受控实验，不自动修改真实 SSH 或启动生产服务。
@@ -70,7 +72,7 @@ go build -o /tmp/openxdr-sshdecoy ./cmd/sshdecoy
 
 ## 验证
 
-`go test -race ./internal/sshdecoy ./cmd/sshdecoy` 验证真实握手拒绝认证、标记关联、三种策略的输出边界、策略与模板冲突拒绝、不可变目录副本及事件归属；还保留原有容量、重放、隐私与持久化失败测试。
+`go test -race ./deception/sshdecoy ./cmd/sshdecoy` 验证真实握手拒绝认证、标记关联、三种策略的输出边界、策略与模板冲突拒绝、不可变目录副本及事件归属；还保留原有容量、重放、隐私与持久化失败测试。
 
 实验结论主要参见 [第八轮长度边界](ssh-decoy-evaluation-round8.md) 和 [第十轮同期复测](ssh-decoy-evaluation-round10.md)。源码新增策略后与历史冻结指纹不同，历史复测脚本拒绝当前版本是预期行为；复现历史实验需恢复对应版本，不应删除指纹校验。
 

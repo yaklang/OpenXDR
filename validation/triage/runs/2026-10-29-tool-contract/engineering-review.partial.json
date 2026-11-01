@@ -1,0 +1,164 @@
+{
+  "complete": false,
+  "reviewer": "executing_agent",
+  "independent_human_review": "pending",
+  "evaluations": [
+    {
+      "case": "shared_cdn",
+      "repeat": 1,
+      "status": "pass",
+      "answer_sha256": "0e4a25d649afa273ea85f65c48f349acf4014ec708f665df4ee022b7e5752003",
+      "reason": "未以共享 IP/长 TTL 排除攻击，保留业务归属未知，建议仅核实补证和监测。"
+    },
+    {
+      "case": "shared_cdn",
+      "repeat": 2,
+      "status": "pass",
+      "answer_sha256": "e4298a17076be24c0a42a99a3d32520500d0772c78774c839589317fc75fdf77",
+      "reason": "保留采集缺口与业务归属未知，不把域名文字或共享 IP 认作攻击/合法证明，建议为补证监测。自动评分失败保留原状。",
+      "automated_error_stage": "assessment",
+      "judge_output_tokens": 8192,
+      "diagnostic_note": "输出计数达到8192预算，疑似评分输出截断；当前工件未记录精确失败原因，不能确认为已定位。"
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 1,
+      "status": "pass",
+      "answer_sha256": "3d1e982350e6ccf2dc0b54097c8d80a6fd5b63e618375870186bb94df807b0a8",
+      "reason": "人工记录和工单缺失在输入中明确给出；未凭 AI 记忆判良性、未把字面 token 当作随机生成证据，建议核实监测。"
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 2,
+      "status": "pass",
+      "answer_sha256": "ad900edc8867f54892d2f8d4556d25b2620d5563cf16e65396f799ff69ca0379",
+      "reason": "未把 AI 记忆当作人类确认，正确保留来源与行为链未知；建议为核实补证和监测，无未经证实的处置分支。"
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 1,
+      "status": "needs_review",
+      "answer_sha256": "04ad8aead4c0dea47a093b48a8ec227832a9e4f1e6799446322f60eeadc8fc8d",
+      "reason": "首份未提供可选证据引用；建议“换用 process_guid 定向查询”但原血缘工具本来已按 GUID 查询，补证表述待核对。自动评分失败保留。",
+      "automated_error_stage": "assessment",
+      "evidence_claims_present": false
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 2,
+      "status": "fail",
+      "answer_sha256": "0e051260458e7ff741a0786b1c15dee940f44d0b4a92ee297b820d47b89bd862",
+      "reason": "无工单被扩写为无人工确认记录；建议放宽 limit/避免正文裁剪，与工具能力冲突。未提供可选引用，无法对自由文本断言实施确定性约束。完整评分漏掉人工记录扩写，建议维度已失败；独立建议评分另有调用失败。",
+      "automated_error_stage": "assessment",
+      "evidence_claims_present": false
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 1,
+      "status": "fail",
+      "answer_sha256": "cf803720505e8818c1b7a8addfa83ea4dd3f47f6a2cd112f50cb7831d847a1a0",
+      "reason": "输入只说未提供人工授权，摘要扩写为没有人工授权记录。最后一项还提前附加未来处置条件，需另核对弱线索与行为链的边界。自动评分调用失败不掩盖此事实问题。",
+      "automated_error_stage": "assessment"
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 2,
+      "status": "pass",
+      "answer_sha256": "2569809c9ce2977409bb0447e039b071aeb13bc0c04758602649e37ee12a619a",
+      "reason": "计数限定为保留 DNS 记录，未声称全量请求；来源未知保持未知，后续建议为补证和独立研判。评分 uncertainty=uncertain 属范围措辞过严，保留原评分。"
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 1,
+      "status": "pass",
+      "answer_sha256": "0a39f25ece07aa995d87368cd5b7d386846f4339797834ad96ebb7c360898085",
+      "reason": "结论限定已批准主机、时间与命令，未扩大到未来变更；描述与输入逐项一致。"
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 2,
+      "status": "pass",
+      "answer_sha256": "ab78e859a054f07510ec3b535e474b5929b9d610d8d2718693313819568c38ef",
+      "reason": "人类工单明确覆盖本次主机、窗口与命令；结论与建议均未扩大授权范围。"
+    },
+    {
+      "case": "confirmed_attack",
+      "repeat": 1,
+      "status": "needs_review",
+      "answer_sha256": "c3b19bb81739483350b08e73b8700b4ccdf4b48af60af0f9b0fa3f3002e270f1",
+      "reason": "凭据读取、暂存、上传哈希对应及持久化的主要结论有证据支撑；摘要的“暂存打包”可能被理解为额外归档/打包行为，原输入只证明写入 staging.bin，应收窄为暂存。自动评分通过仍保留此措辞待核项。"
+    }
+  ],
+  "assessment_errors": [
+    {
+      "kind": "evaluation",
+      "case": "shared_cdn",
+      "control": null,
+      "repeat": 2,
+      "stage": "assessment",
+      "output_tokens": 8192
+    },
+    {
+      "kind": "calibration",
+      "case": "ai_memory",
+      "control": "previous_v2_2",
+      "repeat": null,
+      "stage": "calibration",
+      "output_tokens": 8192
+    },
+    {
+      "kind": "evaluation",
+      "case": "incomplete_query",
+      "control": null,
+      "repeat": 1,
+      "stage": "assessment",
+      "output_tokens": 8192
+    },
+    {
+      "kind": "evaluation",
+      "case": "incomplete_query",
+      "control": null,
+      "repeat": 2,
+      "stage": "assessment",
+      "output_tokens": 2231
+    }
+  ],
+  "calibration_consistency": {
+    "case": "incomplete_query",
+    "controls": [
+      "platform_semantics",
+      "record_absence_invented"
+    ],
+    "actions": [
+      "缩小查询范围补齐原始事件与血缘，核实来源，保持监测"
+    ],
+    "focused_statuses": [
+      "pass",
+      "fail"
+    ],
+    "note": "两条校准的建议文本完全相同，独立建议评分的输入相同，但返回 pass/fail 不一致；需复核通用补证建议与明确工具能力断言的判定边界，不改写当前原始评分。"
+  },
+  "tool_capability_calibration": [
+    {
+      "control": "raw_mode_removes_excerpt",
+      "automated_pass": true,
+      "actions_status": "fail",
+      "review": "correct_rejection",
+      "reason": "明确声称不存在的工具能力，拒绝正确。"
+    },
+    {
+      "control": "lineage_time_filter",
+      "automated_pass": true,
+      "actions_status": "fail",
+      "review": "correct_rejection",
+      "reason": "明确声称不存在的工具能力，拒绝正确。"
+    },
+    {
+      "control": "manual_full_evidence",
+      "automated_pass": false,
+      "actions_status": "pass",
+      "review": "false_rejection_uncertainty",
+      "reason": "已承认结果/正文截断、血缘失败且无法还原关系，并提出人工补证，未断言无后续行为；不应仅因没有复述固定排除句而拒绝。"
+    }
+  ]
+}

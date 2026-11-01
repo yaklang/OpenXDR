@@ -1,9 +1,10 @@
-import { CheckCircleFilled, LockOutlined, UserOutlined } from '@ant-design/icons'
+import { LockOutlined, MoonOutlined, SunOutlined, TranslationOutlined, UserOutlined } from '@ant-design/icons'
 import { useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Form, Input, Space, Typography, theme } from 'antd'
+import { Alert, Button, Form, Input, Space, Tooltip, Typography, theme } from 'antd'
 import { useState } from 'react'
 import { login } from '../api'
-import { Logo } from '../components/Logo'
+import { useTheme } from '../app/theme'
+import { GeminiSparkle, Logo } from '../components/Logo'
 import { useI18n, type MsgKey } from '../i18n'
 import { errText } from '../components/format'
 
@@ -12,6 +13,7 @@ const POINTS: MsgKey[] = ['loginPoint1', 'loginPoint2', 'loginPoint3']
 // 左侧品牌介绍、右侧登录表单；窄屏只留表单
 export function LoginPage() {
   const { t, locale, setLocale } = useI18n()
+  const { dark, toggle } = useTheme()
   const { token } = theme.useToken()
   const client = useQueryClient()
   const [error, setError] = useState<string | null>(null)
@@ -40,33 +42,42 @@ export function LoginPage() {
         </Space>
         <div className="login-hero-title">{t('loginHeroTitle')}</div>
         <div className="login-hero-sub">{t('loginSubtitle')}</div>
-        <Space orientation="vertical" size={14} style={{ marginTop: 36 }}>
+        <div className="login-hero-points">
           {POINTS.map(k => (
-            <Space key={k} size={10} align="start">
-              <CheckCircleFilled style={{ color: '#2997ff', marginTop: 4 }} />
+            <div key={k} className="login-hero-point-row">
+              <span className="login-hero-point-icon"><GeminiSparkle size={16} /></span>
               <span className="login-hero-point">{t(k)}</span>
-            </Space>
+            </div>
           ))}
-        </Space>
+        </div>
       </div>
-      <div className="login-panel" style={{ background: token.colorBgContainer }}>
+      <div className="login-panel" style={{ background: token.colorBgLayout }}>
+        <div className="login-panel-Actions">
+          <Space size={8}>
+            <Tooltip title={dark ? t('lightMode') : t('darkMode')}>
+              <Button shape="round" icon={dark ? <SunOutlined /> : <MoonOutlined />} onClick={toggle} aria-label={dark ? t('lightMode') : t('darkMode')} />
+            </Tooltip>
+            <Button shape="round" icon={<TranslationOutlined />} onClick={() => setLocale(locale === 'zh' ? 'en' : 'zh')}>
+              {locale === 'zh' ? 'EN' : '中文'}
+            </Button>
+          </Space>
+        </div>
         <div className="login-form">
           <div className="login-mobile-brand"><Logo size={36} /><span className="brand-name">OpenXDR</span></div>
-          <Typography.Title level={2} style={{ marginBottom: 6, fontWeight: 700, letterSpacing: '-.022em' }}>{t('signInTitle')}</Typography.Title>
+          <Typography.Title level={2} style={{ marginBottom: 8, fontWeight: 600, letterSpacing: '-.022em' }}>{t('signInTitle')}</Typography.Title>
           <Typography.Text type="secondary">{t('signInHint')}</Typography.Text>
-          <Form disabled={busy} layout="vertical" size="large" onFinish={submit} requiredMark={false} style={{ marginTop: 32 }}>
+          <Form disabled={busy} layout="vertical" size="large" onFinish={submit} requiredMark={false} style={{ marginTop: 28 }}>
             <Form.Item label={t('username')} name="username" rules={[{ required: true, message: t('usernameRequired') }]}>
               <Input prefix={<UserOutlined />} placeholder={t('username')} autoComplete="username" autoFocus />
             </Form.Item>
             <Form.Item label={t('password')} name="password" rules={[{ required: true, message: t('passwordRequired') }]}>
               <Input.Password prefix={<LockOutlined />} placeholder={t('password')} autoComplete="current-password" />
             </Form.Item>
-            {error && <Alert type="error" title={error} showIcon style={{ marginBottom: 16 }} />}
-            <Button type="primary" htmlType="submit" block loading={busy}>{t('signIn')}</Button>
+            {error && <Alert type="error" title={error} showIcon style={{ marginBottom: 18 }} />}
+            <Button type="primary" shape="round" htmlType="submit" block loading={busy} style={{ marginTop: 8, height: 44, fontWeight: 500 }}>
+              {t('signIn')}
+            </Button>
           </Form>
-          <Button type="link" style={{ marginTop: 24, padding: 0 }} onClick={() => setLocale(locale === 'zh' ? 'en' : 'zh')}>
-            {locale === 'zh' ? 'English' : '中文'}
-          </Button>
         </div>
       </div>
     </div>

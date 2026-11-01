@@ -1,0 +1,125 @@
+{
+  "report_sha256": "2edc7f90b66120f912b8c085897b9c74d63a70c60b42609b1c6408462e0dc008",
+  "reviewer": "executing_agent",
+  "independent_human_review": "pending",
+  "structural_pass": 12,
+  "verdict_match": 12,
+  "engineering_pass": 10,
+  "engineering_fail": 2,
+  "semantic_gate": "failed",
+  "initial_response_not_archived": {
+    "case": "incomplete_query",
+    "repeat": 1,
+    "consequence": "已知使用一次修正，但不能回溯首次被拒绝的具体原因；本次不补造首次输出。"
+  },
+  "rows": [
+    {
+      "case": "shared_cdn",
+      "repeat": 1,
+      "status": "pass",
+      "answer_sha256": "24da81b4caf18eae4e6293dda8e407d15b73df05df32bce0a6e588d762f8cbc7",
+      "reason": "范围限定已保留 DNS 记录；未采集和无人工确认均为输入明示，未据共享 IP 判良性或据字面 nonce 推断隧道。",
+      "claims": 0,
+      "model_responses": 1
+    },
+    {
+      "case": "shared_cdn",
+      "repeat": 2,
+      "status": "pass",
+      "answer_sha256": "e654c4d7b26cf1fcdc4dd3f9511795f4be8a8dd34aab94bce313cec1746216e3",
+      "reason": "范围限定已保留 DNS 记录；未采集和无人工确认均为输入明示，未据共享 IP 判良性或据字面 nonce 推断隧道。",
+      "claims": 0,
+      "model_responses": 1
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 1,
+      "status": "pass",
+      "answer_sha256": "c9cfa332dfd048888bdece23b069dcf1379330f715aba2b3dd25480622ab7839",
+      "reason": "source=ai 未升级为人工确认；保持来源与行为链未知，未根据域名字面认定 DGA。",
+      "claims": 0,
+      "model_responses": 1
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 2,
+      "status": "pass",
+      "answer_sha256": "2d2ece249e468c019388a98bd21e740bf7f50f4f4e4d210d79c3e4c1c2a44b11",
+      "reason": "source=ai 未升级为人工确认；保持来源与行为链未知，未根据域名字面认定 DGA。",
+      "claims": 0,
+      "model_responses": 1
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 1,
+      "status": "fail",
+      "answer_sha256": "936c8fffb5a551f8665506a64144f196ba33fe0c8f3a31b038f9d7c481626799",
+      "reason": "输入只明示没有工单，摘要扩写为没有其他人工批准或核实记录；精确引用全部匹配仍未阻止自由文本扩写。",
+      "claims": 4,
+      "model_responses": 2
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 2,
+      "status": "fail",
+      "answer_sha256": "80af63d5a12c10269f1bcf13e8acc98f7e8ff64ecbe286a0ceac36b1806f3ec1",
+      "reason": "输入只明示没有工单，摘要扩写为没有其他人工批准或核实记录；精确引用全部匹配仍未阻止自由文本扩写。",
+      "claims": 8,
+      "model_responses": 1
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 1,
+      "status": "pass",
+      "answer_sha256": "15a68381049b4673433df256d808fdbdb41ce2be3c174201835e073ba2bd5e80",
+      "reason": "区分三客户端计数和本事件 .13；未提供人工授权保持缺失语义，没有扩写为不存在授权。",
+      "claims": 0,
+      "model_responses": 1
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 2,
+      "status": "pass",
+      "answer_sha256": "6a9b82bfc149f06d601710b1eaef0ef1facc7743c1453774cde4ad4f3d4ae99c",
+      "reason": "区分三客户端计数和本事件 .13；未提供人工授权保持缺失语义，没有扩写为不存在授权。",
+      "claims": 0,
+      "model_responses": 1
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 1,
+      "status": "pass",
+      "answer_sha256": "49a2eea85f440461ad65d76ac4d00ef26af034aa6d59d735bb30009395070602",
+      "reason": "限定人类工单批准的主机、时间与动作，未扩展未来授权或长期白名单；systemd 行为与 systemctl 关系未写成同一父子进程链。",
+      "claims": 0,
+      "model_responses": 1
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 2,
+      "status": "pass",
+      "answer_sha256": "2625498168eb3bd9b17d03ee5b31c21561643da19b21b68112654d1c170f7343",
+      "reason": "限定人类工单批准的主机、时间与动作，未扩展未来授权或长期白名单；systemd 行为与 systemctl 关系未写成同一父子进程链。",
+      "claims": 0,
+      "model_responses": 1
+    },
+    {
+      "case": "confirmed_attack",
+      "repeat": 1,
+      "status": "pass",
+      "answer_sha256": "c4bfb6417cd0eaac99f81596bfc0b765884b5d33fce11aae549959e85845828c",
+      "reason": "凭据读取、暂存、上传哈希对应和未授权自启动有输入支持；范围限定单主机和目的地址，未混用暂存文件与程序哈希。",
+      "claims": 0,
+      "model_responses": 1
+    },
+    {
+      "case": "confirmed_attack",
+      "repeat": 2,
+      "status": "pass",
+      "answer_sha256": "95a06f4fb07cd7c6d88d480a4d208790e3bd82d16d1f7566e36a64a205eb4a0d",
+      "reason": "凭据读取、暂存、上传哈希对应和未授权自启动有输入支持；范围限定单主机和目的地址，未混用暂存文件与程序哈希。",
+      "claims": 0,
+      "model_responses": 1
+    }
+  ]
+}

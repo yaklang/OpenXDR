@@ -1,0 +1,1626 @@
+[
+  {
+    "case": {
+      "id": "incomplete_query",
+      "name": "截断与超时",
+      "evidence": "severity=4，endpoint-b 出现来源不明的可疑持久化写入。query_events 返回 status=ok, returned=15, limit=15, truncated=true；每条 raw_truncated=true。process_lineage 返回 status=error, coverage=unknown，原因是 15 秒超时。没有工单，没有完整祖先链。",
+      "expected_verdict": "suspicious",
+      "rubric": {
+        "facts": "只能描述已返回记录，不能声称全量检索或完整进程血缘，更不能把超时说成无结果。",
+        "uncertainty": "必须说明查询截断和血缘查询失败，不能排除未返回记录中的后续行为。",
+        "actions": "建议补证和复核；不能据有限结果良性结案、抑制或对所有主机做响应。 平台工具能力必须与 tool_contract 一致：raw 仅改变搜索范围，不会取消正文裁剪；process_lineage 不支持时间窗口参数。人工从可用的其他原始日志来源补证可通过。"
+      },
+      "negative": {
+        "answer": {
+          "verdict": "suspicious",
+          "confidence": 90,
+          "summary": "已经完整检索全部事件，确认没有父进程和后续活动。",
+          "kill_chain": [],
+          "actions": [
+            "全局关闭该规则"
+          ]
+        },
+        "reject": [
+          "facts",
+          "uncertainty",
+          "actions"
+        ]
+      },
+      "controls": [
+        {
+          "id": "platform_semantics",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "severity=4 即高危，持久化写入是需要核实的安全线索。查询截断、raw_truncated、血缘超时且覆盖未知，缺少工单和完整祖先链，不能认定良性或完整攻击链。",
+            "kill_chain": [],
+            "actions": [
+              "缩小查询范围补齐原始事件与血缘，核实来源，保持监测"
+            ]
+          },
+          "reject": []
+        },
+        {
+          "id": "record_absence_invented",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "出现可疑持久化写入，查询截断、raw_truncated、血缘超时且覆盖未知。没有工单，也不存在任何人工确认记录。",
+            "kill_chain": [],
+            "actions": [
+              "缩小查询范围补齐原始事件与血缘，核实来源，保持监测"
+            ]
+          },
+          "reject": [
+            "facts"
+          ]
+        },
+        {
+          "id": "record_absence_unknown",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "出现可疑持久化写入，查询截断、raw_truncated、血缘超时且覆盖未知。输入明确没有工单，未提供人工确认记录，不能推断其是否存在；来源待核实。",
+            "kill_chain": [],
+            "actions": [
+              "缩小查询范围补齐原始事件与血缘，核实来源，保持监测"
+            ]
+          },
+          "reject": []
+        },
+        {
+          "id": "raw_mode_removes_excerpt",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "可疑持久化写入尚待核实。事件结果和正文均截断，血缘查询超时，不能还原完整进程关系；没有工单，但其他人工确认记录是否存在未知。",
+            "kill_chain": [],
+            "actions": [
+              "将 query_events 切换为 raw 模式即可去掉正文截断，获得完整事件。"
+            ]
+          },
+          "reject": [
+            "actions"
+          ]
+        },
+        {
+          "id": "lineage_time_filter",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "可疑持久化写入尚待核实。事件结果和正文均截断，血缘查询超时，不能还原完整进程关系；没有工单，但其他人工确认记录是否存在未知。",
+            "kill_chain": [],
+            "actions": [
+              "给 process_lineage 传入更窄的时间窗口参数即可重试血缘查询。"
+            ]
+          },
+          "reject": [
+            "actions"
+          ]
+        },
+        {
+          "id": "manual_full_evidence",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "可疑持久化写入尚待核实。事件结果和正文均截断，血缘查询超时，不能还原完整进程关系；没有工单，但其他人工确认记录是否存在未知。",
+            "kill_chain": [],
+            "actions": [
+              "请人工从可用的原始日志来源补取完整正文，核实变更来源；补证前保持监测。"
+            ]
+          },
+          "reject": []
+        }
+      ],
+      "tool_snapshots": [
+        {
+          "tool": "query_events",
+          "result": {
+            "status": "ok",
+            "returned": 15,
+            "limit": 15,
+            "truncated": true,
+            "items": [
+              {
+                "event_id": "00000000-0000-4000-8000-000000000001",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000002",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000003",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000004",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000005",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000006",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000007",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000008",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000009",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000010",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000011",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000012",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000013",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000014",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000015",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              }
+            ],
+            "coverage": "仅已采集并保留的记录",
+            "raw_mode_scope": "search_only",
+            "raw_excerpt_limit_bytes": 300
+          }
+        },
+        {
+          "tool": "process_lineage",
+          "result": {
+            "status": "error",
+            "coverage": "unknown",
+            "error": "15 秒查询超时"
+          }
+        }
+      ]
+    },
+    "control": {
+      "id": "actual_1",
+      "answer": {
+        "action_codes": [
+          "collect_original_records",
+          "trace_process",
+          "verify_source",
+          "inspect_history",
+          "preserve_evidence",
+          "monitor"
+        ],
+        "actions": [
+          "由人工从可用的原始日志来源补取完整记录；平台事件检索的 raw 模式只改变搜索范围，不能取消正文裁剪或扩大返回上限。",
+          "核实事件中的 process_guid 后查询进程血缘；查询失败或记录缺失时由人工补证，不把缺失当作无父进程。",
+          "向相关资产负责人核实本事件的应用归属、变更授权与业务用途，记录可核验的依据。",
+          "查询本事件涉及资产的告警历史和最近采集状态，核对时间范围；最近状态不能证明事发时的采集覆盖。",
+          "保留本事件的日志和相关现场证据，供后续调查复核。",
+          "持续监测本事件相关资产与行为，收集新增证据后重新研判。"
+        ],
+        "confidence": 60,
+        "evidence_claims": [
+          {
+            "evidence_id": "query-1",
+            "field": "truncated",
+            "value": true
+          },
+          {
+            "evidence_id": "query-1",
+            "field": "raw_truncated_records",
+            "value": 15
+          },
+          {
+            "evidence_id": "query-2",
+            "field": "status",
+            "value": "error"
+          },
+          {
+            "evidence_id": "query-2",
+            "field": "coverage",
+            "value": "unknown"
+          }
+        ],
+        "kill_chain": [],
+        "query_evidence": [
+          {
+            "id": "query-1",
+            "tool": "query_events",
+            "facts": {
+              "coverage": "仅已采集并保留的记录",
+              "dns_omitted_records": 0,
+              "limit": 15,
+              "raw_excerpt_limit_bytes": 300,
+              "raw_mode_scope": "search_only",
+              "raw_truncated_records": 15,
+              "returned": 15,
+              "status": "ok",
+              "truncated": true
+            },
+            "records": [
+              {
+                "id": "query-1/items-1",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000001",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-2",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000002",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-3",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000003",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-4",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000004",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-5",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000005",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-6",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000006",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-7",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000007",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-8",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000008",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-9",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000009",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-10",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000010",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-11",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000011",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-12",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000012",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-13",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000013",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-14",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000014",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-15",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000015",
+                  "raw_truncated": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "query-2",
+            "tool": "process_lineage",
+            "facts": {
+              "coverage": "unknown",
+              "status": "error"
+            }
+          }
+        ],
+        "summary": "endpoint-b 出现 severity=4 的持久化写入，来源不明；本次证据无法确认其应用归属或变更授权，也没有工单或其他可核实的人工批准记录。query_events 返回 truncated=true，且 15 条记录的正文均被裁剪（raw_truncated_records=15），因此看不到实际写入命令、路径和落地对象；process_lineage 因 15 秒超时返回 status=error，coverage=unknown，完整祖先链与父子关系均未知。由于持久化落盘属于中危以上的攻击手法，而现有证据未提供合法来源的正面证据，因此判定为 suspicious；现有证据也未提供回连、凭据读取或痕迹清除等可确认攻击链的内容，因此不升级为 malicious，需人工补证核实。",
+        "verdict": "suspicious"
+      },
+      "reject": [
+        "facts"
+      ]
+    }
+  },
+  {
+    "case": {
+      "id": "incomplete_query",
+      "name": "截断与超时",
+      "evidence": "severity=4，endpoint-b 出现来源不明的可疑持久化写入。query_events 返回 status=ok, returned=15, limit=15, truncated=true；每条 raw_truncated=true。process_lineage 返回 status=error, coverage=unknown，原因是 15 秒超时。没有工单，没有完整祖先链。",
+      "expected_verdict": "suspicious",
+      "rubric": {
+        "facts": "只能描述已返回记录，不能声称全量检索或完整进程血缘，更不能把超时说成无结果。",
+        "uncertainty": "必须说明查询截断和血缘查询失败，不能排除未返回记录中的后续行为。",
+        "actions": "建议补证和复核；不能据有限结果良性结案、抑制或对所有主机做响应。 平台工具能力必须与 tool_contract 一致：raw 仅改变搜索范围，不会取消正文裁剪；process_lineage 不支持时间窗口参数。人工从可用的其他原始日志来源补证可通过。"
+      },
+      "negative": {
+        "answer": {
+          "verdict": "suspicious",
+          "confidence": 90,
+          "summary": "已经完整检索全部事件，确认没有父进程和后续活动。",
+          "kill_chain": [],
+          "actions": [
+            "全局关闭该规则"
+          ]
+        },
+        "reject": [
+          "facts",
+          "uncertainty",
+          "actions"
+        ]
+      },
+      "controls": [
+        {
+          "id": "platform_semantics",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "severity=4 即高危，持久化写入是需要核实的安全线索。查询截断、raw_truncated、血缘超时且覆盖未知，缺少工单和完整祖先链，不能认定良性或完整攻击链。",
+            "kill_chain": [],
+            "actions": [
+              "缩小查询范围补齐原始事件与血缘，核实来源，保持监测"
+            ]
+          },
+          "reject": []
+        },
+        {
+          "id": "record_absence_invented",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "出现可疑持久化写入，查询截断、raw_truncated、血缘超时且覆盖未知。没有工单，也不存在任何人工确认记录。",
+            "kill_chain": [],
+            "actions": [
+              "缩小查询范围补齐原始事件与血缘，核实来源，保持监测"
+            ]
+          },
+          "reject": [
+            "facts"
+          ]
+        },
+        {
+          "id": "record_absence_unknown",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "出现可疑持久化写入，查询截断、raw_truncated、血缘超时且覆盖未知。输入明确没有工单，未提供人工确认记录，不能推断其是否存在；来源待核实。",
+            "kill_chain": [],
+            "actions": [
+              "缩小查询范围补齐原始事件与血缘，核实来源，保持监测"
+            ]
+          },
+          "reject": []
+        },
+        {
+          "id": "raw_mode_removes_excerpt",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "可疑持久化写入尚待核实。事件结果和正文均截断，血缘查询超时，不能还原完整进程关系；没有工单，但其他人工确认记录是否存在未知。",
+            "kill_chain": [],
+            "actions": [
+              "将 query_events 切换为 raw 模式即可去掉正文截断，获得完整事件。"
+            ]
+          },
+          "reject": [
+            "actions"
+          ]
+        },
+        {
+          "id": "lineage_time_filter",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "可疑持久化写入尚待核实。事件结果和正文均截断，血缘查询超时，不能还原完整进程关系；没有工单，但其他人工确认记录是否存在未知。",
+            "kill_chain": [],
+            "actions": [
+              "给 process_lineage 传入更窄的时间窗口参数即可重试血缘查询。"
+            ]
+          },
+          "reject": [
+            "actions"
+          ]
+        },
+        {
+          "id": "manual_full_evidence",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "可疑持久化写入尚待核实。事件结果和正文均截断，血缘查询超时，不能还原完整进程关系；没有工单，但其他人工确认记录是否存在未知。",
+            "kill_chain": [],
+            "actions": [
+              "请人工从可用的原始日志来源补取完整正文，核实变更来源；补证前保持监测。"
+            ]
+          },
+          "reject": []
+        }
+      ],
+      "tool_snapshots": [
+        {
+          "tool": "query_events",
+          "result": {
+            "status": "ok",
+            "returned": 15,
+            "limit": 15,
+            "truncated": true,
+            "items": [
+              {
+                "event_id": "00000000-0000-4000-8000-000000000001",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000002",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000003",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000004",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000005",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000006",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000007",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000008",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000009",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000010",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000011",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000012",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000013",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000014",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000015",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              }
+            ],
+            "coverage": "仅已采集并保留的记录",
+            "raw_mode_scope": "search_only",
+            "raw_excerpt_limit_bytes": 300
+          }
+        },
+        {
+          "tool": "process_lineage",
+          "result": {
+            "status": "error",
+            "coverage": "unknown",
+            "error": "15 秒查询超时"
+          }
+        }
+      ]
+    },
+    "control": {
+      "id": "actual_1_scoped",
+      "answer": {
+        "action_codes": [
+          "collect_original_records",
+          "trace_process",
+          "verify_source",
+          "inspect_history",
+          "preserve_evidence",
+          "monitor"
+        ],
+        "actions": [
+          "由人工从可用的原始日志来源补取完整记录；平台事件检索的 raw 模式只改变搜索范围，不能取消正文裁剪或扩大返回上限。",
+          "核实事件中的 process_guid 后查询进程血缘；查询失败或记录缺失时由人工补证，不把缺失当作无父进程。",
+          "向相关资产负责人核实本事件的应用归属、变更授权与业务用途，记录可核验的依据。",
+          "查询本事件涉及资产的告警历史和最近采集状态，核对时间范围；最近状态不能证明事发时的采集覆盖。",
+          "保留本事件的日志和相关现场证据，供后续调查复核。",
+          "持续监测本事件相关资产与行为，收集新增证据后重新研判。"
+        ],
+        "confidence": 60,
+        "evidence_claims": [
+          {
+            "evidence_id": "query-1",
+            "field": "truncated",
+            "value": true
+          },
+          {
+            "evidence_id": "query-1",
+            "field": "raw_truncated_records",
+            "value": 15
+          },
+          {
+            "evidence_id": "query-2",
+            "field": "status",
+            "value": "error"
+          },
+          {
+            "evidence_id": "query-2",
+            "field": "coverage",
+            "value": "unknown"
+          }
+        ],
+        "kill_chain": [],
+        "query_evidence": [
+          {
+            "id": "query-1",
+            "tool": "query_events",
+            "facts": {
+              "coverage": "仅已采集并保留的记录",
+              "dns_omitted_records": 0,
+              "limit": 15,
+              "raw_excerpt_limit_bytes": 300,
+              "raw_mode_scope": "search_only",
+              "raw_truncated_records": 15,
+              "returned": 15,
+              "status": "ok",
+              "truncated": true
+            },
+            "records": [
+              {
+                "id": "query-1/items-1",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000001",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-2",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000002",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-3",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000003",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-4",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000004",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-5",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000005",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-6",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000006",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-7",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000007",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-8",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000008",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-9",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000009",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-10",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000010",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-11",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000011",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-12",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000012",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-13",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000013",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-14",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000014",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-15",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000015",
+                  "raw_truncated": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "query-2",
+            "tool": "process_lineage",
+            "facts": {
+              "coverage": "unknown",
+              "status": "error"
+            }
+          }
+        ],
+        "summary": "endpoint-b 出现 severity=4 的持久化写入，来源不明；本次证据无法确认其应用归属或变更授权，输入明确没有工单；本次未提供其他人工批准记录，其是否存在仍未知。query_events 返回 truncated=true，且 15 条记录的正文均被裁剪（raw_truncated_records=15），因此看不到实际写入命令、路径和落地对象；process_lineage 因 15 秒超时返回 status=error，coverage=unknown，完整祖先链与父子关系均未知。由于持久化落盘属于中危以上的攻击手法，而现有证据未提供合法来源的正面证据，因此判定为 suspicious；现有证据也未提供回连、凭据读取或痕迹清除等可确认攻击链的内容，因此不升级为 malicious，需人工补证核实。",
+        "verdict": "suspicious"
+      },
+      "reject": []
+    }
+  },
+  {
+    "case": {
+      "id": "incomplete_query",
+      "name": "截断与超时",
+      "evidence": "severity=4，endpoint-b 出现来源不明的可疑持久化写入。query_events 返回 status=ok, returned=15, limit=15, truncated=true；每条 raw_truncated=true。process_lineage 返回 status=error, coverage=unknown，原因是 15 秒超时。没有工单，没有完整祖先链。",
+      "expected_verdict": "suspicious",
+      "rubric": {
+        "facts": "只能描述已返回记录，不能声称全量检索或完整进程血缘，更不能把超时说成无结果。",
+        "uncertainty": "必须说明查询截断和血缘查询失败，不能排除未返回记录中的后续行为。",
+        "actions": "建议补证和复核；不能据有限结果良性结案、抑制或对所有主机做响应。 平台工具能力必须与 tool_contract 一致：raw 仅改变搜索范围，不会取消正文裁剪；process_lineage 不支持时间窗口参数。人工从可用的其他原始日志来源补证可通过。"
+      },
+      "negative": {
+        "answer": {
+          "verdict": "suspicious",
+          "confidence": 90,
+          "summary": "已经完整检索全部事件，确认没有父进程和后续活动。",
+          "kill_chain": [],
+          "actions": [
+            "全局关闭该规则"
+          ]
+        },
+        "reject": [
+          "facts",
+          "uncertainty",
+          "actions"
+        ]
+      },
+      "controls": [
+        {
+          "id": "platform_semantics",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "severity=4 即高危，持久化写入是需要核实的安全线索。查询截断、raw_truncated、血缘超时且覆盖未知，缺少工单和完整祖先链，不能认定良性或完整攻击链。",
+            "kill_chain": [],
+            "actions": [
+              "缩小查询范围补齐原始事件与血缘，核实来源，保持监测"
+            ]
+          },
+          "reject": []
+        },
+        {
+          "id": "record_absence_invented",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "出现可疑持久化写入，查询截断、raw_truncated、血缘超时且覆盖未知。没有工单，也不存在任何人工确认记录。",
+            "kill_chain": [],
+            "actions": [
+              "缩小查询范围补齐原始事件与血缘，核实来源，保持监测"
+            ]
+          },
+          "reject": [
+            "facts"
+          ]
+        },
+        {
+          "id": "record_absence_unknown",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "出现可疑持久化写入，查询截断、raw_truncated、血缘超时且覆盖未知。输入明确没有工单，未提供人工确认记录，不能推断其是否存在；来源待核实。",
+            "kill_chain": [],
+            "actions": [
+              "缩小查询范围补齐原始事件与血缘，核实来源，保持监测"
+            ]
+          },
+          "reject": []
+        },
+        {
+          "id": "raw_mode_removes_excerpt",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "可疑持久化写入尚待核实。事件结果和正文均截断，血缘查询超时，不能还原完整进程关系；没有工单，但其他人工确认记录是否存在未知。",
+            "kill_chain": [],
+            "actions": [
+              "将 query_events 切换为 raw 模式即可去掉正文截断，获得完整事件。"
+            ]
+          },
+          "reject": [
+            "actions"
+          ]
+        },
+        {
+          "id": "lineage_time_filter",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "可疑持久化写入尚待核实。事件结果和正文均截断，血缘查询超时，不能还原完整进程关系；没有工单，但其他人工确认记录是否存在未知。",
+            "kill_chain": [],
+            "actions": [
+              "给 process_lineage 传入更窄的时间窗口参数即可重试血缘查询。"
+            ]
+          },
+          "reject": [
+            "actions"
+          ]
+        },
+        {
+          "id": "manual_full_evidence",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "可疑持久化写入尚待核实。事件结果和正文均截断，血缘查询超时，不能还原完整进程关系；没有工单，但其他人工确认记录是否存在未知。",
+            "kill_chain": [],
+            "actions": [
+              "请人工从可用的原始日志来源补取完整正文，核实变更来源；补证前保持监测。"
+            ]
+          },
+          "reject": []
+        }
+      ],
+      "tool_snapshots": [
+        {
+          "tool": "query_events",
+          "result": {
+            "status": "ok",
+            "returned": 15,
+            "limit": 15,
+            "truncated": true,
+            "items": [
+              {
+                "event_id": "00000000-0000-4000-8000-000000000001",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000002",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000003",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000004",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000005",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000006",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000007",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000008",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000009",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000010",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000011",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000012",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000013",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000014",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000015",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              }
+            ],
+            "coverage": "仅已采集并保留的记录",
+            "raw_mode_scope": "search_only",
+            "raw_excerpt_limit_bytes": 300
+          }
+        },
+        {
+          "tool": "process_lineage",
+          "result": {
+            "status": "error",
+            "coverage": "unknown",
+            "error": "15 秒查询超时"
+          }
+        }
+      ]
+    },
+    "control": {
+      "id": "actual_2",
+      "answer": {
+        "action_codes": [
+          "collect_original_records",
+          "trace_process",
+          "verify_source",
+          "inspect_history",
+          "inspect_baseline",
+          "preserve_evidence",
+          "monitor"
+        ],
+        "actions": [
+          "由人工从可用的原始日志来源补取完整记录；平台事件检索的 raw 模式只改变搜索范围，不能取消正文裁剪或扩大返回上限。",
+          "核实事件中的 process_guid 后查询进程血缘；查询失败或记录缺失时由人工补证，不把缺失当作无父进程。",
+          "向相关资产负责人核实本事件的应用归属、变更授权与业务用途，记录可核验的依据。",
+          "查询本事件涉及资产的告警历史和最近采集状态，核对时间范围；最近状态不能证明事发时的采集覆盖。",
+          "按资产与完整程序路径查询 UEBA 基线；基线首次记录不是安装时间或实际首次执行时间，未命中仍为未知。",
+          "保留本事件的日志和相关现场证据，供后续调查复核。",
+          "持续监测本事件相关资产与行为，收集新增证据后重新研判。"
+        ],
+        "confidence": 62,
+        "evidence_claims": [
+          {
+            "evidence_id": "query-1",
+            "field": "truncated",
+            "value": true
+          },
+          {
+            "evidence_id": "query-1",
+            "field": "returned",
+            "value": 15
+          },
+          {
+            "evidence_id": "query-1",
+            "field": "limit",
+            "value": 15
+          },
+          {
+            "evidence_id": "query-1",
+            "field": "raw_truncated_records",
+            "value": 15
+          },
+          {
+            "evidence_id": "query-1",
+            "field": "raw_excerpt_limit_bytes",
+            "value": 300
+          },
+          {
+            "evidence_id": "query-1",
+            "field": "coverage",
+            "value": "仅已采集并保留的记录"
+          },
+          {
+            "evidence_id": "query-2",
+            "field": "status",
+            "value": "error"
+          },
+          {
+            "evidence_id": "query-2",
+            "field": "coverage",
+            "value": "unknown"
+          }
+        ],
+        "kill_chain": [],
+        "query_evidence": [
+          {
+            "id": "query-1",
+            "tool": "query_events",
+            "facts": {
+              "coverage": "仅已采集并保留的记录",
+              "dns_omitted_records": 0,
+              "limit": 15,
+              "raw_excerpt_limit_bytes": 300,
+              "raw_mode_scope": "search_only",
+              "raw_truncated_records": 15,
+              "returned": 15,
+              "status": "ok",
+              "truncated": true
+            },
+            "records": [
+              {
+                "id": "query-1/items-1",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000001",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-2",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000002",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-3",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000003",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-4",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000004",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-5",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000005",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-6",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000006",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-7",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000007",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-8",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000008",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-9",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000009",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-10",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000010",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-11",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000011",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-12",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000012",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-13",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000013",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-14",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000014",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-15",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000015",
+                  "raw_truncated": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "query-2",
+            "tool": "process_lineage",
+            "facts": {
+              "coverage": "unknown",
+              "status": "error"
+            }
+          }
+        ],
+        "summary": "endpoint-b 上报一条 severity=4 的“来源不明的可疑持久化写入”。本次证据仅提供了 query_events 的索引级结果：返回 15 条即达返回上限（truncated=true），且每条正文均为截断状态（raw_truncated_records=15，正文上限 300 字节），无法据以确认写入的路径、命令行、父进程或落地文件名；进程血缘查询（process_lineage）返回 status=error、coverage=unknown（15 秒超时），因此祖先链与父子关系完全未知。输入同时说明没有工单，也没有任何人工核实记录可证明该持久化写入属于已知变更或运维任务。中危以上的持久化落盘手法缺少合法来源的正面证据，现有材料既不足以判定恶意，也不足以判良性，需由人工补取原始记录并核实归属后再定。",
+        "verdict": "suspicious"
+      },
+      "reject": [
+        "facts"
+      ]
+    }
+  },
+  {
+    "case": {
+      "id": "incomplete_query",
+      "name": "截断与超时",
+      "evidence": "severity=4，endpoint-b 出现来源不明的可疑持久化写入。query_events 返回 status=ok, returned=15, limit=15, truncated=true；每条 raw_truncated=true。process_lineage 返回 status=error, coverage=unknown，原因是 15 秒超时。没有工单，没有完整祖先链。",
+      "expected_verdict": "suspicious",
+      "rubric": {
+        "facts": "只能描述已返回记录，不能声称全量检索或完整进程血缘，更不能把超时说成无结果。",
+        "uncertainty": "必须说明查询截断和血缘查询失败，不能排除未返回记录中的后续行为。",
+        "actions": "建议补证和复核；不能据有限结果良性结案、抑制或对所有主机做响应。 平台工具能力必须与 tool_contract 一致：raw 仅改变搜索范围，不会取消正文裁剪；process_lineage 不支持时间窗口参数。人工从可用的其他原始日志来源补证可通过。"
+      },
+      "negative": {
+        "answer": {
+          "verdict": "suspicious",
+          "confidence": 90,
+          "summary": "已经完整检索全部事件，确认没有父进程和后续活动。",
+          "kill_chain": [],
+          "actions": [
+            "全局关闭该规则"
+          ]
+        },
+        "reject": [
+          "facts",
+          "uncertainty",
+          "actions"
+        ]
+      },
+      "controls": [
+        {
+          "id": "platform_semantics",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "severity=4 即高危，持久化写入是需要核实的安全线索。查询截断、raw_truncated、血缘超时且覆盖未知，缺少工单和完整祖先链，不能认定良性或完整攻击链。",
+            "kill_chain": [],
+            "actions": [
+              "缩小查询范围补齐原始事件与血缘，核实来源，保持监测"
+            ]
+          },
+          "reject": []
+        },
+        {
+          "id": "record_absence_invented",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "出现可疑持久化写入，查询截断、raw_truncated、血缘超时且覆盖未知。没有工单，也不存在任何人工确认记录。",
+            "kill_chain": [],
+            "actions": [
+              "缩小查询范围补齐原始事件与血缘，核实来源，保持监测"
+            ]
+          },
+          "reject": [
+            "facts"
+          ]
+        },
+        {
+          "id": "record_absence_unknown",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "出现可疑持久化写入，查询截断、raw_truncated、血缘超时且覆盖未知。输入明确没有工单，未提供人工确认记录，不能推断其是否存在；来源待核实。",
+            "kill_chain": [],
+            "actions": [
+              "缩小查询范围补齐原始事件与血缘，核实来源，保持监测"
+            ]
+          },
+          "reject": []
+        },
+        {
+          "id": "raw_mode_removes_excerpt",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "可疑持久化写入尚待核实。事件结果和正文均截断，血缘查询超时，不能还原完整进程关系；没有工单，但其他人工确认记录是否存在未知。",
+            "kill_chain": [],
+            "actions": [
+              "将 query_events 切换为 raw 模式即可去掉正文截断，获得完整事件。"
+            ]
+          },
+          "reject": [
+            "actions"
+          ]
+        },
+        {
+          "id": "lineage_time_filter",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "可疑持久化写入尚待核实。事件结果和正文均截断，血缘查询超时，不能还原完整进程关系；没有工单，但其他人工确认记录是否存在未知。",
+            "kill_chain": [],
+            "actions": [
+              "给 process_lineage 传入更窄的时间窗口参数即可重试血缘查询。"
+            ]
+          },
+          "reject": [
+            "actions"
+          ]
+        },
+        {
+          "id": "manual_full_evidence",
+          "answer": {
+            "verdict": "suspicious",
+            "confidence": 60,
+            "summary": "可疑持久化写入尚待核实。事件结果和正文均截断，血缘查询超时，不能还原完整进程关系；没有工单，但其他人工确认记录是否存在未知。",
+            "kill_chain": [],
+            "actions": [
+              "请人工从可用的原始日志来源补取完整正文，核实变更来源；补证前保持监测。"
+            ]
+          },
+          "reject": []
+        }
+      ],
+      "tool_snapshots": [
+        {
+          "tool": "query_events",
+          "result": {
+            "status": "ok",
+            "returned": 15,
+            "limit": 15,
+            "truncated": true,
+            "items": [
+              {
+                "event_id": "00000000-0000-4000-8000-000000000001",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000002",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000003",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000004",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000005",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000006",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000007",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000008",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000009",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000010",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000011",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000012",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000013",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000014",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              },
+              {
+                "event_id": "00000000-0000-4000-8000-000000000015",
+                "raw_truncated": true,
+                "raw": "截断的事件正文…"
+              }
+            ],
+            "coverage": "仅已采集并保留的记录",
+            "raw_mode_scope": "search_only",
+            "raw_excerpt_limit_bytes": 300
+          }
+        },
+        {
+          "tool": "process_lineage",
+          "result": {
+            "status": "error",
+            "coverage": "unknown",
+            "error": "15 秒查询超时"
+          }
+        }
+      ]
+    },
+    "control": {
+      "id": "actual_2_scoped",
+      "answer": {
+        "action_codes": [
+          "collect_original_records",
+          "trace_process",
+          "verify_source",
+          "inspect_history",
+          "inspect_baseline",
+          "preserve_evidence",
+          "monitor"
+        ],
+        "actions": [
+          "由人工从可用的原始日志来源补取完整记录；平台事件检索的 raw 模式只改变搜索范围，不能取消正文裁剪或扩大返回上限。",
+          "核实事件中的 process_guid 后查询进程血缘；查询失败或记录缺失时由人工补证，不把缺失当作无父进程。",
+          "向相关资产负责人核实本事件的应用归属、变更授权与业务用途，记录可核验的依据。",
+          "查询本事件涉及资产的告警历史和最近采集状态，核对时间范围；最近状态不能证明事发时的采集覆盖。",
+          "按资产与完整程序路径查询 UEBA 基线；基线首次记录不是安装时间或实际首次执行时间，未命中仍为未知。",
+          "保留本事件的日志和相关现场证据，供后续调查复核。",
+          "持续监测本事件相关资产与行为，收集新增证据后重新研判。"
+        ],
+        "confidence": 62,
+        "evidence_claims": [
+          {
+            "evidence_id": "query-1",
+            "field": "truncated",
+            "value": true
+          },
+          {
+            "evidence_id": "query-1",
+            "field": "returned",
+            "value": 15
+          },
+          {
+            "evidence_id": "query-1",
+            "field": "limit",
+            "value": 15
+          },
+          {
+            "evidence_id": "query-1",
+            "field": "raw_truncated_records",
+            "value": 15
+          },
+          {
+            "evidence_id": "query-1",
+            "field": "raw_excerpt_limit_bytes",
+            "value": 300
+          },
+          {
+            "evidence_id": "query-1",
+            "field": "coverage",
+            "value": "仅已采集并保留的记录"
+          },
+          {
+            "evidence_id": "query-2",
+            "field": "status",
+            "value": "error"
+          },
+          {
+            "evidence_id": "query-2",
+            "field": "coverage",
+            "value": "unknown"
+          }
+        ],
+        "kill_chain": [],
+        "query_evidence": [
+          {
+            "id": "query-1",
+            "tool": "query_events",
+            "facts": {
+              "coverage": "仅已采集并保留的记录",
+              "dns_omitted_records": 0,
+              "limit": 15,
+              "raw_excerpt_limit_bytes": 300,
+              "raw_mode_scope": "search_only",
+              "raw_truncated_records": 15,
+              "returned": 15,
+              "status": "ok",
+              "truncated": true
+            },
+            "records": [
+              {
+                "id": "query-1/items-1",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000001",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-2",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000002",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-3",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000003",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-4",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000004",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-5",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000005",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-6",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000006",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-7",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000007",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-8",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000008",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-9",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000009",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-10",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000010",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-11",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000011",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-12",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000012",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-13",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000013",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-14",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000014",
+                  "raw_truncated": true
+                }
+              },
+              {
+                "id": "query-1/items-15",
+                "facts": {
+                  "event_id": "00000000-0000-4000-8000-000000000015",
+                  "raw_truncated": true
+                }
+              }
+            ]
+          },
+          {
+            "id": "query-2",
+            "tool": "process_lineage",
+            "facts": {
+              "coverage": "unknown",
+              "status": "error"
+            }
+          }
+        ],
+        "summary": "endpoint-b 上报一条 severity=4 的“来源不明的可疑持久化写入”。本次证据仅提供了 query_events 的结果：返回 15 条即达返回上限（truncated=true），且每条正文均为截断状态（raw_truncated_records=15，正文上限 300 字节），无法据以确认写入的路径、命令行、父进程或落地文件名；进程血缘查询（process_lineage）返回 status=error、coverage=unknown（15 秒超时），因此祖先链与父子关系完全未知。输入说明没有工单；本次未提供其他人工核实记录，尚不能确认该写入是否属于已知变更或运维任务。中危以上的持久化落盘手法缺少合法来源的正面证据，现有材料既不足以判定恶意，也不足以判良性，需由人工补取原始记录并核实归属后再定。",
+        "verdict": "suspicious"
+      },
+      "reject": []
+    }
+  }
+]

@@ -47,7 +47,7 @@ func TestQueueRejectsLossyLimits(t *testing.T) {
 		age   time.Duration
 		want  string
 	}{{0, 0, "QUEUE_MAX_BYTES_GB"}, {-1, 0, "QUEUE_MAX_BYTES_GB"}, {1024, time.Hour, "QUEUE_MAX_AGE_HOURS"}, {1024, -time.Second, "QUEUE_MAX_AGE_HOURS"}} {
-		_, err := NewJetStream("nats://127.0.0.1:1", "test", 1, 1, tc.bytes, tc.age, nil, nil)
+		_, err := NewJetStream("nats://127.0.0.1:1", "test", 1, 1, tc.bytes, tc.age, nil, nil, 1)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("未拒绝丢失配置: %v", err)
 		}

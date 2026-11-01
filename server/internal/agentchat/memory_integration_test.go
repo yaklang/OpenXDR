@@ -67,7 +67,7 @@ func TestRememberAndForget(t *testing.T) {
 	if out, err := call("memories", `{}`); err != nil || !strings.Contains(out, "每天 04:30 跑端口巡检脚本") || !strings.Contains(out, "10.1.1.100 是网关容器") {
 		t.Fatalf("实时列表应包含刚写的记忆: %s %v", out, err)
 	}
-	data, _, _, err := s.contextData(ctx, session)
+	data, err := s.contextData(ctx, session)
 	if err != nil || len(data["memories"].([]map[string]any)) != 2 {
 		t.Fatalf("上下文应带记忆: %v", err)
 	}

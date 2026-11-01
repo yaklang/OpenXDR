@@ -1,0 +1,106 @@
+[
+  {
+    "id": "mixed_clients-1",
+    "variant": "original",
+    "answer": {
+      "action_codes": [
+        "verify_source",
+        "collect_original_records",
+        "inspect_history",
+        "monitor",
+        "preserve_evidence"
+      ],
+      "actions": [
+        "向相关资产负责人核实本事件的应用归属、变更授权与业务用途，记录可核验的依据。",
+        "由人工从可用的原始日志来源补取完整记录；平台事件检索的 raw 模式只改变搜索范围，不能取消正文裁剪或扩大返回上限。",
+        "查询本事件涉及资产的告警历史和最近采集状态，核对时间范围；最近状态不能证明事发时的采集覆盖。",
+        "持续监测本事件相关资产与行为，收集新增证据后重新研判。",
+        "保留本事件的日志和相关现场证据，供后续调查复核。"
+      ],
+      "confidence": 65,
+      "evidence_observations": [],
+      "kill_chain": [],
+      "query_evidence": [],
+      "summary": "本事件为 resolver-b 上 10.20.0.13 对域名 nonce.service.example 的中危 DNS 查询。最近 7 天保留的 10 条 DNS 记录显示该域名还被 10.20.0.11 和 10.20.0.12 查询过，但当前事件只对应 .13，且现有证据未提供任何客户端进程或连接记录，无法确认这三个客户端是否运行同一应用，也无法判断查询由哪个程序发起、是否伴随后续连接。本次证据未提供人工授权或可核验的业务归属依据，因此不能认定为合法运维，按可疑事件处理，需进一步核实来源与用途。",
+      "verdict": "suspicious"
+    },
+    "expected_actions": "fail"
+  },
+  {
+    "id": "mixed_clients-1",
+    "variant": "revised",
+    "answer": {
+      "action_codes": [
+        "verify_source",
+        "collect_original_records",
+        "inspect_history",
+        "monitor",
+        "preserve_evidence"
+      ],
+      "actions": [
+        "在现有权限范围内，向相关资产负责人逐一核实本事件涉及资产及证据中各客户端的应用归属、变更授权与业务用途，分别记录可核验的依据；不把转发器或一个客户端的归属结论套用到其他客户端。",
+        "由人工从可用的原始日志来源补取完整记录；平台事件检索的 raw 模式只改变搜索范围，不能取消正文裁剪或扩大返回上限。",
+        "查询本事件涉及资产的告警历史和最近采集状态，核对时间范围；最近状态不能证明事发时的采集覆盖。",
+        "持续监测本事件相关资产与行为，收集新增证据后重新研判。",
+        "保留本事件的日志和相关现场证据，供后续调查复核。"
+      ],
+      "confidence": 65,
+      "evidence_observations": [],
+      "kill_chain": [],
+      "query_evidence": [],
+      "summary": "本事件为 resolver-b 上 10.20.0.13 对域名 nonce.service.example 的中危 DNS 查询。最近 7 天保留的 10 条 DNS 记录显示该域名还被 10.20.0.11 和 10.20.0.12 查询过，但当前事件只对应 .13，且现有证据未提供任何客户端进程或连接记录，无法确认这三个客户端是否运行同一应用，也无法判断查询由哪个程序发起、是否伴随后续连接。本次证据未提供人工授权或可核验的业务归属依据，因此不能认定为合法运维，按可疑事件处理，需进一步核实来源与用途。",
+      "verdict": "suspicious"
+    },
+    "expected_actions": "pass"
+  },
+  {
+    "id": "mixed_clients-2",
+    "variant": "original",
+    "answer": {
+      "action_codes": [
+        "verify_source",
+        "collect_original_records",
+        "preserve_evidence",
+        "monitor"
+      ],
+      "actions": [
+        "向相关资产负责人核实本事件的应用归属、变更授权与业务用途，记录可核验的依据。",
+        "由人工从可用的原始日志来源补取完整记录；平台事件检索的 raw 模式只改变搜索范围，不能取消正文裁剪或扩大返回上限。",
+        "保留本事件的日志和相关现场证据，供后续调查复核。",
+        "持续监测本事件相关资产与行为，收集新增证据后重新研判。"
+      ],
+      "confidence": 65,
+      "evidence_observations": [],
+      "kill_chain": [],
+      "query_evidence": [],
+      "summary": "转发器 resolver-b 最近 7 天保留 10 条对 nonce.service.example 的 DNS 记录，分别来自 10.20.0.11（5 条）、10.20.0.12（4 条）和 10.20.0.13（1 条），当前事件仅对应 10.20.0.13。本次证据未提供客户端进程或连接记录，无法确认三个客户端是否运行同一应用，也未提供人工授权。该中危 DNS 活动的应用归属和业务用途尚未核实，现有证据未显示凭据读取、外传、持久化或回连等攻击链，因此判为可疑，需人工核实来源并补取原始记录。",
+      "verdict": "suspicious"
+    },
+    "expected_actions": "fail"
+  },
+  {
+    "id": "mixed_clients-2",
+    "variant": "revised",
+    "answer": {
+      "action_codes": [
+        "verify_source",
+        "collect_original_records",
+        "preserve_evidence",
+        "monitor"
+      ],
+      "actions": [
+        "在现有权限范围内，向相关资产负责人逐一核实本事件涉及资产及证据中各客户端的应用归属、变更授权与业务用途，分别记录可核验的依据；不把转发器或一个客户端的归属结论套用到其他客户端。",
+        "由人工从可用的原始日志来源补取完整记录；平台事件检索的 raw 模式只改变搜索范围，不能取消正文裁剪或扩大返回上限。",
+        "保留本事件的日志和相关现场证据，供后续调查复核。",
+        "持续监测本事件相关资产与行为，收集新增证据后重新研判。"
+      ],
+      "confidence": 65,
+      "evidence_observations": [],
+      "kill_chain": [],
+      "query_evidence": [],
+      "summary": "转发器 resolver-b 最近 7 天保留 10 条对 nonce.service.example 的 DNS 记录，分别来自 10.20.0.11（5 条）、10.20.0.12（4 条）和 10.20.0.13（1 条），当前事件仅对应 10.20.0.13。本次证据未提供客户端进程或连接记录，无法确认三个客户端是否运行同一应用，也未提供人工授权。该中危 DNS 活动的应用归属和业务用途尚未核实，现有证据未显示凭据读取、外传、持久化或回连等攻击链，因此判为可疑，需人工核实来源并补取原始记录。",
+      "verdict": "suspicious"
+    },
+    "expected_actions": "pass"
+  }
+]

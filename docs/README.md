@@ -21,9 +21,10 @@
 | [detection.md](detection.md) | 检测与降噪链路：Sigma 引擎、情报、去重、抑制、爆破升级、关联、UEBA、AI 研判、响应处置、通知、清理 | 改 `server/internal/` 任何检测相关包 |
 | [api.md](api.md) | REST API 参考：端点、参数、权限约定、对接示例 | 对接外部系统；改 `server/internal/api` |
 | [open-integrations-design.md](open-integrations-design.md) | 资产导出与系统联动详细设计（待实施）：集成身份、API、事件订阅、工单回写及验收 | 实施导出、CMDB 对接或工单联动前 |
-| [roadmap.md](roadmap.md) | 路线图：现状快照、已完成项的教训、后续工作详细规划（P0/P1/P2）、不做清单 | 决定"接下来做什么"之前 |
+| [roadmap.md](roadmap.md) | 路线图：2026-10-30 运行修复与各方向实现/部署/验收状态、当前 P0/P1/P2 与完成条件、历史记录 | 决定"接下来做什么"之前 |
+| [ingestion-capacity.md](ingestion-capacity.md) | 入库容量验证：有界 mTLS 合成流量、逐轮停止阈值与实际落库对账 | 扩大纳管或验证吞吐前 |
 | [pi-backend.md](pi-backend.md) | AI 助手后端：会话与后台运行、命令名单与审批、只读查询、运维待办、预设任务 | 配置 AI 助手与巡检；改 `agentchat`、`commandgate` |
-| [vulns.md](vulns.md) | 软件漏洞：dpkg 软件清单、OSV 漏洞库同步、版本比较与暴露服务标注、已知限制 | 看主机漏洞；改 `vuln` 或 agent 软件清单 |
+| [vulns.md](vulns.md) | 软件漏洞：dpkg / RPM 软件清单、OSV 漏洞库同步、版本比较与暴露服务标注、已知限制 | 看主机漏洞；改 `vuln` 或 agent 软件清单 |
 | [temporal-detection.md](temporal-detection.md) | 时序检测（开发中）：计数与序列规则格式、加载约束、求值与存储 | 写时序规则；改 `temporal` |
 | [identity-correlation.md](identity-correlation.md) | 身份关联（开发中）：Linux / Windows 登录归一化、本地账号、Keycloak / Entra ID / Authentik / AD-LDAP 目录同步 | 接入身份来源；改 `identity` |
 | [asset-map.md](asset-map.md) | 资产图谱与攻击面：设备清单、依赖边、区域与暴露级别、风险分、AI 标注 | 看资产关系与暴露面；改 `assetmap` 或 agent inventory |
@@ -31,8 +32,12 @@
 | [ai-native.md](ai-native.md) | AI 原生架构设计稿（M1 已实现，当前接口以 pi-backend.md 为准）：agent 执行器、平台托管 Pi、定时巡检、对话页、组与审批 | 参与 AI 原生改造之前 |
 | [ssh-decoy.md](ssh-decoy.md) | 独立 SSH 诱饵靶场原型：固定 Banner、标记核实、事件与验证边界 | 进行授权诱骗实验；不用于生产部署 |
 | [multi-carrier-decoys.md](multi-carrier-decoys.md) | 多载体登记、HTTP/HTML、文件打开监视、模拟 Shell 与认证事件回传 | 布放与验收通用诱饵 |
+| [../integrations/dygk/README.md](../integrations/dygk/README.md) | 独立欺骗引擎：统一启动、源码缓存与 Git 管理、镜像范围、上游更新和回退 | 部署或更新 DYGK 与原生诱饵运行包 |
+| [deception-engine-design.md](deception-engine-design.md) | OpenXDR 与 DYGK 独立引擎接入设计：运行逻辑抽离、版本化协议、迁移清单与升级验收 | 实施欺骗引擎抽离或接入 DYGK 前 |
 | [decoy-defense.md](decoy-defense.md) | 诱饵、暂停注入、输出填充的运行策略、事件契约和平台接入边界 | 开发和验收三层诱饵防御 |
 | [event-partitioning.md](event-partitioning.md) | events 按天分区：主键与引用处理、ent 共存、预建与退役、老库在线迁移与回滚 | 改 events 表结构或保留期；执行分区迁移 |
+| [event-archive.md](event-archive.md) | 冷归档：冷块格式、影子归档、冷热读取、按 ID 定位、单日切换与恢复、闸门与生命周期、CLI 速查 | 归档/切换/恢复操作；容量与保留规划；改冷归档代码 |
+| [archive-rehearsal-2026-10-30.md](archive-rehearsal-2026-10-30.md) | 冷归档等规模演练记录（260 万行单日）：全链路耗时、Exists 延迟、空间账、Guard 反向验证 | 容量规划取数；换环境后对照重测 |
 | [cluster.md](cluster.md) | JetStream 队列、server 集群、幂等语义、故障恢复与 Prometheus/Grafana | 部署多节点；排查积压、重投与节点故障 |
 | [../deploy/ha/README.md](../deploy/ha/README.md) | 跨宿主机高可用：Patroni + 三节点 JetStream + Keepalived VIP，初始化与切换验收 | 部署两故障域 HA；升级或排查 VIP、主备切换 |
 

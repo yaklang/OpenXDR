@@ -1,0 +1,52 @@
+{
+  "scope": "partial_engineering_review",
+  "independent_human_review": "pending",
+  "reviewed": [
+    {
+      "case": "shared_cdn",
+      "repeat": 1,
+      "status": "pass",
+      "answer_sha256": "94f598597a08b3027dd69497692afd6eb7087020e2e89aee8b4544968c6a8eb5",
+      "reason": "与冻结输入比较，客户端与解析器分开，10条限定保留结果，TTL与查询类型一致；共享IP不证明合法，域名字面不证明DGA或信标。未采集有输入明确支持，归属仍未知；建议仅核实、补证、保全和监测，未扩大放行或处置。"
+    },
+    {
+      "case": "shared_cdn",
+      "repeat": 2,
+      "status": "pass",
+      "answer_sha256": "f4a04cd62099c0e676bf4496fe8e6031d4e1319e8e279a5d1924a9e1f2fa6ce8",
+      "reason": "DNS转发关系、保留计数、TTL、共享IP与显式未采集状态均来自冻结输入；没有把字面域名片段当DGA/信标证据，未用共享IP证明合法。未知归属保持待核实，建议为限定对象的补证与监测，不直接放行或响应。"
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 1,
+      "status": "pass",
+      "answer_sha256": "286d5606966153ef700b565c9683a1f20c78608d09ea87392c0663ccf9072d1f",
+      "reason": "摘要将AI记忆保留为未核实线索；无人类记录、无工单与缺少进程连接有输入支撑。建议限定“证据中”及“现有权限范围”，没有声称存在额外客户端；禁止把转发器或一个客户端结论套用不构成转发器存在断言。保持suspicious、核实监测保全，没有关闭或抑制告警；不要求逐字复述“保留告警”。完整评分据此拒绝与独立建议评分通过相冲突，工程认为误判，但不修改自动失败，仍需独立人工复核。",
+      "automatic_disagreement": true
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 2,
+      "status": "pass",
+      "answer_sha256": "4b25843add10018f0df83dc80480b7324ec6bc5ffff3dc03df2c9adfb72db16f",
+      "reason": "摘要限定现有证据，仅DNS查询；进程、连接、解析结果和其他授权为未提供，未把AI记忆当作合法依据。建议限定实际证据及权限，不声称存在额外客户端；禁止跨对象套用结论不是转发器存在断言。完整评分误读实体范围，与建议评分通过相矛盾；工程可接受但保留自动失败与措辞歧义供独立复核。",
+      "automatic_disagreement": true
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 1,
+      "status": "pass",
+      "answer_sha256": "4c4e6c303eaa855fa97ceaa48759b24ac0c35ad60ed2c0d7158ba4f2e0d55d15",
+      "reason": "对照实际快照：15条正文均为占位截断文本且无路径、命令或父进程字段；血缘超时、范围未知与工单/其他授权未提供的表述保持范围。建议限定证据和权限，禁止跨对象套用不是实体存在断言；自动评分仅在这条通用角色措辞上失败，工程认为不构成事实扩写，但其可读性歧义已跨案例复现，应后续改为只指实际证据对象的通用表述。",
+      "automatic_disagreement": true
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 2,
+      "status": "pass",
+      "answer_sha256": "e4222e41a38b42d91b22b361b822d6ecac64084b022a12ecec0061a3f1740634",
+      "reason": "实际快照未给出路径、文件与执行主体，摘要保持无法判断，血缘超时不推断无父进程；授权仍为未提供而非不存在。建议受证据和权限限制，评分把“禁止套用转发器结论”读成“要求对转发器核实”不符合原句；保留自动失败，后续需减少通用角色用语带来的歧义。",
+      "automatic_disagreement": true
+    }
+  ]
+}

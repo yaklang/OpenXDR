@@ -37,7 +37,10 @@ type Feed struct {
 	Name     string
 	URL      string
 	Severity int16
-	parse    func(io.Reader) []Entry
+	// 带密钥的下载地址仅在请求时拼接，接口仍返回公开说明页。
+	authURL  string
+	authFile string
+	parse    func(io.Reader) ([]Entry, error)
 }
 
 // Entry 源里解析出的一条 IOC。
@@ -50,9 +53,9 @@ var Catalog = []Feed{
 	{ID: "feodo", Name: "abuse.ch Feodo Tracker：僵尸网络 C2 服务器 IP",
 		URL: "https://feodotracker.abuse.ch/downloads/ipblocklist.txt", Severity: 5, parse: parseList},
 	{ID: "threatfox", Name: "abuse.ch ThreatFox：近期恶意软件 IOC（IP、域名、哈希）",
-		URL: "https://threatfox.abuse.ch/export/csv/recent/", Severity: 4, parse: parseThreatFox},
+		URL: "https://threatfox.abuse.ch/export/", Severity: 4, authURL: "https://threatfox-api.abuse.ch/v2/files/exports/", authFile: "full.csv.zip", parse: parseThreatFoxZIP},
 	{ID: "urlhaus", Name: "abuse.ch URLhaus：恶意软件分发域名",
-		URL: "https://urlhaus.abuse.ch/downloads/hostfile/", Severity: 4, parse: parseHostsFile},
+		URL: "https://urlhaus.abuse.ch/api/", Severity: 4, authURL: "https://urlhaus-api.abuse.ch/v2/files/exports/", authFile: "hostfile.txt", parse: parseHostsFile},
 	{ID: "et-compromised", Name: "Emerging Threats：已知失陷主机 IP",
 		URL: "https://rules.emergingthreats.net/blockrules/compromised-ips.txt", Severity: 3, parse: parseList},
 }
@@ -60,10 +63,12 @@ var Catalog = []Feed{
 const (
 	feedSettingsKey = "intel_feeds"
 	feedStatusKey   = "intel_feed_status"
-	// 单个源的下载与条目上限：超出说明源出了问题，宁可截断也不拖垮引擎
+	// 单个源的下载与条目上限：超限拒绝本次更新，保留原有情报。
 	maxFeedBytes   = 50 << 20
 	maxFeedEntries = 100_000
 )
+
+var errFeedEntryLimit = errors.New("情报源超过 10 万条上限")
 
 // FeedSettings 控制台保存的开关。从没保存过时内置源全部开启——没有情报等于没开碰撞。
 type FeedSettings struct {
@@ -72,15 +77,17 @@ type FeedSettings struct {
 
 // FeedStatus 每个源最近一次同步的结果。
 type FeedStatus struct {
-	SyncedAt *time.Time `json:"syncedAt"`
-	Count    int        `json:"count"`
-	Error    string     `json:"error,omitempty"`
+	SyncedAt    *time.Time `json:"syncedAt"`
+	AttemptedAt *time.Time `json:"attemptedAt"`
+	Count       int        `json:"count"`
+	Error       string     `json:"error,omitempty"`
 }
 
 type Feeds struct {
-	DB     *sql.DB
-	Client *ent.Client
-	HTTP   *http.Client
+	DB      *sql.DB
+	Client  *ent.Client
+	HTTP    *http.Client
+	AuthKey func(context.Context) string
 	// 同步周期；条目有效期取它的 8 倍，连续几次拉不到也不会断情报
 	Interval time.Duration
 }
@@ -103,37 +110,71 @@ func (f *Feeds) Run(ctx context.Context) {
 	}
 }
 
-func (f *Feeds) Settings(ctx context.Context) FeedSettings {
+func (f *Feeds) Settings(ctx context.Context) (FeedSettings, error) {
 	var s FeedSettings
-	if !f.getSetting(ctx, feedSettingsKey, &s) {
+	err := f.getSetting(ctx, feedSettingsKey, &s)
+	if ent.IsNotFound(err) {
 		for _, feed := range Catalog {
 			s.Enabled = append(s.Enabled, feed.ID)
 		}
+		return s, nil
 	}
-	return s
+	if err != nil {
+		return s, err
+	}
+	return s, s.validate()
 }
 
 // SaveSettings 保存开关，只认内置源 ID。
 func (f *Feeds) SaveSettings(ctx context.Context, s FeedSettings) error {
+	if err := s.validate(); err != nil {
+		return err
+	}
+	return f.putSetting(ctx, feedSettingsKey, s)
+}
+
+func (s FeedSettings) validate() error {
+	if s.Enabled == nil {
+		return errors.New("情报订阅配置缺少 enabled 数组")
+	}
 	for _, id := range s.Enabled {
 		if !slices.ContainsFunc(Catalog, func(feed Feed) bool { return feed.ID == id }) {
 			return fmt.Errorf("未知情报源：%s", id)
 		}
 	}
-	return f.putSetting(ctx, feedSettingsKey, s)
+	return nil
 }
 
-func (f *Feeds) Status(ctx context.Context) map[string]FeedStatus {
+func (f *Feeds) Status(ctx context.Context) (map[string]FeedStatus, error) {
 	status := map[string]FeedStatus{}
-	f.getSetting(ctx, feedStatusKey, &status)
-	return status
+	if err := f.getSetting(ctx, feedStatusKey, &status); err != nil && !ent.IsNotFound(err) {
+		return nil, err
+	}
+	// 旧版本把失败时间也写入 syncedAt；无法还原成功时间时明确留空。
+	for id, st := range status {
+		if st.AttemptedAt == nil {
+			st.AttemptedAt = st.SyncedAt
+			if st.Error != "" {
+				st.SyncedAt = nil
+			}
+			status[id] = st
+		}
+	}
+	return status, nil
 }
 
 // Sync 拉取开启的源并落库，清掉关闭的源与过期条目。集群内串行，控制台「立即同步」与定时任务不会撞车。
 func (f *Feeds) Sync(ctx context.Context) error {
 	return cluster.WithLock(ctx, f.DB, "intel-feeds-sync", func() error {
-		enabled := f.Settings(ctx).Enabled
-		status := f.Status(ctx)
+		settings, err := f.Settings(ctx)
+		if err != nil {
+			return err
+		}
+		enabled := settings.Enabled
+		status, err := f.Status(ctx)
+		if err != nil {
+			return err
+		}
 		for _, feed := range Catalog {
 			if !slices.Contains(enabled, feed.ID) {
 				if _, err := f.DB.ExecContext(ctx, `DELETE FROM intels WHERE source = $1`, "feed:"+feed.ID); err != nil {
@@ -143,17 +184,18 @@ func (f *Feeds) Sync(ctx context.Context) error {
 				continue
 			}
 			now := time.Now()
-			st := FeedStatus{SyncedAt: &now}
+			st := status[feed.ID]
+			st.AttemptedAt = &now
 			entries, err := f.fetch(ctx, feed)
 			if err == nil {
 				err = f.store(ctx, feed, entries, now.Add(f.ttl()))
 			}
 			if err != nil {
 				// 失败保留上次的条目数，旧条目在有效期内照常生效
-				st.Count, st.Error = status[feed.ID].Count, err.Error()
+				st.Error = err.Error()
 				slog.Warn("情报源同步失败", "feed", feed.ID, "err", err)
 			} else {
-				st.Count = len(entries)
+				st.Count, st.Error, st.SyncedAt = len(entries), "", &now
 				slog.Info("情报源已同步", "feed", feed.ID, "count", len(entries))
 			}
 			status[feed.ID] = st
@@ -168,30 +210,63 @@ func (f *Feeds) Sync(ctx context.Context) error {
 func (f *Feeds) fetch(ctx context.Context, feed Feed) ([]Entry, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feed.URL, nil)
+	address := feed.URL
+	if feed.authURL != "" {
+		key := ""
+		if f.AuthKey != nil {
+			key = f.AuthKey(ctx)
+		}
+		if key == "" {
+			return nil, errors.New("请在系统设置 → 外部情报查询中配置 abuse.ch Auth-Key")
+		}
+		address = feed.authURL + url.PathEscape(key) + "/" + feed.authFile
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("情报源请求地址无效")
 	}
 	req.Header.Set("User-Agent", "OpenXDR-intel-feeds")
 	client := f.HTTP
 	if client == nil {
 		client = http.DefaultClient
 	}
+	if feed.authURL != "" {
+		copy := *client
+		copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &copy
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		// url.Error 包含请求地址，认证导出的密钥在路径中，不能直接写日志或回显。
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, errors.New("情报源连接失败，请检查网络或代理配置")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("情报源返回 %d", resp.StatusCode)
 	}
-	entries := dedupe(feed.parse(io.LimitReader(resp.Body, maxFeedBytes)))
+	limited := &io.LimitedReader{R: resp.Body, N: maxFeedBytes + 1}
+	entries, err := feed.parse(limited)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if errors.Is(err, errFeedEntryLimit) {
+			return nil, errFeedEntryLimit
+		}
+		return nil, errors.New("情报源解析失败：数据不完整或格式错误")
+	}
+	if limited.N == 0 {
+		return nil, errors.New("情报源超过 50 MiB 下载上限")
+	}
 	if len(entries) == 0 {
 		// 空源多半是格式变了或被限流，不能当成"情报全部撤销"
 		return nil, errors.New("情报源没有解析出任何条目")
 	}
 	if len(entries) > maxFeedEntries {
-		entries = entries[:maxFeedEntries]
+		return nil, errFeedEntryLimit
 	}
 	return entries, nil
 }
@@ -213,12 +288,18 @@ WHERE intels.source LIKE 'feed:%'`,
 	return err
 }
 
-func (f *Feeds) getSetting(ctx context.Context, key string, v any) bool {
+func (f *Feeds) getSetting(ctx context.Context, key string, v any) error {
 	row, err := f.Client.Setting.Get(ctx, key)
 	if err != nil {
-		return false
+		return err
 	}
-	return json.Unmarshal(row.Value, v) == nil
+	if strings.TrimSpace(string(row.Value)) == "null" {
+		return fmt.Errorf("情报订阅配置 %s 不能为 null", key)
+	}
+	if err := json.Unmarshal(row.Value, v); err != nil {
+		return fmt.Errorf("情报订阅配置 %s 格式错误", key)
+	}
+	return nil
 }
 
 func (f *Feeds) putSetting(ctx context.Context, key string, v any) error {
@@ -238,6 +319,8 @@ func (f *Feeds) putSetting(ctx context.Context, key string, v any) error {
 var (
 	domainRe = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$`)
 	hashRe   = regexp.MustCompile(`^([0-9a-f]{32}|[0-9a-f]{40}|[0-9a-f]{64})$`)
+	// RFC 6598 共享地址不属于 IsPrivate 覆盖的 RFC 1918 私网。
+	cgnat = netip.MustParsePrefix("100.64.0.0/10")
 )
 
 // normalize 校验并规范化一条 IOC，不合格返回 false。
@@ -251,7 +334,7 @@ func normalize(kind, value string) (Entry, bool) {
 		}
 		addr = addr.Unmap()
 		// 内网与保留地址出现在公开情报里只会误伤自己人
-		if !addr.IsGlobalUnicast() || addr.IsPrivate() {
+		if !addr.IsGlobalUnicast() || addr.IsPrivate() || cgnat.Contains(addr) {
 			return Entry{}, false
 		}
 		return Entry{Kind: "ip", Value: addr.String()}, true
@@ -270,71 +353,99 @@ func normalize(kind, value string) (Entry, bool) {
 	return Entry{}, false
 }
 
-// dedupe 同一个源里同值只留第一条：同一 IP 换端口在 ThreatFox 里很常见，
-// 而一条 INSERT … ON CONFLICT 里出现重复键会整批失败。
-func dedupe(entries []Entry) []Entry {
-	seen := make(map[string]bool, len(entries))
-	out := entries[:0]
-	for _, e := range entries {
-		if key := e.Kind + ":" + e.Value; !seen[key] {
-			seen[key] = true
-			out = append(out, e)
-		}
-	}
-	return out
+// 解析时去重并限制唯一条目数，避免先积累整份重复数据再分配去重表。
+type feedEntries struct {
+	entries []Entry
+	seen    map[[2]string]bool
 }
 
-func lines(r io.Reader, each func(string)) {
+func (out *feedEntries) add(e Entry) error {
+	key := [2]string{e.Kind, e.Value}
+	if out.seen[key] {
+		return nil
+	}
+	if len(out.entries) >= maxFeedEntries {
+		return errFeedEntryLimit
+	}
+	if out.seen == nil {
+		out.seen = make(map[[2]string]bool)
+	}
+	out.seen[key] = true
+	out.entries = append(out.entries, e)
+	return nil
+}
+
+func lines(r io.Reader, each func(string) error) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line != "" && !strings.HasPrefix(line, "#") {
-			each(line)
+			if err := each(line); err != nil {
+				return err
+			}
 		}
 	}
+	return sc.Err()
 }
 
 // parseList 每行一个 IP。
-func parseList(r io.Reader) []Entry {
-	var out []Entry
-	lines(r, func(line string) {
+func parseList(r io.Reader) ([]Entry, error) {
+	var out feedEntries
+	err := lines(r, func(line string) error {
 		if e, ok := normalize("ip", strings.Fields(line)[0]); ok {
-			out = append(out, e)
+			return out.add(e)
 		}
+		return nil
 	})
-	return out
+	if err != nil {
+		return nil, err
+	}
+	return out.entries, nil
 }
 
 // parseHostsFile hosts 格式：127.0.0.1<空白>域名。
-func parseHostsFile(r io.Reader) []Entry {
-	var out []Entry
-	lines(r, func(line string) {
+func parseHostsFile(r io.Reader) ([]Entry, error) {
+	var out feedEntries
+	err := lines(r, func(line string) error {
 		if fields := strings.Fields(line); len(fields) >= 2 {
 			if e, ok := normalize("domain", fields[1]); ok {
-				out = append(out, e)
+				return out.add(e)
 			}
 		}
+		return nil
 	})
-	return out
+	if err != nil {
+		return nil, err
+	}
+	return out.entries, nil
 }
 
 // parseThreatFox ThreatFox CSV 导出。URL 只取主机为 IP 的：挂在公共平台上的恶意 URL
 // 若按主机名入库，访问正常的 GitHub、Google 也会报警。
-func parseThreatFox(r io.Reader) []Entry {
+func parseThreatFox(r io.Reader) ([]Entry, error) {
 	var body strings.Builder
-	lines(r, func(line string) { body.WriteString(line + "\n") })
+	err := lines(r, func(line string) error {
+		body.WriteString(line + "\n")
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
 	rd := csv.NewReader(strings.NewReader(body.String()))
 	rd.TrimLeadingSpace = true
 	rd.FieldsPerRecord = -1
-	var out []Entry
+	var out feedEntries
 	for {
 		rec, err := rd.Read()
 		if err == io.EOF {
 			break
 		}
-		if err != nil || len(rec) < 8 {
-			continue
+		if err != nil {
+			return nil, errors.New("ThreatFox CSV 格式损坏")
+		}
+		if len(rec) < 8 {
+			return nil, errors.New("ThreatFox CSV 字段不足")
 		}
 		value, typ, malware := rec[2], rec[3], rec[7]
 		var e Entry
@@ -356,8 +467,10 @@ func parseThreatFox(r io.Reader) []Entry {
 			if malware != "" && malware != "None" {
 				e.Note = "ThreatFox：" + malware
 			}
-			out = append(out, e)
+			if err := out.add(e); err != nil {
+				return nil, err
+			}
 		}
 	}
-	return out
+	return out.entries, nil
 }

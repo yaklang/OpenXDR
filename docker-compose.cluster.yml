@@ -33,6 +33,7 @@ x-server: &server
     TLS_KEY_FILE: ${TLS_KEY_FILE:-}
     AI_BASE_URL: ${AI_BASE_URL:-http://host.docker.internal:11434/v1}
     AI_MODEL: ${AI_MODEL:-}
+    AI_TEMPLATE_NO_THINKING: ${AI_TEMPLATE_NO_THINKING:-false}
     AI_API_KEY: ${AI_API_KEY:-}
     PI_MODEL: ${PI_MODEL:-}
     # 配置后 Pi 在独立沙箱主机的隔离容器里运行，见 docs/pi-backend.md#沙箱模式

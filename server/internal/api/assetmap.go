@@ -41,14 +41,24 @@ func AssetMap(db *ent.Client, aiEnabled func() bool) http.Handler {
 	return mux
 }
 
-// assetMapGraph 组内资产图谱。
+// assetMapGraph 组内资产图谱；groupId=all 是全部组视图，只给全局 admin。
 func assetMapGraph(db *ent.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, ok := assetMapGroup(w, r, db)
-		if !ok {
-			return
+		var g *assetmap.Group
+		var err error
+		if r.URL.Query().Get("groupId") == "all" {
+			if u := auth.From(r.Context()); u == nil || u.Role != "admin" {
+				http.Error(w, "全部组视图只对全局管理员开放", http.StatusForbidden)
+				return
+			}
+			g, err = assetmap.LoadAll(r.Context(), db)
+		} else {
+			id, ok := assetMapGroup(w, r, db)
+			if !ok {
+				return
+			}
+			g, err = assetmap.LoadGroup(r.Context(), db, id)
 		}
-		g, err := assetmap.LoadGroup(r.Context(), db, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -174,7 +184,7 @@ func assetProfile(db *ent.Client, aiEnabled func() bool) http.HandlerFunc {
 		writeJSON(w, map[string]any{
 			"zone": facts.Zone, "exposure": facts.Exposure, "cloud": facts.Cloud,
 			"listening": listening, "inventoryAt": a.InventoryAt, "services": assetmap.NotesOf(a),
-			"outbound": facts.Outbound, "inbound": facts.Inbound, "publicDestinations": facts.PublicDestinations, "public": assetmap.WithNotes(facts.Public, a),
+			"outbound": facts.OutboundDetails, "inbound": facts.InboundDetails, "outboundStats": facts.OutboundStats, "inboundStats": facts.InboundStats, "publicDestinations": facts.PublicDestinations, "public": assetmap.WithNotes(facts.Public, a),
 			"role": a.Role, "summary": a.Summary, "criticality": a.Criticality, "reason": a.AnnotationReason,
 			"relationNotes": a.RelationNotes, "lockedFields": a.LockedFields,
 			"annotatedAt": a.AnnotatedAt, "annotateRequestedAt": a.AnnotateRequestedAt, "aiEnabled": aiEnabled(),

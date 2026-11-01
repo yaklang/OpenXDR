@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"openxdr/server/deception/native"
+	"openxdr/server/deception/sdk"
 	"openxdr/server/ent"
 	"openxdr/server/ent/decoydeployment"
 	"openxdr/server/ent/decoyobservation"
@@ -81,7 +83,7 @@ func TestDecoyRuntimeEndToEnd(t *testing.T) {
 	}
 	ts := httptest.NewServer(root)
 	defer ts.Close()
-	client, err := decoy.NewClient(ts.URL, row.ID.String(), token)
+	client, err := sdk.NewClient(ts.URL, row.ID.String(), token)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +91,7 @@ func TestDecoyRuntimeEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := decoy.HTTPHandler(m, func(kind string) error { return client.Record(ctx, kind) })
+	handler, err := native.HTTPHandler(m, func(kind string) error { return client.Record(ctx, kind) })
 	if err != nil {
 		t.Fatal(err)
 	}

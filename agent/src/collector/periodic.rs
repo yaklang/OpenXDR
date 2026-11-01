@@ -3,7 +3,8 @@
 //!
 //! 规则：键是「父进程路径 + 父命令行 + 子进程路径 + 子命令行」。窗口内同一个键出现够多次就认定是周期行为，
 //! 之后它的启动与退出不再逐条上报，每个窗口末尾报一条汇总（次数、首末时间）。一小时没再出现的键忘掉，
-//! 再出现就重新逐条上报。父进程未知或平台指令拉起的进程从不折叠。
+//! 再出现就重新逐条上报。命令行里每次都不同的随机串与长数字不进键。父进程说不清（注册表与 /proc 都查不到）
+//! 或平台指令拉起的进程从不折叠。
 //!
 //! 折叠不是丢弃：被折叠进程的启动事件先压在注册表里，一旦它拉起了不是周期行为的子进程、
 //! 或者发起网络连接与 DNS 查询，压着的启动事件（连同被折叠的祖先）先补发出去，异常的血缘照样完整。
@@ -51,14 +52,38 @@ pub struct Sample {
 impl Sample {
     fn key(&self) -> String {
         let s = |v: &Option<String>| v.clone().unwrap_or_default();
+        let c = |v: &Option<String>| v.as_deref().map(volatile_free).unwrap_or_default();
         [
             s(&self.parent_exe),
-            s(&self.parent_cmd_line),
+            c(&self.parent_cmd_line),
             s(&self.exe),
-            s(&self.cmd_line),
+            c(&self.cmd_line),
         ]
         .join("\0")
     }
+}
+
+/// 折叠键里抹掉每次都不同的部分：16 位以上的十六进制串（容器、exec ID）、5 位以上的数字（临时文件名、PID）
+/// 换成 #。docker 健康检查的 runc 命令行带着随机文件名与 exec ID，原样做键每次都是新键，永远攒不到阈值
+fn volatile_free(cmd: &str) -> String {
+    let mut out = String::with_capacity(cmd.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        let volatile =
+            run.len() >= 16 || (run.len() >= 5 && run.bytes().all(|b| b.is_ascii_digit()));
+        out.push_str(if volatile { "#" } else { run });
+        run.clear();
+    };
+    for c in cmd.chars() {
+        if c.is_ascii_hexdigit() {
+            run.push(c);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
 }
 
 struct Stat {
@@ -238,6 +263,50 @@ mod tests {
         assert_eq!(v["process"]["name"], "ebtables-save");
         assert_eq!(v["process"]["parent_process"]["name"], "pve-firewall");
         assert!(out[0].process_guid.is_empty());
+    }
+
+    /// 每次都不同的随机串与长数字不进键：docker 健康检查的 runc 每次是同一个键，参数真正不同的照样分开
+    #[test]
+    fn volatile_parts_are_not_part_of_the_key() {
+        assert_eq!(
+            volatile_free(
+                "runc exec --process /tmp/runc-process1514723391 --pid-file /run/moby/6639cde64eb561d4988f22850c1316679f3c128a9a01182e6ff81350387cf0d9/a085bc0dcb516f16.pid"
+            ),
+            "runc exec --process /tmp/runc-process# --pid-file /run/moby/#/#.pid"
+        );
+        assert_eq!(
+            volatile_free("awk NR==3 { printf($2)} /proc/loadavg"),
+            "awk NR==3 { printf($2)} /proc/loadavg"
+        );
+        assert_eq!(
+            volatile_free("kill -9 1234 deadbeef"),
+            "kill -9 1234 deadbeef",
+            "短数字和短十六进制保留"
+        );
+        let runc = |process: &str, exec_id: &str| Sample {
+            exe: Some("/usr/bin/runc".into()),
+            cmd_line: Some(format!(
+                "runc exec --process /tmp/runc-process{process} --pid-file /run/{exec_id}.pid"
+            )),
+            parent_exe: Some("/usr/bin/containerd-shim-runc-v2".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            runc(
+                "1514723391",
+                "a085bc0dcb516f16e59edae4a7bdfbdddca4ef6bfc614cfa7eb62f602a32f516"
+            )
+            .key(),
+            runc(
+                "987654321",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            )
+            .key()
+        );
+        assert_ne!(
+            sample("/sbin/ebtables-save").key(),
+            sample("/sbin/iptables-save").key()
+        );
     }
 
     #[test]

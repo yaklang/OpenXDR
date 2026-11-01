@@ -82,7 +82,7 @@ func mapDecoyReview(mux *http.ServeMux, db *ent.Client) {
 // origin 记录是人工提交还是标记命中自动开单，归因始终未确认。
 func openDecoyIncident(ctx context.Context, tx *ent.Tx, deployment *ent.DecoyDeployment, host *ent.Asset, observation *ent.DecoyObservation, severity int16, origin string) (uuid.UUID, error) {
 	raw, _ := json.Marshal(map[string]any{"class_uid": 0, "source": "decoy", "activity_name": observation.Kind, "time": observation.ReceivedAt,
-		"decoy": map[string]any{"observation_id": observation.ID, "deployment_id": deployment.ID, "carrier": deployment.Kind, "profile": deployment.Profile, "template": deployment.Template, "attribution": "unconfirmed", "review_origin": origin, "limitation": "访问或打开不证明读取正文、AI 身份或攻击意图"}})
+		"decoy": map[string]any{"observation_id": observation.ID, "deployment_id": deployment.ID, "carrier": deployment.Kind, "profile": deployment.Profile, "template": deployment.Template, "revision_id": observation.RevisionID, "session_id": observation.SessionID, "details": observation.Details, "occurred_at": observation.OccurredAt, "attribution": "unconfirmed", "review_origin": origin, "limitation": "访问或打开不证明读取正文、AI 身份或攻击意图"}})
 	event, err := tx.Event.Create().SetTs(observation.ReceivedAt).SetClassUID(0).SetSource("decoy").SetAssetID(host.ID).SetRaw(raw).Save(ctx)
 	if err != nil {
 		return uuid.Nil, err

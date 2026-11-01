@@ -52,6 +52,8 @@ services:
       AI_API_KEY: ${AI_API_KEY:-}
       # Pi 对话与预设任务：留空则不启用，与模型端点共用 AI_BASE_URL / AI_API_KEY
       PI_MODEL: ${PI_MODEL:-}
+      # 自部署 vLLM 且模型名是路径（如 /model）时设 true，后台短输出才能关掉思考
+      AI_TEMPLATE_NO_THINKING: ${AI_TEMPLATE_NO_THINKING:-false}
       # 每组近 24 小时 Pi 用量上限（输入加输出 token），0 不限
       PI_GROUP_DAILY_TOKENS: ${PI_GROUP_DAILY_TOKENS:-0}
       # 配置后 Pi 在独立沙箱主机的隔离容器里运行，见 docs/pi-backend.md#沙箱模式
@@ -59,6 +61,7 @@ services:
       SANDBOX_KEY: ${SANDBOX_KEY:-}
       SANDBOX_CA_FILE: ${SANDBOX_CA_FILE:-}
       # 首次启动的 admin 密码；不设则随机生成并打印在 server 日志里
+      ABUSE_CH_AUTH_KEY: ${ABUSE_CH_AUTH_KEY:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # 告警通知：留空不推送。格式 generic / dingtalk / feishu / wecom
       WEBHOOK_URL: ${WEBHOOK_URL:-}
@@ -93,16 +96,47 @@ services:
       HOST_CREDENTIAL_KEY: ${HOST_CREDENTIAL_KEY:-}
       ENROLL_PUBLIC_URL: ${ENROLL_PUBLIC_URL:-}
       ENROLL_SSH_ENABLED: ${ENROLL_SSH_ENABLED:-false}
+      DYGK_CONTROL_SOCKET: /run/openxdr/deception/control.sock
     volumes:
       - ./rules:/rules:ro
       - ./tasks:/tasks:ro
       - ./certs:/certs:ro
       - ./dist:/dist:ro
+      - deception-control:/run/openxdr/deception
     ports:
       - "8080:8080"   # REST API
       - "8081:8081"   # gRPC：agent / sensor 接入
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  deception:
+    profiles: [dygk]
+    build:
+      context: .
+      dockerfile: integrations/dygk/Dockerfile
+      args:
+        DYGK_SOURCE: ${DYGK_SOURCE:-local}
+        DYGK_LOCAL_SOURCE: ${DYGK_LOCAL_SOURCE:-local-source}
+      secrets:
+        - dygk_upstream_token
+    image: openxdr-deception:${DYGK_VERSION:-local}
+    depends_on:
+      - server
+    environment:
+      DYGK_CONTROL_SOCKET: /run/openxdr/deception/control.sock
+      DYGK_STATE_DIR: /data
+      DYGK_LISTEN_HOST: 0.0.0.0
+    volumes:
+      - deception-control:/run/openxdr/deception
+      - deception-data:/data
+    ports:
+      - "${DYGK_BIND_IP:-127.0.0.1}:${DYGK_PORT_RANGE:-18080-18179}:${DYGK_PORT_RANGE:-18080-18179}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    pids_limit: 64
+    stop_grace_period: 30s
 
   web:
     build:
@@ -117,3 +151,9 @@ services:
 volumes:
   pgdata:
   natsdata:
+  deception-control:
+  deception-data:
+
+secrets:
+  dygk_upstream_token:
+    environment: DYGK_UPSTREAM_TOKEN

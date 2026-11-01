@@ -12,9 +12,10 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"openxdr/server/deception/native"
+	"openxdr/server/deception/sdk"
 	"openxdr/server/ent/decoydeployment"
 	"openxdr/server/ent/decoyobservation"
-	"openxdr/server/internal/decoy"
 	"openxdr/server/internal/testdb"
 )
 
@@ -26,7 +27,7 @@ func TestDecoySSHAuthenticatedReporting(t *testing.T) {
 	row := db.DecoyDeployment.Create().SetAssetID(asset.ID).SetKind(decoydeployment.KindSSH).SetPort(2222).SetProfile("decoy").SetTemplate("identify-v1").SetCreatedBy("admin").SetTokenHash(decoyTokenHash(token)).SetTokenGroupID(group.ID).SetTokenExpiresAt(time.Now().Add(time.Hour)).SetMarker(randomDecoyToken()).SaveX(ctx)
 	platform := httptest.NewServer(DecoyRuntime(db))
 	defer platform.Close()
-	client, err := decoy.NewClient(platform.URL, row.ID.String(), token)
+	client, err := sdk.NewClient(platform.URL, row.ID.String(), token)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestDecoySSHAuthenticatedReporting(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- decoy.ServeSSH(runCtx, listener, signer, manifest, func(kind string) error { return client.Record(runCtx, kind) })
+		done <- native.ServeSSH(runCtx, listener, signer, manifest, func(kind string) error { return client.Record(runCtx, kind) })
 	}()
 	connection, err := ssh.Dial("tcp", listener.Addr().String(), &ssh.ClientConfig{User: "synthetic", Auth: []ssh.AuthMethod{ssh.Password("synthetic")}, HostKeyCallback: ssh.FixedHostKey(signer.PublicKey()), Timeout: 3 * time.Second})
 	if err == nil {

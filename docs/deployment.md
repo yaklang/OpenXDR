@@ -132,7 +132,8 @@ sudo env SENSOR_IFACE=eth0 OPENXDR_SERVER=http://<server>:8081 ./target/release/
 | `afxdp` | 绕过协议栈，吞吐更高。需 `--features xdp` 构建、驱动支持，进程会在网卡上挂载 XDP 程序；**只能看到入向流量**，镜像口场景够用 |
 
 `SENSOR_WORKERS` 决定并行度。afpacket 下多个 worker 共享 FANOUT 组；afxdp 下
-worker 号即网卡队列号，数量不应超过网卡实际队列数。
+worker 号即网卡队列号，数量不应超过网卡实际队列数。`SENSOR_GRPC_COMPRESSION=gzip`
+让上行 gRPC 消息走 gzip（默认关闭，server 侧已注册编码器，清空该变量重启即回滚）。
 
 ### 按主机下发采集配置
 
@@ -205,13 +206,21 @@ echo '*.* @<server>:514' >> /etc/rsyslog.conf && systemctl restart rsyslog
 域名情报按后缀匹配，`evil.com` 能撞上 `c2.evil.com` 的 DNS 查询、TLS SNI 与 HTTP Host。
 哈希情报撞的是 agent 随进程事件上报的 exe SHA-256（同一二进制只算一次，缓存按 mtime 失效）。
 
-**情报订阅**开箱即用：内置 abuse.ch Feodo Tracker（僵尸网络 C2 IP）、ThreatFox
+**情报订阅**：内置 abuse.ch Feodo Tracker（僵尸网络 C2 IP）、ThreatFox
 （近期恶意软件 IP / 域名 / 哈希）、URLhaus（恶意软件分发域名）与 Emerging Threats
 （失陷主机 IP）四个公开源，默认全部开启，server 单活每 `INTEL_FEED_INTERVAL_HOURS`
 （默认 6）小时拉取一次。内网与保留地址不入库；ThreatFox 的 URL 只收主机是 IP 的，
 挂在 GitHub 之类公共平台上的恶意 URL 若按主机名入库会误伤正常访问。手工录入的同值情报
 优先；源里撤下的条目约两天后到期失效，关掉的源立即清空。在「威胁情报」页可逐个开关、
 立即同步，并直接看到哪些订阅情报命中过。server 需要能访问这些源（可经 `HTTPS_PROXY`）。
+
+ThreatFox 与 URLhaus 需要 abuse.ch Auth-Key。在「系统设置 → 外部情报查询」保存密钥，
+或设置 `ABUSE_CH_AUTH_KEY`；控制台保存的值优先，清空后不再回退环境变量，点击恢复默认才重新使用环境变量。
+密钥通过 `HOST_CREDENTIAL_KEY` 加密入库，接口只显示是否配置及末四位；认证下载地址不回显、不写入日志，且不跟随重定向。
+未配置时明确提示配置密钥，不再请求已停用的匿名地址。Feodo 与 Emerging Threats 不需要这项密钥。
+配置后在威胁情报页执行「立即同步」确认实际可用性；测试通过不代表账号具有源的下载权限。
+官方说明：[ThreatFox 导出](https://threatfox.abuse.ch/export/) 与 [URLhaus API](https://urlhaus.abuse.ch/api/)。
+
 
 界面上（威胁情报入口）还可直接粘贴清单批量导入：一行一条，类型自动识别，
 重复条目跳过。每条情报持续累计命中次数——长期零命中的陈年 IOC 应当清理，
@@ -333,6 +342,7 @@ server 全部通过环境变量配置，均有默认值：
 | `DATABASE_URL` | `postgres://openxdr:openxdr@localhost:5432/openxdr?sslmode=disable` | 数据库连接串 |
 | `NATS_URL` | 空（单机直连） | NATS 地址；配置后启用 JetStream 持久队列，多个地址用逗号分隔 |
 | `QUEUE_SHARDS` | `32` | 事件一致性分片数；同一资产保持有序 |
+| `QUEUE_BATCH_SIZE` | `1` | 同资产批消息最大事件数（1..64）；全部服务端升级到支持批消息的版本后可设为 64。仍保持每分片一条在途消息，整批原子提交；单个批消息不超过 256 KiB，超大单事件保持原格式。 |
 | `QUEUE_REPLICAS` | `1` | JetStream stream 副本数；三节点生产集群设为 3 |
 | `QUEUE_MAX_BYTES_GB` | `20` | 事件 stream 最大磁盘占用 |
 | `QUEUE_MAX_AGE_HOURS` | `0` | 必须为 0；未处理消息不自动过期，容量满则拒收新消息 |
@@ -355,6 +365,7 @@ server 全部通过环境变量配置，均有默认值：
 | `CORRELATE_RECUR_HOURS` | `24`（0 关闭） | 同资产同规则同实体的复发并回未结案事件的最长跨度（从事件创建起算） |
 | `CORRELATE_RECUR_COARSE` | `1` | 进程类告警的复发再按粗键归并：同用户、同父进程映像、同映像，命令行不同也并；解释器与命令包装器仍只按完整命令行，首次出现（`xdr:new-process`）按主机+用户+父进程并。0 关闭 |
 | `AI_MODEL` | 空（不启用） | 事件研判与资产标注的模型名。**`AI_*`、`PI_MODEL`、`VT_API_KEY`、`IPINFO_PTR`、`VT_ALERT_MIN_ENGINES` 也能在控制台「系统设置 → AI 模型 / 外部情报」里改**，保存过的项以控制台为准、十几秒内全集群生效，环境变量只是首次部署的默认值；控制台保存的密钥用 `HOST_CREDENTIAL_KEY` 加密，没配这把钥匙时只能用环境变量提供密钥 |
+| `AI_TEMPLATE_NO_THINKING` | `false` | 自部署 vLLM 使用无法识别的模型名（如 `/model`）时设为 `true`，对请求关闭思考的调用同时发送 `thinking=false` 与 `enable_thinking=false` 模板参数。已识别模型沿用原协议；不影响未请求关闭思考的调用。仅支持环境变量，修改后需重建 server 容器；单机、安装版、HA 与 cluster Compose 均透传 |
 | `AI_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点 |
 | `AI_RETRIAGE_COOLDOWN_MINUTES` | `30` | 已研判的事件又并入普通新证据时，距上次研判至少隔这么久才重研判，冷却期内的新告警到期一次带上；级别升高或头一回出现情报命中、凭据窃取等高危类告警时不等。默认 30：生产上被系统例行变更反复并入的事件每几分钟来一批告警，不限流时一天能被重研判几十次、把慢模型的研判名额占满；30 分钟把它压到每小时至多两次，又不至于让真实攻击的后续动作晚太久才被重新定性（升级类本来就立即重判）。只认环境变量，控制台不可改 |
 | `SYSLOG_ADDR` | 空（不启用） | syslog 监听地址，如 `:514`。UDP 与 TCP 同时监听 |
@@ -372,7 +383,9 @@ server 全部通过环境变量配置，均有默认值：
 | `TLS_CA_KEY_FILE` | 空 | CA 私钥，开了 mTLS 时在线接入用它签发主机证书 |
 | `AGENT_DIST_DIR` | 空 | agent 与 sensor 安装包目录，供安装脚本下载，也是在线 agent / sensor 自动升级的目标版本 |
 | `AGENT_AUTO_UPGRADE` | `true` | 在线 agent / sensor 与安装包哈希不同时自动升级，`false` 同时关闭两者 |
+| `SENSOR_GRPC_COMPRESSION` | 空（关闭） | 探针侧变量：设为 `gzip` 时 sensor 上行 gRPC 消息（注册、状态、会话批量上报）压缩，默认关闭，清空后重启即回滚；先升级 server 再开（server 始终能解压），只改线上字节，事件内容与身份不变 |
 | `TRUSTED_PROXIES` | 空 | 可信反向代理的地址或网段（逗号分隔）。只有来自这些地址的请求才采信 `X-Forwarded-For`，从右往左取第一个不可信地址作为客户端，登录退避与审计按它记来源；留空不还原 |
+| `ABUSE_CH_AUTH_KEY` | 空 | ThreatFox / URLhaus 认证导出密钥，可在「系统设置 → 外部情报查询」加密保存 |
 | `INTEL_FEED_INTERVAL_HOURS` | `6` | 情报订阅同步周期（小时），订阅条目有效期为它的 8 倍 |
 | `RESPONSE_ENABLED` | `false` | 是否允许下发响应指令；开启后人工处置、Pi 命令、定时任务与自动响应下发的指令都会真执行 |
 | `ISOLATION_ALLOW` | 空 | 隔离主机时放行的地址，必须包含 server 的 gRPC 端点 |
@@ -388,6 +401,10 @@ server 全部通过环境变量配置，均有默认值：
 | `VULN_DIR` | 空 | 离线漏洞库目录（放 `Debian.zip`、`Ubuntu.zip`），设置后不联网 |
 | `BEACON_LEARNING_DAYS` | `7` | 外联心跳学习期，按资产接入时间算；首次启用回放这段历史只学不报 |
 | `RETENTION_DAYS` | `30` | 原始事件保留天数，0 表示不清理。被告警引用的证据事件不受影响。events 是分区表时按日分区整体退役（老库迁移见 [event-partitioning.md](event-partitioning.md)） |
+| `TEMPORAL_GAP_RETENTION_DAYS` | `30` | 时序求值缺口（`temporal_evaluation_gaps`，诊断记录）按自身产生时间的保留天数，0 关闭，与 `RETENTION_DAYS` 相互独立。冷归档 swap 移出热表的事件的 gap 不随退役/删除清理，由 janitor 按此保留期清理（见 [event-archive.md](event-archive.md#105-派生状态决策表)） |
+| `EVENT_ARCHIVE_READ` | 空（关闭） | 设为 `1` 时 `/api/events` 与 related/explain 调查入口读冷块（`event_archive_chunks`）并合流，冷查询按组权限过滤；响应体是对象契约 `{items, truncated, coverage}`，覆盖缺口（关键词不搜冷块、冷读关闭、扫描预算耗尽等）如实写进 `coverage.reason`，调试头 `X-Archive-Coverage` 只是摘要。开启时启动先确保冷归档表存在，建表失败只降级为「没有冷层」。生产归档仍要手工跑 `eventarchive` CLI（见 [event-archive.md](event-archive.md)）。**运营不变式：一旦用 `eventarchive swap` 切走分区，这个变量必须为 `1`**——已有切走数据的部署不能靠关闭读取变成「查询完整」，缺口还在，只是不再被声明 |
+| `EVENT_ARCHIVE_DEDUP` | 空（关闭） | 设为 `1` 时接入路径在「事件时间不晚于归档边界」时按 ID 查冷层（`eventarchive.Exists`），命中就按重复处理：不入库、不重新检测、不产告警。归档边界有 60 秒缓存，逐条事件不查库；冷层故障时 fail-open（照常入库并继续检测），失败计入 `openxdr_archive_dedup_failopen_total{stage}` 并限流记日志。与 `EVENT_ARCHIVE_READ` 相互独立。**运营不变式：一旦用 `eventarchive swap` 切走分区，这个变量必须为 `1`**，否则迟到/重传的老事件会重新入库并重复告警（详见 [event-archive.md](event-archive.md#1010-重传判重接线event_archive_dedup)） |
+| `EVENT_ARCHIVE_MIN_AGE_DAYS` | `14` | `eventarchive swap` 切换闸门的运营下限（天）：待切**日结束**必须早于 `现在 − 有效下限`。有效下限取各项最大：本值、temporal 安全边界（max(时序规则实际窗口, 24h) + 迟到余量 + 处理余量）、beacon 回读窗口（仅口径含 4001/agent）、assetmap 无游标回填 7 天（仅口径含 4001/5001/5020）。设了但不是合法非负天数时 swap 直接报错，不静默退默认；本值只是运营纪律，正确性来自有效下限与消费者追平证明（见 [event-archive.md](event-archive.md#103-p4-切换闸门min-age-有效下限与消费者追平)） |
 | `IPDB_DIR` | 空（镜像内 `/opt/openxdr/ipdb`） | 离线 IP 归属库目录（DB-IP Lite 的 `dbip-asn-lite.mmdb`、`dbip-country-lite.mmdb`，CC BY 4.0），本地查 AS 与国家、不外发地址；发版镜像自带一份，缺库时归属留空并在启动日志说明。用 `openxdr-ipdb -dir <目录>` 更新，替换后自动加载，见 [资产图谱](asset-map.md#离线归属库) |
 | `IPINFO_PTR` | `true` | 对资产连过的与告警里出现的公网地址做反向解析（PTR），结果缓存，供图谱展示与 AI 标注认地址；内网没有外部解析时可设 `false` |
 | `VT_ALERT_MIN_ENGINES` | `3` | VirusTotal 判恶意的引擎数达到该值，就把地址加入威胁情报（来源 virustotal，随缓存期到期），之后再有主机连它即按情报命中告警；重查后不再达到即失效，人工录入的同一地址不动；0 关闭 |
@@ -437,3 +454,22 @@ DNS 校验与实际拨号使用同一地址，TLS 证书必须有效。
 `openxdr_integration_oldest_pending_seconds`、`openxdr_integration_attempts_retained`
 以及集成 API 的 429 计数。队列指标是数据库全局快照，跨节点采集应取 max 而不是求和；
 尝试数量是保留期内的 gauge，不是永久累计 counter。
+
+
+## 独立欺骗引擎统一启动
+
+在原安装目录的 `.env` 中追加 `COMPOSE_PROFILES=dygk`，继续使用主 `docker compose up -d`。原有 profile 以逗号保留。引擎版本和运行身份由平台与受限控制通道自动登记、签发；控制台选择平台托管后无需再配置独立启动参数。
+
+| 配置 | 默认 | 用途 |
+| --- | --- | --- |
+| `COMPOSE_PROFILES` | 未启用 DYGK | 包含 `dygk` 时随主编排启用引擎 |
+| `DYGK_VERSION` | 安装编排 `latest`，源码编排 `local` | 独立引擎镜像标签，生产宜锁定 |
+| `DYGK_BIND_IP` | `127.0.0.1` | 主编排预留端口的宿主绑定地址 |
+| `DYGK_PORT_RANGE` | `18080-18179` | 站点端口范围；登记应选择对应端口 |
+| `DYGK_SOURCE` | `local` | 构建源码来源，`local` 使用提供的源码，`remote` 才从锁定的远端版本拉取 |
+| `DYGK_LOCAL_SOURCE` | `local-source` | 相对 `integrations/dygk/` 的源码目录；云端构建需在自己的模块构建上下文内提供 |
+| `DYGK_UPSTREAM_TOKEN` | 空 | 仅远端私有源码需要的读取令牌，经 BuildKit secret 提供；本地模式和预构建镜像运行时无需设置 |
+
+控制 socket 和持久目录由主编排注入命名卷，不是开发机路径；不要将引擎控制卷挂给其他服务。独立镜像的发布授权、云端接入与回退步骤见 [运行包说明](../integrations/dygk/README.md)。
+
+源码来源在同一 `.env` 配置，默认本地模式，不调用 Git 或自动回退远端。默认 `local-source/` 是被 Git 忽略的私有构建输入，Docker 构建会使用它；`.downloads/` 和 `.upstream/` 缓存则同时被 Docker 排除。云端本地模式需提供源码到自身构建上下文，远端模式需具备上游读取权限，两者都核验文件摘要。预构建镜像已包含运行核心，启动时无需源码来源参数或读取令牌。具体配置、目录与打包范围见 [源码来源配置](../integrations/dygk/README.md#源码来源配置)。

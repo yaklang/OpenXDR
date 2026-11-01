@@ -75,6 +75,82 @@ func (_c *DecoyObservationCreate) SetNillableReceivedAt(v *time.Time) *DecoyObse
 	return _c
 }
 
+// SetRevisionID sets the "revision_id" field.
+func (_c *DecoyObservationCreate) SetRevisionID(v uuid.UUID) *DecoyObservationCreate {
+	_c.mutation.SetRevisionID(v)
+	return _c
+}
+
+// SetNillableRevisionID sets the "revision_id" field if the given value is not nil.
+func (_c *DecoyObservationCreate) SetNillableRevisionID(v *uuid.UUID) *DecoyObservationCreate {
+	if v != nil {
+		_c.SetRevisionID(*v)
+	}
+	return _c
+}
+
+// SetSessionID sets the "session_id" field.
+func (_c *DecoyObservationCreate) SetSessionID(v string) *DecoyObservationCreate {
+	_c.mutation.SetSessionID(v)
+	return _c
+}
+
+// SetNillableSessionID sets the "session_id" field if the given value is not nil.
+func (_c *DecoyObservationCreate) SetNillableSessionID(v *string) *DecoyObservationCreate {
+	if v != nil {
+		_c.SetSessionID(*v)
+	}
+	return _c
+}
+
+// SetTriggerKey sets the "trigger_key" field.
+func (_c *DecoyObservationCreate) SetTriggerKey(v string) *DecoyObservationCreate {
+	_c.mutation.SetTriggerKey(v)
+	return _c
+}
+
+// SetNillableTriggerKey sets the "trigger_key" field if the given value is not nil.
+func (_c *DecoyObservationCreate) SetNillableTriggerKey(v *string) *DecoyObservationCreate {
+	if v != nil {
+		_c.SetTriggerKey(*v)
+	}
+	return _c
+}
+
+// SetPayloadHash sets the "payload_hash" field.
+func (_c *DecoyObservationCreate) SetPayloadHash(v string) *DecoyObservationCreate {
+	_c.mutation.SetPayloadHash(v)
+	return _c
+}
+
+// SetNillablePayloadHash sets the "payload_hash" field if the given value is not nil.
+func (_c *DecoyObservationCreate) SetNillablePayloadHash(v *string) *DecoyObservationCreate {
+	if v != nil {
+		_c.SetPayloadHash(*v)
+	}
+	return _c
+}
+
+// SetOccurredAt sets the "occurred_at" field.
+func (_c *DecoyObservationCreate) SetOccurredAt(v time.Time) *DecoyObservationCreate {
+	_c.mutation.SetOccurredAt(v)
+	return _c
+}
+
+// SetNillableOccurredAt sets the "occurred_at" field if the given value is not nil.
+func (_c *DecoyObservationCreate) SetNillableOccurredAt(v *time.Time) *DecoyObservationCreate {
+	if v != nil {
+		_c.SetOccurredAt(*v)
+	}
+	return _c
+}
+
+// SetDetails sets the "details" field.
+func (_c *DecoyObservationCreate) SetDetails(v map[string]interface{}) *DecoyObservationCreate {
+	_c.mutation.SetDetails(v)
+	return _c
+}
+
 // SetID sets the "id" field.
 func (_c *DecoyObservationCreate) SetID(v uuid.UUID) *DecoyObservationCreate {
 	_c.mutation.SetID(v)
@@ -124,6 +200,18 @@ func (_c *DecoyObservationCreate) defaults() {
 		v := decoyobservation.DefaultReceivedAt()
 		_c.mutation.SetReceivedAt(v)
 	}
+	if _, ok := _c.mutation.SessionID(); !ok {
+		v := decoyobservation.DefaultSessionID
+		_c.mutation.SetSessionID(v)
+	}
+	if _, ok := _c.mutation.TriggerKey(); !ok {
+		v := decoyobservation.DefaultTriggerKey
+		_c.mutation.SetTriggerKey(v)
+	}
+	if _, ok := _c.mutation.PayloadHash(); !ok {
+		v := decoyobservation.DefaultPayloadHash
+		_c.mutation.SetPayloadHash(v)
+	}
 }
 
 // check runs all checks and user-defined validators on the builder.
@@ -139,6 +227,15 @@ func (_c *DecoyObservationCreate) check() error {
 	}
 	if _, ok := _c.mutation.ReceivedAt(); !ok {
 		return &ValidationError{Name: "received_at", err: errors.New(`ent: missing required field "DecoyObservation.received_at"`)}
+	}
+	if _, ok := _c.mutation.SessionID(); !ok {
+		return &ValidationError{Name: "session_id", err: errors.New(`ent: missing required field "DecoyObservation.session_id"`)}
+	}
+	if _, ok := _c.mutation.TriggerKey(); !ok {
+		return &ValidationError{Name: "trigger_key", err: errors.New(`ent: missing required field "DecoyObservation.trigger_key"`)}
+	}
+	if _, ok := _c.mutation.PayloadHash(); !ok {
+		return &ValidationError{Name: "payload_hash", err: errors.New(`ent: missing required field "DecoyObservation.payload_hash"`)}
 	}
 	return nil
 }
@@ -194,6 +291,30 @@ func (_c *DecoyObservationCreate) createSpec() (*DecoyObservation, *sqlgraph.Cre
 	if value, ok := _c.mutation.ReceivedAt(); ok {
 		_spec.SetField(decoyobservation.FieldReceivedAt, field.TypeTime, value)
 		_node.ReceivedAt = value
+	}
+	if value, ok := _c.mutation.RevisionID(); ok {
+		_spec.SetField(decoyobservation.FieldRevisionID, field.TypeUUID, value)
+		_node.RevisionID = &value
+	}
+	if value, ok := _c.mutation.SessionID(); ok {
+		_spec.SetField(decoyobservation.FieldSessionID, field.TypeString, value)
+		_node.SessionID = value
+	}
+	if value, ok := _c.mutation.TriggerKey(); ok {
+		_spec.SetField(decoyobservation.FieldTriggerKey, field.TypeString, value)
+		_node.TriggerKey = value
+	}
+	if value, ok := _c.mutation.PayloadHash(); ok {
+		_spec.SetField(decoyobservation.FieldPayloadHash, field.TypeString, value)
+		_node.PayloadHash = value
+	}
+	if value, ok := _c.mutation.OccurredAt(); ok {
+		_spec.SetField(decoyobservation.FieldOccurredAt, field.TypeTime, value)
+		_node.OccurredAt = &value
+	}
+	if value, ok := _c.mutation.Details(); ok {
+		_spec.SetField(decoyobservation.FieldDetails, field.TypeJSON, value)
+		_node.Details = value
 	}
 	return _node, _spec
 }

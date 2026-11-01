@@ -158,8 +158,26 @@ ancestor 父进程链 / process 同一进程 / child 子进程 / connection 同�
 "points":["不超过 5 条关键依据，每条不超过 80 字"],"related":[{"id":"原样取自 candidates 的 id","why":"不超过 60 字，说明它和 target 的关系"}],
 "next":["不超过 3 条下一步建议，每条不超过 60 字"]}`
 
-// Messages 拼出给模型的输入。日志体按条截断，免得单条超长日志挤掉上下文
-func Messages(e *ent.Event, host map[string]any, groups []Group, lang string) (system, user string) {
+// Coverage 是「问 AI」输入的数据来源边界，由调用方如实告知，不在这里猜。
+// 相关的响应字段（api 的 archive.candidates_hot_only）、发给模型的 CandidatesHotOnlyNote
+// 与前端 EventAIDrawer 的候选边界提示，描述的都是同一份事实。
+type Coverage struct {
+	// CandidatesHotOnly 关联候选只查了热表（冷层没有关联索引，已归档事件不在候选中）
+	CandidatesHotOnly bool
+}
+
+// HotOnlyCoverage 是 Related 当前实现的固定覆盖事实：关联候选恒只来自热表。
+// 这是恒真事实，不按解读目标冷热分支——热目标的历史关联事件（同进程 / 父子 / 同连接）
+// 同样可能已归档，候选缺失不能被推断为「不存在相关行为」。
+var HotOnlyCoverage = Coverage{CandidatesHotOnly: true}
+
+// CandidatesHotOnlyNote 是随解读输入发给模型的固定覆盖说明（恒真恒说，措辞固定，
+// 不按目标冷热分支）：提示模型候选缺失只说明热表里没有，不能推断为没有相关行为。
+const CandidatesHotOnlyNote = "注意：以上关联候选仅来自热表；已归档的历史事件不在候选中，候选缺失不能推断为不存在相关行为。"
+
+// Messages 拼出给模型的输入。日志体按条截断，免得单条超长日志挤掉上下文；
+// cov 如实说明候选的数据来源边界（见 Coverage），覆盖说明追加在数据之后。
+func Messages(e *ent.Event, host map[string]any, groups []Group, lang string, cov Coverage) (system, user string) {
 	type item struct {
 		ID       uuid.UUID `json:"id"`
 		Relation string    `json:"relation,omitempty"`
@@ -187,7 +205,12 @@ func Messages(e *ent.Event, host map[string]any, groups []Group, lang string) (s
 	if lang == "en" {
 		system += "\nWrite title, summary, points, why and next in English."
 	}
-	return system, string(data)
+	user = string(data)
+	if cov.CandidatesHotOnly {
+		// 恒真的事实就恒说：候选只查热表对热/冷目标同样成立，固定措辞不分支
+		user += "\n" + CandidatesHotOnlyNote
+	}
+	return system, user
 }
 
 // Parse 模型输出不可信：取第一个 JSON 对象，逐字段校验与截断，相关日志只收候选里的

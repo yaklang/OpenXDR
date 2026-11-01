@@ -33,8 +33,9 @@ type Config struct {
 	// AI 助手与定时任务（Pi）用的模型；空表示不启用
 	PiModel string
 	// 公网目的地址反向解析
-	PTR   bool
-	VTKey string
+	PTR        bool
+	VTKey      string
+	AbuseCHKey string
 	// VirusTotal 判恶意的引擎数达到这个值，就把地址加入威胁情报；0 不加
 	VTAlertMin int
 }
@@ -47,8 +48,9 @@ type stored struct {
 	PTR        *bool   `json:"ptr,omitempty"`
 	VTAlertMin *int    `json:"vtAlertMin,omitempty"`
 	// 密文；Sealed 为空表示在控制台清空了
-	APIKey *secret `json:"apiKey,omitempty"`
-	VTKey  *secret `json:"vtKey,omitempty"`
+	APIKey     *secret `json:"apiKey,omitempty"`
+	VTKey      *secret `json:"vtKey,omitempty"`
+	AbuseCHKey *secret `json:"abuseCHKey,omitempty"`
 }
 
 type secret struct {
@@ -122,6 +124,7 @@ func (s *Store) merge(raw stored) Config {
 	}
 	c.APIKey = s.open(raw.APIKey, "apiKey", c.APIKey)
 	c.VTKey = s.open(raw.VTKey, "vtKey", c.VTKey)
+	c.AbuseCHKey = s.open(raw.AbuseCHKey, "abuseCHKey", c.AbuseCHKey)
 	return c
 }
 
@@ -154,16 +157,18 @@ func (s *Store) usable(sec *secret, field string) *secret {
 
 // View 给界面看的：密钥只说有没有、末四位，每项标明来自控制台还是环境变量
 type View struct {
-	BaseURL    string            `json:"baseUrl"`
-	Model      string            `json:"model"`
-	PiModel    string            `json:"piModel"`
-	PTR        bool              `json:"ptr"`
-	VTAlertMin int               `json:"vtAlertMin"`
-	APIKeySet  bool              `json:"apiKeySet"`
-	APIKeyHint string            `json:"apiKeyHint,omitempty"`
-	VTKeySet   bool              `json:"vtKeySet"`
-	VTKeyHint  string            `json:"vtKeyHint,omitempty"`
-	Source     map[string]string `json:"source"`
+	BaseURL        string            `json:"baseUrl"`
+	Model          string            `json:"model"`
+	PiModel        string            `json:"piModel"`
+	PTR            bool              `json:"ptr"`
+	VTAlertMin     int               `json:"vtAlertMin"`
+	APIKeySet      bool              `json:"apiKeySet"`
+	APIKeyHint     string            `json:"apiKeyHint,omitempty"`
+	VTKeySet       bool              `json:"vtKeySet"`
+	VTKeyHint      string            `json:"vtKeyHint,omitempty"`
+	AbuseCHKeySet  bool              `json:"abuseCHKeySet"`
+	AbuseCHKeyHint string            `json:"abuseCHKeyHint,omitempty"`
+	Source         map[string]string `json:"source"`
 	// 没配 HOST_CREDENTIAL_KEY 时不能在控制台保存密钥
 	CanSaveSecrets bool `json:"canSaveSecrets"`
 }
@@ -175,6 +180,7 @@ func (s *Store) View(ctx context.Context) (View, error) {
 	}
 	c := s.merge(raw)
 	apiKey, vtKey := s.usable(raw.APIKey, "apiKey"), s.usable(raw.VTKey, "vtKey")
+	abuseCHKey := s.usable(raw.AbuseCHKey, "abuseCHKey")
 	src := map[string]string{}
 	mark := func(name string, set bool) {
 		src[name] = map[bool]string{true: "console", false: "env"}[set]
@@ -186,9 +192,11 @@ func (s *Store) View(ctx context.Context) (View, error) {
 	mark("vtAlertMin", raw.VTAlertMin != nil)
 	mark("apiKey", apiKey != nil)
 	mark("vtKey", vtKey != nil)
+	mark("abuseCHKey", abuseCHKey != nil)
 	return View{
 		BaseURL: c.BaseURL, Model: c.Model, PiModel: c.PiModel, PTR: c.PTR, VTAlertMin: c.VTAlertMin,
 		APIKeySet: c.APIKey != "", APIKeyHint: hintOf(apiKey, c.APIKey), VTKeySet: c.VTKey != "", VTKeyHint: hintOf(vtKey, c.VTKey),
+		AbuseCHKeySet: c.AbuseCHKey != "", AbuseCHKeyHint: hintOf(abuseCHKey, c.AbuseCHKey),
 		Source: src, CanSaveSecrets: s.Vault != nil,
 	}, nil
 }
@@ -216,6 +224,7 @@ type Patch struct {
 	VTAlertMin *int     `json:"vtAlertMin"`
 	APIKey     *string  `json:"apiKey"`
 	VTKey      *string  `json:"vtKey"`
+	AbuseCHKey *string  `json:"abuseCHKey"`
 	Reset      []string `json:"reset"`
 }
 
@@ -233,7 +242,7 @@ func (p Patch) Check() error {
 			return errors.New("模型名不超过 128 个字符且不含空白")
 		}
 	}
-	for _, k := range []*string{p.APIKey, p.VTKey} {
+	for _, k := range []*string{p.APIKey, p.VTKey, p.AbuseCHKey} {
 		if k != nil && (len(*k) > 512 || strings.ContainsAny(*k, " \t\r\n")) {
 			return errors.New("密钥不超过 512 个字符且不含空白")
 		}
@@ -249,7 +258,7 @@ func (p Patch) Check() error {
 	return nil
 }
 
-var resettable = map[string]bool{"baseUrl": true, "model": true, "piModel": true, "ptr": true, "vtAlertMin": true, "apiKey": true, "vtKey": true}
+var resettable = map[string]bool{"baseUrl": true, "model": true, "piModel": true, "ptr": true, "vtAlertMin": true, "apiKey": true, "vtKey": true, "abuseCHKey": true}
 
 func (s *Store) Save(ctx context.Context, p Patch) error {
 	if err := p.Check(); err != nil {
@@ -279,7 +288,7 @@ func (s *Store) Save(ctx context.Context, p Patch) error {
 		in    *string
 		field string
 		out   **secret
-	}{{p.APIKey, "apiKey", &raw.APIKey}, {p.VTKey, "vtKey", &raw.VTKey}} {
+	}{{p.APIKey, "apiKey", &raw.APIKey}, {p.VTKey, "vtKey", &raw.VTKey}, {p.AbuseCHKey, "abuseCHKey", &raw.AbuseCHKey}} {
 		if k.in == nil {
 			continue
 		}
@@ -312,6 +321,8 @@ func (s *Store) Save(ctx context.Context, p Patch) error {
 			raw.APIKey = nil
 		case "vtKey":
 			raw.VTKey = nil
+		case "abuseCHKey":
+			raw.AbuseCHKey = nil
 		}
 	}
 	value, err := json.Marshal(raw)
@@ -350,9 +361,11 @@ func (s *Store) Preview(ctx context.Context, p Patch) (Config, error) {
 			c.APIKey = s.Default.APIKey
 		case "vtKey":
 			c.VTKey = s.Default.VTKey
+		case "abuseCHKey":
+			c.AbuseCHKey = s.Default.AbuseCHKey
 		}
 	}
-	for _, f := range []struct{ in, out *string }{{p.BaseURL, &c.BaseURL}, {p.Model, &c.Model}, {p.PiModel, &c.PiModel}, {p.APIKey, &c.APIKey}, {p.VTKey, &c.VTKey}} {
+	for _, f := range []struct{ in, out *string }{{p.BaseURL, &c.BaseURL}, {p.Model, &c.Model}, {p.PiModel, &c.PiModel}, {p.APIKey, &c.APIKey}, {p.VTKey, &c.VTKey}, {p.AbuseCHKey, &c.AbuseCHKey}} {
 		if f.in != nil {
 			*f.out = *f.in
 		}

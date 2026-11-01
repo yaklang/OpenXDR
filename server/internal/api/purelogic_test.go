@@ -13,22 +13,6 @@ import (
 	entintel "openxdr/server/ent/intel"
 )
 
-func TestEscapeLike(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"plain", "plain"},
-		{"100%", "100\\%"},
-		{"a_b", "a\\_b"},
-		{`path\file`, `path\\file`},
-		{`%_\`, `\%\_\\`},
-		{"", ""},
-	}
-	for _, c := range cases {
-		if got := escapeLike(c.in); got != c.want {
-			t.Errorf("escapeLike(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
 func TestSummarize(t *testing.T) {
 	title := "反弹 shell"
 	raw := json.RawMessage(`{"verdict":"malicious"}`)

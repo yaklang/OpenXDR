@@ -1,5 +1,7 @@
 # 多载体诱饵：布放、运行与事件
 
+运行实现已抽离至独立引擎，统一接入与云端部署见 [运行包说明](../integrations/dygk/README.md)。
+
 此实现位于 `ssh-decoy` worktree。控制台提供统一登记与事件查看；`decoyhost` 是显式启动的独立运行端。没有自动修改生产服务、真实用户 Shell 或已有文件。
 
 ## 支持范围
@@ -95,7 +97,7 @@ Pi 普通会话与沙箱上下文均包含当前组 `decoy_exclusions`，只带�
 
 ```bash
 # server/
-go test -race ./internal/decoy ./internal/sshdecoy ./cmd/decoyhost
+go test -race ./internal/decoy ./deception/... ./cmd/decoyhost
 go test -race -tags integration -p 1 ./internal/api ./internal/agentchat ./internal/response ./internal/janitor -run 'Test(SSHDecoy|Decoy)'
 go build ./...
 # web/

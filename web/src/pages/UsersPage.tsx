@@ -1,12 +1,12 @@
 import { TableActions } from '../components/TableActions'
 import { PlusOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Form, Input, Modal, Popconfirm, Select, Table, Tag } from 'antd'
+import { App, Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd'
 import { useRef, useState } from 'react'
 import { createUser, deleteUser, fetchUsers, resetUserPassword, type UserRow } from '../api'
 import { useSession } from '../app/session'
 import { LoadError } from '../components/LoadError'
-import { Page, TableCard } from '../components/Page'
+import { FilterCard, Page, STICKY_HEADER } from '../components/Page'
 import { ROLE_KEY, fmtTime, errText } from '../components/format'
 import { useI18n } from '../i18n'
 
@@ -19,11 +19,20 @@ export function UsersPage() {
   const { me } = useSession()
   const pending = useRef(false)
   const [busy, setBusy] = useState(false)
+  const [q, setQ] = useState('')
+  const [roleFilter, setRoleFilter] = useState('')
   const [creating, setCreating] = useState(false)
   const [resetting, setResetting] = useState<UserRow | null>(null)
   const [createForm] = Form.useForm()
   const [resetForm] = Form.useForm()
   const { data, isPending, isError, error, refetch } = useQuery({ queryKey: ['users'], queryFn: fetchUsers })
+
+  const activeQ = q.trim().toLowerCase()
+  const hasFilters = Boolean(activeQ || roleFilter)
+  const rows = (data ?? []).filter(u =>
+    (!roleFilter || u.role === roleFilter) &&
+    (!activeQ || u.username.toLowerCase().includes(activeQ))
+  )
 
   const run = async (fn: () => Promise<unknown>, ok?: string) => {
     if (pending.current) return false
@@ -50,17 +59,28 @@ export function UsersPage() {
       subtitle={t('usersSubtitle')}
       extra={<Button type="primary" icon={<PlusOutlined />} disabled={busy} onClick={() => { createForm.resetFields(); setCreating(true) }}>{t('newUser')}</Button>}
     >
-      <TableCard>
+      <FilterCard
+        onReset={hasFilters ? () => { setQ(''); setRoleFilter('') } : undefined}
+        extra={hasFilters && data ? <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>{t('filteredCount', { n: rows.length, total: data.length })}</Typography.Text> : undefined}
+        filters={
+          <Space wrap>
+            <Input.Search allowClear style={{ width: 240 }} placeholder={t('searchUsers')} value={q} onChange={e => setQ(e.target.value)} />
+            <Select aria-label={t('globalRole')} style={{ width: 140 }} value={roleFilter} onChange={setRoleFilter}
+              options={[{ value: '', label: t('allRoles') }, ...roleOptions]} />
+          </Space>
+        }
+      >
         {isError ? <LoadError error={error} onRetry={() => refetch()} /> : <Table<UserRow>
+          sticky={STICKY_HEADER}
           scroll={{ x: 680 }}
           rowKey="id"
           loading={isPending}
-          dataSource={data ?? []}
+          dataSource={rows}
           pagination={false}
           columns={[
-            { title: t('username'), dataIndex: 'username' },
-            { title: t('globalRole'), dataIndex: 'role', width: 140, render: v => <Tag color={ROLE_COLOR[v]}>{t(ROLE_KEY[v] ?? 'roleViewer')}</Tag> },
-            { title: t('thCreatedAt'), dataIndex: 'createdAt', width: 200, render: fmtTime },
+            { title: t('username'), dataIndex: 'username', sorter: (a, b) => a.username.localeCompare(b.username) },
+            { title: t('globalRole'), dataIndex: 'role', width: 140, sorter: (a, b) => a.role.localeCompare(b.role), render: v => <Tag color={ROLE_COLOR[v]}>{t(ROLE_KEY[v] ?? 'roleViewer')}</Tag> },
+            { title: t('thCreatedAt'), dataIndex: 'createdAt', width: 200, sorter: (a, b) => a.createdAt.localeCompare(b.createdAt), render: fmtTime },
             {
               title: t('actions'), width: 200,
               render: (_, u) => (
@@ -76,7 +96,7 @@ export function UsersPage() {
             },
           ]}
         />}
-      </TableCard>
+      </FilterCard>
 
       <Modal open={creating} title={t('newUser')} onCancel={() => { if (!busy) { createForm.resetFields(); setCreating(false) } }} confirmLoading={busy} closable={!busy} maskClosable={!busy} keyboard={!busy} cancelButtonProps={{ disabled: busy }} onOk={() => createForm.submit()} destroyOnHidden>
         <Form disabled={busy} form={createForm} layout="vertical" initialValues={{ role: 'analyst' }}

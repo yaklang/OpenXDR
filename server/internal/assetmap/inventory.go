@@ -20,7 +20,8 @@ const ClassSoftware = 5020
 
 const maxPackages = 20000
 
-// Software 物化到资产上的软件清单。Packages 每项是 [包名, 版本, 源码包, 源码版本]
+// Software 物化到资产上的软件清单。Packages 每项是 [包名, 版本, 源码包, 源码版本]。
+// RPM 没有源码信息时后两项同时为空，源码版本不推测补齐 epoch。
 type Software struct {
 	OS       string      `json:"os"`
 	Version  string      `json:"version"`
@@ -38,7 +39,7 @@ func software(raw json.RawMessage) (*Software, bool) {
 		Manager  string     `json:"manager"`
 		Packages [][]string `json:"packages"`
 	}
-	if json.Unmarshal(raw, &body) != nil || body.Manager != "dpkg" || len(body.Packages) == 0 || len(body.Packages) > maxPackages {
+	if json.Unmarshal(raw, &body) != nil || (body.Manager != "dpkg" && body.Manager != "rpm") || len(body.Packages) == 0 || len(body.Packages) > maxPackages {
 		return nil, false
 	}
 	s := &Software{OS: clean(strings.ToLower(body.OS.ID), 32), Version: clean(body.OS.VersionID, 32), Manager: body.Manager}
@@ -48,9 +49,12 @@ func software(raw json.RawMessage) (*Software, bool) {
 		}
 		row := [4]string{}
 		for i, v := range p {
-			if row[i] = clean(v, 128); row[i] == "" {
+			if row[i] = clean(v, 128); row[i] == "" && !(body.Manager == "rpm" && i >= 2) {
 				return nil, false
 			}
+		}
+		if (row[2] == "") != (row[3] == "") {
+			return nil, false
 		}
 		s.Packages = append(s.Packages, row)
 	}

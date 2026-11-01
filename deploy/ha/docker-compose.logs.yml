@@ -1,0 +1,9 @@
+# journal 与容器生命周期分离，重建容器不会删除旧日志。
+services:
+  server:
+    logging: &logging
+      driver: journald
+      options:
+        tag: openxdr-ha
+  web:
+    logging: *logging

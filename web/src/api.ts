@@ -1,8 +1,23 @@
+export interface RecordEvidence {
+  id: string
+  facts: { event_id: string; asset_id?: string; ts?: string; process_guid?: string; parent_process_guid?: string }
+}
+
+export interface QueryEvidence {
+  records?: RecordEvidence[]
+  id: string
+  tool: string
+  facts: { status?: string; returned?: number; truncated?: boolean; missing_ancestor?: boolean; raw_truncated_records?: number; dns_omitted_records?: number; baseline_status?: string; baseline_id?: string; baseline_path?: string; exe_path?: string; baseline_first_recorded_at?: string; collection_status?: string; collection_received_at?: string; collection_states?: Record<string, string> }
+}
+
 export interface Verdict {
+  evidence_observations?: { evidence_id: string; field: string; text: string }[]
+  query_evidence?: QueryEvidence[]
   verdict?: 'malicious' | 'suspicious' | 'benign'
   confidence?: number
   summary?: string
   kill_chain?: string[]
+  action_codes?: string[]
   actions?: string[]
   error?: string
   raw?: string
@@ -233,7 +248,12 @@ export interface FindingRow {
   note: string | null
 }
 
-export const fetchFindings = (status?: string) => get<FindingRow[]>(`/api/findings${status ? `?status=${status}` : ''}`)
+export const fetchFindingsByID = (ids: string[]) => get<FindingRow[]>(`/api/findings?${new URLSearchParams({ ids: ids.join(',') })}`)
+export const fetchFindingsPage = (params: { status?: string; assetId?: string; ids?: string; limit?: number; offset?: number } = {}) => {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) if (value !== undefined) query.set(key, String(value))
+  return list<FindingRow>(`/api/findings?${query}`)
+}
 export const setFindingStatus = (id: string, status: string, note?: string) =>
   send('POST', `/api/findings/${id}/status`, { status, note })
 
@@ -260,13 +280,22 @@ export interface CommandRow {
   issuedBy: string
   detail: string | null
   completedAt: string | null
+  cmd?: string
+  stdout?: string
+  stderr?: string
+  exitCode?: number
+  truncated?: boolean
   target?: string
   // 这条指令拉起的进程触发的检测（来源已知，不进事件）
   detections?: { ruleId: string; title?: string; author?: string; count: number }[]
 }
 
 export const fetchCommands = (filter: { incidentId?: string; assetId?: string }) =>
-  get<CommandRow[]>(`/api/commands?${new URLSearchParams(filter as Record<string, string>)}`)
+  get<CommandRow[]>(`/api/commands?${new URLSearchParams({ ...filter, view: 'summary' })}`)
+
+export const fetchCommandsPage = (filter: { incidentId?: string; assetId?: string }, page: number, pageSize = 10) =>
+  get<{ items: CommandRow[]; total: number }>(`/api/commands?${new URLSearchParams({ ...filter, view: 'summary', page: String(page), pageSize: String(pageSize) })}`)
+export const fetchCommand = (id: string) => get<CommandRow>(`/api/commands/${id}`)
 
 export async function issueCommand(body: {
   kind: string
@@ -726,23 +755,48 @@ export interface EventRow {
   automation?: AutomationRef
 }
 
+// /api/events 的响应契约：items 是事件行，truncated 表示返回条数达到 limit（可能还有更早的），
+// coverage 说明冷热两层的覆盖缺口（reason 非空 = 有缺口，与 scan_complete=false 同义）
+export interface EventCoverage {
+  hot_searched: boolean
+  cold_searched: boolean
+  scan_complete: boolean
+  reason: '' | 'hot_keyword_degraded' | 'keyword_not_searched' | 'no_archive_schema' | 'scan_incomplete' | 'before_archive'
+}
+
+export interface EventsResult {
+  items: EventRow[]
+  truncated: boolean
+  coverage: EventCoverage
+}
+
+// 问 AI 的数据来源边界：candidates_hot_only 恒为 true（关联候选只查热表，热目标的历史
+// 关联也可能已归档）；target_from_archive 表示目标事件本身来自冷层（热表已无此行）
+export interface EventAIArchive {
+  target_from_archive: boolean
+  candidates_hot_only: boolean
+}
+
 // 问 AI：related 是查库得出的确定关联（父进程链、同一进程、子进程、同一连接、同一远端、前后同主机）；
 // explain 是模型读这条日志与候选后的解读，挑出的相关日志只会来自候选
 export type Relation = 'ancestor' | 'process' | 'child' | 'connection' | 'peer' | 'nearby'
 export interface RelatedGroup { relation: Relation; events: EventRow[] }
+export interface RelatedEvents { groups: RelatedGroup[]; archive?: EventAIArchive }
 export interface EventExplanation {
   verdict: 'benign' | 'suspicious' | 'malicious' | 'unknown'
   title: string; summary: string; points: string[]; next: string[]
   related: { id: string; why: string }[]
+  // 候选边界说明（candidates_hot_only=true 表示候选未覆盖冷层，热目标也会带）
+  archive?: EventAIArchive
 }
-export const fetchRelatedEvents = (id: string) => get<RelatedGroup[]>(`/api/events/${id}/related`)
+export const fetchRelatedEvents = (id: string) => get<RelatedEvents>(`/api/events/${id}/related`)
 // 后台 AI 任务：发起后立即返回，结果在服务端，前端轮询；换页、刷新都能接着看
 export interface AIJob<T> { id?: string; status: 'none' | 'running' | 'done' | 'failed'; result?: T; error?: string; createdAt?: string; finishedAt?: string }
 export const fetchExplain = (id: string, lang: string) => get<AIJob<EventExplanation>>(`/api/events/${id}/explain?lang=${lang}`)
 export const startExplain = async (id: string, lang: string, refresh = false): Promise<AIJob<EventExplanation>> =>
   (await send('POST', `/api/events/${id}/explain?lang=${lang}${refresh ? '&refresh=1' : ''}`)).json()
 
-export const searchEvents = (params: {
+export const searchEvents = async (params: {
   assetId?: string
   q?: string
   source?: string
@@ -752,6 +806,8 @@ export const searchEvents = (params: {
   from?: string
   to?: string
 }) => {
+  // /api/events 是对象契约 {items, truncated, coverage}：条数截断与覆盖缺口都在响应体里，
+  // X-Truncated / X-Archive-Coverage 头只是调试摘要，前端不读
   const qs = new URLSearchParams()
   if (params.q) qs.set('q', params.q)
   if (params.assetId) qs.set('assetId', params.assetId)
@@ -763,7 +819,10 @@ export const searchEvents = (params: {
   } else if (params.hours)
     qs.set('from', new Date(Date.now() - params.hours * 3_600_000).toISOString())
   qs.set('limit', '200')
-  return list<EventRow>(`/api/events?${qs}`)
+  const r = await fetch(`/api/events?${qs}`)
+  check(r)
+  if (!r.ok) await fail(r)
+  return r.json() as Promise<EventsResult>
 }
 
 export interface AttackCoverage {
@@ -796,6 +855,29 @@ export interface RuleRow {
 
 export const fetchRules = () => get<RuleRow[]>('/api/rules')
 
+export interface BacktestSample {
+  id: string
+  ts: string
+  classUid: number
+  source: string
+  assetId?: string
+  hostname?: string
+  raw: unknown
+}
+
+export interface BacktestResult {
+  ruleId: string
+  hours: number
+  scannedEvents: number
+  truncated: boolean
+  matchedCount: number
+  hosts: { hostname: string; assetId?: string; count: number }[]
+  samples: BacktestSample[]
+}
+
+export const backtestRule = async (id: string, hours = 24): Promise<BacktestResult> =>
+  (await send('POST', `/api/rules/${encodeURIComponent(id)}/backtest?hours=${hours}`)).json()
+
 export interface IntelRow {
   id: string
   createdAt: string
@@ -821,6 +903,7 @@ export interface IntelFeed {
   count: number
   hits: number
   syncedAt: string | null
+  attemptedAt?: string | null
   error?: string
 }
 export interface IntelFeeds {
@@ -973,13 +1056,13 @@ export const testNotifySettings = (s: NotifySettings) => send('POST', '/api/sett
 // AI 与外部情报配置：密钥只回是否已设与末四位；source 标明每项来自控制台还是环境变量
 export interface AISettings {
   baseUrl: string; model: string; piModel: string; ptr: boolean; vtAlertMin: number
-  apiKeySet: boolean; apiKeyHint?: string; vtKeySet: boolean; vtKeyHint?: string
+  apiKeySet: boolean; apiKeyHint?: string; vtKeySet: boolean; vtKeyHint?: string; abuseCHKeySet: boolean; abuseCHKeyHint?: string
   source: Record<string, 'console' | 'env'>
   canSaveSecrets: boolean
 }
 // 只发改动的项；密钥传空串表示清空；reset 里的项回到环境变量
 export interface AISettingsPatch {
-  baseUrl?: string; model?: string; piModel?: string; ptr?: boolean; vtAlertMin?: number; apiKey?: string; vtKey?: string; reset?: string[]
+  baseUrl?: string; model?: string; piModel?: string; ptr?: boolean; vtAlertMin?: number; apiKey?: string; vtKey?: string; abuseCHKey?: string; reset?: string[]
 }
 export const fetchAISettings = () => get<AISettings>('/api/settings/ai')
 export const saveAISettings = async (p: AISettingsPatch): Promise<AISettings> => (await send('PUT', '/api/settings/ai', p)).json()
@@ -1286,8 +1369,15 @@ export interface MapNode {
   online?: boolean
   listening?: number
   ports?: string[]
+  // 资产所在的组：全部组视图里点开详情按资产自己的组取
+  groupId?: string
 }
 // 公网目的地址：按地址合并的外联明细，带反向解析、离线归属库、VirusTotal 信息与 AI 给的用途
+export interface PeerStat {
+  count: number
+  lastSeen: string
+}
+
 export interface PublicDest {
   ip: string; ports: string[]; processes?: string[]; count: number; lastSeen: string
   ptr?: string; owner?: string; asn?: number; country?: string; malicious?: number; suspicious?: number; domains?: string[]; checked?: boolean; purpose?: string
@@ -1333,6 +1423,9 @@ export interface AssetProfile {
   services?: Record<string, ServiceNote> | null
   outbound: string[] | null
   inbound: string[] | null
+  // 按对端合计的连接次数与最近一次时间，键与 outbound / inbound 里的对端一致
+  outboundStats?: Record<string, PeerStat> | null
+  inboundStats?: Record<string, PeerStat> | null
   publicDestinations: number
   public?: PublicDest[] | null
   role?: string | null
@@ -1347,6 +1440,7 @@ export interface AssetProfile {
 }
 export type ProfileEdit = { role?: string; summary?: string; criticality?: number; unlock?: string[] }
 
+// groupId 为 all 是全部组视图（仅全局管理员），跨组的连接连成主机到主机
 export const fetchAssetMap = (groupId: string) => get<AssetMap>(`/api/asset-map?groupId=${groupId}`)
 // 软件漏洞：按源码包归组，可升级修复与暂无修复分开
 export interface VulnItem { id: string; aliases?: string[]; summary?: string; score: number; vector?: string; fixed?: string }
@@ -1425,6 +1519,11 @@ export interface DecoyProfile {
 export const fetchDecoyInstallStatus = () => get<{ enabled: boolean }>('/api/decoy-install/status')
 export const installDecoy = (id: string, body: { fingerprint: string; arch: string; listenHost: string; fileRoot?: string }) => send('POST', `/api/decoy-install/${encodeURIComponent(id)}`, body)
 export interface DecoyDeployment {
+  runtime_pending?: number | null
+  runtime_error?: string
+  hosted?: boolean
+  active_revision_id?: string | null
+  stop_requested?: boolean
   remote_installable: boolean
   install_state: 'idle' | 'installing' | 'installed' | 'unconfirmed'
   install_started_at?: string
@@ -1451,12 +1550,24 @@ export const revokeDecoy = (id: string) => send('POST', `/api/decoys/${encodeURI
 export async function issueDecoyToken(id: string): Promise<{ token: string; expiresAt: string }> {
   return (await send('POST', `/api/decoys/${encodeURIComponent(id)}/token`)).json()
 }
-export interface DecoyObservation { id: string; kind: string; received_at: string; incident_id?: string | null }
+export interface DecoyObservation { id: string; kind: string; received_at: string; occurred_at?: string | null; session_id?: string; revision_id?: string | null; incident_id?: string | null }
 export const fetchDecoyObservations = (id: string) => get<{ items: DecoyObservation[]; more: boolean }>(`/api/decoys/${encodeURIComponent(id)}/observations`)
 
 export async function reviewDecoyObservation(id: string, observation: string): Promise<{ incidentId: string }> {
   return (await send('POST', `/api/decoys/${encodeURIComponent(id)}/observations/${encodeURIComponent(observation)}/review`)).json()
 }
+
+export interface DeceptionReleaseInput { engine: 'native' | 'dygk'; version: string; digest: string; protocol: number; stateSchema: string }
+export interface DeceptionRelease { id: string; engine: 'native' | 'dygk'; version: string; digest: string; protocol: number; state_schema: string; enabled: boolean }
+export interface DeceptionConfig { hosted?: boolean; attachment: 'standalone' | 'gateway'; mode: 'observe' | 'block' | 'quarantine'; origin: string; upstream?: string; prefix: string; trustedProxies?: string[]; entries: number; branches: number; depth: number; maxNodes: number; requestLimit: number }
+export interface DeceptionRevision { id: string; number: number; release_id: string; spec: DeceptionConfig; created_at: string }
+export const fetchDeceptionReleases = () => get<DeceptionRelease[]>('/api/deception/releases')
+export const fetchHostedDeceptionRelease = () => get<DeceptionRelease | null>('/api/deception/hosted-release')
+export const admitDeceptionRelease = (body: DeceptionReleaseInput) => send('POST', '/api/deception/releases', body)
+export const disableDeceptionRelease = (id: string) => send('POST', `/api/deception/releases/${encodeURIComponent(id)}/disable`)
+export const fetchDeceptionRevisions = (id: string) => get<{ items: DeceptionRevision[]; more: boolean }>(`/api/decoys/${encodeURIComponent(id)}/revisions`)
+export const selectDeceptionRevision = (id: string, body: { releaseId: string; config: DeceptionConfig; expectedRevision?: string | null }) => send('POST', `/api/decoys/${encodeURIComponent(id)}/revisions`, body)
+export const stopDeceptionRuntime = (id: string) => send('POST', `/api/decoys/${encodeURIComponent(id)}/stop`)
 
 export async function downloadAssets(format: 'csv' | 'json', selection: { mode: 'filter'; q: string; groupId: string } | { mode: 'ids'; ids: string[] }): Promise<void> {
   const r = await fetch('/api/assets/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ format, selection }) })
@@ -1514,3 +1625,27 @@ export const fetchIntegrationAttempts = (id: string, did: string) => get<Deliver
 export const retryIntegrationDelivery = (id: string, did: string) => send('POST', `/api/system-integrations/${id}/deliveries/${did}/retry`)
 export interface ExternalTicket { id: string; integrationId: string; incidentId: string; externalId: string; title: string; status: string; url: string; updatedAt: string }
 export const fetchIncidentTickets = (id: string) => get<ExternalTicket[]>(`/api/incidents/${id}/tickets`)
+
+export const fetchHostedDeceptionStatus = () => get<{ online: boolean; seenAt: string | null }>('/api/deception/hosted-status')
+
+export interface TriageRun {
+  heartbeat_valid: boolean
+  id: string
+  started_at: string
+  ready_at?: string
+  finished_at?: string
+  trigger: 'initial' | 'reopened' | 'urgent' | 'evidence'
+  status: 'running' | 'succeeded' | 'failed' | 'interrupted'
+  model: string
+  error_code: string
+  duration_ms?: number
+  model_ms?: number
+  tool_ms?: number
+  model_calls?: number
+  tool_calls?: number
+  tool_errors?: number
+  tool_details?: { tool: string; duration_ms: number; failed: boolean; returned?: number; truncated?: boolean }[]
+  input_tokens?: number
+  output_tokens?: number
+}
+export const fetchTriageRuns = (id: string, page: number) => get<{ items: TriageRun[]; more: boolean }>(`/api/incidents/${id}/triage-runs?page=${page}`)

@@ -3,10 +3,11 @@ import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Collapse, Space, Tag, Typography } from 'antd'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
-import { createAgentSession, fetchFindings, fetchIncident, setFindingStatus, setIncidentStatus } from '../api'
+import { createAgentSession, fetchFindingsByID, fetchIncident, setFindingStatus, setIncidentStatus } from '../api'
 import { useCanAct, useSession } from '../app/session'
 import { useI18n, type MsgKey } from '../i18n'
 import { ResolveModal } from './ResolveModal'
+import { LoadError } from './LoadError'
 import { IncidentStatusTag, SeverityTag, errText } from './format'
 import { agreesWithAI, proposalNote, verdictStatus } from './verdict'
 
@@ -55,7 +56,8 @@ export function SubjectsBar({ subjects, groupId }: { subjects: string[]; groupId
     queries: parsed.filter(([k]) => k === 'incident').map(([, id]) => ({ queryKey: ['incident', id], queryFn: () => fetchIncident(id), refetchInterval: 15_000 })),
   })
   const findingIds = parsed.filter(([k]) => k === 'finding').map(([, id]) => id)
-  const findings = useQuery({ queryKey: ['findings', 'all'], queryFn: () => fetchFindings(), enabled: findingIds.length > 0, refetchInterval: 15_000 })
+  const findings = useQuery({ queryKey: ['findings', 'subjects', findingIds], queryFn: () => fetchFindingsByID(findingIds), enabled: findingIds.length > 0, refetchInterval: 15_000 })
+  const failed = [...incidents, findings].filter(q => q.isError)
   // 结案弹窗与事件页同口径：预填结论相同的 AI 结案建议，与研判一致时理由选填、相反时提示
   const incident = resolving?.kind === 'incident' ? incidents.find(q => q.data?.id === resolving.id)?.data : undefined
   const next = incident ? (resolving?.next as 'closed' | 'false_positive') : null
@@ -83,7 +85,7 @@ export function SubjectsBar({ subjects, groupId }: { subjects: string[]; groupId
         <div key={i.id} className="subject-row">
           <AlertOutlined />
           <SeverityTag value={i.severity} />
-          <Link to={`/incidents/${i.id}`} style={{ flex: 1, minWidth: 0 }}><Typography.Text ellipsis>{title}</Typography.Text></Link>
+          <Link to={`/incidents/${i.id}`} className="subject-title"><Typography.Text ellipsis>{title}</Typography.Text></Link>
           <IncidentStatusTag value={i.status} retriage={i.retriage} triageStartedAt={i.triageStartedAt} />
           {canAct && !done && (
             <Space size={0}>
@@ -98,7 +100,7 @@ export function SubjectsBar({ subjects, groupId }: { subjects: string[]; groupId
       <div key={f.id} className="subject-row">
         <ToolOutlined />
         <Typography.Text type="secondary">{f.hostname}</Typography.Text>
-        <Link to="/findings" style={{ flex: 1, minWidth: 0 }}><Typography.Text ellipsis>{f.title}</Typography.Text></Link>
+        <Link to={`/findings?${new URLSearchParams({ ids: f.id, status: 'all' })}`} className="subject-title"><Typography.Text ellipsis>{f.title}</Typography.Text></Link>
         <Tag>{t(FINDING_STATUS[f.status])}</Tag>
         {canAct && f.status === 'open' && (
           <Space size={0}>
@@ -113,7 +115,7 @@ export function SubjectsBar({ subjects, groupId }: { subjects: string[]; groupId
   return (
     <>
       <Collapse size="small" defaultActiveKey={['s']} className="subjects-bar" bordered={false}
-        items={[{ key: 's', label: t('subjectsTitle', { n: subjects.length }), children: rows }]} />
+        items={[{ key: 's', label: t('subjectsTitle', { n: subjects.length }), children: <>{failed.length > 0 && <LoadError error={failed[0].error} onRetry={() => failed.forEach(q => q.refetch())} />}{rows}</> }]} />
       <ResolveModal
         open={!!resolving}
         title={`${t(resolving ? RESOLVE_TITLE[resolving.next] : 'resolveClosedTitle')} · ${resolving?.title ?? ''}`}

@@ -203,6 +203,47 @@ func (_u *DecoyDeploymentUpdate) ClearRuntimeSeenAt() *DecoyDeploymentUpdate {
 	return _u
 }
 
+// SetRuntimePending sets the "runtime_pending" field.
+func (_u *DecoyDeploymentUpdate) SetRuntimePending(v int) *DecoyDeploymentUpdate {
+	_u.mutation.ResetRuntimePending()
+	_u.mutation.SetRuntimePending(v)
+	return _u
+}
+
+// SetNillableRuntimePending sets the "runtime_pending" field if the given value is not nil.
+func (_u *DecoyDeploymentUpdate) SetNillableRuntimePending(v *int) *DecoyDeploymentUpdate {
+	if v != nil {
+		_u.SetRuntimePending(*v)
+	}
+	return _u
+}
+
+// AddRuntimePending adds value to the "runtime_pending" field.
+func (_u *DecoyDeploymentUpdate) AddRuntimePending(v int) *DecoyDeploymentUpdate {
+	_u.mutation.AddRuntimePending(v)
+	return _u
+}
+
+// ClearRuntimePending clears the value of the "runtime_pending" field.
+func (_u *DecoyDeploymentUpdate) ClearRuntimePending() *DecoyDeploymentUpdate {
+	_u.mutation.ClearRuntimePending()
+	return _u
+}
+
+// SetRuntimeError sets the "runtime_error" field.
+func (_u *DecoyDeploymentUpdate) SetRuntimeError(v string) *DecoyDeploymentUpdate {
+	_u.mutation.SetRuntimeError(v)
+	return _u
+}
+
+// SetNillableRuntimeError sets the "runtime_error" field if the given value is not nil.
+func (_u *DecoyDeploymentUpdate) SetNillableRuntimeError(v *string) *DecoyDeploymentUpdate {
+	if v != nil {
+		_u.SetRuntimeError(*v)
+	}
+	return _u
+}
+
 // SetRuntimeState sets the "runtime_state" field.
 func (_u *DecoyDeploymentUpdate) SetRuntimeState(v decoydeployment.RuntimeState) *DecoyDeploymentUpdate {
 	_u.mutation.SetRuntimeState(v)
@@ -271,6 +312,60 @@ func (_u *DecoyDeploymentUpdate) ClearInstallStartedAt() *DecoyDeploymentUpdate 
 	return _u
 }
 
+// SetActiveRevisionID sets the "active_revision_id" field.
+func (_u *DecoyDeploymentUpdate) SetActiveRevisionID(v uuid.UUID) *DecoyDeploymentUpdate {
+	_u.mutation.SetActiveRevisionID(v)
+	return _u
+}
+
+// SetNillableActiveRevisionID sets the "active_revision_id" field if the given value is not nil.
+func (_u *DecoyDeploymentUpdate) SetNillableActiveRevisionID(v *uuid.UUID) *DecoyDeploymentUpdate {
+	if v != nil {
+		_u.SetActiveRevisionID(*v)
+	}
+	return _u
+}
+
+// ClearActiveRevisionID clears the value of the "active_revision_id" field.
+func (_u *DecoyDeploymentUpdate) ClearActiveRevisionID() *DecoyDeploymentUpdate {
+	_u.mutation.ClearActiveRevisionID()
+	return _u
+}
+
+// SetTokenRevisionID sets the "token_revision_id" field.
+func (_u *DecoyDeploymentUpdate) SetTokenRevisionID(v uuid.UUID) *DecoyDeploymentUpdate {
+	_u.mutation.SetTokenRevisionID(v)
+	return _u
+}
+
+// SetNillableTokenRevisionID sets the "token_revision_id" field if the given value is not nil.
+func (_u *DecoyDeploymentUpdate) SetNillableTokenRevisionID(v *uuid.UUID) *DecoyDeploymentUpdate {
+	if v != nil {
+		_u.SetTokenRevisionID(*v)
+	}
+	return _u
+}
+
+// ClearTokenRevisionID clears the value of the "token_revision_id" field.
+func (_u *DecoyDeploymentUpdate) ClearTokenRevisionID() *DecoyDeploymentUpdate {
+	_u.mutation.ClearTokenRevisionID()
+	return _u
+}
+
+// SetStopRequested sets the "stop_requested" field.
+func (_u *DecoyDeploymentUpdate) SetStopRequested(v bool) *DecoyDeploymentUpdate {
+	_u.mutation.SetStopRequested(v)
+	return _u
+}
+
+// SetNillableStopRequested sets the "stop_requested" field if the given value is not nil.
+func (_u *DecoyDeploymentUpdate) SetNillableStopRequested(v *bool) *DecoyDeploymentUpdate {
+	if v != nil {
+		_u.SetStopRequested(*v)
+	}
+	return _u
+}
+
 // Mutation returns the DecoyDeploymentMutation object of the builder.
 func (_u *DecoyDeploymentUpdate) Mutation() *DecoyDeploymentMutation {
 	return _u.mutation
@@ -308,6 +403,11 @@ func (_u *DecoyDeploymentUpdate) check() error {
 	if v, ok := _u.mutation.Status(); ok {
 		if err := decoydeployment.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "DecoyDeployment.status": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.RuntimePending(); ok {
+		if err := decoydeployment.RuntimePendingValidator(v); err != nil {
+			return &ValidationError{Name: "runtime_pending", err: fmt.Errorf(`ent: validator failed for field "DecoyDeployment.runtime_pending": %w`, err)}
 		}
 	}
 	if v, ok := _u.mutation.RuntimeState(); ok {
@@ -386,6 +486,18 @@ func (_u *DecoyDeploymentUpdate) sqlSave(ctx context.Context) (_node int, err er
 	if _u.mutation.RuntimeSeenAtCleared() {
 		_spec.ClearField(decoydeployment.FieldRuntimeSeenAt, field.TypeTime)
 	}
+	if value, ok := _u.mutation.RuntimePending(); ok {
+		_spec.SetField(decoydeployment.FieldRuntimePending, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedRuntimePending(); ok {
+		_spec.AddField(decoydeployment.FieldRuntimePending, field.TypeInt, value)
+	}
+	if _u.mutation.RuntimePendingCleared() {
+		_spec.ClearField(decoydeployment.FieldRuntimePending, field.TypeInt)
+	}
+	if value, ok := _u.mutation.RuntimeError(); ok {
+		_spec.SetField(decoydeployment.FieldRuntimeError, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.RuntimeState(); ok {
 		_spec.SetField(decoydeployment.FieldRuntimeState, field.TypeEnum, value)
 	}
@@ -403,6 +515,21 @@ func (_u *DecoyDeploymentUpdate) sqlSave(ctx context.Context) (_node int, err er
 	}
 	if _u.mutation.InstallStartedAtCleared() {
 		_spec.ClearField(decoydeployment.FieldInstallStartedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ActiveRevisionID(); ok {
+		_spec.SetField(decoydeployment.FieldActiveRevisionID, field.TypeUUID, value)
+	}
+	if _u.mutation.ActiveRevisionIDCleared() {
+		_spec.ClearField(decoydeployment.FieldActiveRevisionID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.TokenRevisionID(); ok {
+		_spec.SetField(decoydeployment.FieldTokenRevisionID, field.TypeUUID, value)
+	}
+	if _u.mutation.TokenRevisionIDCleared() {
+		_spec.ClearField(decoydeployment.FieldTokenRevisionID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.StopRequested(); ok {
+		_spec.SetField(decoydeployment.FieldStopRequested, field.TypeBool, value)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -598,6 +725,47 @@ func (_u *DecoyDeploymentUpdateOne) ClearRuntimeSeenAt() *DecoyDeploymentUpdateO
 	return _u
 }
 
+// SetRuntimePending sets the "runtime_pending" field.
+func (_u *DecoyDeploymentUpdateOne) SetRuntimePending(v int) *DecoyDeploymentUpdateOne {
+	_u.mutation.ResetRuntimePending()
+	_u.mutation.SetRuntimePending(v)
+	return _u
+}
+
+// SetNillableRuntimePending sets the "runtime_pending" field if the given value is not nil.
+func (_u *DecoyDeploymentUpdateOne) SetNillableRuntimePending(v *int) *DecoyDeploymentUpdateOne {
+	if v != nil {
+		_u.SetRuntimePending(*v)
+	}
+	return _u
+}
+
+// AddRuntimePending adds value to the "runtime_pending" field.
+func (_u *DecoyDeploymentUpdateOne) AddRuntimePending(v int) *DecoyDeploymentUpdateOne {
+	_u.mutation.AddRuntimePending(v)
+	return _u
+}
+
+// ClearRuntimePending clears the value of the "runtime_pending" field.
+func (_u *DecoyDeploymentUpdateOne) ClearRuntimePending() *DecoyDeploymentUpdateOne {
+	_u.mutation.ClearRuntimePending()
+	return _u
+}
+
+// SetRuntimeError sets the "runtime_error" field.
+func (_u *DecoyDeploymentUpdateOne) SetRuntimeError(v string) *DecoyDeploymentUpdateOne {
+	_u.mutation.SetRuntimeError(v)
+	return _u
+}
+
+// SetNillableRuntimeError sets the "runtime_error" field if the given value is not nil.
+func (_u *DecoyDeploymentUpdateOne) SetNillableRuntimeError(v *string) *DecoyDeploymentUpdateOne {
+	if v != nil {
+		_u.SetRuntimeError(*v)
+	}
+	return _u
+}
+
 // SetRuntimeState sets the "runtime_state" field.
 func (_u *DecoyDeploymentUpdateOne) SetRuntimeState(v decoydeployment.RuntimeState) *DecoyDeploymentUpdateOne {
 	_u.mutation.SetRuntimeState(v)
@@ -666,6 +834,60 @@ func (_u *DecoyDeploymentUpdateOne) ClearInstallStartedAt() *DecoyDeploymentUpda
 	return _u
 }
 
+// SetActiveRevisionID sets the "active_revision_id" field.
+func (_u *DecoyDeploymentUpdateOne) SetActiveRevisionID(v uuid.UUID) *DecoyDeploymentUpdateOne {
+	_u.mutation.SetActiveRevisionID(v)
+	return _u
+}
+
+// SetNillableActiveRevisionID sets the "active_revision_id" field if the given value is not nil.
+func (_u *DecoyDeploymentUpdateOne) SetNillableActiveRevisionID(v *uuid.UUID) *DecoyDeploymentUpdateOne {
+	if v != nil {
+		_u.SetActiveRevisionID(*v)
+	}
+	return _u
+}
+
+// ClearActiveRevisionID clears the value of the "active_revision_id" field.
+func (_u *DecoyDeploymentUpdateOne) ClearActiveRevisionID() *DecoyDeploymentUpdateOne {
+	_u.mutation.ClearActiveRevisionID()
+	return _u
+}
+
+// SetTokenRevisionID sets the "token_revision_id" field.
+func (_u *DecoyDeploymentUpdateOne) SetTokenRevisionID(v uuid.UUID) *DecoyDeploymentUpdateOne {
+	_u.mutation.SetTokenRevisionID(v)
+	return _u
+}
+
+// SetNillableTokenRevisionID sets the "token_revision_id" field if the given value is not nil.
+func (_u *DecoyDeploymentUpdateOne) SetNillableTokenRevisionID(v *uuid.UUID) *DecoyDeploymentUpdateOne {
+	if v != nil {
+		_u.SetTokenRevisionID(*v)
+	}
+	return _u
+}
+
+// ClearTokenRevisionID clears the value of the "token_revision_id" field.
+func (_u *DecoyDeploymentUpdateOne) ClearTokenRevisionID() *DecoyDeploymentUpdateOne {
+	_u.mutation.ClearTokenRevisionID()
+	return _u
+}
+
+// SetStopRequested sets the "stop_requested" field.
+func (_u *DecoyDeploymentUpdateOne) SetStopRequested(v bool) *DecoyDeploymentUpdateOne {
+	_u.mutation.SetStopRequested(v)
+	return _u
+}
+
+// SetNillableStopRequested sets the "stop_requested" field if the given value is not nil.
+func (_u *DecoyDeploymentUpdateOne) SetNillableStopRequested(v *bool) *DecoyDeploymentUpdateOne {
+	if v != nil {
+		_u.SetStopRequested(*v)
+	}
+	return _u
+}
+
 // Mutation returns the DecoyDeploymentMutation object of the builder.
 func (_u *DecoyDeploymentUpdateOne) Mutation() *DecoyDeploymentMutation {
 	return _u.mutation
@@ -716,6 +938,11 @@ func (_u *DecoyDeploymentUpdateOne) check() error {
 	if v, ok := _u.mutation.Status(); ok {
 		if err := decoydeployment.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "DecoyDeployment.status": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.RuntimePending(); ok {
+		if err := decoydeployment.RuntimePendingValidator(v); err != nil {
+			return &ValidationError{Name: "runtime_pending", err: fmt.Errorf(`ent: validator failed for field "DecoyDeployment.runtime_pending": %w`, err)}
 		}
 	}
 	if v, ok := _u.mutation.RuntimeState(); ok {
@@ -811,6 +1038,18 @@ func (_u *DecoyDeploymentUpdateOne) sqlSave(ctx context.Context) (_node *DecoyDe
 	if _u.mutation.RuntimeSeenAtCleared() {
 		_spec.ClearField(decoydeployment.FieldRuntimeSeenAt, field.TypeTime)
 	}
+	if value, ok := _u.mutation.RuntimePending(); ok {
+		_spec.SetField(decoydeployment.FieldRuntimePending, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedRuntimePending(); ok {
+		_spec.AddField(decoydeployment.FieldRuntimePending, field.TypeInt, value)
+	}
+	if _u.mutation.RuntimePendingCleared() {
+		_spec.ClearField(decoydeployment.FieldRuntimePending, field.TypeInt)
+	}
+	if value, ok := _u.mutation.RuntimeError(); ok {
+		_spec.SetField(decoydeployment.FieldRuntimeError, field.TypeString, value)
+	}
 	if value, ok := _u.mutation.RuntimeState(); ok {
 		_spec.SetField(decoydeployment.FieldRuntimeState, field.TypeEnum, value)
 	}
@@ -828,6 +1067,21 @@ func (_u *DecoyDeploymentUpdateOne) sqlSave(ctx context.Context) (_node *DecoyDe
 	}
 	if _u.mutation.InstallStartedAtCleared() {
 		_spec.ClearField(decoydeployment.FieldInstallStartedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ActiveRevisionID(); ok {
+		_spec.SetField(decoydeployment.FieldActiveRevisionID, field.TypeUUID, value)
+	}
+	if _u.mutation.ActiveRevisionIDCleared() {
+		_spec.ClearField(decoydeployment.FieldActiveRevisionID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.TokenRevisionID(); ok {
+		_spec.SetField(decoydeployment.FieldTokenRevisionID, field.TypeUUID, value)
+	}
+	if _u.mutation.TokenRevisionIDCleared() {
+		_spec.ClearField(decoydeployment.FieldTokenRevisionID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.StopRequested(); ok {
+		_spec.SetField(decoydeployment.FieldStopRequested, field.TypeBool, value)
 	}
 	_node = &DecoyDeployment{config: _u.config}
 	_spec.Assign = _node.assignValues

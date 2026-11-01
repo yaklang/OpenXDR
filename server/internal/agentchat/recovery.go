@@ -15,7 +15,7 @@ func (s *Service) timeout() time.Duration {
 	if s.Timeout > 0 {
 		return s.Timeout
 	}
-	return 30 * time.Minute
+	return 4 * time.Hour
 }
 
 func expiry(ctx context.Context) time.Time {

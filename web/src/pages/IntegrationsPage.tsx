@@ -7,7 +7,7 @@ import { fetchIntegrations, fetchIntegrationTokens, fetchOutboundAllow, fetchUse
 import { useSession } from '../app/session'
 import { IntegrationSubscriptions } from '../components/IntegrationSubscriptions'
 import { LoadError } from '../components/LoadError'
-import { Page } from '../components/Page'
+import { Page, TableCard } from '../components/Page'
 import { errText, fmtTime } from '../components/format'
 import { useI18n } from '../i18n'
 
@@ -46,14 +46,16 @@ export function IntegrationsPage() {
   }
   const openTokens = (row: IntegrationRow) => { setTokensFor(row); setTokenScopes(row.scopes); setPlain(null); setDays(90) }
   return <Page title={t('navIntegrations')} subtitle={t('integrationHint')} extra={<Space><Button onClick={() => { setAllowText(undefined); setAllowOpen(true) }}>{t('integrationOutboundAllow')}</Button><Button type="primary" icon={<PlusOutlined />} onClick={() => edit()}>{t('create')}</Button></Space>}>
-    {query.isError ? <LoadError error={query.error} onRetry={() => query.refetch()} /> : <Table<IntegrationRow> rowKey="id" dataSource={query.data} loading={query.isPending} scroll={{ x: 800 }} columns={[
-      { title: t('integrationName'), dataIndex: 'name' },
-      { title: t('integrationPurpose'), dataIndex: 'purpose' },
-      { title: t('integrationEnabled'), render: (_, row) => <Tag>{t(row.enabled ? 'integrationOn' : 'integrationOff')}</Tag> },
-      { title: t('group'), render: (_, row) => row.groupIds.map(id => groups.find(g => g.id === id)?.name ?? id).join(', ') || '—' },
-      { title: t('integrationScopes'), render: (_, row) => row.scopes.map(s => <Tag key={s}>{s}</Tag>) },
-      { title: t('integrationActions'), render: (_, row) => <TableActions><Button onClick={() => edit(row)}>{t('integrationEdit')}</Button><Button onClick={() => openTokens(row)}>{t('integrationTokens')}</Button><Button onClick={() => setSubscriptionsFor(row)}>{t('integrationSubscriptions')}</Button></TableActions> },
-    ]} />}
+    <TableCard>
+      {query.isError ? <LoadError error={query.error} onRetry={() => query.refetch()} /> : <Table<IntegrationRow> rowKey="id" dataSource={query.data} loading={query.isPending} scroll={{ x: 800 }} pagination={false} columns={[
+        { title: t('integrationName'), dataIndex: 'name' },
+        { title: t('integrationPurpose'), dataIndex: 'purpose' },
+        { title: t('integrationEnabled'), render: (_, row) => <Tag>{t(row.enabled ? 'integrationOn' : 'integrationOff')}</Tag> },
+        { title: t('group'), render: (_, row) => row.groupIds.map(id => groups.find(g => g.id === id)?.name ?? id).join(', ') || '—' },
+        { title: t('integrationScopes'), render: (_, row) => row.scopes.map(s => <Tag key={s}>{s}</Tag>) },
+        { title: t('integrationActions'), render: (_, row) => <TableActions><Button size="small" onClick={() => edit(row)}>{t('integrationEdit')}</Button><Button size="small" onClick={() => openTokens(row)}>{t('integrationTokens')}</Button><Button size="small" onClick={() => setSubscriptionsFor(row)}>{t('integrationSubscriptions')}</Button></TableActions> },
+      ]} />}
+    </TableCard>
     <Modal title={t('navIntegrations')} open={!!editing} onCancel={() => setEditing(null)} confirmLoading={busy} okText={t('save')} onOk={() => form.submit()}>
       <Form form={form} layout="vertical" onFinish={body => run(async () => { await saveIntegration(body, editing && editing !== 'new' ? editing.id : undefined); setEditing(null) })}>
         <Form.Item name="name" label={t('integrationName')} rules={[{ required: true, whitespace: true, max: 100 }]}><Input maxLength={100} /></Form.Item>

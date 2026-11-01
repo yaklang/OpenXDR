@@ -23,6 +23,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -197,7 +198,7 @@ func (s selection) matches(c *evalCtx) bool {
 	for _, branch := range s.branches {
 		ok := true
 		for _, t := range branch {
-			if !t.matches(c.raw) {
+			if !t.matchesContext(c) {
 				ok = false
 				break
 			}
@@ -278,6 +279,7 @@ func (m matcher) match(value, lower string) bool {
 // fieldTest：值列表是 OR（带 |all 修饰符时为 AND），expectNull 表示字段必须缺失。
 type fieldTest struct {
 	path       []string
+	cacheIndex int
 	patterns   []matcher
 	expectNull bool
 	matchAll   bool
@@ -285,13 +287,16 @@ type fieldTest struct {
 
 func (t fieldTest) matches(raw map[string]any) bool {
 	value, ok := resolve(raw, t.path)
+	return t.matchesValue(value, strings.ToLower(value), ok)
+}
+
+func (t fieldTest) matchesValue(value, lower string, ok bool) bool {
 	if t.expectNull {
 		return !ok
 	}
 	if !ok {
 		return false
 	}
-	lower := strings.ToLower(value)
 	for _, p := range t.patterns {
 		if p.match(value, lower) {
 			if !t.matchAll {
@@ -302,6 +307,22 @@ func (t fieldTest) matches(raw map[string]any) bool {
 		}
 	}
 	return t.matchAll
+}
+
+func (t fieldTest) matchesContext(c *evalCtx) bool {
+	// 零值表示尚未经过规则集索引，独立 selection 继续走原始匹配。
+	if t.cacheIndex == 0 || t.cacheIndex > len(c.fields) {
+		return t.matches(c.raw)
+	}
+	field := &c.fields[t.cacheIndex-1]
+	if !field.loaded {
+		field.value, field.present = resolve(c.raw, t.path)
+		if field.present {
+			field.lower = strings.ToLower(field.value)
+		}
+		field.loaded = true
+	}
+	return t.matchesValue(field.value, field.lower, field.present)
 }
 
 func resolve(raw map[string]any, path []string) (string, bool) {
@@ -331,9 +352,11 @@ type engineState struct {
 	rules []*Rule
 	byID  map[string]*Rule
 	// 按 OCSF class 分桶：一条网络事件没必要去碰一千多条进程规则
-	byClass  map[int][]*Rule
-	anyClass []*Rule // 未限定 class 的规则，对所有事件都要过
-	maxSels  int     // 单条规则的最多 selection 数，决定 memo 缓冲大小
+	byClass    map[int][]*Rule
+	anyClass   []*Rule   // 未限定 class 的规则，对所有事件都要过
+	maxSels    int       // 单条规则的最多 selection 数，决定 memo 缓冲大小
+	fieldCount int       // 所有规则共享字段路径的数量，用于按事件缓存解析结果
+	contexts   sync.Pool // 当前规则快照的求值缓冲，并发调用各自独占
 }
 
 type Engine struct {
@@ -353,6 +376,7 @@ func (e *Engine) load() *engineState {
 
 func (s *engineState) index() {
 	s.byClass = map[int][]*Rule{}
+	fieldIndices := map[string]int{}
 	for _, r := range s.rules {
 		if r.ClassUID == 0 {
 			s.anyClass = append(s.anyClass, r)
@@ -362,7 +386,22 @@ func (s *engineState) index() {
 		if n := len(r.sels); n > s.maxSels {
 			s.maxSels = n
 		}
+		for i := range r.sels {
+			for j := range r.sels[i].branches {
+				for k := range r.sels[i].branches[j] {
+					t := &r.sels[i].branches[j][k]
+					key := strings.Join(t.path, ".")
+					index, ok := fieldIndices[key]
+					if !ok {
+						index = len(fieldIndices) + 1
+						fieldIndices[key] = index
+					}
+					t.cacheIndex = index
+				}
+			}
+		}
 	}
+	s.fieldCount = len(fieldIndices)
 }
 
 // Report 加载结果统计。失败原因按类别聚合，用于衡量规则库兼容率。
@@ -506,7 +545,7 @@ func classify(err error) string {
 
 // Evaluate 匹配一条事件，只返回会产生告警的规则，信号规则不在其中。os 是事件所属资产的操作系统（未知时传空串），
 // 用于把 Windows 规则挡在 Linux 事件之外——反之亦然。
-// 可并发调用：除按事件分配的 memo 外不持有可变状态。
+// 可并发调用：每次独占求值缓冲，结束时清掉事件引用再归还。
 func (e *Engine) Evaluate(classUID int, os string, raw map[string]any) []*Rule {
 	return e.evaluate(classUID, os, raw, false)
 }
@@ -518,7 +557,17 @@ func (e *Engine) EvaluateSignals(classUID int, os string, raw map[string]any) []
 
 func (e *Engine) evaluate(classUID int, os string, raw map[string]any, signal bool) []*Rule {
 	s := e.load()
-	ctx := evalCtx{raw: raw, memo: make([]int8, s.maxSels)}
+	ctx, _ := s.contexts.Get().(*evalCtx)
+	if ctx == nil {
+		ctx = &evalCtx{memo: make([]int8, s.maxSels), fields: make([]fieldValue, s.fieldCount)}
+	}
+	ctx.raw = raw
+	defer func() {
+		ctx.raw, ctx.sels = nil, nil
+		ctx.flat, ctx.flatDone = "", false
+		clear(ctx.fields)
+		s.contexts.Put(ctx)
+	}()
 	var hits []*Rule
 	match := func(rules []*Rule) {
 		for _, r := range rules {
@@ -531,7 +580,7 @@ func (e *Engine) evaluate(classUID int, os string, raw map[string]any, signal bo
 			}
 			ctx.sels = r.sels
 			clear(ctx.memo[:len(r.sels)])
-			if r.cond.eval(&ctx) {
+			if r.cond.eval(ctx) {
 				hits = append(hits, r)
 			}
 		}
@@ -544,6 +593,26 @@ func (e *Engine) evaluate(classUID int, os string, raw map[string]any, signal bo
 // Rules 当前加载的全部规则。返回的切片属于某个不可变状态版本，只读。
 func (e *Engine) Rules() []*Rule {
 	return e.load().rules
+}
+
+// Matches 对单条事件独立求值，供控制台规则回测使用。
+// 跨事件时序规则（Kind 非空）无单事件条件树，直接返回 false。
+func (r *Rule) Matches(classUID int, os string, raw map[string]any) bool {
+	if r == nil || r.cond == nil || r.Kind != "" {
+		return false
+	}
+	if r.ClassUID != 0 && r.ClassUID != classUID {
+		return false
+	}
+	if r.Product != "" && os != "" && r.Product != os {
+		return false
+	}
+	ctx := &evalCtx{
+		raw:  raw,
+		sels: r.sels,
+		memo: make([]int8, len(r.sels)),
+	}
+	return r.cond.eval(ctx)
 }
 
 // RuleBruteforceSuccess 爆破得手合成检测：多次登录失败后同用户登录成功。

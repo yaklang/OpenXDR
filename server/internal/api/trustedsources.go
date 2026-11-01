@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -156,23 +157,6 @@ func mapTrustedSources(api *http.ServeMux, db *ent.Client) {
 		writeJSON(w, out)
 	})
 
-	api.HandleFunc("GET /api/trusted-sources/candidates", func(w http.ResponseWriter, r *http.Request) {
-		id, err := uuid.Parse(r.URL.Query().Get("groupId"))
-		if err != nil {
-			http.Error(w, "groupId 必填", http.StatusBadRequest)
-			return
-		}
-		if !requireGroup(w, r, db, id, "admin") {
-			return
-		}
-		out, err := trustedCandidates(r.Context(), db, id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		writeJSON(w, out)
-	})
-
 	api.HandleFunc("POST /api/trusted-sources", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			GroupID        uuid.UUID `json:"groupId"`
@@ -277,6 +261,29 @@ func mapTrustedSources(api *http.ServeMux, db *ent.Client) {
 var errAlreadyRevoked = fmt.Errorf("已撤销")
 
 // mapTrustedSourceEdits 调整与删除：改名与说明、改有效期、固定、停用 / 启用、删除，组管理员，落审计
+// TrustedCandidates 组内近期 SSH 登录为什么（没）被认成已知自动化，组管理员可见。
+// 要按 (id, ts) 直接查分区事件，所以拿原始连接、单独挂路由
+func TrustedCandidates(db *ent.Client, sqlDB *sql.DB) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/trusted-sources/candidates", func(w http.ResponseWriter, r *http.Request) {
+		id, err := uuid.Parse(r.URL.Query().Get("groupId"))
+		if err != nil {
+			http.Error(w, "groupId 必填", http.StatusBadRequest)
+			return
+		}
+		if !requireGroup(w, r, db, id, "admin") {
+			return
+		}
+		out, err := trustedCandidates(r.Context(), db, sqlDB, id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, out)
+	})
+	return mux
+}
+
 func mapTrustedSourceEdits(api *http.ServeMux, db *ent.Client) {
 	api.HandleFunc("PATCH /api/trusted-sources/{id}", func(w http.ResponseWriter, r *http.Request) {
 		row, ok := getByPath(w, r, "id", "trusted source", db.TrustedSource.Get)
@@ -436,10 +443,10 @@ func trustedEdit(row *ent.TrustedSource, name, reason *string, days *int, pinned
 
 // trustedCandidates 组内窗口内的 SSH 登录，与后台识别同一套判断，解释每个登录身份为什么（没）被自动识别。
 // 已被生效条目覆盖的标出条目；自动识别被人停用、删除过的标 declined
-func trustedCandidates(ctx context.Context, db *ent.Client, group uuid.UUID) ([]trustedCandidate, error) {
+func trustedCandidates(ctx context.Context, db *ent.Client, sqlDB *sql.DB, group uuid.UUID) ([]trustedCandidate, error) {
 	conf := automation.CurrentConfig()
 	now := time.Now()
-	assessments, _, err := automation.Assess(ctx, db, conf, &group, now)
+	assessments, _, err := automation.Assess(ctx, db, sqlDB, conf, &group, now)
 	if err != nil {
 		return nil, err
 	}

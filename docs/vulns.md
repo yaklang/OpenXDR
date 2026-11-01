@@ -4,10 +4,11 @@
 
 ## 数据从哪来
 
-- **软件清单**：agent 每 30 分钟跑一次 `dpkg-query`，上报已装（状态 `ii`）的二进制包、版本、源码包与源码版本，
+- **软件清单**：agent 每 30 分钟查询一次本机软件包数据库；dpkg 主机运行 `dpkg-query`，上报已装（状态 `ii`）的二进制包、版本、源码包与源码版本，
   以及 `/etc/os-release` 的发行版与版本号（OCSF 5020，`agent/src/collector/software.rs`）。清单变了才报，最长 24 小时补报一次。
-  监听端口清单里，每个服务进程顺带标上它的可执行文件属于哪个包（`dpkg -S`，按路径缓存）。
+  监听端口清单里，每个服务进程顺带标上它的可执行文件属于哪个包（`dpkg -S` 或 `rpm -qf`，按路径缓存）。
   server 由资产图谱的批处理物化到 `assets.software`（`assetmap/inventory.go` 的 `software`，字段逐个清洗）。
+- **RPM 清单**：没有 dpkg-query 时使用 `rpm -qa`，保留二进制包完整 epoch:version-release；源码名称与版本来自 SOURCERPM，不推测源码 epoch。没有源码信息时两项留空；gpg-pubkey 密钥条目不算软件包。健康路径显示 rpm，UOS 的清单可入库，但尚无对应漏洞公告与 RPM 版本比较支持。
 - **漏洞库**：OSV 按生态打包的公告（`<VULN_OSV_URL>/Debian/all.zip`、`Ubuntu/all.zip`），每 `VULN_SYNC_HOURS`（默认 24）
   小时同步一次，只同步资产实际用到的生态（Debian:13、Ubuntu:22.04……），同一生态在一个事务里整批替换，
   失败保留旧数据并在资产页提示，一小时后重试（`sync.go`，状态存 settings 表 `vuln_sync`）。下载按 HTTP Range 每段 8 MB、
@@ -28,7 +29,7 @@
 
 ## 已知限制
 
-- 只支持 dpkg 系（Debian、Ubuntu）。RPM 与 Alpine 的版本规则不同，没有 dpkg 的主机健康快照里 `software` 显示不可用。
+- 漏洞匹配只支持 dpkg 系（Debian、Ubuntu）。RPM 支持软件清单采集，但不参与 dpkg 版本比较；Alpine 等没有 dpkg/RPM 的主机仍标记软件采集不可用。
 - 看的是宿主机自己的包；容器、LXC 里的软件不在清单里。
 - Proxmox 这类在 Debian 之上自带同名包的发行版，自带包的版本号与 Debian 不同（如 `-pve`），比较结果只作参考。
 - Windows 不采集软件清单（缺少可对的漏洞生态）。

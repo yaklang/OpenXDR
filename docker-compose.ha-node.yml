@@ -61,6 +61,7 @@ services:
       GRPC_ADDR: :18081
       SYSLOG_ADDR: :5514
       QUEUE_SHARDS: ${QUEUE_SHARDS:-32}
+      QUEUE_BATCH_SIZE: ${QUEUE_BATCH_SIZE:-1}
       QUEUE_REPLICAS: 3
       LOG_FORMAT: json
       RULES_PATH: /rules
@@ -69,6 +70,7 @@ services:
       # 目录来源的 tokenEnv 引用的变量要在这里透传进容器；用别的变量名时照此加一行
       AUTHENTIK_TOKEN: ${AUTHENTIK_TOKEN:-}
       IDENTITY_RUN_RETENTION_DAYS: ${IDENTITY_RUN_RETENTION_DAYS:-30}
+      ABUSE_CH_AUTH_KEY: ${ABUSE_CH_AUTH_KEY:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}
       RESPONSE_ENABLED: ${RESPONSE_ENABLED:-false}
       ISOLATION_ALLOW: ${ISOLATION_ALLOW:-10.1.1.199:8081}
@@ -77,6 +79,7 @@ services:
       TLS_KEY_FILE: /certs/server.key
       AI_BASE_URL: ${AI_BASE_URL:-http://10.1.1.180:80/v1}
       AI_MODEL: ${AI_MODEL:-}
+      AI_TEMPLATE_NO_THINKING: ${AI_TEMPLATE_NO_THINKING:-false}
       AI_API_KEY: ${AI_API_KEY:-}
       PI_MODEL: ${PI_MODEL:-}
       # 每组近 24 小时 Pi 用量上限（输入加输出 token），0 不限

@@ -80,6 +80,31 @@ func ReceivedAt(v time.Time) predicate.DecoyObservation {
 	return predicate.DecoyObservation(sql.FieldEQ(FieldReceivedAt, v))
 }
 
+// RevisionID applies equality check predicate on the "revision_id" field. It's identical to RevisionIDEQ.
+func RevisionID(v uuid.UUID) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldEQ(FieldRevisionID, v))
+}
+
+// SessionID applies equality check predicate on the "session_id" field. It's identical to SessionIDEQ.
+func SessionID(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldEQ(FieldSessionID, v))
+}
+
+// TriggerKey applies equality check predicate on the "trigger_key" field. It's identical to TriggerKeyEQ.
+func TriggerKey(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldEQ(FieldTriggerKey, v))
+}
+
+// PayloadHash applies equality check predicate on the "payload_hash" field. It's identical to PayloadHashEQ.
+func PayloadHash(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldEQ(FieldPayloadHash, v))
+}
+
+// OccurredAt applies equality check predicate on the "occurred_at" field. It's identical to OccurredAtEQ.
+func OccurredAt(v time.Time) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldEQ(FieldOccurredAt, v))
+}
+
 // DeploymentIDEQ applies the EQ predicate on the "deployment_id" field.
 func DeploymentIDEQ(v uuid.UUID) predicate.DecoyObservation {
 	return predicate.DecoyObservation(sql.FieldEQ(FieldDeploymentID, v))
@@ -338,6 +363,311 @@ func ReceivedAtLT(v time.Time) predicate.DecoyObservation {
 // ReceivedAtLTE applies the LTE predicate on the "received_at" field.
 func ReceivedAtLTE(v time.Time) predicate.DecoyObservation {
 	return predicate.DecoyObservation(sql.FieldLTE(FieldReceivedAt, v))
+}
+
+// RevisionIDEQ applies the EQ predicate on the "revision_id" field.
+func RevisionIDEQ(v uuid.UUID) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldEQ(FieldRevisionID, v))
+}
+
+// RevisionIDNEQ applies the NEQ predicate on the "revision_id" field.
+func RevisionIDNEQ(v uuid.UUID) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldNEQ(FieldRevisionID, v))
+}
+
+// RevisionIDIn applies the In predicate on the "revision_id" field.
+func RevisionIDIn(vs ...uuid.UUID) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldIn(FieldRevisionID, vs...))
+}
+
+// RevisionIDNotIn applies the NotIn predicate on the "revision_id" field.
+func RevisionIDNotIn(vs ...uuid.UUID) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldNotIn(FieldRevisionID, vs...))
+}
+
+// RevisionIDGT applies the GT predicate on the "revision_id" field.
+func RevisionIDGT(v uuid.UUID) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldGT(FieldRevisionID, v))
+}
+
+// RevisionIDGTE applies the GTE predicate on the "revision_id" field.
+func RevisionIDGTE(v uuid.UUID) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldGTE(FieldRevisionID, v))
+}
+
+// RevisionIDLT applies the LT predicate on the "revision_id" field.
+func RevisionIDLT(v uuid.UUID) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldLT(FieldRevisionID, v))
+}
+
+// RevisionIDLTE applies the LTE predicate on the "revision_id" field.
+func RevisionIDLTE(v uuid.UUID) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldLTE(FieldRevisionID, v))
+}
+
+// RevisionIDIsNil applies the IsNil predicate on the "revision_id" field.
+func RevisionIDIsNil() predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldIsNull(FieldRevisionID))
+}
+
+// RevisionIDNotNil applies the NotNil predicate on the "revision_id" field.
+func RevisionIDNotNil() predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldNotNull(FieldRevisionID))
+}
+
+// SessionIDEQ applies the EQ predicate on the "session_id" field.
+func SessionIDEQ(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldEQ(FieldSessionID, v))
+}
+
+// SessionIDNEQ applies the NEQ predicate on the "session_id" field.
+func SessionIDNEQ(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldNEQ(FieldSessionID, v))
+}
+
+// SessionIDIn applies the In predicate on the "session_id" field.
+func SessionIDIn(vs ...string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldIn(FieldSessionID, vs...))
+}
+
+// SessionIDNotIn applies the NotIn predicate on the "session_id" field.
+func SessionIDNotIn(vs ...string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldNotIn(FieldSessionID, vs...))
+}
+
+// SessionIDGT applies the GT predicate on the "session_id" field.
+func SessionIDGT(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldGT(FieldSessionID, v))
+}
+
+// SessionIDGTE applies the GTE predicate on the "session_id" field.
+func SessionIDGTE(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldGTE(FieldSessionID, v))
+}
+
+// SessionIDLT applies the LT predicate on the "session_id" field.
+func SessionIDLT(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldLT(FieldSessionID, v))
+}
+
+// SessionIDLTE applies the LTE predicate on the "session_id" field.
+func SessionIDLTE(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldLTE(FieldSessionID, v))
+}
+
+// SessionIDContains applies the Contains predicate on the "session_id" field.
+func SessionIDContains(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldContains(FieldSessionID, v))
+}
+
+// SessionIDHasPrefix applies the HasPrefix predicate on the "session_id" field.
+func SessionIDHasPrefix(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldHasPrefix(FieldSessionID, v))
+}
+
+// SessionIDHasSuffix applies the HasSuffix predicate on the "session_id" field.
+func SessionIDHasSuffix(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldHasSuffix(FieldSessionID, v))
+}
+
+// SessionIDEqualFold applies the EqualFold predicate on the "session_id" field.
+func SessionIDEqualFold(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldEqualFold(FieldSessionID, v))
+}
+
+// SessionIDContainsFold applies the ContainsFold predicate on the "session_id" field.
+func SessionIDContainsFold(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldContainsFold(FieldSessionID, v))
+}
+
+// TriggerKeyEQ applies the EQ predicate on the "trigger_key" field.
+func TriggerKeyEQ(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldEQ(FieldTriggerKey, v))
+}
+
+// TriggerKeyNEQ applies the NEQ predicate on the "trigger_key" field.
+func TriggerKeyNEQ(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldNEQ(FieldTriggerKey, v))
+}
+
+// TriggerKeyIn applies the In predicate on the "trigger_key" field.
+func TriggerKeyIn(vs ...string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldIn(FieldTriggerKey, vs...))
+}
+
+// TriggerKeyNotIn applies the NotIn predicate on the "trigger_key" field.
+func TriggerKeyNotIn(vs ...string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldNotIn(FieldTriggerKey, vs...))
+}
+
+// TriggerKeyGT applies the GT predicate on the "trigger_key" field.
+func TriggerKeyGT(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldGT(FieldTriggerKey, v))
+}
+
+// TriggerKeyGTE applies the GTE predicate on the "trigger_key" field.
+func TriggerKeyGTE(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldGTE(FieldTriggerKey, v))
+}
+
+// TriggerKeyLT applies the LT predicate on the "trigger_key" field.
+func TriggerKeyLT(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldLT(FieldTriggerKey, v))
+}
+
+// TriggerKeyLTE applies the LTE predicate on the "trigger_key" field.
+func TriggerKeyLTE(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldLTE(FieldTriggerKey, v))
+}
+
+// TriggerKeyContains applies the Contains predicate on the "trigger_key" field.
+func TriggerKeyContains(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldContains(FieldTriggerKey, v))
+}
+
+// TriggerKeyHasPrefix applies the HasPrefix predicate on the "trigger_key" field.
+func TriggerKeyHasPrefix(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldHasPrefix(FieldTriggerKey, v))
+}
+
+// TriggerKeyHasSuffix applies the HasSuffix predicate on the "trigger_key" field.
+func TriggerKeyHasSuffix(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldHasSuffix(FieldTriggerKey, v))
+}
+
+// TriggerKeyEqualFold applies the EqualFold predicate on the "trigger_key" field.
+func TriggerKeyEqualFold(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldEqualFold(FieldTriggerKey, v))
+}
+
+// TriggerKeyContainsFold applies the ContainsFold predicate on the "trigger_key" field.
+func TriggerKeyContainsFold(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldContainsFold(FieldTriggerKey, v))
+}
+
+// PayloadHashEQ applies the EQ predicate on the "payload_hash" field.
+func PayloadHashEQ(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldEQ(FieldPayloadHash, v))
+}
+
+// PayloadHashNEQ applies the NEQ predicate on the "payload_hash" field.
+func PayloadHashNEQ(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldNEQ(FieldPayloadHash, v))
+}
+
+// PayloadHashIn applies the In predicate on the "payload_hash" field.
+func PayloadHashIn(vs ...string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldIn(FieldPayloadHash, vs...))
+}
+
+// PayloadHashNotIn applies the NotIn predicate on the "payload_hash" field.
+func PayloadHashNotIn(vs ...string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldNotIn(FieldPayloadHash, vs...))
+}
+
+// PayloadHashGT applies the GT predicate on the "payload_hash" field.
+func PayloadHashGT(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldGT(FieldPayloadHash, v))
+}
+
+// PayloadHashGTE applies the GTE predicate on the "payload_hash" field.
+func PayloadHashGTE(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldGTE(FieldPayloadHash, v))
+}
+
+// PayloadHashLT applies the LT predicate on the "payload_hash" field.
+func PayloadHashLT(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldLT(FieldPayloadHash, v))
+}
+
+// PayloadHashLTE applies the LTE predicate on the "payload_hash" field.
+func PayloadHashLTE(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldLTE(FieldPayloadHash, v))
+}
+
+// PayloadHashContains applies the Contains predicate on the "payload_hash" field.
+func PayloadHashContains(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldContains(FieldPayloadHash, v))
+}
+
+// PayloadHashHasPrefix applies the HasPrefix predicate on the "payload_hash" field.
+func PayloadHashHasPrefix(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldHasPrefix(FieldPayloadHash, v))
+}
+
+// PayloadHashHasSuffix applies the HasSuffix predicate on the "payload_hash" field.
+func PayloadHashHasSuffix(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldHasSuffix(FieldPayloadHash, v))
+}
+
+// PayloadHashEqualFold applies the EqualFold predicate on the "payload_hash" field.
+func PayloadHashEqualFold(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldEqualFold(FieldPayloadHash, v))
+}
+
+// PayloadHashContainsFold applies the ContainsFold predicate on the "payload_hash" field.
+func PayloadHashContainsFold(v string) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldContainsFold(FieldPayloadHash, v))
+}
+
+// OccurredAtEQ applies the EQ predicate on the "occurred_at" field.
+func OccurredAtEQ(v time.Time) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldEQ(FieldOccurredAt, v))
+}
+
+// OccurredAtNEQ applies the NEQ predicate on the "occurred_at" field.
+func OccurredAtNEQ(v time.Time) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldNEQ(FieldOccurredAt, v))
+}
+
+// OccurredAtIn applies the In predicate on the "occurred_at" field.
+func OccurredAtIn(vs ...time.Time) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldIn(FieldOccurredAt, vs...))
+}
+
+// OccurredAtNotIn applies the NotIn predicate on the "occurred_at" field.
+func OccurredAtNotIn(vs ...time.Time) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldNotIn(FieldOccurredAt, vs...))
+}
+
+// OccurredAtGT applies the GT predicate on the "occurred_at" field.
+func OccurredAtGT(v time.Time) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldGT(FieldOccurredAt, v))
+}
+
+// OccurredAtGTE applies the GTE predicate on the "occurred_at" field.
+func OccurredAtGTE(v time.Time) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldGTE(FieldOccurredAt, v))
+}
+
+// OccurredAtLT applies the LT predicate on the "occurred_at" field.
+func OccurredAtLT(v time.Time) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldLT(FieldOccurredAt, v))
+}
+
+// OccurredAtLTE applies the LTE predicate on the "occurred_at" field.
+func OccurredAtLTE(v time.Time) predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldLTE(FieldOccurredAt, v))
+}
+
+// OccurredAtIsNil applies the IsNil predicate on the "occurred_at" field.
+func OccurredAtIsNil() predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldIsNull(FieldOccurredAt))
+}
+
+// OccurredAtNotNil applies the NotNil predicate on the "occurred_at" field.
+func OccurredAtNotNil() predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldNotNull(FieldOccurredAt))
+}
+
+// DetailsIsNil applies the IsNil predicate on the "details" field.
+func DetailsIsNil() predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldIsNull(FieldDetails))
+}
+
+// DetailsNotNil applies the NotNil predicate on the "details" field.
+func DetailsNotNil() predicate.DecoyObservation {
+	return predicate.DecoyObservation(sql.FieldNotNull(FieldDetails))
 }
 
 // And groups predicates with the AND operator between them.

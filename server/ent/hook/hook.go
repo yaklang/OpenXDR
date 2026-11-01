@@ -152,6 +152,18 @@ func (f DecoyDeploymentFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Va
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.DecoyDeploymentMutation", m)
 }
 
+// The DecoyEngineReleaseFunc type is an adapter to allow the use of ordinary
+// function as DecoyEngineRelease mutator.
+type DecoyEngineReleaseFunc func(context.Context, *ent.DecoyEngineReleaseMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f DecoyEngineReleaseFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.DecoyEngineReleaseMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.DecoyEngineReleaseMutation", m)
+}
+
 // The DecoyObservationFunc type is an adapter to allow the use of ordinary
 // function as DecoyObservation mutator.
 type DecoyObservationFunc func(context.Context, *ent.DecoyObservationMutation) (ent.Value, error)
@@ -162,6 +174,18 @@ func (f DecoyObservationFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.V
 		return f(ctx, mv)
 	}
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.DecoyObservationMutation", m)
+}
+
+// The DecoyRevisionFunc type is an adapter to allow the use of ordinary
+// function as DecoyRevision mutator.
+type DecoyRevisionFunc func(context.Context, *ent.DecoyRevisionMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f DecoyRevisionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.DecoyRevisionMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.DecoyRevisionMutation", m)
 }
 
 // The EnrollTokenFunc type is an adapter to allow the use of ordinary
@@ -510,6 +534,18 @@ func (f TaskRunFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, err
 		return f(ctx, mv)
 	}
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TaskRunMutation", m)
+}
+
+// The TriageRunFunc type is an adapter to allow the use of ordinary
+// function as TriageRun mutator.
+type TriageRunFunc func(context.Context, *ent.TriageRunMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f TriageRunFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.TriageRunMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TriageRunMutation", m)
 }
 
 // The TrustedSourceFunc type is an adapter to allow the use of ordinary

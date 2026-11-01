@@ -56,7 +56,7 @@ func mapDecoyRuntimeManagement(mux *http.ServeMux, db *ent.Client) {
 		}
 		token, marker := randomDecoyToken(), randomDecoyToken()
 		expires := time.Now().Add(decoyTokenTTL)
-		n, err := tx.DecoyDeployment.Update().Where(decoydeployment.IDEQ(row.ID), decoydeployment.StatusEQ(decoydeployment.StatusRegistered)).SetTokenHash(decoyTokenHash(token)).SetTokenGroupID(*a.GroupID).SetTokenExpiresAt(expires).SetMarker(marker).Save(r.Context())
+		n, err := tx.DecoyDeployment.Update().Where(decoydeployment.IDEQ(row.ID), decoydeployment.StatusEQ(decoydeployment.StatusRegistered)).SetTokenHash(decoyTokenHash(token)).SetTokenGroupID(*a.GroupID).SetTokenExpiresAt(expires).SetMarker(marker).SetNillableTokenRevisionID(current.ActiveRevisionID).SetStopRequested(false).Save(r.Context())
 		if err == nil && n == 0 {
 			http.Error(w, "登记已撤销", 409)
 			return
@@ -122,43 +122,17 @@ func DecoyRuntime(db *ent.Client) http.Handler {
 		defer cancel()
 		r = r.WithContext(ctx)
 		w.Header().Set("Cache-Control", "no-store")
-		id, err := uuid.Parse(r.PathValue("id"))
-		if err != nil {
-			http.Error(w, "未认证", 401)
-			return
-		}
-		authorization := r.Header.Get("Authorization")
-		if !strings.HasPrefix(authorization, "Bearer ") {
-			http.Error(w, "未认证", 401)
-			return
-		}
-		token := strings.TrimPrefix(authorization, "Bearer ")
-		if len(token) != 64 {
-			http.Error(w, "未认证", 401)
-			return
-		}
-		tx, err := db.Tx(ctx)
-		if err != nil {
-			http.Error(w, "服务不可用", 503)
+		tx, row, a, token, ok := authenticateDecoyRuntime(w, r, db)
+		if !ok {
 			return
 		}
 		defer tx.Rollback()
-		row, err := tx.DecoyDeployment.Get(ctx, id)
-		if err != nil || !validDecoyToken(row, token) {
-			http.Error(w, "未认证", 401)
+		id := row.ID
+		if row.ActiveRevisionID != nil {
+			http.Error(w, "此登记要求版本化运行协议", 409)
 			return
 		}
-		// 与迁组、撤销、令牌轮换共用资产锁，防止认证后归属变化。
-		a, err := tx.Asset.Query().Where(asset.IDEQ(row.AssetID), func(s *sql.Selector) { s.ForUpdate() }).Only(ctx)
-		if err != nil {
-			http.Error(w, "未认证", 401)
-			return
-		}
-		row, err = tx.DecoyDeployment.Get(ctx, id)
-		if err != nil || !validDecoyToken(row, token) || a.GroupID == nil || row.TokenGroupID == nil || *a.GroupID != *row.TokenGroupID {
-			http.Error(w, "未认证", 401)
-			return
-		}
+
 		if strings.HasSuffix(r.URL.Path, "/lease") {
 			updateDecoyLease(w, r, tx, row, token)
 			return
@@ -234,4 +208,52 @@ func DecoyRuntime(db *ent.Client) http.Handler {
 }
 func validDecoyToken(row *ent.DecoyDeployment, token string) bool {
 	return row.Status == decoydeployment.StatusRegistered && row.TokenExpiresAt != nil && time.Now().Before(*row.TokenExpiresAt) && len(row.TokenHash) == 64 && subtle.ConstantTimeCompare([]byte(row.TokenHash), []byte(decoyTokenHash(token))) == 1
+}
+
+func authenticateDecoyRuntime(w http.ResponseWriter, r *http.Request, db *ent.Client) (*ent.Tx, *ent.DecoyDeployment, *ent.Asset, string, bool) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "未认证", 401)
+		return nil, nil, nil, "", false
+	}
+	authorization := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authorization, "Bearer ") {
+		http.Error(w, "未认证", 401)
+		return nil, nil, nil, "", false
+	}
+	token := strings.TrimPrefix(authorization, "Bearer ")
+	if len(token) != 64 {
+		http.Error(w, "未认证", 401)
+		return nil, nil, nil, "", false
+	}
+	tx, err := db.Tx(r.Context())
+	if err != nil {
+		http.Error(w, "服务不可用", 503)
+		return nil, nil, nil, "", false
+	}
+
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	row, err := tx.DecoyDeployment.Get(r.Context(), id)
+	if err != nil || !validDecoyToken(row, token) {
+		http.Error(w, "未认证", 401)
+		return nil, nil, nil, "", false
+	}
+	// 与迁组、撤销、令牌轮换共用资产锁，防止认证后归属变化。
+	a, err := tx.Asset.Query().Where(asset.IDEQ(row.AssetID), func(s *sql.Selector) { s.ForUpdate() }).Only(r.Context())
+	if err != nil {
+		http.Error(w, "未认证", 401)
+		return nil, nil, nil, "", false
+	}
+	row, err = tx.DecoyDeployment.Get(r.Context(), id)
+	if err != nil || !validDecoyToken(row, token) || a.GroupID == nil || row.TokenGroupID == nil || *a.GroupID != *row.TokenGroupID {
+		http.Error(w, "未认证", 401)
+		return nil, nil, nil, "", false
+	}
+	committed = true
+	return tx, row, a, token, true
 }

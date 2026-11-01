@@ -349,15 +349,17 @@ func (e *Engine) findByLateral(ctx context.Context, al *ent.Alert, inBatch func(
 	if al.Edges.Asset.GroupID != nil {
 		group = asset.GroupIDEQ(*al.Edges.Asset.GroupID)
 	}
+	peers, err := e.DB.Asset.Query().Where(group, asset.IDNEQ(*al.AssetID)).IDs(ctx)
+	if err != nil || len(peers) == 0 {
+		return nil, nil, errNoLateral
+	}
 	for _, ip := range al.Edges.Asset.IPAddrs {
 		conns, err := e.DB.Event.Query().
 			Where(
 				event.TsGTE(since),
 				event.TsLTE(al.Ts),
-				event.HasAssetWith(group),
+				event.AssetIDIn(peers...),
 				event.ConnTupleContains(">"+ip+":"),
-				event.AssetIDNotNil(),
-				event.AssetIDNEQ(*al.AssetID),
 			).
 			WithAsset().
 			Order(ent.Desc(event.FieldTs)).

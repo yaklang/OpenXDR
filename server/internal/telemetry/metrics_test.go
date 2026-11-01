@@ -59,3 +59,15 @@ func TestQueueDepth(t *testing.T) {
 		t.Errorf("queueDepth[shard-0] = %v, want 42", got)
 	}
 }
+
+func TestQueueSampleTimestamp(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	m.SetQueueSampleTimestamp("00", 0)
+	m.SetQueueSampleTimestamp("01", 123)
+	if got := testutil.ToFloat64(m.queueSampleTime.WithLabelValues("00")); got != 0 {
+		t.Fatalf("未采样分片时间应为 0，got %v", got)
+	}
+	if got := testutil.ToFloat64(m.queueSampleTime.WithLabelValues("01")); got != 123 {
+		t.Fatalf("采样时间应按分片独立保存，got %v", got)
+	}
+}

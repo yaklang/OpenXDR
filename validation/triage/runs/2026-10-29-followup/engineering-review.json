@@ -1,0 +1,96 @@
+{
+  "reviewer": "执行代理逐条工程复核，非独立人工验收",
+  "source": "reviewed.jsonl",
+  "release_gate": "not_accepted",
+  "independent_human_review": "pending",
+  "items": [
+    {
+      "case": "shared_cdn",
+      "repeat": 1,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在该快照的事实、来源和处置边界内未发现阻断项；不等于独立真人验收或总体准确率。"
+    },
+    {
+      "case": "shared_cdn",
+      "repeat": 2,
+      "automated_pass": false,
+      "engineering_review": "needs_review",
+      "reason": "先独立研判再决定处置可作合规理解，但“进程或外联方向正面证据”仍含糊；两次评分有分歧，保留并待独立复核。"
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 1,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在该快照的事实、来源和处置边界内未发现阻断项；不等于独立真人验收或总体准确率。"
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 2,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在该快照的事实、来源和处置边界内未发现阻断项；不等于独立真人验收或总体准确率。"
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 1,
+      "automated_pass": false,
+      "engineering_review": "fail",
+      "reason": "输入仅明确没有工单，答案却声称输入明确说明也没有人工确认记录；属于真实的无依据事实扩写。"
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 2,
+      "automated_pass": true,
+      "engineering_review": "needs_review",
+      "reason": "建议扩大查询时间窗以补齐截断记录可能加重截断/超时，需要结合工具能力复核；原评分失败后补评通过不视为新的生成样本。"
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 1,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在该快照的事实、来源和处置边界内未发现阻断项；不等于独立真人验收或总体准确率。"
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 2,
+      "automated_pass": false,
+      "engineering_review": "pass",
+      "reason": "原文明确限定最近七天的保留 DNS 记录，未声称全量请求；评分要求额外固定覆盖措辞，疑似过严，原始失败仍保留。"
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 1,
+      "automated_pass": true,
+      "engineering_review": "needs_review",
+      "reason": "“systemctl 由 systemd 创建指向 /dev/null 的符号链接”主语和创建对象含糊，实际应明确 rpcbind.service 的链接与各进程动作。"
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 2,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在该快照的事实、来源和处置边界内未发现阻断项；不等于独立真人验收或总体准确率。"
+    },
+    {
+      "case": "confirmed_attack",
+      "repeat": 1,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在该快照的事实、来源和处置边界内未发现阻断项；不等于独立真人验收或总体准确率。"
+    },
+    {
+      "case": "confirmed_attack",
+      "repeat": 2,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在该快照的事实、来源和处置边界内未发现阻断项；不等于独立真人验收或总体准确率。"
+    }
+  ],
+  "calibration_disagreements": [
+    "incomplete_query/record_absence_unknown",
+    "mixed_clients/weak_branch_investigate"
+  ]
+}

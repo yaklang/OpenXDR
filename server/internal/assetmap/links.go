@@ -6,6 +6,9 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+
+	"github.com/google/uuid"
+	"openxdr/server/ent"
 )
 
 // conn 一条网络事件的两端：src 是发起方
@@ -88,16 +91,21 @@ func sourceOf(src, dst netip.Addr, own []netip.Addr) (netip.Addr, bool) {
 	return pick, pick.IsValid()
 }
 
+// instanceMetadata 不在链路本地段里的实例元数据地址：阿里云 IMDS 在 CGNAT 段、AWS 的 IPv6 IMDS 在 ULA 段。
+// 各家都是每台实例本机的服务，agent 启动识别云环境、cloud-init 都会连，不是资产间的依赖；
+// 169.254.169.254（AWS/Azure/GCP）与 169.254.0.23（腾讯云）已按链路本地剔掉
+var instanceMetadata = []netip.Addr{netip.MustParseAddr("100.100.100.200"), netip.MustParseAddr("fd00:ec2::254")}
+
 // dependency 这条连接算不算资产间的依赖。own 是上报 agent 所在资产的地址，sensor 事件为空。
 //
 // 未指定的源地址不是节点（发起方先经 sourceOf 换成资产自己的地址）。
-// 回环、组播、链路本地、自己连自己都不算。另有一类要剔掉：源地址不是本机登记的地址、
+// 回环、组播、链路本地、云厂商实例元数据服务、自己连自己都不算。另有一类要剔掉：源地址不是本机登记的地址、
 // 目的又和源同在一个私网段——这是宿主机里容器之间的通信（docker 网桥），
 // 不该在图上长出一台「未纳管主机」。
 func dependency(c conn, own []netip.Addr) bool {
 	d := c.dst
 	if !c.src.IsValid() || c.src.IsUnspecified() || !d.IsValid() || d.IsLoopback() || d.IsUnspecified() || d.IsMulticast() ||
-		d.IsLinkLocalUnicast() || d.IsLinkLocalMulticast() || c.src == d {
+		d.IsLinkLocalUnicast() || d.IsLinkLocalMulticast() || slices.Contains(instanceMetadata, d) || c.src == d {
 		return false
 	}
 	if len(own) == 0 || slices.Contains(own, c.src) || !d.IsPrivate() {
@@ -109,4 +117,43 @@ func dependency(c conn, own []netip.Addr) bool {
 	}
 	srcNet, _ := c.src.Prefix(bits)
 	return !srcNet.Contains(d)
+}
+
+// eventLink 统一日常消费和历史核对使用的连接身份与过滤规则。
+func eventLink(ev *ent.Event, own map[uuid.UUID][]netip.Addr, names map[uuid.UUID]string, managed map[netip.Addr]bool) (linkKey, *uuid.UUID, bool) {
+	tuple := ""
+	if ev.ConnTuple != nil {
+		tuple = *ev.ConnTuple
+	}
+	c, ok := connOf(ev.Raw, tuple)
+	if !ok {
+		return linkKey{}, nil, false
+	}
+	srcAsset, process := ev.AssetID, c.process
+	var ownIPs []netip.Addr
+	if ev.AssetID != nil {
+		ownIPs = own[*ev.AssetID]
+	}
+	// sensor 会话源地址不是纳管资产时归到目的端（公网打进网关的），发起方不是这台资产，按入站记
+	if ev.Source == "sensor" && ev.AssetID != nil && !slices.Contains(ownIPs, c.src) {
+		c.inbound = true
+	}
+	if c.inbound {
+		// 入站只补发起方未纳管的那部分：发起方纳管时它自己的出站已经记过这条依赖。
+		// 只认连到宿主机自己地址上的：宿主机上容器的服务（docker 网桥、LXC）不是这台资产的服务。
+		// 发起方由地址解析，进程是本机服务端，不是发起方，不记
+		if managed[c.src] || !slices.Contains(ownIPs, c.dst) || !dependency(c, nil) {
+			return linkKey{}, nil, false
+		}
+		srcAsset, process = nil, ""
+	} else {
+		if c.src, ok = sourceOf(c.src, c.dst, ownIPs); !ok || !dependency(c, ownIPs) {
+			return linkKey{}, nil, false
+		}
+		// 新版 agent 随连接带进程名；旧版只有 GUID，回查同一进程的启动事件
+		if process == "" && ev.ProcessGUID != nil {
+			process = names[*ev.ProcessGUID]
+		}
+	}
+	return linkKey{c.src.String(), c.dst.String(), c.port, c.proto, process}, srcAsset, true
 }

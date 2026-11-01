@@ -21,14 +21,16 @@ export function AssetIdentityAccounts({ asset }: { asset: Asset }) {
   const scope = `${me.username}:${me.role}:${groups.map(g => `${g.id}:${g.role}`).sort().join(',')}:${asset.id}:${asset.groupId}`
   const query = useQuery({ queryKey: ['assetIdentityAccounts', scope, hours], queryFn: () => fetchAssetIdentityAccounts(asset.id, hours), gcTime: 0, refetchInterval: 30000 })
   const data = query.data
-  return <Space orientation="vertical" style={{ width: '100%' }}>
+  return <Space orientation="vertical" size={14} style={{ width: '100%' }}>
     <Typography.Title level={5} style={{ margin: 0 }}>{t('assetAccountsTitle')}</Typography.Title>
     <Typography.Text type="secondary">{t('assetAccountsHint')}</Typography.Text>
-    <Space wrap>
-      <Select aria-label={t('thTime')} value={hours} style={{ width: 170 }} onChange={setHours}
-        options={[1, 6, 24, 72, 168, 720].map(n => ({ value: n, label: t('lastHours', { n }) }))} />
-      <Button loading={query.isFetching} onClick={() => query.refetch()}>{t('refresh')}</Button>
-    </Space>
+    <div className="filter-bar" style={{ padding: '10px 14px' }}>
+      <Space wrap className="filter-controls">
+        <Select aria-label={t('thTime')} value={hours} style={{ width: 170 }} onChange={setHours}
+          options={[1, 6, 24, 72, 168, 720].map(n => ({ value: n, label: t('lastHours', { n }) }))} />
+        <Button loading={query.isFetching} onClick={() => query.refetch()}>{t('refresh')}</Button>
+      </Space>
+    </div>
     {query.isError ? <LoadError error={query.error} onRetry={() => query.refetch()} /> : <>
       {!!data?.pending && <Alert type="info" showIcon title={t('assetAccountsPending', { n: data.pending })} />}
       {data?.truncated && <Alert type="info" showIcon title={t('identityAccountsTruncated')} />}

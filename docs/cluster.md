@@ -71,7 +71,8 @@ UDP/TCP 健康检查，或者部署独立 syslog gateway；HAProxy 只承载 HTT
 | `openxdr_events_processed_total{duplicate}` | 处理完成与幂等丢弃数 |
 | `openxdr_queue_pending_messages{shard}` | 每个 durable consumer 的积压+待 ACK |
 | `openxdr_queue_replicas_unhealthy` | 事件流不同步或离线的副本数；取不到流信息（没有 leader）时等于副本总数 |
-| `openxdr_event_processing_seconds` | 单事件处理耗时直方图 |
+| `openxdr_event_processing_seconds` | 单事件处理耗时直方图（只算这条事件自己的处理，不含等待同批其他事件与提交） |
+| `openxdr_event_batch_seconds` / `openxdr_event_batch_size` | 整批入库事务耗时（含取锁与提交）与每批事件数 |
 | `openxdr_pipeline_failures_total{stage}` | 发布、解码或处理失败 |
 | `openxdr_alerts_created_total` | 新建告警数 |
 

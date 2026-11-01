@@ -42,7 +42,7 @@ func (Event) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("ts"),
 		index.Fields("asset_id", "ts"),
-		index.Fields("process_guid"),
+		index.Fields("process_guid").StorageKey("event_process_creation_guid").Annotations(entsql.IndexWhere("class_uid = 1007 AND process_guid IS NOT NULL")),
 		index.Fields("process_guid", "ts").Annotations(entsql.IndexWhere("process_guid IS NOT NULL")),
 		index.Fields("parent_process_guid"),
 		index.Fields("conn_tuple", "ts").Annotations(entsql.IndexWhere("conn_tuple IS NOT NULL")),

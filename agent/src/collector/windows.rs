@@ -96,7 +96,8 @@ fn start(
                 }
             } else {
                 // Stop：进程已退出，句柄多半开不到，命令行和用户名留空；
-                // GUID 走注册表复用启动时的映射
+                // ExitCode 直接在 ETW Stop 事件载荷里，GUID 走注册表复用启动时的映射
+                let exit_code: Option<u32> = parser.try_parse("ExitCode").ok();
                 for event in emit_process(
                     &cb_agent_id,
                     &mut reg,
@@ -105,6 +106,7 @@ fn start(
                         pid,
                         name: &name,
                         exe: Some(&image),
+                        exit_code,
                         ..Default::default()
                     },
                 ) {

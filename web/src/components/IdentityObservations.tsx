@@ -32,14 +32,16 @@ export function IdentityObservations({ asset }: { asset: Asset }) {
   const items = query.data?.items ?? []
   const currentPage = Math.min(page, Math.max(1, Math.ceil(items.length / 10)))
 
-  return <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+  return <Space orientation="vertical" size={16} style={{ width: '100%' }}>
     <Typography.Text type="secondary">{t('identityHint')}</Typography.Text>
-    <Space wrap>
-      <Select aria-label={t('thTime')} value={hours} style={{ width: 170 }}
-        onChange={value => { setHours(value); setPage(1) }}
-        options={[1, 6, 24, 72, 168].map(n => ({ value: n, label: t('lastHours', { n }) }))} />
-      <Button loading={query.isFetching} onClick={() => query.refetch()}>{t('refresh')}</Button>
-    </Space>
+    <div className="filter-bar" style={{ padding: '10px 14px' }}>
+      <Space wrap className="filter-controls">
+        <Select aria-label={t('thTime')} value={hours} style={{ width: 170 }}
+          onChange={value => { setHours(value); setPage(1) }}
+          options={[1, 6, 24, 72, 168].map(n => ({ value: n, label: t('lastHours', { n }) }))} />
+        <Button loading={query.isFetching} onClick={() => query.refetch()}>{t('refresh')}</Button>
+      </Space>
+    </div>
     {query.isError ? <LoadError error={query.error} onRetry={() => query.refetch()} /> : <>
       {query.data?.truncated && <Alert type="info" showIcon title={t('identityTruncated', { n: items.length })} />}
       <Table<IdentityObservation> size="small" rowKey="eventId" loading={query.isPending} dataSource={items}
@@ -51,7 +53,7 @@ export function IdentityObservations({ asset }: { asset: Asset }) {
           { title: t('thResult'), dataIndex: 'success', width: 120, render: (value: boolean | null) => <Tag color={value === true ? 'blue' : value === false ? 'warning' : undefined}>{t(value === true ? 'identitySucceeded' : value === false ? 'identityFailed' : 'identityResultUnknown')}</Tag> },
           { title: t('identityState'), dataIndex: 'state', width: 140, render: (value: string) => <Tag color={value === 'invalid' ? 'warning' : undefined}>{t(states[value] ?? 'identityUnknown')}</Tag> },
         ]}
-        expandable={{ expandedRowRender: row => <Descriptions column={1} size="small" items={[
+        expandable={{ expandedRowRender: row => <div className="ev-expand"><Descriptions column={1} size="small" items={[
           { key: 'sid', label: 'SID', children: copy(row.sid) },
           { key: 'domain', label: t('identityDomain'), children: copy(row.domain) },
           { key: 'logon', label: t('identityLogon'), children: copy(row.logonId) },
@@ -60,7 +62,7 @@ export function IdentityObservations({ asset }: { asset: Asset }) {
           ...(row.sid ? [{ key: 'directory', label: t('directoryAccounts'), children: <IdentityCandidates key={`${me.username}:${me.role}:${membership}:${asset.groupId}:${row.eventId}`} eventId={row.eventId} scope={`${me.username}:${me.role}:${membership}:${asset.groupId}`} /> }] : []),
           ...(row.state === 'missing_uid' ? [{ key: 'local', label: t('collectorLocalAccounts'), children: <LocalIdentityCandidates key={`${me.username}:${me.role}:${membership}:${asset.groupId}:${row.eventId}`} eventId={row.eventId} scope={`${me.username}:${me.role}:${membership}:${asset.groupId}`} /> }] : []),
           ...(row.detail ? [{ key: 'detail', label: t('thDetail'), children: row.detail }] : []),
-        ]} /> }} />
+        ]} /></div> }} />
     </>}
   </Space>
 }

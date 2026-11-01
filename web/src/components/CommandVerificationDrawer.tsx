@@ -89,8 +89,8 @@ export function CommandVerificationDrawer({ command, canEdit, onClose }: { comma
             { key: 'expected', label: t('verificationExpected'), children: <span style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.expected}</span> },
             { key: 'observed', label: t('verificationObserved'), children: <span style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.observed}</span> },
           ]} />
-          <Button aria-expanded={expanded === row.id} onClick={() => setExpanded(expanded === row.id ? null : row.id)}>{t('verificationEvidence')}</Button>
-          {expanded === row.id && <Evidence key={`${scope}:${row.id}`} scope={scope} commandId={command.id} id={row.id} />}
+          <Button size="small" style={{ marginTop: 10 }} aria-expanded={expanded === row.id} onClick={() => setExpanded(expanded === row.id ? null : row.id)}>{t('verificationEvidence')}</Button>
+          {expanded === row.id && <div style={{ marginTop: 12 }}><Evidence key={`${scope}:${row.id}`} scope={scope} commandId={command.id} id={row.id} /></div>}
         </Card>)}
         <Pagination current={currentPage} pageSize={10} total={query.data.items.length} hideOnSinglePage showSizeChanger={false} onChange={value => { setPage(value); setExpanded(null) }} />
       </>}

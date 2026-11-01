@@ -92,7 +92,7 @@ func TestNewJetStreamParamValidation(t *testing.T) {
 	}
 	for _, tc := range bad {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewJetStream("nats://127.0.0.1:1", "test", tc.shards, tc.replicas, 0, 0, nil, nil)
+			_, err := NewJetStream("nats://127.0.0.1:1", "test", tc.shards, tc.replicas, 0, 0, nil, nil, 1)
 			if err == nil {
 				t.Fatal("非法参数应返回错误")
 			}
@@ -131,3 +131,5 @@ func TestUnhealthyReplicas(t *testing.T) {
 		}
 	}
 }
+
+func (m *fakeMetrics) SetQueueSampleTimestamp(string, float64) {}

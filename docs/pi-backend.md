@@ -12,9 +12,10 @@
 | `AI_BASE_URL` | `http://localhost:11434/v1` | 与旧 triage 共用模型端点 |
 | `AI_API_KEY` | 空 | 模型凭据，仅通过子进程 stdin 传递 |
 | `PI_RUNNER_PATH` | `/app/pi-runtime/runner.mjs` | 容器内 runner；本地运行改为绝对路径 |
-| `PI_TIMEOUT_SECONDS` | `1800` | 一轮对话总超时，含模型、工具和审批等待 |
+| `PI_TIMEOUT_SECONDS` | `14400` | 一轮对话总超时（对话与预设任务共用），含模型与工具；只是兜底上限，防模型陷入死循环 |
+| `PI_MAX_TURNS` | `500` | 一轮最多的模型调用次数，兜底上限，最大 1000（runner 与沙箱桥的上限） |
 | `PI_GROUP_DAILY_TOKENS` | `0` | 每组近 24 小时 Pi 会话（对话与预设任务）输入加输出 token 上限，0 不限。到顶时新一轮拒绝发起；正在跑的在下一次模型调用前停下，对话回到可继续状态，任务记失败 |
-| `PI_APPROVAL_TIMEOUT_SECONDS` | `600` | AI 和人工 exec 审批等待上限 |
+| `PI_APPROVAL_TIMEOUT_SECONDS` | `600` | 人工发起的 exec 等组管理员审批的上限；AI 发起的由 AI 审计员当场评审，不等人 |
 | `PI_QUERY_DATABASE_URLS` | 空 | JSON 对象：组 UUID → 专属只读 DSN；未配置的组不开放 SQL |
 | `RESPONSE_ENABLED` | `false` | 现有响应总开关，exec 同样受其控制 |
 | `SANDBOX_URL` | 空（本机 runner） | 配置后 Pi 改在 sandboxd 的隔离容器里运行，见下文「沙箱模式」 |
@@ -98,7 +99,7 @@ sandboxd 配置（环境变量）：
 | `SANDBOX_MEMORY` / `SANDBOX_CPUS` / `SANDBOX_PIDS` | `1g` / `1.5` / `256` | 单个容器的资源上限 |
 | `SANDBOX_WORK_SIZE` | `512m` | 工作目录 tmpfs 大小 |
 | `SANDBOX_MAX_RUNS` | `4` | 同时运行的容器数，满了返回 503 |
-| `SANDBOX_MAX_MINUTES` | `60` | 单个容器最长存活时间 |
+| `SANDBOX_MAX_MINUTES` | `60` | 单个容器最长存活时间；要不小于 `PI_TIMEOUT_SECONDS`（生产配 245 分钟），否则长会话会被沙箱先掐断 |
 
 部署步骤见 [`deploy/pi-sandbox/README.md`](../deploy/pi-sandbox/README.md)。
 
@@ -167,10 +168,15 @@ Ent 实体字段采用 snake_case（例如 `group_id`、`created_at`）。
   `lxc-attach`、`sh -c` 里同样命中，`docker ps/inspect/logs` 不受影响）；Windows 侧覆盖关机重启、递归删除、格式化磁盘、停止/禁用服务、
   禁用网卡、本地账户与管理员组变更、Defender 设置、结束进程与防火墙改动。只读巡检命令不受影响。
   删组时名单一并清掉。
-- **名单不交给模型。** 系统提示只告诉模型：命令直接执行，少数高风险操作会暂停等组管理员批准、
-  管理员已收到通知，这不是拒绝，不要改写或拆分命令绕开，先做不依赖它的工作，最后列出待批准的操作。
-  等待超时返回给模型的同样是「仍在等待批准（已通知），暂未执行」；管理员明确驳回时才告诉它
-  没被批准、不要换写法重复。
+- **AI 发起的命令不等人**：命中名单时由 AI 审计员（`commandreview`）当场评审。审计员用会话自己的模型做一次独立调用，
+  只看命令、目标主机、会话标题、用户最初的请求与执行前模型最后的说明，按「与目标直接相关且必要、改动最小且可回滚、
+  不碰凭据内容、不削弱防护审计与采集、不删证据不影响业务」判断，输出批准或拒绝与一句理由。批准记为已消费、拒绝记为已拒绝，
+  决定人 `ai-reviewer`，理由写审计（`approval_ai_reviewed`）；评审出错或回复解析不了按拒绝处理。人发起的命令照旧等组管理员。
+- **硬拒绝清单**（`commandgate.hardDeny`）：停止或卸载 OpenXDR agent、关机重启、清空日志命令历史或审计、清空防火墙规则、
+  格式化或覆写磁盘。AI 发起的一律不执行、不送评审，不论是否命中组名单——审计员也是模型，这几类不赌它的判断。
+  只认命令位置上的写法，`last reboot`、`journalctl -u …` 这类查询不受影响。
+- **名单不交给模型。** 系统提示只告诉模型：命中高风险名单的命令由 AI 审计员评审、被拒会给理由，硬拒绝的几类操作不执行；
+  被拒时不要改写或拆分命令绕开，按理由调整，确有必要就在回复或报告里说明，由人处理。
 - 每条审批创建时经通知配置外发一次（标题「待批准：AI 请求执行高风险命令」或人工对应标题，
   正文含组、主机、发起人和截断到 300 字的命令，链接 `/approvals`）；发送失败只记日志。
 - 升级时启动迁移：删掉全部旧版 AI 免审批（ai/allow）条目，只给这次删到条目的组补一份默认高风险名单。
@@ -225,9 +231,10 @@ SQL 出错时把 PostgreSQL 报错原文（只取 message）返回给模型，�
 两种方式建的视图相同，都按组固化过滤：assets（含 agent 版本、失联时间、AI 画像、监听端口、云环境与服务 / 外联调查结论）、
 events、alerts、alert_events（告警连同原始事件；两者带可信来源标注 automation_id / automation_watch）、incidents、commands、findings（运维待办）、
 suppressions（本组主机上的抑制，不含全局抑制）、trusted_sources（本组登记的可信自动化来源，只读，Pi 没有登记或撤销的工具）、
-memories（长期记忆）、asset_links（本组主机发起的连接聚合）、ip_infos（只含本组主机连过的地址与本组告警里出现的地址）、
+memories（长期记忆）、asset_links（本组主机发起的连接聚合）、ip_infos（只含本组主机连过的地址与本组告警里出现的地址）、managed_addresses（全平台已纳管主机的地址与是否本组，不含主机名与组名：
+别组纳管的主机不再被报成「未纳管」，组隔离只多透露「这个地址已纳管」）、
 reports（历史报告，供定时任务与上一轮对比）。incident 与 REST 同口径（全部告警都在本组才可见），
-角色只读、5 秒超时、最多 5 个连接。
+角色只读、5 秒超时、不用 JIT、最多 5 个连接。
 不得填写平台的 `DATABASE_URL`，也不要让不同组共用可读全部组的账号。
 
 组未开通时完全不注册 query，不回退到平台数据库账号。SQL 不能用于写入报告；报告走

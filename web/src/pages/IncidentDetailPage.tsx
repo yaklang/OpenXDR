@@ -1,3 +1,4 @@
+import { TriageHistory } from '../components/TriageHistory'
 import { ArrowLeftOutlined, DownOutlined, DownloadOutlined, EllipsisOutlined, RobotOutlined, UpOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, App, Button, Card, Col, Descriptions, Dropdown, Result, Row, Segmented, Skeleton, Space, Table, Timeline, Tooltip, Typography } from 'antd'
@@ -65,7 +66,7 @@ function QueueCard({ items, index }: { items: QueueItem[]; index: number }) {
   const from = Math.max(0, Math.min(index - 3, items.length - 7))
   return (
     <Card title={t('queueTitle')} size="small" extra={<Typography.Text type="secondary">{index + 1} / {items.length}</Typography.Text>}
-      styles={{ body: { padding: 6 } }}>
+      styles={{ body: { padding: '12px 16px' } }}>
       {items.slice(from, from + 7).map((q, i) => {
         const body = <><SeverityTag value={q.severity} /><Typography.Text ellipsis style={{ flex: 1 }}>{q.title ?? q.id}</Typography.Text></>
         return from + i === index
@@ -181,9 +182,9 @@ export function IncidentDetailPage() {
         </>
       }
     >
-      <Row gutter={[16, 16]}>
+      <Row gutter={[20, 20]}>
         <Col xs={24} xl={16}>
-          <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={20} style={{ width: '100%' }}>
             {inc.closureProposal && !done && (
               <Alert type="info" showIcon icon={<RobotOutlined />}
                 title={t(inc.closureProposal.status === 'closed' ? 'proposalClosed' : 'proposalFp')}
@@ -202,11 +203,13 @@ export function IncidentDetailPage() {
                 )} />
             )}
             <VerdictCard verdict={inc.aiVerdict} />
-            <Card title={t('graphTitle')}><IncidentGraph graph={inc.graph} /></Card>
+            <TriageHistory key={inc.id} id={inc.id} />
+            <Card title={t('graphTitle')}><IncidentGraph graph={inc.graph} assetId={inc.assetId} incidentId={inc.id} canAct={canAct} /></Card>
             <Card title={t('alertsTitle', { n: inc.alerts.length })} styles={{ body: { padding: alertView === 'timeline' ? '20px 24px 4px' : 0 } }}
               extra={<Segmented size="small" value={alertView} onChange={v => setAlertView(v as 'table' | 'timeline')}
                 options={[{ value: 'timeline', label: t('viewTimeline') }, { value: 'table', label: t('viewTable') }]} />}>
               {alertView === 'timeline' ? <AlertTimeline alerts={inc.alerts} /> : (
+              <div className="table-card-content">
               <Table<AlertRow>
                 size="small"
                 rowKey="id"
@@ -240,12 +243,13 @@ export function IncidentDetailPage() {
                   },
                 ]}
               />
+              </div>
               )}
             </Card>
           </Space>
         </Col>
         <Col xs={24} xl={8}>
-          <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={20} style={{ width: '100%' }}>
             {queue.total > 1 && queue.index >= 0 && <QueueCard items={queue.items} index={queue.index} />}
             <Card title={t('basicInfo')}>
               <Descriptions column={1} size="small">

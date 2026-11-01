@@ -12,6 +12,7 @@ import { useI18n, type MsgKey } from '../i18n'
 import { EventKind } from './EventKind'
 import { useCanChat, useHandoff } from './Handoff'
 import { HostLink } from './HostLink'
+import { GeminiSparkle } from './Logo'
 import { errText, fmtTime } from './format'
 import { EventFacts } from './EventFacts'
 import { eventAction, eventSummary } from './eventSummary'
@@ -102,8 +103,10 @@ export function EventAIDrawer({ event, onClose, onAsk }: { event: EventRow | nul
   const handoff = useHandoff()
   if (!event) return <Drawer open={false} />
 
-  const groups = related.data ?? []
+  const groups = related.data?.groups ?? []
   const all = groups.flatMap(g => g.events)
+  // 冷层边界说明：目标事件来自冷层时，related 与解读结果都会带上；两边都拿到时只显示一次
+  const archive = related.data?.archive ?? x?.archive
   const why = new Map((x?.related ?? []).map(p => [p.id, p.why]))
   const picked = (x?.related ?? []).map(p => all.find(e => e.id === p.id)).filter((e): e is EventRow => !!e)
   const groupId = assets.data?.find(a => a.id === event.assetId)?.groupId
@@ -114,17 +117,23 @@ export function EventAIDrawer({ event, onClose, onAsk }: { event: EventRow | nul
   const line = (e: EventRow) => <EventLine key={e.id} e={e} why={why.get(e.id)} showHost={e.assetId !== event.assetId} onAsk={onAsk} />
 
   return (
-    <Drawer open onClose={onClose} size={wide ? 640 : '100%'} title={<Space><RobotOutlined />{t('askAI')}</Space>}
+    <Drawer open onClose={onClose} size={wide ? 640 : '100%'} title={<Space><GeminiSparkle size={18} active={status === 'running'} />{t('askAI')}</Space>}
       footer={(
         <Flex justify="space-between" gap={8} wrap>
-          <Button icon={<FieldTimeOutlined />} onClick={() => {
+          <Button shape="round" icon={<FieldTimeOutlined />} onClick={() => {
             onClose()
             navigate(`/events?${new URLSearchParams({ ...(event.assetId && { assetId: event.assetId }), from: new Date(Date.parse(event.ts) - 300_000).toISOString(), to: new Date(Date.parse(event.ts) + 300_000).toISOString() })}`)
           }}>{t('pivotAround')}</Button>
-          {groupId && canChat(groupId) && <Button type="primary" icon={<RobotOutlined />} loading={handoff.busy} onClick={deep}>{t('eventDeep')}</Button>}
+          {groupId && canChat(groupId) && <Button type="primary" shape="round" icon={<RobotOutlined />} loading={handoff.busy} onClick={deep}>{t('eventDeep')}</Button>}
         </Flex>
       )}>
       <Flex vertical gap={20}>
+        {/* 候选边界：关联候选与解读输入恒只查热表（无论目标冷热）——「没有关联」可能是「没搜到」；
+            目标本身来自冷归档时用更完整的说明（目标也不在热表） */}
+        {archive?.candidates_hot_only && (
+          <Alert type="info" showIcon title={archive.target_from_archive ? t('eventFromArchive') : t('eventCandidatesHotOnly')} />
+        )}
+
         {/* 问的是哪条 */}
         <div className="ask-target">
           <Space size={8} wrap>

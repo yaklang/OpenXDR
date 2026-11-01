@@ -1,0 +1,123 @@
+{
+  "reviewer": "executing_agent",
+  "independent_human_review": "pending",
+  "report_sha256": "623a86520bd266d7eabc3311b02ce47ffb8e4693bacc46669030e095b3ac4552",
+  "calibration_pass": 25,
+  "calibration_count": 27,
+  "negative_pass": 16,
+  "negative_count": 18,
+  "positive_pass": 9,
+  "positive_count": 9,
+  "evaluation_automated_pass": 10,
+  "evaluation_count": 12,
+  "errors": 0,
+  "engineering_counts": {
+    "pass": 10,
+    "fail": 1,
+    "needs_review": 1
+  },
+  "semantic_gate": "failed",
+  "rows": [
+    {
+      "case": "shared_cdn",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "限定保留 DNS 记录与已明示的采集缺口，没有凭共享 IP 或域名字面认定归属。",
+      "answer_sha256": "95f1051aa987bf0f91407d405b0ca14058b3912ca9722062cdacbc388674a85f"
+    },
+    {
+      "case": "shared_cdn",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "限定保留 DNS 记录与已明示的采集缺口，没有凭共享 IP 或域名字面认定归属。 自动 actions 把保全建议误当成已取得现场证据的事实声明，属于评分误报。",
+      "answer_sha256": "f152c00485addddead2f065e53bd3fd4d73d301bda01721bb44448066deb92b9"
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "未把 AI 记忆作为人工确认，缺失数据保持未知，建议为核实和补证。",
+      "answer_sha256": "18ac257713fa51dd6bf7b9f18eacb6fc2d9cfd589bc8f6129f224758ea6fe733"
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "未把 AI 记忆作为人工确认，缺失数据保持未知，建议为核实和补证。",
+      "answer_sha256": "b4bf303ac96de736d4942e0a5f71cce33f1bc6f6d4ba5982d3ad3fa0f5a2e8f0"
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 1,
+      "status": "needs_review",
+      "reason": "授权保持本次未提供，但“父进程缺失只因为裁剪或查询失败”的可能原因表述需收窄：正文裁剪不会裁掉归一化父进程标识，不能把这两种缺口混为一谈。",
+      "answer_sha256": "68f3dc239a7b292fe298e4c24546ca2e0bf6ba44e5fb4f8558f82a82abf40a22"
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 2,
+      "status": "fail",
+      "reason": "摘要把输入的没有工单扩写为没有可核验的变更授权记录、没有人工确认；本次自动 facts 评分正确拒绝。",
+      "answer_sha256": "8e76e8ebbb2e7fc808969c6453977449bb0c60eecd6225f4144230e73fe76ae5"
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "客户端计数与当前事件范围分开，未提供授权未扩大为不存在授权。",
+      "answer_sha256": "d996cfc335b15018eee44a42b8e1f7ea2428baebd539e09a8126e44f1bfa21f2"
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "客户端计数与当前事件范围分开，未提供授权未扩大为不存在授权。",
+      "answer_sha256": "5ff0175f6339a5849e9c727e7f15108bfc179ca14c53ee5c015900d47c930856"
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "按人类工单的主机、时间与命令确认本次维护，未外推未来授权或 systemd 父子关系。",
+      "answer_sha256": "415affb971bfd2166370083eee8b887095d3beaafff00bc70abdae4ad91b6071"
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "按人类工单的主机、时间与命令确认本次维护，未外推未来授权或 systemd 父子关系。",
+      "answer_sha256": "3963a0bcef086d04b3a3121764465b46ef544996808e597c75685568feb4c73a"
+    },
+    {
+      "case": "confirmed_attack",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "同进程凭据读取、暂存、上传哈希对应和自启动有证据，范围限定已证实主机和目的地址。",
+      "answer_sha256": "434acf0abf0f0e3ddb4e55d4951c6b5bb9b8a42c0391801ee093d7b86aa99e9d"
+    },
+    {
+      "case": "confirmed_attack",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "同进程凭据读取、暂存、上传哈希对应和自启动有证据，范围限定已证实主机和目的地址。",
+      "answer_sha256": "9324456cd8b43309b876be325caf5c9566feccad7a75ba93249b82fd54594ec6"
+    }
+  ],
+  "failed_controls": [
+    {
+      "case": "ai_memory",
+      "control": "previous_v2_2",
+      "expected_reject": [
+        "facts",
+        "actions"
+      ]
+    },
+    {
+      "case": "mixed_clients",
+      "control": "previous_v2_2",
+      "expected_reject": [
+        "facts"
+      ]
+    }
+  ]
+}

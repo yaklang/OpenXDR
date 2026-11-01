@@ -81,6 +81,10 @@ func DecoyInstalls(s *hostimport.Service, cfg DecoyInstallConfig) http.Handler {
 			http.Error(w, "仅允许全新登记安装；已有操作请先核查目标主机，勿直接重试", 409)
 			return
 		}
+		if row.ActiveRevisionID != nil {
+			http.Error(w, "独立引擎请通过受控运行包或容器部署，兼容安装入口不支持引擎修订", 400)
+			return
+		}
 		if row.Kind == decoydeployment.KindShell || (row.Port > 0 && row.Port < 1024) {
 			http.Error(w, "只支持文件或非特权端口的 SSH/HTTP 服务", 400)
 			return

@@ -28,6 +28,12 @@ func TestVulnSummaryMergesSource(t *testing.T) {
 	client.Asset.Create().SetHostname("pve").
 		SetSoftware(json.RawMessage(`{"os":"debian","version":"13","manager":"dpkg","packages":[["perl-base","5.40.1-6","perl","5.40.1-6"]]}`)).
 		SetListening(json.RawMessage(`[{"proto":"tcp","addr":"0.0.0.0","port":8006,"process":"pveproxy","package":"perl-base"}]`)).ExecX(ctx)
+	rpm := client.Asset.Create().SetHostname("uos").
+		SetSoftware(json.RawMessage(`{"os":"uos","version":"20","manager":"rpm","packages":[["openssl","1:1.1.1k-9","openssl","1.1.1k-9"]]}`)).SaveX(ctx)
+	rep, err := vulnReportOf(httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx), db, client, rpm)
+	if err != nil || rep == nil || rep.Ecosystem != "" || rep.Packages != 1 {
+		t.Fatalf("RPM 清单应保留未知覆盖状态: %+v %v", rep, err)
+	}
 	for _, fixed := range []string{`[{"introduced":"0","fixed":"5.40.1-6+deb13u1"}]`, `[{"introduced":"0"}]`} {
 		if _, err := db.Exec(`INSERT INTO vuln_records (osv_id, ecosystem, package, ranges, aliases, summary, score, vector, synced_at)
 VALUES ($1,'Debian:13','perl',$2::jsonb,'[]','x',9.8,'',now())`, "DEBIAN-CVE-"+fixed[:20], fixed); err != nil {

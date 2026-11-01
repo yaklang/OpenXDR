@@ -208,6 +208,8 @@ type agentStream struct {
 	lastDropped uint64
 	// 每个 agent_id 首次出现时核对证书身份，之后放行；假 id 直接断流
 	verifiedIDs  map[string]bool
+	queuedEvents []ingest.Envelope
+	queuedBytes  int
 	eventCreates []*ent.EventCreate
 	alertCreates []*ent.AlertCreate
 	// 一条流对应一台主机，告警指纹 (rule_id, asset_id) 在流内就是 rule_id
@@ -215,6 +217,14 @@ type agentStream struct {
 }
 
 func (st *agentStream) flush() error {
+	if len(st.queuedEvents) > 0 {
+		if err := eventbus.PublishBatch(st.ctx, st.s.Events, st.queuedEvents); err != nil {
+			return status.Errorf(codes.Unavailable, "事件入队失败: %v", err)
+		}
+		st.received += uint64(len(st.queuedEvents))
+		st.queuedEvents = nil
+		st.queuedBytes = 0
+	}
 	if len(st.eventCreates) > 0 {
 		if _, err := st.s.DB.Event.CreateBulk(st.eventCreates...).Save(st.ctx); err != nil {
 			return err
@@ -337,16 +347,18 @@ func (st *agentStream) publish(ev *pb.AgentEvent, raw json.RawMessage, rawMap ma
 	eventID := ingest.StableID(ev.AgentId, strconv.FormatInt(ev.TsUnixNs, 10),
 		strconv.FormatUint(uint64(ev.ClassUid), 10), ev.ProcessGuid, ev.ParentProcessGuid,
 		ev.ConnTuple, string(raw))
-	if err := st.s.Events.Publish(st.ctx, ingest.Envelope{
+	envelope := ingest.Envelope{
 		Version: ingest.EnvelopeVersion, ID: eventID, PartitionKey: partitionKey,
 		Timestamp: ts, ClassUID: int(ev.ClassUid), Source: "agent", AssetID: st.assetID,
 		AssetOS: st.assetOS, ProcessGUID: processGUID, ParentProcessGUID: parentGUID,
 		Username: ev.Username, ConnTuple: ev.ConnTuple, FingerprintSuffix: fileFingerprintSuffix(ev.ClassUid, rawMap),
 		Raw: sanitizeRawJSON(raw),
-	}); err != nil {
-		return status.Errorf(codes.Unavailable, "事件入队失败: %v", err)
 	}
-	st.received++
+	st.queuedEvents = append(st.queuedEvents, envelope)
+	st.queuedBytes += len(envelope.Raw)
+	if len(st.queuedEvents) >= eventbus.BatchSize(st.s.Events) || st.queuedBytes >= 256<<10 {
+		return st.flush()
+	}
 	return nil
 }
 

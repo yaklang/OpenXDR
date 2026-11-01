@@ -10,6 +10,8 @@ ExecStart=/usr/local/bin/openxdr-agent
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
+# Linux 5.11 之前的 eBPF map 计入锁定内存，默认 64 KiB 不足。
+LimitMEMLOCK=134217728
 
 [Install]
 WantedBy=multi-user.target

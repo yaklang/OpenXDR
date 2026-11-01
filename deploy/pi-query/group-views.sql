@@ -47,6 +47,11 @@ CREATE OR REPLACE VIEW :"schema".asset_links WITH (security_barrier) AS
   FROM public.asset_links WHERE src_asset_id IN (SELECT id FROM public.assets WHERE group_id = :'group_id');
 
 -- 只给本组主机连过的地址与本组告警里出现的地址（情报命中、入站对端），别组的不外泄
+-- 全平台已纳管主机的地址，只说是不是本组的，不给主机名与组名
+CREATE OR REPLACE VIEW :"schema".managed_addresses WITH (security_barrier) AS
+  SELECT ip, coalesce(bool_or(a.group_id = :'group_id'), false) AS in_group
+  FROM public.assets a CROSS JOIN LATERAL jsonb_array_elements_text(a.ip_addrs) AS ip
+  GROUP BY ip;
 CREATE OR REPLACE VIEW :"schema".ip_infos WITH (security_barrier) AS
   SELECT ip, ptr, as_owner, asn, country, malicious, suspicious, domains, vt_at,
          ipdb_asn, ipdb_org, ipdb_country, ipdb_at
@@ -55,7 +60,7 @@ CREATE OR REPLACE VIEW :"schema".ip_infos WITH (security_barrier) AS
   OR ip IN (SELECT substring(rule_id from 10) FROM public.alerts WHERE rule_id LIKE 'intel:ip:%'
     AND asset_id IN (SELECT id FROM public.assets WHERE group_id = :'group_id'))
   OR ip IN (SELECT unnest(ARRAY[e.raw->'src_endpoint'->>'ip', e.raw->'dst_endpoint'->>'ip'])
-    FROM public.alerts a JOIN public.events e ON e.id = a.event_id AND e.asset_id = a.asset_id
+    FROM public.alerts a JOIN public.events e ON e.id = a.event_id AND e.ts = a.ts AND e.asset_id = a.asset_id
     WHERE a.asset_id IN (SELECT id FROM public.assets WHERE group_id = :'group_id'));
 
 CREATE OR REPLACE VIEW :"schema".reports WITH (security_barrier) AS
@@ -75,12 +80,13 @@ CREATE OR REPLACE VIEW :"schema".alerts WITH (security_barrier) AS
   FROM public.alerts
   WHERE asset_id IN (SELECT id FROM public.assets WHERE group_id = :'group_id');
 
--- 告警连同它的原始事件：在视图里按主键回查，跨视图 JOIN events 会全表扫描、必然超时
+-- 告警连同它的原始事件：在视图里按主键回查，跨视图 JOIN events 会全表扫描、必然超时。
+-- 告警 ts 就是事件 ts，带上它每条告警只探一个日分区
 CREATE OR REPLACE VIEW :"schema".alert_events WITH (security_barrier) AS
   SELECT a.id AS alert_id, a.ts, a.last_ts, a.count, a.rule_id, a.severity, a.asset_id, a.incident_id, a.command_id,
          e.id AS event_id, e.ts AS event_ts, e.class_uid, e.username, e.conn_tuple, e.raw,
          a.automation_id, a.automation_watch
-  FROM public.alerts a JOIN public.events e ON e.id = a.event_id AND e.asset_id = a.asset_id
+  FROM public.alerts a JOIN public.events e ON e.id = a.event_id AND e.ts = a.ts AND e.asset_id = a.asset_id
   WHERE a.asset_id IN (SELECT id FROM public.assets WHERE group_id = :'group_id');
 
 -- incident：与 REST 接口同一口径，全部告警都落在本组资产上才可见，跨组的不给
@@ -146,6 +152,7 @@ COMMENT ON VIEW :"schema".suppressions IS '本组主机上的抑制规则（stat
 COMMENT ON VIEW :"schema".trusted_sources IS '本组登记的可信自动化来源（SSH 公钥指纹 / 来源网段 / 登录用户）；alerts.automation_id 指向这里';
 COMMENT ON VIEW :"schema".memories IS '本组长期记忆（source：human 人工 / ai）';
 COMMENT ON VIEW :"schema".asset_links IS '本组主机发起的连接聚合成的依赖边';
+COMMENT ON VIEW :"schema".managed_addresses IS '全平台已纳管主机的地址（含其他组，不含主机名与组名）；in_group=false 即已在其他组纳管，不是未纳管';
 COMMENT ON VIEW :"schema".ip_infos IS '本组主机连过的与本组告警里出现的公网地址：反向解析、离线归属库（ipdb_*，DB-IP Lite）与 VirusTotal 结果';
 COMMENT ON VIEW :"schema".reports IS '本组历史报告（level：ok / attention / urgent）';
 COMMENT ON VIEW :"schema".identity_accounts IS '本组账号登记（directory 目录 / windows 组+资产+SID / linux 组+资产+UID+用户名）及当前所属身份';
@@ -153,7 +160,7 @@ COMMENT ON VIEW :"schema".identities IS '本组身份：每个目录账号一个
 COMMENT ON VIEW :"schema".identity_links IS '账号到身份的链接与撤销历史（basis：directory_anchor / ad_sid / host_local / manual）';
 COMMENT ON VIEW :"schema".identity_linux_logins IS 'Linux 登录与登录时有效本地账号清单的关联（state：matched / no_account / no_snapshot / snapshot_unavailable）';
 
--- 登录角色：不可登录管理、不可绕过 RLS，只读、5 秒超时、少量连接
+-- 登录角色：不可登录管理、不可绕过 RLS，只读、5 秒超时、不用 JIT、少量连接
 SELECT format('CREATE ROLE %I LOGIN', :'role')
   WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
 ALTER ROLE :"role" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
@@ -161,6 +168,8 @@ ALTER ROLE :"role" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION 
 ALTER ROLE :"role" SET search_path = :"schema";
 ALTER ROLE :"role" SET default_transaction_read_only = on;
 ALTER ROLE :"role" SET statement_timeout = '5s';
+-- 分区多时规划器估价虚高会触发 JIT，编译一次就要几秒
+ALTER ROLE :"role" SET jit = off;
 
 GRANT CONNECT ON DATABASE openxdr TO :"role";
 GRANT USAGE ON SCHEMA :"schema" TO :"role";

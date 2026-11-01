@@ -239,3 +239,49 @@ func TestUsage(t *testing.T) {
 		t.Fatalf("第二名: %+v", ov.Top[1])
 	}
 }
+
+func TestAbuseCHKeyLifecycle(t *testing.T) {
+	ctx, db := testdb.New(t)
+	s := &Store{DB: db, Vault: newVault(t), Default: Config{AbuseCHKey: "env-abuse-key-1234"}}
+	key := "console-abuse-key-9876"
+	if err := s.Save(ctx, Patch{AbuseCHKey: &key}); err != nil {
+		t.Fatal(err)
+	}
+	if s.Get(ctx).AbuseCHKey != key {
+		t.Fatal("控制台密钥未生效")
+	}
+	stored := db.Setting.GetX(ctx, settingKey)
+	if strings.Contains(string(stored.Value), key) {
+		t.Fatal("密钥不能明文落库")
+	}
+	view, err := s.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.AbuseCHKeySet || view.AbuseCHKeyHint != "9876" || view.Source["abuseCHKey"] != "console" {
+		t.Fatalf("视图状态不正确: %+v", view)
+	}
+	body, _ := json.Marshal(view)
+	if strings.Contains(string(body), key) {
+		t.Fatal("接口视图不能回显密钥")
+	}
+	if err := s.Save(ctx, Patch{AbuseCHKey: ptr("")}); err != nil {
+		t.Fatal(err)
+	}
+	if s.Get(ctx).AbuseCHKey != "" {
+		t.Fatal("清空密钥后不能偷偷退回环境变量")
+	}
+	if err := s.Save(ctx, Patch{Reset: []string{"abuseCHKey"}}); err != nil {
+		t.Fatal(err)
+	}
+	if s.Get(ctx).AbuseCHKey != s.Default.AbuseCHKey {
+		t.Fatal("重置应恢复环境变量")
+	}
+	s.Vault = nil
+	if err := s.Save(ctx, Patch{AbuseCHKey: &key}); !errors.Is(err, ErrNoVault) {
+		t.Fatal("无加密钥匙时必须拒绝保存密钥")
+	}
+	if s.Get(ctx).AbuseCHKey != s.Default.AbuseCHKey {
+		t.Fatal("被拒绝的保存不能改变原配置")
+	}
+}

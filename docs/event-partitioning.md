@@ -39,7 +39,7 @@ events (PARTITION BY RANGE (ts))
 - 入库 `INSERT ... ON CONFLICT DO NOTHING` 不写冲突列（`ingest/processor.go`），
   老表（主键 id）与分区表（主键 id, ts）都适用，迁移前后同一份代码。
 - 二级索引与 ent 定义同名同列：`event_ts`、`event_asset_id_ts`、`event_process_guid`、
-  `event_process_guid_ts`、`event_parent_process_guid`、`event_conn_tuple_ts`，外加 server 启动时建的 `events_raw_trgm`（pg_trgm GIN）。
+  `event_process_guid_ts`、`event_process_creation_guid`、`event_parent_process_guid`、`event_conn_tuple_ts`，外加 server 启动时建的关键词检索索引 `events_search_trgm`（pg_trgm GIN，见下文；老库可能还是旧的 `events_raw_trgm`）。
   在父表上建的是分区索引，新分区自动带上。
 - `events_assets_events` 外键（asset_id → assets，ON DELETE SET NULL）保留：分区表**引用**别的表没有限制。
 
@@ -66,11 +66,53 @@ ON events (process_guid, ts) WHERE process_guid IS NOT NULL;
 进程字段通常覆盖绝大多数事件，此索引的空间不能按连接部分索引估算；
 需同时预留索引、排序临时文件和 WAL 的空间，并监控主从复制。验收前保留原单列索引。
 
+资产图谱按进程 GUID 查询 `class_uid=1007` 的进程名，使用 `event_process_creation_guid`。
+普通 GUID 索引也包含该进程的大量网络事件；若启动记录已过保留期，查一个不存在的进程名
+仍会扫描这些网络记录。专用部分索引让不存在的启动记录直接返回，不必读取无关事件：
+
+```sql
+SET lock_timeout = '5s';
+CREATE INDEX CONCURRENTLY event_process_creation_guid
+ON events (process_guid) WHERE class_uid = 1007 AND process_guid IS NOT NULL;
+```
+
+该索引只用于进程事件查询，不能替代跨事件类型的 GUID 回溯索引。
+若进程事件占比很高，仍需按 GB 级估算空间；不要把“部分索引”理解为一定很小。
+
 完成后检查 `pg_index.indisvalid` 与查询计划；中断可能留下无效索引，不能仅凭同名索引存在判断成功。
 并发建索引完成前不要重启 server：启动时的全文索引 DDL 即使带 `IF NOT EXISTS`，
 也可能等待表锁，并使后续写入排在锁队列中。应先完成索引校验，再滚动发布应用。
 已有分区表不能直接在父表上使用 `CONCURRENTLY`：需在各子表并发建立同构索引，再挂到父索引；
 新建库会直接带上该索引。不要为了补索引重新执行事件数据迁移。
+
+### 关键词检索索引
+
+检索不直接把关键词条件交给规划器：它估不准子串命中率，会只走 trgm 索引、把时间范围当事后过滤，
+整个保留期的候选行都要重算检索函数。`eventsearch.Search` 按三档走：逐行过滤最近 1 万行 → trgm 索引限时 5 秒 →
+逐行过滤最近 20 万行，总时限 20 秒，没覆盖整个时间窗口时标为截断。按天分区后时间范围能裁掉分区，索引那档会快得多。
+
+控制台事件检索与研判工具 `query_events` 的关键词走 `events_search_trgm`：
+`gin (openxdr_event_search_text(raw) gin_trgm_ops)`。函数把事件里的标量值拼成一串，去掉 UUID 与
+32 位以上的十六进制串（进程 uid、文件哈希）。旧索引 `events_raw_trgm` 对整个 `raw::text` 切三元组，
+字段名、JSON 标点与高熵哈希都进了索引；生产抽样每行三元组从 253 个降到 79 个，约少七成。
+口径变化：字段名与 JSON 结构不再能搜到；关键词只由十六进制字符与连字符组成且含字母或连字符时
+（UUID、哈希片段）回退 `raw::text` 匹配，结果不漏，只是不走索引、按时间范围扫；
+纯数字关键词按值匹配，不再命中 UUID 与哈希内部的数字片段。
+
+新库启动即建。已有 `events_raw_trgm` 的库启动时**不现建**（大表上要几小时且挡住写入），
+server 仍按旧口径用旧索引，直到新索引建好且有效。先升级 server（启动时建出 `openxdr_event_search_text` 函数），再在主库事务外：
+
+```sql
+SET lock_timeout = '5s';
+CREATE INDEX CONCURRENTLY events_search_trgm
+ON events USING gin (openxdr_event_search_text(raw) gin_trgm_ops);
+```
+
+分区表不能在父表上 `CONCURRENTLY`：先 `CREATE INDEX events_search_trgm ON ONLY events USING gin (...)`，
+再对每个子表 `CREATE INDEX CONCURRENTLY` 同构索引并 `ALTER INDEX events_search_trgm ATTACH PARTITION <子表索引>`，
+全部挂上后父索引才有效。确认 `pg_index.indisvalid` 后滚动重启 server，日志出现
+「events_search_trgm 已可用，可以删除旧检索索引」即已切换；再删旧索引（普通表用 `DROP INDEX CONCURRENTLY events_raw_trgm`，
+分区表直接 `DROP INDEX`，带 `lock_timeout`）。别在新索引建好之前删旧索引：两个都没有时启动会在前台现建新索引。
 
 ## 3. 指向 events 的引用，逐个处理
 
@@ -96,7 +138,7 @@ ON events (process_guid, ts) WHERE process_guid IS NOT NULL;
 `REFERENCES events(id)`；老库上已有的外键不动，迁移切换时才去掉。
 
 **钉住（pinned）的口径**与原 janitor 逐行清理完全一致：`alerts.event_id`、`temporal_evidence.event_id`、
-`alert_id` 非空的 `temporal_detections.anchor_id`（`eventpart/schema.go` 的 `pinnedIDs`）。
+`alert_id` 非空的 `temporal_detections.anchor_id`（`eventpart/schema.go` 的 `PinnedIDs`，冷归档复用同一常量）。
 
 ## 4. ent 自动迁移与分区表共存
 
@@ -218,11 +260,14 @@ verify 的逐日摘要必然发现，repair 修掉。
    `Schema.Create` 失败，必须在 switch 之前全部换掉；之后也不能回退到旧版本。
 2. 把 `eventpartition` 二进制拷进主库与备库容器（同 `cmd/backtest` 的做法），两边各跑
    `check -pgdata $PGDATA`：看老表数据与索引大小、需要的余量、预计耗时；余量不足先扩容。
+   **执行身份必须是 events 的属主**（server 的连接用户），工具每一步都会检查。在容器里以 postgres 超级用户连接时，
+   连接串加 `role=<属主>`，例如 `DATABASE_URL="postgres:///openxdr?host=/var/run/postgresql&role=openxdr"`；
+   否则新表与函数归错人，迁移期间镜像触发器以 server 身份写新表会被拒，入库中断。
 3. 低峰期 `prepare -confirm -retention-days <与 RETENTION_DAYS 一致>`：只在挂触发器时短暂锁老表写入（≤ lock-timeout）。
    此后入库每条事件多一次写入，直到 finish。
 4. `copy -confirm`，IO 紧张时加 `-pause 200ms`。按经验速率（30–80 MB/s，含同步复制）78 GB 约 0.5–1.5 小时，
    运行中每 10 秒打印游标、速率与预计剩余。期间关注复制延迟与 `pg_wal` 占用。可随时 Ctrl-C，重跑续传。
-5. `index -confirm`：4 个 btree 各扫一遍新表，约 10–30 分钟/个；trgm GIN 最慢，约 2–5 小时。
+5. `index -confirm`：4 个 btree 各扫一遍新表，约 10–30 分钟/个；trgm GIN 最慢，约 2–5 小时（换成 `events_search_trgm` 后会快不少）。
 6. 低峰期 `verify`：两表各全扫一遍，约 20–60 分钟，期间持有一个长快照（会推迟 VACUUM 回收）。
    有不一致就 `repair -confirm`，再 `verify`。
 7. 低峰期 `switch -confirm`。拿不到锁（有长查询或长事务）会整体放弃，换个时间重跑即可。
@@ -243,11 +288,35 @@ verify 的逐日摘要必然发现，repair 修掉。
 
 - 去掉外键后，引用完整性靠触发器和退役流程保证；绕过它们的操作（直接对分区 `TRUNCATE`、手工 `DROP` 分区、
   `session_replication_role = replica`）不会级联也不会保护证据。
-- 默认分区存在时不能 `DETACH CONCURRENTLY`，退役要短暂拿父表 ACCESS EXCLUSIVE；长查询多的时候可能连续几轮拿不到锁，
-  日志会持续报「退役过期事件分区失败」，过期数据暂时多留。
+- 默认分区存在时不能 `DETACH CONCURRENTLY`，退役要短暂拿父表 ACCESS EXCLUSIVE。它不排队等锁（排队时后来的读写全被堵在后面），
+  而是在 SAVEPOINT 里 `LOCK ... NOWAIT` 每 100ms 试一次，碰上没有冲突持锁的瞬间拿到，最多试 30 秒；
+  一直有超过 30 秒的读（或持续不断的长查询）时这一轮放弃，日志报「退役过期事件分区失败」，过期数据暂时多留。
 - 退役事务持有日分区的 SHARE 锁复制证据（整分区扫一遍，约 2.6 GB）期间，迟到写进该日的事件要等；
   与写迟到事件的事务可能触发死锁检测、中止其中一方（重投 / 下一轮重来）。
 - 月归档分区每次退役整体重建，大小取决于当月被告警引用的事件量；引用很多的月份重建更慢（仍不持父表排他锁）。
 - 不带 ts 的按 id 查询代价随分区数增长（第 8 节）。
 - 迁移期间写放大（镜像），verify 的长快照推迟 VACUUM；switch 要求全部 server 已是本版本。
 - 同步备库的磁盘与 WAL：copy / index 产生的 WAL 与数据量同级，备库同样需要一倍余量，复制延迟会拖慢主库提交。
+
+## 普通表的重复 GUID 索引清理
+
+`event_process_guid_ts(process_guid, ts) WHERE process_guid IS NOT NULL` 已覆盖应用的非空 GUID 等值、
+批量与时间排序查询。新库不再单独创建 `event_process_guid(process_guid)`，避免每条事件维护重复 B-tree。
+`event_process_creation_guid` 和父进程索引仍保留，不属于这次清理范围。
+
+旧表不会在服务启动时自动删索引。先升级全部服务节点，确认联合索引 valid/ready，保存查询计划与旧定义，
+再由数据库管理员在**普通 events 表**执行 [受保护的清理脚本](../deploy/ha/drop-redundant-process-index.sql)。
+脚本核对表类型及两个索引的列、谓词和有效性，使用 5 秒锁等待、2 分钟语句上限并发删除；不删除任何事件。
+不要放进外层事务。分区父索引不支持 `DROP INDEX CONCURRENTLY`，脚本会拒绝，须单独安排分区维护。
+
+完成后确认 `to_regclass('public.event_process_guid') IS NULL`，复核 GUID 查询结果、执行计划、写入队列和复制状态。
+若并发删除被取消，先检查索引状态和阻塞者；索引可能已无效但尚未释放空间，不能仅凭命令退出判断完成。
+迁移工具会保留旧表上的既有索引，因此需要清理的普通表应在分区迁移之前处理。
+
+如出现查询回归，保持联合索引存在，并按保存的旧定义在线重建，例如：
+
+```sql
+CREATE INDEX CONCURRENTLY event_process_guid ON public.events(process_guid);
+```
+
+重建需要时间、磁盘和 WAL 余量；它不是瞬时回滚。清理前应核对非应用的自定义查询是否依赖空 GUID 检索性能。

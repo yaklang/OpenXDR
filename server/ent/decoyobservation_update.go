@@ -95,6 +95,15 @@ func (_u *DecoyObservationUpdate) sqlSave(ctx context.Context) (_node int, err e
 	if _u.mutation.IncidentIDCleared() {
 		_spec.ClearField(decoyobservation.FieldIncidentID, field.TypeUUID)
 	}
+	if _u.mutation.RevisionIDCleared() {
+		_spec.ClearField(decoyobservation.FieldRevisionID, field.TypeUUID)
+	}
+	if _u.mutation.OccurredAtCleared() {
+		_spec.ClearField(decoyobservation.FieldOccurredAt, field.TypeTime)
+	}
+	if _u.mutation.DetailsCleared() {
+		_spec.ClearField(decoyobservation.FieldDetails, field.TypeJSON)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{decoyobservation.Label}
@@ -211,6 +220,15 @@ func (_u *DecoyObservationUpdateOne) sqlSave(ctx context.Context) (_node *DecoyO
 	}
 	if _u.mutation.IncidentIDCleared() {
 		_spec.ClearField(decoyobservation.FieldIncidentID, field.TypeUUID)
+	}
+	if _u.mutation.RevisionIDCleared() {
+		_spec.ClearField(decoyobservation.FieldRevisionID, field.TypeUUID)
+	}
+	if _u.mutation.OccurredAtCleared() {
+		_spec.ClearField(decoyobservation.FieldOccurredAt, field.TypeTime)
+	}
+	if _u.mutation.DetailsCleared() {
+		_spec.ClearField(decoyobservation.FieldDetails, field.TypeJSON)
 	}
 	_node = &DecoyObservation{config: _u.config}
 	_spec.Assign = _node.assignValues

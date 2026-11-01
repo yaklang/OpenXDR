@@ -1,0 +1,12 @@
+[Unit]
+Description=Restrict registry ingress to verified consumers
+After=network-pre.target
+Before=docker.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/sbin/nft -c -f /etc/nftables.d/openxdr-registry-guard.nft
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/openxdr-registry-guard.nft
+ExecStop=/usr/sbin/nft delete table inet openxdr_registry_guard
+[Install]
+WantedBy=multi-user.target

@@ -74,7 +74,7 @@ func (a *Auto) Sweep(ctx context.Context, now time.Time) error {
 	if err := a.collect(ctx, now); err != nil {
 		return fmt.Errorf("收集 SSH 登录: %w", err)
 	}
-	assessments, facts, err := Assess(ctx, a.DB, a.Config, nil, now)
+	assessments, facts, err := Assess(ctx, a.DB, a.SQL, a.Config, nil, now)
 	if err != nil {
 		return err
 	}
