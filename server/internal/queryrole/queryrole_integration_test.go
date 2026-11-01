@@ -168,6 +168,10 @@ func TestEnsureIsolatesGroupAndDrops(t *testing.T) {
 	if err := ro.QueryRowContext(ctx, `SHOW default_transaction_read_only`).Scan(&readOnly); err != nil || readOnly != "on" {
 		t.Errorf("应默认只读，实际 %q %v", readOnly, err)
 	}
+	var jit string
+	if err := ro.QueryRowContext(ctx, `SHOW jit`).Scan(&jit); err != nil || jit != "off" {
+		t.Errorf("应关闭 JIT，实际 %q %v", jit, err)
+	}
 	ro.Close()
 
 	if err := p.Drop(ctx, a.ID); err != nil {
