@@ -1,0 +1,207 @@
+name: Release
+
+# Push v* tag to release: build agent / sensor (Linux amd64 + arm64, Windows) -> inject agent and sensor packages into server image, push to GHCR (amd64 + arm64) -> create GitHub Release.
+# Release assets: install.sh (one-line install), docker-compose.yml, cross-platform packages and SHA256SUMS.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+# Pass tag and owner into shell via env vars, do not interpolate directly into scripts
+env:
+  TAG: ${{ github.ref_name }}
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  binaries:
+    name: Collector Packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # musl static linking: one binary runs across new and old distros (even CentOS 7); mingw for Windows targets
+      - name: Install cross-compilation tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools gcc-mingw-w64-x86-64
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,x86_64-pc-windows-gnu
+      - name: Install nightly and bpf-linker
+        # Reason for pinning 0.10.4 is detailed in ci.yml
+        run: |
+          rustup toolchain install nightly --component rust-src
+          cargo install bpf-linker --version 0.10.4 --locked
+      - name: Agent (Linux, with eBPF)
+        working-directory: agent
+        # Default build has no Linux network collection, distribution package must be an eBPF build; it falls back to netlink/polling if eBPF is unavailable
+        run: |
+          cargo build --release --locked --features ebpf --target x86_64-unknown-linux-musl
+          strings target/x86_64-unknown-linux-musl/release/openxdr-agent | grep -c inet_sock_set_state
+      - name: Agent (Windows)
+        working-directory: agent
+        run: cargo build --release --locked --target x86_64-pc-windows-gnu
+      - name: Sensor (Linux)
+        working-directory: sensor
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: Organize
+        run: |
+          mkdir -p out/dist
+          cp agent/target/x86_64-unknown-linux-musl/release/openxdr-agent out/dist/openxdr-agent-linux-amd64
+          cp agent/target/x86_64-pc-windows-gnu/release/openxdr-agent.exe out/dist/openxdr-agent-windows-amd64.exe
+          # sensor and agent in the same directory: one-line install downloads from here, online probes automatically upgrade based on hashes here
+          cp sensor/target/x86_64-unknown-linux-musl/release/openxdr-sensor out/dist/openxdr-sensor-linux-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: out
+
+  # arm64 uses GitHub native arm runner for native compilation, in parallel with x86_64 job: no cross-toolchain needed,
+  # ring's C code is compiled by musl-gcc from musl-tools, eBPF's bpf_target_arch takes native arch, can run directly after compiling
+  binaries-arm64:
+    name: Collector Packages (arm64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+      # file / strings used for artifact checking, arm runner image is more streamlined than x86, explicitly install them
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools file binutils
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+      - name: Install nightly and bpf-linker
+        # Reason for pinning 0.10.4 is detailed in ci.yml
+        run: |
+          rustup toolchain install nightly --component rust-src
+          cargo install bpf-linker --version 0.10.4 --locked
+      - name: Agent (Linux arm64, with eBPF)
+        working-directory: agent
+        run: |
+          cargo build --release --locked --features ebpf --target aarch64-unknown-linux-musl
+          bin=target/aarch64-unknown-linux-musl/release/openxdr-agent
+          # grep exits after reading the entire input: -q exiting early will cause strings to get SIGPIPE, causing false failures under pipefail
+          strings "$bin" | grep -c inet_sock_set_state
+          file "$bin" | grep 'ARM aarch64.*static'
+          "$bin" version
+      - name: Sensor (Linux arm64)
+        working-directory: sensor
+        run: |
+          cargo build --release --locked --target aarch64-unknown-linux-musl
+          bin=target/aarch64-unknown-linux-musl/release/openxdr-sensor
+          file "$bin" | grep 'ARM aarch64.*static'
+          "$bin" version
+      - name: Organize
+        run: |
+          mkdir -p out/dist
+          cp agent/target/aarch64-unknown-linux-musl/release/openxdr-agent out/dist/openxdr-agent-linux-arm64
+          cp sensor/target/aarch64-unknown-linux-musl/release/openxdr-sensor out/dist/openxdr-sensor-linux-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-arm64
+          path: out
+
+  images:
+    name: Container Images
+    needs: [binaries, binaries-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      # Combine installation packages for both architectures into the same out/dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries*
+          merge-multiple: true
+          path: out
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache-dependency-path: server/go.sum
+      - name: Offline IP attribution database
+        # Bake the current month's version of DB-IP Lite (CC BY 4.0) into the image, perform structural and type verification after downloading; DB-IP only keeps the last two months and doesn't publish checksums,
+        # Impossible to pin a fixed version's SHA256, so record the actual baked-in hash into logs and image. Fails the release immediately if download or verification fails, preventing images missing databases.
+        working-directory: server
+        run: |
+          go run ./cmd/ipdb -dir ../ipdb-out/ipdb
+          cd ../ipdb-out/ipdb && sha256sum -- *.mmdb | tee SHA256SUMS
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tags
+        id: tags
+        run: |
+          owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          tag=$TAG
+          for img in server web; do
+            list="ghcr.io/$owner/openxdr-$img:$tag"
+            # Pre-releases (with -) do not touch 'latest'
+            case $tag in *-*) ;; *) list="$list,ghcr.io/$owner/openxdr-$img:latest" ;; esac
+            echo "$img=$list" >> "$GITHUB_OUTPUT"
+          done
+      - name: Server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/Dockerfile
+          # Bake agent and sensor packages into the image: upgrading the image auto-upgrades online agents and probes; a copy of offline IP database is included with the image
+          build-contexts: |
+            agents=out
+            ipdb=ipdb-out
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.server }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+      - name: Web
+        uses: docker/build-push-action@v6
+        with:
+          context: web
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.web }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+  release:
+    name: GitHub Release
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      # Combine installation packages for both architectures into the same out/dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries*
+          merge-multiple: true
+          path: out
+      - name: Assets
+        run: |
+          tag=$TAG
+          mkdir assets
+          cp out/dist/* assets/
+          # Pin the installation script to this version: users install the exact version of the script from the Release they downloaded
+          sed "s/__OPENXDR_VERSION__/$tag/" deploy/install/install.sh > assets/install.sh
+          cp deploy/install/docker-compose.yml deploy/nats.conf assets/
+          (cd assets && sha256sum -- * > SHA256SUMS)
+      - name: Release Notes
+        run: |
+          tag=$TAG
+          ver=${tag#v}
+          {
+            sed "s/__OPENXDR_VERSION__/$tag/g" deploy/install/RELEASE_NOTES.md
+            echo
+            # Changelog for this version: between ## [Version] and the next ## [ in CHANGELOG.md
+            awk -v v="$ver" '$0 ~ "^## \\[" v "\\]" {on=1; next} on && /^## \[/ {exit} on' CHANGELOG.md
+          } > notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$TAG
+          pre=""; case $tag in *-*) pre="--prerelease" ;; esac
+          gh release create "$tag" --title "OpenXDR $tag" --notes-file notes.md $pre assets/*
