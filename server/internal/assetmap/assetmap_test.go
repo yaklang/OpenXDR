@@ -256,6 +256,9 @@ func TestGraph(t *testing.T) {
 		if e.Ports[0] == "tcp/5432" {
 			note = e.Note
 		}
+		if e.Processes == nil {
+			t.Fatalf("没有进程归属的边也要给空数组，前端按数组读: %s → %s", e.From, e.To)
+		}
 	}
 	if note != "读写业务库" {
 		t.Fatalf("边上应带 AI 关系说明: %q", note)

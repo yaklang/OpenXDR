@@ -191,7 +191,7 @@ func (g *Group) Graph(now time.Time) Graph {
 		k := pair{src.id, dst.id}
 		e := edges[k]
 		if e == nil {
-			e = &Edge{From: src.id, To: dst.id, Note: g.note(src, dst)}
+			e = &Edge{From: src.id, To: dst.id, Note: g.note(src, dst), Processes: []string{}}
 			edges[k] = e
 		}
 		if !slices.Contains(e.Ports, port) {
