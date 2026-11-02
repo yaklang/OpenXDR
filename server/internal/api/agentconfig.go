@@ -16,8 +16,10 @@ type agentConfig struct {
 	// 覆盖内置的敏感目录清单，为空表示用 agent 默认（Linux inotify）
 	FileWatchDirs []string `json:"fileWatchDirs,omitempty"`
 	// 采集开关，缺省全开。裸机排查噪声时按需关
-	CollectFiles   *bool `json:"collectFiles,omitempty"`
-	CollectAuth    *bool `json:"collectAuth,omitempty"`
+	CollectFiles *bool `json:"collectFiles,omitempty"`
+	CollectAuth  *bool `json:"collectAuth,omitempty"`
+	// 可选 Sysmon 事件，缺省关闭，需安装新版 Agent 和 Sysmon。
+	CollectSysmon  *bool `json:"collectSysmon,omitempty"`
 	CollectPersist *bool `json:"collectPersist,omitempty"`
 	CollectNetwork *bool `json:"collectNetwork,omitempty"`
 	// 监听端口与云环境清单，资产图谱与攻击面的数据来源

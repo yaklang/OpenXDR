@@ -1,0 +1,30 @@
+{
+  "title": "Windows 登录成功（关联信号）",
+  "id": "a2ebc770-fe00-5d87-b5b4-cb97cd9ab2cf",
+  "status": "experimental",
+  "author": "Local security operations",
+  "description": " 参照 Wazuh 的检测场景独立编写；表示需核查的行为，不单独证明入侵。",
+  "references": [
+    "https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0580-win-security_rules.xml"
+  ],
+  "tags": [
+    "attack.initial_access",
+    "attack.t1078"
+  ],
+  "logsource": {
+    "category": "authentication",
+    "product": "windows"
+  },
+  "detection": {
+    "selection": {
+      "activity_id": 1,
+      "status_id": 1
+    },
+    "condition": "selection"
+  },
+  "level": "informational",
+  "falsepositives": [
+    "授权运维、软件部署或安全测试；结合变更窗口和操作者核查，不自动隔离。"
+  ],
+  "openxdr_signal": true
+}

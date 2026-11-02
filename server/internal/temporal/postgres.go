@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"openxdr/server/internal/authfields"
 
 	"openxdr/server/internal/eventpart"
 )
@@ -27,6 +28,8 @@ CREATE TABLE IF NOT EXISTS temporal_candidates (
  PRIMARY KEY(revision,event_id));
 CREATE INDEX IF NOT EXISTS temporal_candidates_window ON temporal_candidates(revision,asset_id,group_id,ts);
 ALTER TABLE temporal_candidates ADD COLUMN IF NOT EXISTS account text;
+ALTER TABLE temporal_candidates ADD COLUMN IF NOT EXISTS source_entity text;
+CREATE INDEX IF NOT EXISTS temporal_candidates_source ON temporal_candidates(revision,group_id,source_entity,ts) WHERE source_entity IS NOT NULL;
 CREATE INDEX IF NOT EXISTS temporal_candidates_ts ON temporal_candidates(ts);
 CREATE INDEX IF NOT EXISTS temporal_candidates_account ON temporal_candidates(revision,group_id,account,ts) WHERE account IS NOT NULL;
 CREATE TABLE IF NOT EXISTS temporal_evaluation_gaps (
@@ -109,9 +112,10 @@ func (s *Snapshot) Observe(ctx context.Context, tx *sql.Tx, id uuid.UUID, ruleID
 	var e Event
 	var assetID, groupID uuid.NullUUID
 	var username sql.NullString
+	var raw []byte
 	var result Observation
-	err := tx.QueryRowContext(ctx, `SELECT e.id,e.ts,e.asset_id,a.group_id,e.username FROM events e
- LEFT JOIN assets a ON a.id=e.asset_id WHERE e.id=$1`, id).Scan(&e.ID, &e.Time, &assetID, &groupID, &username)
+	err := tx.QueryRowContext(ctx, `SELECT e.id,e.ts,e.asset_id,a.group_id,e.username,e.raw FROM events e
+ LEFT JOIN assets a ON a.id=e.asset_id WHERE e.id=$1`, id).Scan(&e.ID, &e.Time, &assetID, &groupID, &username, &raw)
 	if err != nil {
 		return Observation{}, err
 	}
@@ -161,6 +165,12 @@ func (s *Snapshot) Observe(ctx context.Context, tx *sql.Tx, id uuid.UUID, ruleID
 	}
 	assetScope := Scope{Group: groupID.UUID, Entity: assetID.UUID.String()}
 	accountScope := Scope{Group: groupID.UUID, Entity: AccountEntity(username.String)}
+	sourceScope := Scope{Group: groupID.UUID, Entity: AssetSourceIPEntity(assetID.UUID, authfields.SourceIP(raw))}
+	bySource := s.Relevant(GroupByAssetSourceIP, e.Rules)
+	if bySource && sourceScope.Entity == "" {
+		result.skip("no_source_ip")
+		bySource = false
+	}
 	byAccount := s.Relevant(GroupByAccount, e.Rules)
 	if byAccount && accountScope.Entity == "" {
 		result.skip("no_account")
@@ -183,12 +193,14 @@ func (s *Snapshot) Observe(ctx context.Context, tx *sql.Tx, id uuid.UUID, ruleID
 		return Observation{}, err
 	}
 	account := sql.NullString{String: strings.TrimPrefix(accountScope.Entity, accountPrefix), Valid: accountScope.Entity != ""}
+	source := sql.NullString{String: sourceScope.Entity, Valid: sourceScope.Entity != ""}
 	var accepted uuid.UUID
-	err = tx.QueryRowContext(ctx, `INSERT INTO temporal_candidates AS existing(revision,event_id,asset_id,group_id,ts,rules,account)
-VALUES($1,$2,$3,$4,$5,$6::jsonb,$7) ON CONFLICT(revision,event_id) DO UPDATE SET rules=existing.rules
+	err = tx.QueryRowContext(ctx, `INSERT INTO temporal_candidates AS existing(revision,event_id,asset_id,group_id,ts,rules,account,source_entity)
+VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8) ON CONFLICT(revision,event_id) DO UPDATE SET rules=existing.rules
 WHERE existing.asset_id=EXCLUDED.asset_id AND existing.group_id=EXCLUDED.group_id
-AND existing.ts=EXCLUDED.ts AND existing.rules=EXCLUDED.rules AND existing.account IS NOT DISTINCT FROM EXCLUDED.account RETURNING event_id`,
-		s.revision, e.ID, assetID.UUID, groupID.UUID, e.Time, string(encoded), account).Scan(&accepted)
+AND existing.ts=EXCLUDED.ts AND existing.rules=EXCLUDED.rules AND existing.account IS NOT DISTINCT FROM EXCLUDED.account
+AND existing.source_entity IS NOT DISTINCT FROM EXCLUDED.source_entity RETURNING event_id`,
+		s.revision, e.ID, assetID.UUID, groupID.UUID, e.Time, string(encoded), account, source).Scan(&accepted)
 	if err != nil {
 		return Observation{}, fmt.Errorf("时序候选写入失败或重投内容冲突: %w", err)
 	}
@@ -199,9 +211,10 @@ AND existing.ts=EXCLUDED.ts AND existing.rules=EXCLUDED.rules AND existing.accou
 	}{
 		{GroupByAsset, "asset_id", assetScope, assetID.UUID},
 		{GroupByAccount, "account", accountScope, account.String},
+		{GroupByAssetSourceIP, "source_entity", sourceScope, source.String},
 	}
 	for _, d := range dimensions {
-		if !s.Relevant(d.groupBy, e.Rules) || (d.groupBy == GroupByAccount && !byAccount) {
+		if !s.Relevant(d.groupBy, e.Rules) || (d.groupBy == GroupByAccount && !byAccount) || (d.groupBy == GroupByAssetSourceIP && !bySource) {
 			continue
 		}
 		matches, err := s.observeScope(ctx, tx, &result, e, assetID.UUID, d.groupBy, d.column, d.scope, d.key)

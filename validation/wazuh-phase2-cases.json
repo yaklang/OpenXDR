@@ -1,0 +1,490 @@
+[
+  {
+    "name": "sudo_success/positive-0",
+    "rule": "6bc649d0-9f95-54ea-b62c-b70c656765d4",
+    "class": 100001,
+    "os": "linux",
+    "event": {
+      "metadata": {
+        "product": {
+          "name": "sudo"
+        }
+      },
+      "message": "alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/id"
+    },
+    "hit": true,
+    "signal": true
+  },
+  {
+    "name": "sudo_success/positive-1",
+    "rule": "6bc649d0-9f95-54ea-b62c-b70c656765d4",
+    "class": 100001,
+    "os": "linux",
+    "event": {
+      "metadata": {
+        "product": {
+          "name": "sudo"
+        }
+      },
+      "message": "alice : PWD=/tmp ; USER=root ; TSID=000ABC ; COMMAND=/usr/bin/id"
+    },
+    "hit": true,
+    "signal": true
+  },
+  {
+    "name": "sudo_success/negative-0",
+    "rule": "6bc649d0-9f95-54ea-b62c-b70c656765d4",
+    "class": 100001,
+    "os": "linux",
+    "event": {
+      "metadata": {
+        "product": {
+          "name": "sudo"
+        }
+      },
+      "message": "alice : authentication failure"
+    },
+    "hit": false,
+    "signal": true
+  },
+  {
+    "name": "sudo_success/negative-1",
+    "rule": "6bc649d0-9f95-54ea-b62c-b70c656765d4",
+    "class": 100001,
+    "os": "linux",
+    "event": {
+      "metadata": {
+        "product": {
+          "name": "sudo"
+        }
+      },
+      "message": "alice : PWD=/tmp ; USER=backup ; COMMAND=/usr/bin/id"
+    },
+    "hit": false,
+    "signal": true
+  },
+  {
+    "name": "sudo_success/negative-2",
+    "rule": "6bc649d0-9f95-54ea-b62c-b70c656765d4",
+    "class": 100001,
+    "os": "linux",
+    "event": {
+      "metadata": {
+        "product": {
+          "name": "nginx"
+        }
+      },
+      "message": "alice : PWD=/tmp ; USER=root ; COMMAND=/usr/bin/id"
+    },
+    "hit": false,
+    "signal": true
+  },
+  {
+    "name": "sudo_success/negative-3",
+    "rule": "6bc649d0-9f95-54ea-b62c-b70c656765d4",
+    "class": 100001,
+    "os": "linux",
+    "event": {
+      "metadata": {
+        "product": {
+          "name": "sudo"
+        }
+      },
+      "message": "alice : PWD=/tmp ; USER=root ; COMMAND="
+    },
+    "hit": false,
+    "signal": true
+  },
+  {
+    "name": "sudo_success/negative-4",
+    "rule": "6bc649d0-9f95-54ea-b62c-b70c656765d4",
+    "class": 100001,
+    "os": "linux",
+    "event": {},
+    "hit": false,
+    "signal": true
+  },
+  {
+    "name": "sudo_success/wrong-platform",
+    "rule": "6bc649d0-9f95-54ea-b62c-b70c656765d4",
+    "class": 100001,
+    "os": "windows",
+    "event": {
+      "metadata": {
+        "product": {
+          "name": "sudo"
+        }
+      },
+      "message": "alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/id"
+    },
+    "hit": false,
+    "signal": true
+  },
+  {
+    "name": "systemd_delete/positive-0",
+    "rule": "89454b35-df30-510a-9530-a5226a8c82ac",
+    "class": 1001,
+    "os": "linux",
+    "event": {
+      "activity_id": 4,
+      "file": {
+        "path": "/etc/systemd/system/demo.service"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "systemd_delete/positive-1",
+    "rule": "89454b35-df30-510a-9530-a5226a8c82ac",
+    "class": 1001,
+    "os": "linux",
+    "event": {
+      "activity_id": 4,
+      "file": {
+        "path": "/usr/lib/systemd/system/demo.service"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "systemd_delete/negative-0",
+    "rule": "89454b35-df30-510a-9530-a5226a8c82ac",
+    "class": 1001,
+    "os": "linux",
+    "event": {
+      "activity_id": 3,
+      "file": {
+        "path": "/etc/systemd/system/demo.service"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "systemd_delete/negative-1",
+    "rule": "89454b35-df30-510a-9530-a5226a8c82ac",
+    "class": 1001,
+    "os": "linux",
+    "event": {
+      "activity_id": 4,
+      "file": {
+        "path": "/etc/systemd/system-old/demo.service"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "systemd_delete/negative-2",
+    "rule": "89454b35-df30-510a-9530-a5226a8c82ac",
+    "class": 1001,
+    "os": "linux",
+    "event": {
+      "activity_id": 4,
+      "file": {
+        "path": "/tmp/demo.service"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "systemd_delete/negative-3",
+    "rule": "89454b35-df30-510a-9530-a5226a8c82ac",
+    "class": 1001,
+    "os": "linux",
+    "event": {
+      "activity_id": 4,
+      "file": {
+        "path": "/etc/systemd/system/demo.timer"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "systemd_delete/negative-4",
+    "rule": "89454b35-df30-510a-9530-a5226a8c82ac",
+    "class": 1001,
+    "os": "linux",
+    "event": {},
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "systemd_delete/wrong-platform",
+    "rule": "89454b35-df30-510a-9530-a5226a8c82ac",
+    "class": 1001,
+    "os": "windows",
+    "event": {
+      "activity_id": 4,
+      "file": {
+        "path": "/etc/systemd/system/demo.service"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "linux_account_create/positive-0",
+    "rule": "9faa9fdd-814a-5412-a494-3e92ca4f26b7",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "process": {
+        "file": {
+          "path": "/usr/sbin/useradd"
+        },
+        "cmd_line": "useradd -m lab-user"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "linux_account_create/positive-1",
+    "rule": "9faa9fdd-814a-5412-a494-3e92ca4f26b7",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "process": {
+        "file": {
+          "path": "/usr/sbin/adduser"
+        },
+        "cmd_line": "adduser --disabled-password lab-user"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "linux_account_create/negative-0",
+    "rule": "9faa9fdd-814a-5412-a494-3e92ca4f26b7",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "process": {
+        "file": {
+          "path": "/usr/sbin/useradd"
+        },
+        "cmd_line": "useradd --help"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "linux_account_create/negative-1",
+    "rule": "9faa9fdd-814a-5412-a494-3e92ca4f26b7",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "process": {
+        "file": {
+          "path": "/usr/sbin/useradd"
+        },
+        "cmd_line": "useradd -D"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "linux_account_create/negative-2",
+    "rule": "9faa9fdd-814a-5412-a494-3e92ca4f26b7",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "process": {
+        "file": {
+          "path": "/usr/sbin/useradd"
+        },
+        "cmd_line": "useradd"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "linux_account_create/negative-3",
+    "rule": "9faa9fdd-814a-5412-a494-3e92ca4f26b7",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "process": {
+        "file": {
+          "path": "/usr/bin/echo"
+        },
+        "cmd_line": "echo useradd test"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "linux_account_create/negative-4",
+    "rule": "9faa9fdd-814a-5412-a494-3e92ca4f26b7",
+    "class": 1007,
+    "os": "linux",
+    "event": {},
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "linux_account_create/wrong-platform",
+    "rule": "9faa9fdd-814a-5412-a494-3e92ca4f26b7",
+    "class": 1007,
+    "os": "windows",
+    "event": {
+      "process": {
+        "file": {
+          "path": "/usr/sbin/useradd"
+        },
+        "cmd_line": "useradd -m lab-user"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "winrm_network/positive-0",
+    "rule": "21c25d34-69ac-544c-bda5-43c6765af718",
+    "class": 4001,
+    "os": "windows",
+    "event": {
+      "dst_endpoint": {
+        "port": 5985,
+        "ip": "192.0.2.9"
+      },
+      "connection_info": {
+        "protocol_name": "tcp"
+      }
+    },
+    "hit": true,
+    "signal": true
+  },
+  {
+    "name": "winrm_network/positive-1",
+    "rule": "21c25d34-69ac-544c-bda5-43c6765af718",
+    "class": 4001,
+    "os": "windows",
+    "event": {
+      "dst_endpoint": {
+        "port": 5986,
+        "ip": "192.0.2.9"
+      },
+      "connection_info": {
+        "protocol_name": "tcp"
+      }
+    },
+    "hit": true,
+    "signal": true
+  },
+  {
+    "name": "winrm_network/positive-2",
+    "rule": "21c25d34-69ac-544c-bda5-43c6765af718",
+    "class": 4001,
+    "os": "windows",
+    "event": {
+      "dst_endpoint": {
+        "port": 5985
+      },
+      "connection_info": {
+        "protocol_num": 6
+      }
+    },
+    "hit": true,
+    "signal": true
+  },
+  {
+    "name": "winrm_network/negative-0",
+    "rule": "21c25d34-69ac-544c-bda5-43c6765af718",
+    "class": 4001,
+    "os": "windows",
+    "event": {
+      "dst_endpoint": {
+        "port": 443,
+        "ip": "192.0.2.9"
+      },
+      "connection_info": {
+        "protocol_name": "tcp"
+      }
+    },
+    "hit": false,
+    "signal": true
+  },
+  {
+    "name": "winrm_network/negative-1",
+    "rule": "21c25d34-69ac-544c-bda5-43c6765af718",
+    "class": 4001,
+    "os": "windows",
+    "event": {
+      "dst_endpoint": {
+        "port": 5985,
+        "ip": "192.0.2.9"
+      },
+      "connection_info": {
+        "protocol_name": "udp"
+      }
+    },
+    "hit": false,
+    "signal": true
+  },
+  {
+    "name": "winrm_network/negative-2",
+    "rule": "21c25d34-69ac-544c-bda5-43c6765af718",
+    "class": 4001,
+    "os": "windows",
+    "event": {
+      "dst_endpoint": {
+        "port": 5985
+      }
+    },
+    "hit": false,
+    "signal": true
+  },
+  {
+    "name": "winrm_network/negative-3",
+    "rule": "21c25d34-69ac-544c-bda5-43c6765af718",
+    "class": 4001,
+    "os": "windows",
+    "event": {
+      "dst_endpoint": {
+        "port": 5985
+      },
+      "connection_info": {
+        "protocol_num": 17
+      }
+    },
+    "hit": false,
+    "signal": true
+  },
+  {
+    "name": "winrm_network/negative-4",
+    "rule": "21c25d34-69ac-544c-bda5-43c6765af718",
+    "class": 4001,
+    "os": "windows",
+    "event": {},
+    "hit": false,
+    "signal": true
+  },
+  {
+    "name": "winrm_network/wrong-platform",
+    "rule": "21c25d34-69ac-544c-bda5-43c6765af718",
+    "class": 4001,
+    "os": "linux",
+    "event": {
+      "dst_endpoint": {
+        "port": 5985,
+        "ip": "192.0.2.9"
+      },
+      "connection_info": {
+        "protocol_name": "tcp"
+      }
+    },
+    "hit": false,
+    "signal": true
+  }
+]

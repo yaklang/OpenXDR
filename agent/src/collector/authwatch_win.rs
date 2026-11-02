@@ -21,7 +21,7 @@ use windows_sys::Win32::System::EventLog::{
 };
 use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, WaitForSingleObject};
 
-use super::EventSink;
+use super::{EventSink, windows_evidence};
 use crate::pb::AgentEvent;
 
 /// OCSF Authentication
@@ -132,19 +132,12 @@ fn subscribe(
         return Err(unsafe { GetLastError() });
     }
     handles.sub = sub;
-    sink.capability(
-        if channel == "Security" {
-            "auth"
-        } else {
-            "powershell"
-        },
-        if channel == "Security" {
-            "event-log-security"
-        } else {
-            "event-log-4104"
-        },
-        "active",
-    );
+    let (capability, path) = match channel {
+        "Security" => ("auth", "event-log-security"),
+        "Microsoft-Windows-Sysmon/Operational" => ("sysmon", "event-log-sysmon-8-10-25"),
+        _ => ("powershell", "event-log-4104"),
+    };
+    sink.capability(capability, path, "active");
     eprintln!("{desc}");
     while !sink.is_closed() {
         // SAFETY: signal 由 handles 持有，在循环期间一直有效，等待不涉及内存。
@@ -301,7 +294,18 @@ fn is_machine_or_service(user: &str) -> bool {
 /// Security 通道事件分发：按 EventID 归一化成 OCSF 3002。
 fn parse_security_event(xml: &str, agent_id: &str) -> Option<AgentEvent> {
     match event_id(xml)? {
-        4624 | 4625 => parse_security_xml(xml).map(|rec| login_event(agent_id, &rec)),
+        4624 | 4625 => parse_security_xml(xml).map(|rec| {
+            let mut event = login_event(agent_id, &rec);
+            let mut raw: serde_json::Value =
+                serde_json::from_str(&event.raw_json).expect("内部生成 JSON");
+            if let Some(fields) = windows_evidence::authentication_context(xml).as_object() {
+                for (key, value) in fields {
+                    raw[key] = value.clone();
+                }
+            }
+            event.raw_json = raw.to_string();
+            event
+        }),
         4720 => account_mgmt_event(xml, agent_id, ACTIVITY_USER_CREATED),
         4726 => account_mgmt_event(xml, agent_id, ACTIVITY_USER_DELETED),
         4732 => group_add_event(xml, agent_id),
@@ -529,6 +533,37 @@ fn parse_script_block(xml: &str, agent_id: &str) -> Option<AgentEvent> {
     }
     Some(AgentEvent {
         agent_id: agent_id.to_string(),
+        ts_unix_ns: now_ns(),
+        class_uid: CLASS_PROCESS,
+        process_guid: String::new(),
+        parent_process_guid: String::new(),
+        username: String::new(),
+        conn_tuple: String::new(),
+        raw_json: raw.to_string(),
+        dropped_events: 0,
+    })
+}
+
+/// 新采集能力只读取未来事件，不启用或修改 Sysmon 本身的采集策略。
+pub fn spawn_sysmon(agent_id: String, sink: EventSink) {
+    std::thread::spawn(move || {
+        if let Err(error) = subscribe(
+            &agent_id,
+            &sink,
+            "Microsoft-Windows-Sysmon/Operational",
+            "*[System[(EventID=8) or (EventID=10) or (EventID=25)]]",
+            "Sysmon 8/10/25 事件监控",
+            parse_sysmon,
+        ) {
+            sink.capability("sysmon", "event-log-sysmon-8-10-25", "unavailable");
+            eprintln!("Sysmon 订阅失败（{error}），请检查安装、配置与读取权限");
+        }
+    });
+}
+fn parse_sysmon(xml: &str, agent_id: &str) -> Option<AgentEvent> {
+    let raw = windows_evidence::sysmon(xml)?;
+    Some(AgentEvent {
+        agent_id: agent_id.to_owned(),
         ts_unix_ns: now_ns(),
         class_uid: CLASS_PROCESS,
         process_guid: String::new(),
@@ -857,5 +892,32 @@ mod tests {
             parse_script_block(other, "agent-t").is_none(),
             "非 4104 应跳过"
         );
+    }
+}
+
+#[cfg(test)]
+mod evidence_dispatch_tests {
+    use super::*;
+    #[test]
+    fn ntlm_fields_survive_agent_event() {
+        let xml = "<Event><System><EventID>4624</EventID></System><EventData><Data Name='TargetUserName'>alice</Data><Data Name='LogonType'>3</Data><Data Name='IpAddress'>192.0.2.9</Data><Data Name='AuthenticationPackageName'>NTLM</Data><Data Name='LogonProcessName'>NtLmSsp </Data><Data Name='WorkstationName'>WS01</Data></EventData></Event>";
+        let event = parse_security_event(xml, "agent-test").unwrap();
+        let raw: serde_json::Value = serde_json::from_str(&event.raw_json).unwrap();
+        assert_eq!(raw["authentication_package"], "NTLM");
+        assert_eq!(raw["logon_process"], "NtLmSsp");
+        assert_eq!(raw["src_endpoint"]["ip"], "192.0.2.9");
+        assert_eq!(raw["event_id"], 4624);
+        assert_eq!(event.agent_id, "agent-test");
+    }
+    #[test]
+    fn sysmon_event_preserves_evidence_without_fake_process_identity() {
+        let xml = "<Event><System><Provider Name='Microsoft-Windows-Sysmon'/><EventID>25</EventID></System><EventData><Data Name='Image'>C:\\test.exe</Data><Data Name='Type'>Image is replaced</Data></EventData></Event>";
+        let event = parse_sysmon(xml, "agent-test").unwrap();
+        let raw: serde_json::Value = serde_json::from_str(&event.raw_json).unwrap();
+        assert_eq!(event.class_uid, CLASS_PROCESS);
+        assert_eq!(raw["sysmon"]["event_id"], 25);
+        assert_eq!(raw["activity_id"], 125);
+        assert!(event.process_guid.is_empty());
+        assert_eq!(event.agent_id, "agent-test");
     }
 }

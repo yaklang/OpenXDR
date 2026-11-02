@@ -1,0 +1,33 @@
+{
+  "id": "a1f52dd2-fc4a-587f-84f7-34bafe28712c",
+  "title": "Windows NTLM 网络登录需核查身份与来源",
+  "status": "experimental",
+  "author": "Local security operations",
+  "description": "参考 Wazuh 92652；NTLM 登录仅是待核查候选，不能单凭此告警认定 Pass-the-Hash。新版 Agent 保留认证包、登录进程和工作站；不自动封禁。 命中代表需核查的行为，不单独证明入侵，不自动执行处置。",
+  "tags": [
+    "attack.lateral_movement",
+    "attack.t1550.002",
+    "attack.t1078.002"
+  ],
+  "logsource": {
+    "category": "authentication",
+    "product": "windows"
+  },
+  "detection": {
+    "selection": {
+      "event_id": 4624,
+      "log_name": "Security",
+      "status_id": 1,
+      "service.name": "logon-type-3",
+      "authentication_package": "NTLM",
+      "logon_process": "NtLmSsp",
+      "src_endpoint.ip|re": "^[0-9a-fA-F:.]+$",
+      "user.name|re": "^.+$"
+    },
+    "condition": "selection"
+  },
+  "level": "low",
+  "falsepositives": [
+    "经授权的管理、调试、自动化或安全测试；结合账号、签名、来源及变更窗口复核。"
+  ]
+}

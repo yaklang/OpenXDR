@@ -28,8 +28,9 @@ type Rule struct {
 
 // 聚合实体维度：asset 按资产（默认），account 按同组规范化用户名跨资产累计。
 const (
-	GroupByAsset   = "asset"
-	GroupByAccount = "account"
+	GroupByAsset         = "asset"
+	GroupByAccount       = "account"
+	GroupByAssetSourceIP = "asset_source_ip"
 )
 
 type definition struct {
@@ -73,7 +74,7 @@ func Compile(data []byte, references map[string]bool) (*Rule, error) {
 	switch d.GroupBy {
 	case "":
 		d.GroupBy = GroupByAsset
-	case GroupByAsset, GroupByAccount:
+	case GroupByAsset, GroupByAccount, GroupByAssetSourceIP:
 	default:
 		return nil, fmt.Errorf("无效时序规则 group_by: %q", d.GroupBy)
 	}

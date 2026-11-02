@@ -1,0 +1,32 @@
+{
+  "id": "3d295b21-3a29-5546-8076-48d8d8ea6ebd",
+  "title": "Windows Sysmon 检测向系统进程创建远程线程",
+  "status": "experimental",
+  "author": "Local security operations",
+  "description": "需要新版 Agent 与已安装且配置 Event 8 的 Sysmon。远程线程仅标注 T1055，不据此推断线程劫持或进程镂空。 命中代表需核查的行为，不单独证明入侵，不自动执行处置。",
+  "tags": [
+    "attack.defense_evasion",
+    "attack.t1055"
+  ],
+  "logsource": {
+    "category": "create_remote_thread",
+    "product": "windows"
+  },
+  "detection": {
+    "selection": {
+      "sysmon.provider": "Microsoft-Windows-Sysmon",
+      "sysmon.event_id": 8,
+      "sysmon.target_image|endswith": [
+        "\\svchost.exe",
+        "\\lsass.exe",
+        "\\explorer.exe"
+      ],
+      "sysmon.source_image|re": "(?i)^.+\\.exe$"
+    },
+    "condition": "selection"
+  },
+  "level": "high",
+  "falsepositives": [
+    "经授权的管理、调试、自动化或安全测试；结合账号、签名、来源及变更窗口复核。"
+  ]
+}

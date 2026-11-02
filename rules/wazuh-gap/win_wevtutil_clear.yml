@@ -1,0 +1,29 @@
+{
+  "title": "Windows 命令行清除事件日志",
+  "id": "bcfe0541-6df0-5f3a-b678-901dff27886d",
+  "status": "experimental",
+  "author": "Local security operations",
+  "description": " 参照 Wazuh 的检测场景独立编写；表示需核查的行为，不单独证明入侵。",
+  "references": [
+    "https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0580-win-security_rules.xml"
+  ],
+  "tags": [
+    "attack.defense_evasion",
+    "attack.t1070.001"
+  ],
+  "logsource": {
+    "category": "process_creation",
+    "product": "windows"
+  },
+  "detection": {
+    "selection": {
+      "Image|endswith": "\\wevtutil.exe",
+      "CommandLine|re": "(?i)\\b(cl|clear-log)\\s+[\"\\x27]?(security|system|application|microsoft-windows-powershell/operational)([\"\\x27\\s]|$)"
+    },
+    "condition": "selection"
+  },
+  "level": "high",
+  "falsepositives": [
+    "授权运维、软件部署或安全测试；结合变更窗口和操作者核查，不自动隔离。"
+  ]
+}

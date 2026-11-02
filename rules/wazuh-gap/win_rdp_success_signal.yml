@@ -1,0 +1,31 @@
+{
+  "title": "Windows RDP 登录成功（关联信号）",
+  "id": "76ea3896-f180-5bdf-a8e3-e6d7f4e040d0",
+  "status": "experimental",
+  "author": "Local security operations",
+  "description": " 参照 Wazuh 的检测场景独立编写；表示需核查的行为，不单独证明入侵。",
+  "references": [
+    "https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0840-win_event_channel.xml"
+  ],
+  "tags": [
+    "attack.lateral_movement",
+    "attack.t1021.001"
+  ],
+  "logsource": {
+    "category": "authentication",
+    "product": "windows"
+  },
+  "detection": {
+    "selection": {
+      "activity_id": 1,
+      "status_id": 1,
+      "service.name": "logon-type-10"
+    },
+    "condition": "selection"
+  },
+  "level": "informational",
+  "falsepositives": [
+    "授权运维、软件部署或安全测试；结合变更窗口和操作者核查，不自动隔离。"
+  ],
+  "openxdr_signal": true
+}

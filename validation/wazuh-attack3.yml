@@ -1,0 +1,197 @@
+{
+  "name": "第三批 ATT&CK 规则正例",
+  "cases": [
+    {
+      "name": "win_screen_capture/0",
+      "technique": "T1113",
+      "class": 1007,
+      "os": "windows",
+      "event": {
+        "process": {
+          "name": "powershell.exe",
+          "cmd_line": "$graphics.CopyFromScreen(0,0,0,0,$size)"
+        }
+      },
+      "expect": "detected"
+    },
+    {
+      "name": "win_screen_capture/1",
+      "technique": "T1113",
+      "class": 1007,
+      "os": "windows",
+      "event": {
+        "process": {
+          "name": "powershell.exe",
+          "cmd_line": "$g.cOpYfRoMsCrEeN (0,0,0,0,$s)"
+        }
+      },
+      "expect": "detected"
+    },
+    {
+      "name": "win_office_verclsid/0",
+      "technique": "T1218.012",
+      "class": 1007,
+      "os": "windows",
+      "event": {
+        "process": {
+          "file": {
+            "path": "C:\\Windows\\System32\\verclsid.exe"
+          },
+          "parent_process": {
+            "file": {
+              "path": "C:\\Program Files\\Office\\WINWORD.EXE"
+            }
+          }
+        }
+      },
+      "expect": "detected"
+    },
+    {
+      "name": "win_office_verclsid/1",
+      "technique": "T1218.012",
+      "class": 1007,
+      "os": "windows",
+      "event": {
+        "process": {
+          "file": {
+            "path": "C:\\Windows\\SysWOW64\\verclsid.exe"
+          },
+          "parent_process": {
+            "file": {
+              "path": "C:\\Office\\EXCEL.EXE"
+            }
+          }
+        }
+      },
+      "expect": "detected"
+    },
+    {
+      "name": "win_sysmon_remote_thread/0",
+      "technique": "T1055",
+      "class": 1007,
+      "os": "windows",
+      "event": {
+        "sysmon": {
+          "event_id": 8,
+          "provider": "Microsoft-Windows-Sysmon",
+          "source_image": "C:\\temp\\sample.exe",
+          "target_image": "C:\\Windows\\System32\\svchost.exe"
+        }
+      },
+      "expect": "detected"
+    },
+    {
+      "name": "win_sysmon_lsass_access/0",
+      "technique": "T1003.001",
+      "class": 1007,
+      "os": "windows",
+      "event": {
+        "sysmon": {
+          "event_id": 10,
+          "provider": "Microsoft-Windows-Sysmon",
+          "source_image": "C:\\temp\\sample.exe",
+          "target_image": "C:\\Windows\\System32\\lsass.exe",
+          "granted_access": "0x1010"
+        }
+      },
+      "expect": "detected"
+    },
+    {
+      "name": "win_sysmon_lsass_access/1",
+      "technique": "T1003.001",
+      "class": 1007,
+      "os": "windows",
+      "event": {
+        "sysmon": {
+          "event_id": 10,
+          "provider": "Microsoft-Windows-Sysmon",
+          "source_image": "C:\\a.exe",
+          "target_image": "C:\\Windows\\System32\\LSASS.EXE",
+          "granted_access": "0x001FFFFF"
+        }
+      },
+      "expect": "detected"
+    },
+    {
+      "name": "win_sysmon_image_replaced/0",
+      "technique": "T1055.012",
+      "class": 1007,
+      "os": "windows",
+      "event": {
+        "sysmon": {
+          "event_id": 25,
+          "provider": "Microsoft-Windows-Sysmon",
+          "image": "C:\\Windows\\System32\\svchost.exe",
+          "tamper_type": "Image is replaced"
+        }
+      },
+      "expect": "detected"
+    },
+    {
+      "name": "win_ntlm_remote_context/0",
+      "technique": "T1550.002",
+      "class": 3002,
+      "os": "windows",
+      "event": {
+        "event_id": 4624,
+        "log_name": "Security",
+        "status_id": 1,
+        "service": {
+          "name": "logon-type-3"
+        },
+        "user": {
+          "name": "alice"
+        },
+        "src_endpoint": {
+          "ip": "10.0.0.7"
+        },
+        "authentication_package": "NTLM",
+        "logon_process": "NtLmSsp",
+        "workstation_name": "WS01"
+      },
+      "expect": "detected"
+    },
+    {
+      "name": "linux_audit_rule_removed/0",
+      "technique": "T1562.001",
+      "class": 100001,
+      "os": "linux",
+      "event": {
+        "metadata": {
+          "product": {
+            "name": "auditd"
+          }
+        },
+        "audit": {
+          "type": "CONFIG_CHANGE",
+          "op": "remove_rule",
+          "res": "1",
+          "auid": "1000"
+        }
+      },
+      "expect": "detected"
+    },
+    {
+      "name": "linux_audit_root_exec_signal/0",
+      "technique": "T1548",
+      "class": 100001,
+      "os": "linux",
+      "event": {
+        "metadata": {
+          "product": {
+            "name": "auditd"
+          }
+        },
+        "audit": {
+          "type": "SYSCALL",
+          "arch": "c000003e",
+          "syscall": "59",
+          "success": "yes",
+          "euid": "0",
+          "auid": "1000"
+        }
+      },
+      "expect": "signal"
+    }
+  ]
+}

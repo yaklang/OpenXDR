@@ -1,0 +1,32 @@
+{
+  "title": "Windows PowerShell 枚举域账号",
+  "id": "41fd15ad-65a5-5897-bdbf-64f3db4ce010",
+  "status": "experimental",
+  "author": "Local security operations",
+  "description": " 参照 Wazuh 的检测场景独立编写；表示需核查的行为，不单独证明入侵。",
+  "references": [
+    "https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0915-win-powershell_rules.xml"
+  ],
+  "tags": [
+    "attack.discovery",
+    "attack.t1087.002"
+  ],
+  "logsource": {
+    "category": "process_creation",
+    "product": "windows"
+  },
+  "detection": {
+    "selection": {
+      "Image|endswith": [
+        "\\powershell.exe",
+        "\\pwsh.exe"
+      ],
+      "CommandLine|re": "(?i)\\b(get-aduser|get-netuser)\\b"
+    },
+    "condition": "selection"
+  },
+  "level": "low",
+  "falsepositives": [
+    "授权运维、软件部署或安全测试；结合变更窗口和操作者核查，不自动隔离。"
+  ]
+}

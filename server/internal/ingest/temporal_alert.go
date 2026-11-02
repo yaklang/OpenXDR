@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"openxdr/server/internal/authfields"
 	"openxdr/server/internal/cmdorigin"
 	"openxdr/server/internal/eventarchive"
 	"openxdr/server/internal/eventpart"
@@ -37,7 +38,11 @@ func (p *Processor) temporalAlert(ctx context.Context, tx *sql.Tx, match tempora
 		Scan(&e.Timestamp, &e.ClassUID, &e.Source, &asset, &username, &e.Raw); err != nil {
 		return false, err
 	}
-	if !temporal.IsAccountEntity(match.Scope.Entity) && match.Scope.Entity != asset.String() {
+	if temporal.IsSourceIPEntity(match.Scope.Entity) {
+		if match.Scope.Entity != temporal.AssetSourceIPEntity(asset, authfields.SourceIP(e.Raw)) {
+			return false, fmt.Errorf("时序来源 IP 实体与终点事件不一致")
+		}
+	} else if !temporal.IsAccountEntity(match.Scope.Entity) && match.Scope.Entity != asset.String() {
 		return false, fmt.Errorf("时序终点 %s 不属于命中资产 %s", match.Anchor, match.Scope.Entity)
 	}
 	e.Username = username.String

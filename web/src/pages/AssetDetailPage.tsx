@@ -54,13 +54,14 @@ function Stat({ label, value, tone, active, onClick }: { label: string; value: R
 const SWITCHES: { name: keyof AgentConfig; key: MsgKey }[] = [
   { name: 'collectFiles', key: 'cfgFiles' },
   { name: 'collectAuth', key: 'cfgAuth' },
+  { name: 'collectSysmon', key: 'cfgSysmon' },
   { name: 'collectPersist', key: 'cfgPersist' },
   { name: 'collectNetwork', key: 'cfgNetwork' },
   { name: 'collectInventory', key: 'cfgInventory' },
   { name: 'collapsePeriodic', key: 'cfgCollapse' },
 ]
 
-// 采集配置：开关缺省全开；目录为空表示用 agent 内置的敏感目录清单
+// 采集配置：Sysmon 默认关闭，其余开关缺省开启；空目录使用 agent 内置清单
 function ConfigTab({ assetId, canEdit }: { assetId: string; canEdit: boolean }) {
   const { t } = useI18n()
   const { message } = App.useApp()
@@ -71,7 +72,7 @@ function ConfigTab({ assetId, canEdit }: { assetId: string; canEdit: boolean }) 
   useEffect(() => {
     if (!data) return
     form.setFieldsValue({
-      ...Object.fromEntries(SWITCHES.map(s => [s.name, data[s.name] !== false])),
+      ...Object.fromEntries(SWITCHES.map(s => [s.name, s.name === 'collectSysmon' ? data[s.name] === true : data[s.name] !== false])),
       fileWatchDirs: data.fileWatchDirs ?? [],
     })
   }, [data, form])
@@ -82,6 +83,7 @@ function ConfigTab({ assetId, canEdit }: { assetId: string; canEdit: boolean }) 
       const cfg: AgentConfig = { fileWatchDirs: (v.fileWatchDirs as string[]).length ? (v.fileWatchDirs as string[]) : undefined }
       // 只写关掉的开关，开着的留空 = 用 agent 默认，配置里不堆冗余字段
       for (const s of SWITCHES) if (v[s.name] === false) (cfg as Record<string, unknown>)[s.name] = false
+      cfg.collectSysmon = v.collectSysmon === true
       await saveAgentConfig(assetId, cfg)
       message.success(t('cfgSaved'))
     } catch (e) {
@@ -94,7 +96,7 @@ function ConfigTab({ assetId, canEdit }: { assetId: string; canEdit: boolean }) 
   if (isPending) return <Skeleton active />
   return (
     <Form form={form} layout="horizontal" labelCol={{ span: 6 }} wrapperCol={{ span: 14 }} onFinish={save} disabled={!canEdit} style={{ maxWidth: 760 }}>
-      <Alert type="info" showIcon title={t('cfgHint')} style={{ marginBottom: 20 }} />
+      <Alert type="info" showIcon title={t('cfgHint')} description={t('cfgSysmonHint')} style={{ marginBottom: 20 }} />
       {SWITCHES.map(s => (
         <Form.Item key={s.name} name={s.name} label={t(s.key)} valuePropName="checked">
           <Switch />

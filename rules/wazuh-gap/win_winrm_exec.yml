@@ -1,0 +1,37 @@
+{
+  "title": "Windows PowerShell 远程执行",
+  "id": "80ea6f71-2a4d-5651-9803-3a1edd582414",
+  "status": "experimental",
+  "author": "Local security operations",
+  "description": "授权远程管理也可命中；只记录行为，不认定入侵。 参照 Wazuh 的检测场景独立编写；表示需核查的行为，不单独证明入侵。",
+  "references": [
+    "https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0915-win-powershell_rules.xml"
+  ],
+  "tags": [
+    "attack.lateral_movement",
+    "attack.t1021.006"
+  ],
+  "logsource": {
+    "category": "process_creation",
+    "product": "windows"
+  },
+  "detection": {
+    "command": {
+      "CommandLine|re": "\\b(invoke-command|enter-pssession|new-pssession)\\b"
+    },
+    "remote": {
+      "CommandLine|re": "-(computername|session)\\b"
+    },
+    "selection": {
+      "Image|endswith": [
+        "\\powershell.exe",
+        "\\pwsh.exe"
+      ]
+    },
+    "condition": "selection and command and remote"
+  },
+  "level": "medium",
+  "falsepositives": [
+    "授权运维、软件部署或安全测试；结合变更窗口和操作者核查，不自动隔离。"
+  ]
+}
