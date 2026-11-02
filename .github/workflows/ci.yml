@@ -1,0 +1,260 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# Cancel old runs on new pushes to the same branch, prevent queue buildup
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Server (Go)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: openxdr
+          POSTGRES_PASSWORD: openxdr
+          POSTGRES_DB: openxdr_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache-dependency-path: server/go.sum
+      - name: Format check
+        working-directory: server
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: Log archive regression
+        run: python3 -m unittest discover -s deploy/ha/logs -p 'test_*.py'
+      - name: Build
+        working-directory: server
+        run: go build ./...
+      - name: Static check (Linting)
+        working-directory: server
+        run: go vet ./...
+      - name: Test
+        working-directory: server
+        run: go test ./...
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Prepare DYGK runtime dependencies based on config
+        id: dygk_source
+        working-directory: integrations/dygk
+        run: node scripts/prepare-upstream.mjs --ci
+        env:
+          DYGK_SOURCE: ${{ vars.DYGK_SOURCE }}
+          DYGK_LOCAL_SOURCE: ${{ vars.DYGK_LOCAL_SOURCE }}
+          DYGK_UPSTREAM_TOKEN: ${{ secrets.DYGK_UPSTREAM_TOKEN }}
+      # Integration tests share a single test DB, must run serially with -p 1
+      - name: Integration tests
+        working-directory: server
+        run: go test -tags integration -p 1 ./...
+        env:
+          INTEGRATION_DATABASE_URL: postgres://openxdr:openxdr@localhost:5432/openxdr_test?sslmode=disable
+          DECEPTION_NODE: ${{ steps.dygk_source.outputs.available == 'true' && 'node' || '' }}
+      - name: Built-in rules must all be loadable
+        working-directory: server
+        run: go run ./cmd/sigmacheck --strict ../rules
+      # Detection capability regression line: can real attack commands still be caught after rule changes?
+      - name: Detection validation comparison
+        working-directory: server
+        run: go run ./cmd/detectcheck --strict
+
+  deception-runtime:
+    name: Standalone Deception Engine
+    runs-on: ubuntu-latest
+    env:
+      DYGK_SOURCE: ${{ vars.DYGK_SOURCE }}
+      DYGK_LOCAL_SOURCE: ${{ vars.DYGK_LOCAL_SOURCE }}
+      DYGK_UPSTREAM_TOKEN: ${{ secrets.DYGK_UPSTREAM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - working-directory: integrations/dygk
+        run: npm test
+      - working-directory: integrations/dygk
+        id: dygk_source
+        run: node scripts/prepare-upstream.mjs --ci
+      - working-directory: integrations/dygk
+        if: steps.dygk_source.outputs.available == 'true'
+        run: npm run test:upstream
+      - working-directory: integrations/dygk
+        if: steps.dygk_source.outputs.available == 'true'
+        run: node scripts/stage-runtime.mjs "$RUNNER_TEMP/deception-runtime"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache-dependency-path: server/go.sum
+      - working-directory: server
+        run: go test -race ./deception/... ./internal/decoy
+      - name: Verify main orchestration and standalone image
+        if: steps.dygk_source.outputs.available == 'true'
+        run: |
+          docker compose --profile dygk config --quiet
+          docker build --build-arg DYGK_SOURCE="${DYGK_SOURCE:-local}" --build-arg DYGK_LOCAL_SOURCE="${DYGK_LOCAL_SOURCE:-local-source}" --secret id=dygk_upstream_token,env=DYGK_UPSTREAM_TOKEN -f integrations/dygk/Dockerfile -t openxdr-deception:ci .
+          docker run --rm --entrypoint node openxdr-deception:ci web/main.mjs --print-release
+          docker run --rm --entrypoint decoyhost openxdr-deception:ci -print-release
+
+  pi-runtime:
+    name: Pi runtime (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/pi-runtime/package-lock.json
+      - working-directory: server/pi-runtime
+        run: npm ci --ignore-scripts
+      - working-directory: server/pi-runtime
+        run: npm test
+
+  web:
+    name: Web (React)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - working-directory: web
+        run: npm ci
+      - working-directory: web
+        run: npm run lint
+      - working-directory: web
+        run: npm run build
+
+  # Default build doesn't need nightly and bpf-linker, this ensures "out-of-the-box" usability
+  collectors:
+    name: ${{ matrix.crate }} (Default features)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [agent, sensor]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.crate }}
+      - name: Format check
+        working-directory: ${{ matrix.crate }}
+        run: cargo fmt --check
+      - name: Build
+        working-directory: ${{ matrix.crate }}
+        run: cargo build --locked
+      - name: Static check (Linting)
+        working-directory: ${{ matrix.crate }}
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        working-directory: ${{ matrix.crate }}
+        run: cargo test
+
+  # Release includes arm64 packages: compile and run tests on native arm runner, preventing arm64 regressions (c_char symbols, struct layouts, etc.)
+  collectors-arm64:
+    name: ${{ matrix.crate }} (arm64)
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [agent, sensor]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.crate }}
+      - name: Build
+        working-directory: ${{ matrix.crate }}
+        run: cargo build --locked
+      - name: Static check (Linting)
+        working-directory: ${{ matrix.crate }}
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        working-directory: ${{ matrix.crate }}
+        run: cargo test
+
+  # Kernel collector is an optional feature, separate item: it needs nightly toolchain and bpf-linker
+  kernel-collectors:
+    name: ${{ matrix.crate }} (${{ matrix.feature }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: agent
+            feature: ebpf
+          - crate: sensor
+            feature: xdp
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install nightly and rust-src
+        run: rustup toolchain install nightly --component rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.crate }}
+          key: ${{ matrix.feature }}
+      - name: Install bpf-linker
+        # pin version: 0.10.4 defaults to nightly's built-in LLVM (rust-llvm-22), no dependency on runner's pre-installed LLVM.
+        # Since 0.11 defaults to llvm-23, unpinned cargo install will silently pull new versions and break builds.
+        run: cargo install bpf-linker --version 0.10.4 --locked
+      - name: Build
+        working-directory: ${{ matrix.crate }}
+        run: cargo build --features ${{ matrix.feature }}
+
+  # Collectors must cross-compile to Windows: ETW code is normally unreachable on Linux CI
+  windows-target:
+    name: Agent (Windows target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # ring's build script requires mingw cross-compiler
+      - name: Install mingw
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent
+          key: windows
+      - working-directory: agent
+        run: cargo clippy --target x86_64-pc-windows-gnu -- -D warnings
+
+  images:
+    name: Container Images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build server image
+        run: docker build -f server/Dockerfile -t openxdr-server:ci .
+      - name: Build web image
+        run: docker build -t openxdr-web:ci ./web
