@@ -1,0 +1,4 @@
+.github/workflows/* merge=ours
+README.md merge=ours
+.github/workflows/security_glossary.json merge=ours
+.gitattributes merge=ours
