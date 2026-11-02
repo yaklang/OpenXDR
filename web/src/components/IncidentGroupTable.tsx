@@ -70,17 +70,18 @@ export function IncidentGroupTable({ groups, loading, emptyText, actable, onReso
         ),
       }}
       columns={[
-        { responsive: WIDE_ONLY, title: t('thSeverity'), dataIndex: 'severity', width: 90, render: v => <SeverityTag value={v} /> },
+        { responsive: WIDE_ONLY, title: t('thSeverity'), dataIndex: 'severity', width: 95, sorter: (a, b) => a.severity - b.severity, render: v => <SeverityTag value={v} /> },
         {
           title: t('thRule'), dataIndex: 'ruleId', ellipsis: wideTable,
+          sorter: (a, b) => (a.ruleTitle ?? a.ruleId).localeCompare(b.ruleTitle ?? b.ruleId),
           render: (v, g) => <>
             <Tooltip title={g.ruleTitle ? `${g.ruleTitle} · ${v}` : v}><Typography.Text>{g.ruleTitle ?? (v || '-')}</Typography.Text></Tooltip>
             {/* 窄屏收起级别、主机与事件数三列，挪到规则名下面 */}
             {!wideTable && <div><SeverityTag value={g.severity} /> <HostLink id={g.assetId} fallback={g.hostname ?? '-'} /> · {g.count}</div>}
           </>,
         },
-        { responsive: WIDE_ONLY, title: t('thHostname'), dataIndex: 'assetId', width: 150, ellipsis: true, render: (v, g) => <HostLink id={v} fallback={g.hostname ?? '-'} /> },
-        { responsive: WIDE_ONLY, title: t('thIncidentCount'), dataIndex: 'count', width: 100, align: 'right' },
+        { responsive: WIDE_ONLY, title: t('thHostname'), dataIndex: 'assetId', width: 150, ellipsis: true, sorter: (a, b) => (a.hostname ?? '').localeCompare(b.hostname ?? ''), render: (v, g) => <HostLink id={v} fallback={g.hostname ?? '-'} /> },
+        { responsive: WIDE_ONLY, title: t('thIncidentCount'), dataIndex: 'count', width: 105, align: 'right', sorter: (a, b) => a.count - b.count },
         {
           responsive: WIDE_ONLY, title: t('thVerdictMix'), width: 230,
           render: (_, g) => {
@@ -95,8 +96,8 @@ export function IncidentGroupTable({ groups, loading, emptyText, actable, onReso
             )
           },
         },
-        { responsive: WIDE_ONLY, title: t('groupFirstAt'), dataIndex: 'firstAt', width: 110, render: v => <Ago iso={v} /> },
-        { responsive: WIDE_ONLY, title: t('groupLastAt'), dataIndex: 'lastAt', width: 110, render: v => <Ago iso={v} /> },
+        { responsive: WIDE_ONLY, title: t('groupFirstAt'), dataIndex: 'firstAt', width: 115, sorter: (a, b) => a.firstAt.localeCompare(b.firstAt), render: v => <Ago iso={v} /> },
+        { responsive: WIDE_ONLY, title: t('groupLastAt'), dataIndex: 'lastAt', width: 115, sorter: (a, b) => a.lastAt.localeCompare(b.lastAt), render: v => <Ago iso={v} /> },
         ...(anyActable ? [{
           title: '', width: wideTable ? 170 : 96,
           render: (_: unknown, g: IncidentGroup) => {

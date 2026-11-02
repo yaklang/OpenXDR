@@ -33,7 +33,7 @@ func TestSuppressionReview(t *testing.T) {
 	if store.Suppressed("probe", &host.ID, nil, time.Now()) {
 		t.Fatal("提议在批准前不能生效")
 	}
-	h := Handler(client, loadRules(t), response.NewHub(client, false), store, intel.New(client, time.Hour), nil)
+	h := Handler(client, nil, loadRules(t), response.NewHub(client, false), store, intel.New(client, time.Hour), nil)
 	review := func(ts *httptest.Server, decision string) int {
 		resp, err := http.Post(ts.URL+"/api/suppressions/"+p.ID.String()+"/review", "application/json", strings.NewReader(`{"decision":"`+decision+`"}`))
 		if err != nil {

@@ -1,0 +1,9 @@
+{
+  "parent_report": "dc4150655d367bf63c1a17f439f747f9abab1c5f3736b4a298d1deb44ad396ce",
+  "source": {
+    "server/internal/triage/actions.go": "d05c34178cca503fe6dcb4a968fa8f20e0093c9789a98ff72b8c899cdf2da66d",
+    "server/internal/triage/llm.go": "0a3346e43f0bc9c30a59572e5f1616d40deb6b73c83bd33b61f2f3d595315224",
+    "server/internal/triageeval/eval.go": "c3a9f8408aca04d5f4f0e67895199aca427666018034f72df6f51322156a1081",
+    "server/internal/triageeval/diagnostic.go": "41d590cd1b0ea62598a0ff0aae253f3a48cebd37e3b3da4bb32b3c6d898ca66f"
+  }
+}

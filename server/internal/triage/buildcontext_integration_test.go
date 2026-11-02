@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"openxdr/server/ent"
 	"openxdr/server/internal/testdb"
 )
 
@@ -83,7 +84,7 @@ func TestBuildContextCaseHistory(t *testing.T) {
 	host := client.Asset.Create().SetHostname("h1").SaveX(ctx)
 	other := client.Asset.Create().SetHostname("h2").SaveX(ctx)
 	mk := func(status, title, verdict, note, rule string, asset uuid.UUID) {
-		c := client.Incident.Create().SetStatus(status).SetTitle(title).SetGraph(json.RawMessage(`{}`))
+		c := client.Incident.Create().SetStatus(status).SetTitle(title).SetGraph(json.RawMessage(`{}`)).SetResolvedBy("analyst").SetResolvedAt(now)
 		if verdict != "" {
 			c.SetAiVerdict(json.RawMessage(`{"verdict":"` + verdict + `"}`))
 		}
@@ -106,8 +107,8 @@ func TestBuildContextCaseHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"历史结案参考", "「扫描器噪声」：AI 判 malicious，人工结案为误报或良性。备注：运维巡检脚本",
-		"「同机真入侵」：AI 判 benign，人工结案为属实已处置。备注：已确认被植入后门并重装"} {
+	for _, want := range []string{"历史结案参考", `"title":"扫描器噪声"`, `"previous_ai_verdict":"malicious"`, `"resolution_excerpt":"运维巡检脚本"`,
+		`"title":"同机真入侵"`, `"previous_ai_verdict":"benign"`, `"resolution_excerpt":"已确认被植入后门并重装"`, `"source":"human"`, `"resolved_by":"analyst"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("上下文缺少 %q：\n%s", want, out)
 		}
@@ -119,13 +120,14 @@ func TestBuildContextCaseHistory(t *testing.T) {
 	}
 
 	lone := client.Incident.Create().SetStatus("open").SetTitle("另一事件").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
-	client.Alert.Create().SetTs(now).SetRuleID("r-clean").SetSeverity(3).SetIncidentID(lone.ID).SaveX(ctx)
+	loneHost := client.Asset.Create().SetHostname("no-history").SaveX(ctx)
+	client.Alert.Create().SetTs(now).SetRuleID("r-clean").SetSeverity(3).SetAssetID(loneHost.ID).SetIncidentID(lone.ID).SaveX(ctx)
 	out2, err := (&Engine{DB: client}).buildContext(ctx, lone)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out2, "历史结案参考") {
-		t.Errorf("无案例时不该有该段落：\n%s", out2)
+	if !strings.Contains(out2, "本次返回 0 条") || !strings.Contains(out2, "未返回不代表不存在其他人工确认或工单") || strings.Contains(out2, `"source":"human"`) {
+		t.Errorf("空查询必须保留覆盖范围，不伪造人工案例：\n%s", out2)
 	}
 }
 
@@ -155,5 +157,68 @@ func TestBuildContextIPInfo(t *testing.T) {
 	}
 	if strings.Contains(out, "192.0.2.99") {
 		t.Errorf("无关地址不该出现：\n%s", out)
+	}
+}
+
+func TestCaseHistoryRequiresRecordedHumanProvenance(t *testing.T) {
+	ctx, client := testdb.New(t)
+	now := time.Now()
+	host := client.Asset.Create().SetHostname("source-host").SaveX(ctx)
+	current := client.Incident.Create().SetTitle("当前事件").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+	client.Alert.Create().SetTs(now).SetRuleID("same-rule").SetSeverity(3).SetAssetID(host.ID).SetIncidentID(current.ID).SaveX(ctx)
+	for _, name := range []string{"人工独立结案", "结案人缺失", "结案人为空", "结案人空白", "时间缺失", "备注缺失", "备注空白", "系统结案", "采纳AI研判", "采纳AI建议"} {
+		builder := client.Incident.Create().SetTitle(name).SetStatus("false_positive").SetGraph(json.RawMessage(`{}`))
+		if name != "结案人缺失" {
+			by := "analyst"
+			switch name {
+			case "结案人为空":
+				by = ""
+			case "结案人空白":
+				by = "  "
+			case "系统结案":
+				by = "system"
+			}
+			builder.SetResolvedBy(by)
+		}
+		if name != "时间缺失" {
+			builder.SetResolvedAt(now)
+		}
+		if name != "备注缺失" {
+			note := "人工确认本次操作"
+			if name == "备注空白" {
+				note = "  "
+			}
+			builder.SetResolution(note)
+		}
+		switch name {
+		case "采纳AI研判":
+			builder.SetResolutionSource("ai_verdict")
+		case "采纳AI建议":
+			builder.SetResolutionSource("ai_proposal")
+		}
+		c := builder.SaveX(ctx)
+		client.Alert.Create().SetTs(now).SetRuleID("same-rule").SetSeverity(3).SetAssetID(host.ID).SetIncidentID(c.ID).SaveX(ctx)
+	}
+	out, err := (&Engine{DB: client}).buildContext(ctx, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"title":"人工独立结案"`) || strings.Count(out, `"source":"human"`) != 1 {
+		t.Fatalf("人工来源筛选错误: %s", out)
+	}
+	for _, bad := range []string{"结案人缺失", "结案人为空", "结案人空白", "时间缺失", "备注缺失", "备注空白", "系统结案", "采纳AI研判", "采纳AI建议"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("未知或AI来源被升级为人工确认: %s", bad)
+		}
+	}
+}
+
+func TestCaseHistoryQueryFailureIsUnknown(t *testing.T) {
+	ctx, client := testdb.New(t)
+	client.Close()
+	var out strings.Builder
+	(&Engine{DB: client}).appendCaseHistory(ctx, &out, &ent.Incident{ID: uuid.New()}, []*ent.Alert{{RuleID: "same-rule"}})
+	if !strings.Contains(out.String(), "查询失败，覆盖未知") || strings.Contains(out.String(), "本次返回 0 条") || strings.Contains(out.String(), `"source":"human"`) {
+		t.Fatalf("查询失败不能变成人工记录不存在: %s", out.String())
 	}
 }

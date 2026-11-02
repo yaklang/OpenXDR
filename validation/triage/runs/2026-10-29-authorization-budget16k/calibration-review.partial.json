@@ -1,0 +1,26 @@
+{
+  "scope": "partial_calibration_engineering_review",
+  "independent_human_review": "pending",
+  "items": [
+    {
+      "case": "incomplete_query",
+      "control": "manual_full_evidence",
+      "dimension": "uncertainty",
+      "automatic_status": "fail",
+      "engineering_status": "disputed",
+      "answer_sha256": "bee3131b525589610e651c241645d40e53ced98a4b45e4be045eb530a01d6fc4",
+      "reason": "答案明确结果及正文截断、血缘超时、不能还原完整关系，并建议人工补完整记录；没有全量或无后续行为断言。评分要求再明确复述不能排除未返回后续行为，可能把语义上的范围未知误判为缺少固定表达。保留原始失败，不修改语料或通过率，交独立复核。"
+    },
+    {
+      "case": "incomplete_query",
+      "control": "verified_refs_actual_1",
+      "dimension": "facts",
+      "automatic_status": "pass",
+      "expected_status": "fail",
+      "engineering_status": "needs_independent_scope_review",
+      "answer_sha256": "a0604c77d752d1e22366eef3bfe23656d6893628ceb9812a1a0d908987733c8d",
+      "quote": "本次证据无法确认其应用归属或变更授权，也没有工单或其他可核实的人工批准记录。",
+      "reason": "既有负对照要求识别从无工单扩大为无其他批准记录。评分器将句首“本次证据”解释为同时限定后续“也没有”分句，因而按输入未提供记录理解并通过。该解释涉及并列句否定范围，不能只凭预期标签认定漏判，也不能据一次评分通过重写标签。原始校准未匹配维持，交独立复核明确口径；生产建议使用显式未提供/未知以避免此歧义。"
+    }
+  ]
+}

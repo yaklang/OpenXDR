@@ -21,15 +21,17 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | POST | `/api/incidents/{id}/status` | `{"status":"open\|closed\|false_positive","note":"…"}`；closed 为属实已处置、false_positive 为误报或良性，两者必须写 `note`（1–2000 字），记录结案人与时间并作为案例喂回研判；改回 open 清掉结案信息 |
 | GET | `/api/incidents/groups?status=review\|unresolved` | 按规则归并（只是视图，不改 incident）：未结案事件按「主告警的规则 + 主机」分组，主告警取事件里级别最高的告警（同级取最早）；情报命中的规则 ID 形如 `intel:ip:1.2.3.4`，同一目标自然归一组。每组含 `ruleId`、`ruleTitle`、`assetId`、`hostname`、`count`、`severity`、`firstAt` / `lastAt`（事件创建时间）、`verdicts`（`benign` / `suspicious` / `malicious` / `none` 各几个）与组内事件 `incidents`（同列表项）；按事件数、最近时间倒序。`status` 默认 `review`，只接受 `review` / `unresolved`；最多扫最近 2000 个事件，超出时 `X-Truncated: 1`，`X-Total-Count` 为匹配总数 |
 | POST | `/api/incidents/batch-status` | 批量结案 `{"ids":[…],"status":"closed\|false_positive","note":"…","confirmMalicious":false}`：一次 1–200 个，口径与单个结案一致（理由规则、结案人与时间、作为人工案例回喂研判），一个事务内全部成功或全部不动，逐条写 `incident_status` 审计。任一事件不存在（404）、不在调用者有 analyst 权限的组内（403）、已被结案（409）或需写理由却没写（400）都整批拒绝；含 AI 判恶意的事件按 `false_positive` 结案必须 `confirmMalicious: true`，否则 409。说明原样等于这批里某个事件的 AI 结案建议时，整批记为 `resolution_source=ai_proposal`。返回 `{"resolved":n}` |
-| GET | `/api/findings?status=` | 运维待办（巡检 AI 登记，按组裁剪，最近 500 条），含主机名、首次与最近发现时间 |
+| GET | `/api/findings?status=&assetId=&ids=&limit=&offset=` | 运维待办（巡检 AI 登记，按组裁剪，可按资产筛选），含主机名、首次与最近发现时间；`limit` 默认 500、范围 1–500，`offset` 默认 0；`X-Total-Count` 返回筛选后总数，仍有后续页时带 `X-Truncated: 1`；可用逗号分隔的 `ids` 精确查询最多 10 条会话引用；无效 `assetId`、空或无效 `ids` 返回 400 |
 | POST | `/api/findings/{id}/status` | `{"status":"open\|resolved\|ignored","note":"…"}`，需组内 analyst；resolved / ignored 必须写原因，忽略原因会交给巡检 AI，之后不再登记，写审计 `finding_status`；组管理员发起的 Pi 对话里 AI 可按用户明确要求代为忽略，口径相同（见 `docs/pi-backend.md`「运维待办」） |
 | GET | `/api/incidents/{id}/report` | 事件报告（Markdown 附件下载）：判定、攻击链、涉及实体、告警时间线、处置记录、处置建议 |
+| DELETE | `/api/incidents/{id}/closure-proposal` | analyst（可见范围内）；撤下 AI 结案建议，204，写审计 `incident_proposal_dismissed` |
 | GET | `/api/events` | 原始事件检索，参数见下 |
 | GET | `/api/events/{id}/related` | 与这条日志有确定关联的日志，按关联方式分组：ancestor 父进程链 / process 同一进程 / child 子进程 / connection 同一连接 / peer 别的主机连同一远端 / nearby 同主机前后两分钟；只取调用者可见的资产 |
 | POST | `/api/events/{id}/explain?lang=&refresh=` | 问 AI（analyst）：发起后台解读并立即返回任务 `{id,status,result,error}`。模型读这条日志与上面的候选，`result` 含判定（benign / suspicious / malicious / unknown）、结论、依据、下一步，以及从候选里挑出的相关日志。已有在跑的或已有结果时直接返回它，`refresh=1` 才重新解读；未配置研判与标注模型时 503 |
 | GET | `/api/events/{id}/explain?lang=` | 读自己对这条日志的最近一次解读：`status` 为 none / running / done / failed；前端在 running 时轮询。解读按发起人存，保留 7 天 |
 | GET | `/api/stats` | 概览：24h 降噪漏斗、告警趋势、按级别的告警分布（`alertsBySeverity`）、Top 规则、资产在线率；`reviewIncidents` 为需人工复核的事件数（口径同 `status=review`） |
 | GET | `/api/rules` | 引擎当前加载的规则（热重载后即时反映），含数据源覆盖标记与 ATT&CK 标签 |
+| POST | `/api/rules/{id}/backtest?hours=` | viewer；在近期事件上回测单条基础规则（`hours` 默认 24，范围 1–168，最多扫 5000 条）；返回命中数、主机分布与样例。跨事件时序规则返回 400 |
 | GET | `/api/attack` | ATT&CK 覆盖矩阵：按杀伤链顺序的战术列与技术格，含未打标签、无数据源的规则数 |
 | GET | `/api/temporal-gaps?assetId=&from=&to=&limit=` | 该资产的时序检测缺口（`candidate_limit` / `late`），详见 [时序检测](temporal-detection.md#缺口查询接口) |
 | GET | `/api/temporal-rule-snapshots?limit=&alertId=` | 已归档的时序规则版本（**全局 admin / analyst**，角色每次从库里取），按首次使用时间倒序：`{items:[{revision,createdAt,format,baseRuleCount,temporalRules}],truncated}`；`limit` 默认 20、范围 1..100。带 `alertId` 时只返回该告警命中时的版本（单事件告警、旧版本告警或调用者看不到的告警返回空列表） |
@@ -38,10 +40,13 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 `GET /api/events` 参数：`from`/`to`（RFC3339，默认近 24h）、`assetId`、
 `classUid`（1001 文件 / 1007 进程 / 3002 认证 / 4001 网络 / 4003 DNS /
 201002 注册表 / 100001 日志）、
-`source`（agent/sensor/syslog）、`q`（对事件体子串匹配，通配符按字面量处理）、
-`limit`（≤200，默认 100）。返回条数等于 `limit` 时带响应头 `X-Truncated: 1`，
-提示可能还有更多、应收窄条件。各类事件的字段 schema 见
-[events.md](events.md)。
+`source`（agent/sensor/syslog）、`q`（对事件里的字段值做不区分大小写的子串匹配，通配符按字面量处理；不匹配字段名，口径见 [事件表分区](event-partitioning.md#关键词检索索引)）、
+`limit`（≤200，默认 100）。响应是对象 `{items, truncated, coverage}`：`items` 为事件行；
+`truncated` 表示返回条数达到 `limit`（可能还有更早的，同时带响应头 `X-Truncated: 1`）；
+`coverage` 为 `{hot_searched, cold_searched, scan_complete, reason}`，`reason` 非空即本次没查全——
+`hot_keyword_degraded`（关键词检索超出时限，只覆盖最近数据）、`keyword_not_searched`（关键词不搜冷归档）、
+`no_archive_schema`、`scan_incomplete`、`before_archive`，冷归档口径见 [冷归档](event-archive.md)。
+各类事件的字段 schema 见 [events.md](events.md)。
 
 ## 威胁情报
 
@@ -51,8 +56,8 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | POST | `/api/intel` | 单条：`{"kind":"ip\|domain\|hash","value","source","severity","note","expiresInDays"}`，kind 缺省自动识别 |
 | POST | `/api/intel/import` | 批量：`{"text":"一行一条","source","severity","expiresInDays"}`，类型自动识别，重复跳过，`#` 行忽略 |
 | DELETE | `/api/intel/{id}` | 删除 |
-| GET | `/api/intel/feeds` | 情报订阅：`{feeds:[{id,name,url,severity,enabled,count,hits,syncedAt,error}], hits:[命中过的订阅情报], intervalHours}`。`/api/intel` 列表不含订阅条目 |
-| PUT | `/api/intel/feeds` | `{"enabled":["feodo",...]}` 保存开关并立即同步（admin） |
+| GET | `/api/intel/feeds` | 情报订阅：`{feeds:[{id,name,url,severity,enabled,count,hits,syncedAt,attemptedAt,error}], hits:[命中过的订阅情报], intervalHours}`。`syncedAt` 为最近成功、`attemptedAt` 为最近尝试；配置读取失败返回 500。`/api/intel` 列表不含订阅条目 |
+| PUT | `/api/intel/feeds` | `{"enabled":["feodo",...]}` 保存开关并立即同步（admin）；必须提供数组，全部关闭用 `{"enabled":[]}`，缺失或 null 返回 400，不修改配置 |
 | POST | `/api/intel/feeds/sync` | 立即同步（admin） |
 
 ## 误报抑制
@@ -62,6 +67,7 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | GET | `/api/suppressions` | 抑制清单（含压掉次数）；非 admin 只见本组资产的抑制，全局抑制仅 admin 可见 |
 | POST | `/api/suppressions` | `{"ruleId","assetId"(空=全局),"reason","expiresInDays"(0=长期)}`；需该资产所在组的 analyst，全局抑制仅 admin，否则 403 |
 | DELETE | `/api/suppressions/{id}` | 撤销，权限同创建（按该抑制的资产判断） |
+| POST | `/api/suppressions/{id}/review` | 资产所在组 admin；`{"decision":"approve\|reject","note"}`，处理 AI 提议的抑制草案。仅 `proposed` 且绑定资产的可审批；批准时有效期从批准那一刻重算；已处理返回 409；落审计 `suppression_approved` / `suppression_rejected` |
 
 ## 已知自动化
 
@@ -83,11 +89,48 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/commands?incidentId=&assetId=` | 指令历史，可按事件或主机筛选 |
+| GET | `/api/commands?incidentId=&assetId=&view=summary` | 指令历史，可按事件或主机筛选；传 `page`（1–100000）和 `pageSize`（1–100，默认 20）返回 `{items,total}`，不传 `page` 保持最多 100 条数组。控制台使用 `summary`，不读取或返回 `cmd/stdout/stderr`，保留结果摘要与检测关联。省略 `view` 或使用 `full` 保留完整返回；其他值返回 400 |
+| GET | `/api/commands/{id}/verifications` | 同指令可见范围；最近 100 条复核记录，见 [响应复核](response-verification.md) |
+| POST | `/api/commands/{id}/verifications` | 组 analyst（或全局 admin）；提交复核判断，留存证据，见 [响应复核](response-verification.md) |
+| GET | `/api/commands/{id}/verifications/{verificationId}` | 同指令可见范围；单条复核的完整留存快照，包括事件原文 |
+| GET | `/api/commands/{id}` | 指令详情，按资产组校验权限，包含完整命令与输出 |
 | POST | `/api/commands` | `{"kind":"kill_process\|isolate_host\|unisolate_host\|exec\|block_network\|unblock_network\|quarantine_file\|restore_file\|disable_account\|enable_account","assetId","incidentId","pid","target"}`（一律真执行，没有演练模式）；封锁、隔离文件、锁定账号必须带 `target`（IP / 网段 / 域名、文件绝对路径、账号名），不合法或会封到 server 自己时 400；`exec` 另带 `"cmd"`（必填）与 `"timeoutMs"`（0 = agent 默认 60s），结果回写 `exitCode` / `stdout` / `stderr` / `truncated`（各截断到 64KB） |
 
 需 server 配置 `RESPONSE_ENABLED=true`；隔离要求 `ISOLATION_ALLOW` 包含 server
 的 gRPC 端点，否则 agent 拒绝执行。
+
+## AI 助手、记忆与巡检
+
+会话、报告、审批与名单的完整说明见 [AI 助手与巡检](pi-backend.md#前端接口)，预设任务见 [预设任务](pi-backend.md#预设任务)，长期记忆见 [长期记忆](pi-backend.md#长期记忆)。下表只列路径与权限。
+
+| 方法 | 路径 | 权限与说明 |
+|---|---|---|
+| POST | `/api/agent-sessions` | 组 analyst；创建会话，`subjects` 可绑定 `incident:<id>` 或 `finding:<id>` |
+| GET | `/api/agent-sessions?groupId=` | 组 viewer；最近 100 个会话 |
+| GET | `/api/agent-sessions/{id}` | 组 viewer；会话状态与元数据 |
+| GET | `/api/agent-sessions/{id}/messages?afterSeq=` | 组 viewer；按 seq 分页，每页最多 1000 条 |
+| POST | `/api/agent-sessions/{id}/messages` | 发起人且仍为组 analyst；会话须 idle，后台运行，返回 202 |
+| POST | `/api/agent-sessions/{id}/cancel` | 发起人或组 admin；写入停止请求，204 |
+| GET | `/api/agent-reports?groupId=` | 组 viewer；最近 100 份报告，带摘要与当前用户的已读状态 |
+| GET | `/api/agent-reports/{id}` | 组 viewer；报告实体 |
+| GET | `/api/agent-reports/{id}/html` | 组 viewer；渲染后的 HTML，带 CSP，打开即标已读 |
+| GET | `/api/agent-reports/{id}/pdf` | 组 viewer；headless Chromium 打印，找不到浏览器返回 503 |
+| POST | `/api/agent-reports/{id}/read` | 组 viewer；标为当前用户已读，204 |
+| POST | `/api/agent-reports/read?groupId=` | 组 viewer；列表中最近 100 份全部标已读 |
+| GET | `/api/command-policies?groupId=` | 组 admin；高风险命令名单 |
+| POST | `/api/command-policies` | 组 admin；`{groupId,origin,pattern}`，201 |
+| DELETE | `/api/command-policies/{id}` | 组 admin；204 |
+| GET | `/api/approvals?groupId=` | 组 admin；最近 100 个审批（含终态） |
+| POST | `/api/approvals/{id}/decision` | 组 admin；`{approve}` 原子决定，204；重复或过期返回 409 |
+| GET | `/api/memories` | viewer，按可见组裁剪；长期记忆，最多 1000 条 |
+| POST | `/api/memories` | 组 analyst；`{groupId,assetId?,content}`，本组满 200 条返回 409 |
+| PATCH | `/api/memories/{id}` | 组 analyst；改写后即算人工记忆，AI 不能再删 |
+| DELETE | `/api/memories/{id}` | 组 analyst；删除，写审计 |
+| GET | `/api/tasks` | viewer；预设任务列表，含各组下一次运行时间 |
+| PATCH | `/api/tasks/{id}` | admin；全局默认开关与周期 |
+| PUT | `/api/tasks/{id}/groups/{groupId}` | 组 admin；该组单独开关，null 恢复跟随全局 |
+| POST | `/api/tasks/{id}/run` | admin；立即运行，所有组都未开启时 409 |
+| GET | `/api/tasks/{id}/runs` | viewer；最近 100 次运行，按组裁剪 |
 
 ## 资产与管理
 
@@ -97,6 +140,15 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | GET | `/api/assets/{id}/config` | 该主机的采集配置 |
 | PUT | `/api/assets/{id}/config` | 设置采集配置：`{"fileWatchDirs":[...],"collectFiles":true,"collectAuth":true,"collectPersist":true,"collectNetwork":true,"collectInventory":true,"collapsePeriodic":true}`。随 agent 下次注册（重连或重启）生效；`collectNetwork` 在 Linux eBPF 与 Windows ETW 路径生效 |
 | GET | `/api/assets/{id}/profile` | 资产画像：区域、暴露级别、云环境、监听端口、依赖与 AI 标注。改标注、指派区域与资产图谱、攻击面、区域定义等接口见 [资产图谱与攻击面](asset-map.md#接口) |
+| GET | `/api/vulns/summary` | viewer；组内有软件清单的资产漏洞汇总（可修复、高危、暴露、暂无修复），最多 500 台，见 [软件漏洞](vulns.md) |
+| GET | `/api/assets/{id}/vulns` | viewer；单台资产的完整漏洞报告，见 [软件漏洞](vulns.md) |
+| GET | `/api/asset-map?groupId=` | viewer；资产图谱节点与有向边，见 [资产图谱与攻击面](asset-map.md#接口) |
+| GET | `/api/attack-surface?groupId=` | viewer；攻击面汇总、暴露面与盲区 |
+| GET / POST | `/api/zones` | viewer / 组 admin；区域定义，同名 409 |
+| PUT / DELETE | `/api/zones/{id}` | 组 admin |
+| PUT | `/api/assets/{id}/zone` | 组 admin；`{zoneId}`，null 回到自动划分 |
+| POST | `/api/assets/{id}/annotate` | 组 analyst；请求 AI 重新标注，未配置模型返回 503 |
+| PUT | `/api/assets/{id}/services` | 组 analyst；人工标注服务 `{port,name,note?,risk?}` |
 | GET | `/api/users` | 用户列表（admin） |
 | POST | `/api/users` | 建号：`{"username","password","role"}`（admin） |
 | POST | `/api/users/{id}/password` | 重置密码（admin） |
@@ -151,6 +203,14 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | POST | `/api/identities/{id}/rejections` | `{"accountId"}` 判定不是同一人；落审计 `identity_candidate_rejected` |
 | DELETE | `/api/identity-links/{id}` | 撤销人工链接，账号回到默认归属；系统链接 409；落审计 `identity_link_revoked` |
 | DELETE | `/api/identity-rejections/{id}` | 撤销拒绝；落审计 `identity_candidate_rejection_revoked` |
+| GET | `/api/identity-directories?groupId=` | 组成员（viewer 起）；目录来源与最近一次同步状态，见 [目录与同步状态查询](identity-correlation.md#目录与同步状态查询) |
+| GET | `/api/identity-directories/{sourceId}/accounts` | 组成员；目录账号，`limit` 1–200，`after` 游标 |
+| GET | `/api/identity-directories/{sourceId}/runs` | 组成员；最近同步运行记录 |
+| GET | `/api/identity-observations?assetId=` | 观察与资产所在组都须是成员（全局 admin 放行）；`from`/`to` 默认近 24 小时，见 [身份来源与关联](identity-correlation.md) |
+| GET | `/api/identity-observations/{eventId}/directory-accounts` | 同上；登录 SID 与目录账号的精确匹配候选，见 [登录记录的目录账号候选](identity-correlation.md#登录记录的目录账号候选) |
+| GET | `/api/identity-observations/{eventId}/local-accounts` | 同上；Linux 登录与本地账号快照的候选 |
+| GET | `/api/local-account-snapshots?assetId=` | 同上；最近 24 小时本地账号快照，见 [本地账号快照查询](identity-correlation.md#本地账号快照查询) |
+| GET | `/api/local-account-snapshots/{eventId}` | 同上；单次快照及账号列表，不可见返回 404 |
 | GET | `/api/assets/{id}/identity-accounts?hours=` | 资产账号视图：`accounts`（近期登录与所属身份）、`unmatched`（未关联到账号的 Linux 登录）、`pending`（待后台关联数）；`hours` 默认 24 |
 
 登录观察、本地账号快照与目录状态等只读接口见 [身份来源与关联](identity-correlation.md)。
@@ -166,6 +226,20 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | POST | `/api/enroll-tokens` | `{"groupId","days"}` 签发令牌（组 admin），`days` 缺省 7、最长 30；明文 `token` 只在此返回一次 |
 | DELETE | `/api/enroll-tokens/{id}` | 撤销令牌（组 admin） |
 
+文档导入与 SSH 纳管接口均为组 admin（`/api/host-import/status` 登录即可），字段细节见 [文档导入与主机纳管](host-enrollment.md#api)：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/host-import/status` | 登录即可；凭据存储、SSH 纳管与 AI 解析的能力状态 |
+| POST | `/api/host-import/extract` | 组 admin；上传文档，返回原文与图片，敏感响应禁止缓存 |
+| POST | `/api/host-import/analyze` | 组 admin；后台 AI 解析任务，立即返回 `{id,status}` |
+| GET / DELETE | `/api/host-import/analyze?groupId=` | 组 admin；读取最近一次解析结果 / 删除该结果 |
+| POST | `/api/host-import/preview`、`/commit` | 组 admin；预览（不含秘密）与单事务提交，提交时重新解析并核对摘要 |
+| POST | `/api/host-import/confirm` | 组 admin；确认主机清单，无模型调用 |
+| GET | `/api/host-import/credentials?groupId=` | 组 admin；仅凭据元数据 |
+| DELETE | `/api/host-import/credentials/{id}` | 组 admin；删除凭据，不卸载 agent、不删资产 |
+| POST | `/api/host-import/credentials/{id}/enroll` | 组 admin；`{fingerprint}` 显式安装，成功不代表已在线 |
+
 以下端点**免登录**，由安装脚本调用：
 
 | 方法 | 路径 | 说明 |
@@ -173,6 +247,8 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | GET | `/api/enroll/install.sh` | Linux 安装脚本，参数 `<控制台地址> <令牌>` |
 | GET | `/api/enroll/install.ps1` | Windows 安装脚本，参数同上 |
 | GET | `/api/enroll/agent/{platform}` | agent 安装包，`linux-amd64` / `linux-arm64` / `windows-amd64` |
+| GET | `/api/enroll/sensor-install.sh` | 流量探针安装脚本，参数 `<控制台> <令牌> <网卡>`，见 [采集端](collection.md) |
+| GET | `/api/enroll/sensor/{platform}` | 流量探针安装包，平台写法同 agent 安装包 |
 | POST | `/api/enroll/register` | `Authorization: Bearer <令牌>`，请求体 `{"hostname","os","csr"}`；返回 `{server, ca, cert}`。令牌无效 401，主机名已有在线 agent 或主机已在别组 409，接入未启用 503 |
 
 ## 对接示例：定时同步情报源
@@ -276,3 +352,50 @@ URL 更改默认保留旧积压目标；movePending=true 显式改投尚未发�
 `X-OpenXDR-Signature`。使用 base64 解码后的秘密，对 UTF-8
 `timestamp + "." + eventId + "." + rawBody` 计算 HMAC-SHA256，签名为小写十六进制。
 接收方须校验时间窗口（建议 5 分钟）、签名并持久去重。事件可能重复及乱序，使用 revision 防止旧状态覆盖新状态。
+
+
+## 独立欺骗引擎
+
+引擎使用独立运行协议，管理接口仍走 cookie 和组权限。契约类型定义在 `server/deception/contract/engine.go`，实施说明见 [运行包说明](../integrations/dygk/README.md)。
+
+| 方法和路径 | 权限与用途 |
+| --- | --- |
+| `GET /api/deception/releases` | 登录后读取最近 200 个已登记版本 |
+| `GET /api/deception/hosted-release` | 当前托管引擎回报的可用版本，未在线时返回 null |
+| `POST /api/deception/releases` | 全局 admin 准入版本，字段 `engine/version/digest/protocol/stateSchema` |
+| `POST /api/deception/releases/{id}/disable` | 全局 admin 停用版本，后续运行认证拒绝 |
+| `GET /api/decoys/{id}/revisions` | 当前资产组 viewer，最多 100 条并返回 `more` |
+| `POST /api/decoys/{id}/revisions` | 组管理员且全局至少 analyst；传 `releaseId/config/expectedRevision`，`config.hosted=true` 由平台统一启动；确认旧实例已停止后创建不可变修订 |
+| `POST /api/decoys/{id}/stop` | 同上；只请求停止，202 不代表实例已退出 |
+| `GET /api/deception-runtime/v1/deployments/{id}/config` | 单登记 Bearer 令牌，绑定资产当前组和修订 |
+| `POST .../handshake` | 实例、修订和精确产物握手并领取 starting 租约 |
+| `POST .../lease` | 单实例状态转换，需 `X-Decoy-Instance` 和 `X-Decoy-Revision` |
+| `POST .../observations` | 每批 1–100 条白名单事实，按事件 ID 确认持久化；相同 ID 不同内容 409 |
+| `GET /api/deception/hosted-status` | 任意已登录用户；托管引擎最近心跳，30 秒内视为在线 |
+| `GET /api/decoy-profiles`、`GET /api/ssh-decoy-profiles` | 登录即可；载体与策略元数据，不含模板正文 |
+| `GET /api/decoy-install/status` | 登录即可；远程安装的配置开关，不代表目标可安装 |
+| `GET /api/ssh-decoys?groupId=` | 组 viewer；每页最多 50 条，返回 `{items, more}` |
+| `POST /api/ssh-decoys` | 组 admin；`{assetId, profile, port}`，资产须已分组；`kind` / `resource` 用于多载体登记 |
+| `POST /api/ssh-decoys/{id}/revoke` | 组 admin；幂等撤销，保留历史记录 |
+| `GET /api/decoys`、`POST /api/decoys` | 同 `/api/ssh-decoys`（别名），见 [多载体诱饵](multi-carrier-decoys.md) |
+| `POST /api/decoys/{id}/token` | 组 admin；签发或轮换运行令牌，与审计同事务 |
+| `POST /api/decoys/{id}/revoke` | 组 admin；等同 `POST /api/ssh-decoys/{id}/revoke` |
+| `GET /api/decoys/{id}/observations` | 资产所在组 viewer；最近 100 条观察，返回 `more` |
+| `POST /api/decoys/{id}/observations/{observation}/review` | 组 analyst；对访问类观察提交复核并开单，生命周期事件不能复核 |
+| `POST /api/decoy-install/{id}` | 组 admin；经 SSH 远程安装运行端，见 [多载体诱饵](multi-carrier-decoys.md) |
+| `GET /api/decoy-runtime/{id}/config`、`POST /api/decoy-runtime/{id}/lease`、`POST /api/decoy-runtime/{id}/events` | 单登记 Bearer 令牌；旧版运行端接口，保留兼容，新协议见 [引擎设计](deception-engine-design.md) |
+| `POST /engine/poll`、`POST /engine/finished` | 仅托管引擎控制通道（Unix socket，权限 0600），不在 `:8080` 上；拉取下发任务、回报实例退出 |
+
+观察字段为 `eventId/streamEpoch/sequence/occurredAt/session/kind/count`；不接受 IP、自由文本、平台身份或原始请求体。新协议每登记滚动 24 小时最多 10000 条；旧接口保持每日 1000 条。旧路径不会接受已启用修订的登记，防止协议降级。
+
+### 研判执行记录
+
+`GET /api/incidents/{id}/triage-runs?page=1`：沿用事件的 viewer/组权限，
+每页 20 条，按开始时间倒序返回 `{items, more}`。记录字段为 snake_case：
+`started_at/ready_at/finished_at`、`trigger`、`status`、`model`、`error_code`、
+`duration_ms/model_ms/tool_ms`、`model_calls/tool_calls/tool_errors`、`tool_details`（顺序数组，工具名、duration_ms、failed，可选 returned/truncated；不含查询原文）、
+`input_tokens/output_tokens`。`ready_at` 未知时省略；
+`lease_replaced` 表示崩溃后接管，结束时刻为发现中断的时刻，不是真实执行结束时刻。
+不返回模型凭据、提示词或原始工具结果。仅有本版本上线后的记录。
+
+运行中记录的 `heartbeat_valid` 按事件当前执行身份与心跳判断；为 false 时界面显示未确认，不能据旧 running 记录断言任务仍在运行。

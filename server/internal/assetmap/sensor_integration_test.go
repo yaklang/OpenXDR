@@ -31,7 +31,7 @@ func TestEngineSensorInboundAttribution(t *testing.T) {
 	flow("198.51.100.7", "203.0.113.10", 443)
 	flow("10.0.0.1", "10.0.0.2", 5432)
 	e := &Engine{DB: client, SQL: db, Interval: time.Second}
-	e.cursor = e.loadCursor(ctx)
+	e.cursor, e.cursorID = e.loadCursor(ctx)
 	if _, err := e.batch(ctx); err != nil {
 		t.Fatal(err)
 	}

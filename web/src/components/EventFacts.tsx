@@ -50,6 +50,16 @@ export function EventFacts({ classUid, raw, username }: { classUid: number; raw:
       <span className="mono">{endpoint(r.src_endpoint)} → {endpoint(r.dst_endpoint)}</span>
     </>)
     add('domain', t('factDomain'), r.dst_endpoint?.hostname || r.tls?.sni || r.http_request?.hostname)
+    if (r.tls && (r.tls.version || r.tls.alpn || r.tls.ja3_hash || r.tls.ja3s_hash || r.tls.cert?.subject || r.tls.handshake_only)) {
+      add('tls', 'TLS', <>
+        {r.tls.version && <Tag variant="filled" color="cyan">{r.tls.version}</Tag>}
+        {r.tls.alpn && <Tag variant="filled" color="geekblue">{r.tls.alpn}</Tag>}
+        {r.tls.handshake_only && <Tag variant="filled" color="orange">handshake-only</Tag>}
+        {r.tls.cert?.subject && <span className="mono">{r.tls.cert.subject}{r.tls.cert.self_signed ? ' (self-signed)' : ''}</span>}
+        {r.tls.ja3_hash && <Typography.Text type="secondary" className="mono"> JA3:{String(r.tls.ja3_hash).slice(0, 8)}</Typography.Text>}
+        {r.tls.ja3s_hash && <Typography.Text type="secondary" className="mono"> JA3S:{String(r.tls.ja3s_hash).slice(0, 8)}</Typography.Text>}
+      </>)
+    }
   }
 
   if (classUid === 4003 && r.query) {

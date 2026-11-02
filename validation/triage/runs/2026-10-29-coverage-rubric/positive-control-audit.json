@@ -1,0 +1,78 @@
+{
+  "scope": "frozen_positive_control_engineering_audit",
+  "controls": 10,
+  "independent_human_review": "pending",
+  "runtime_inputs_changed": false,
+  "items": [
+    {
+      "case": "ai_memory",
+      "control": "collection_unknown",
+      "review": "no_additional_issue_identified",
+      "reason": "对照现有事实、限制与建议标准，未发现上述工具能力混淆；这不是独立人工验收。",
+      "answer_sha256": "6722604881da36b157d0edf158d57e92ceaccf757a32082ff90878adaeb8ffc7"
+    },
+    {
+      "case": "incomplete_query",
+      "control": "platform_semantics",
+      "review": "needs_revision",
+      "reason": "建议把缩小查询范围与补齐原始正文和血缘绑定，不能作为工具能力明确正确的全通过正对照。应将取完整正文交给人工原始来源，将血缘核实与真实 process_guid 绑定。",
+      "answer_sha256": "d98499c937cfe4d77de31d15344a929e7d586f860bef513da7ecf80f9e63e404"
+    },
+    {
+      "case": "incomplete_query",
+      "control": "record_absence_unknown",
+      "review": "needs_revision",
+      "reason": "复用了 platform_semantics 的同一歧义建议，无法单独验证记录缺失与未知的事实区别；需要统一修正公共建议，保持摘要差异。",
+      "answer_sha256": "d553d4a5181fe428a37787666511128479af62af15aaf2217127d253af9f2756"
+    },
+    {
+      "case": "incomplete_query",
+      "control": "manual_full_evidence",
+      "review": "no_additional_issue_identified",
+      "reason": "对照现有事实、限制与建议标准，未发现上述工具能力混淆；这不是独立人工验收。",
+      "answer_sha256": "bee3131b525589610e651c241645d40e53ced98a4b45e4be045eb530a01d6fc4"
+    },
+    {
+      "case": "incomplete_query",
+      "control": "verified_refs_actual_1_scoped",
+      "review": "needs_review",
+      "reason": "摘要把正文裁剪作为看不到命令、路径和落地对象的原因；快照说明存在裁剪，但不能单凭裁剪证明这些信息因裁剪缺失。应区分快照未提供字段与裁剪带来的未知。",
+      "answer_sha256": "f8fb7650d13e1de12c45faa2893f0efa11d1612de57d5066dc625e1365b69430"
+    },
+    {
+      "case": "incomplete_query",
+      "control": "verified_refs_actual_2_scoped",
+      "review": "no_additional_issue_identified",
+      "reason": "对照现有事实、限制与建议标准，未发现上述工具能力混淆；这不是独立人工验收。",
+      "answer_sha256": "be85e8dd74db33e0893d479ff173ca9e477df9bd4fba6fce37073e92d2ae4a77"
+    },
+    {
+      "case": "mixed_clients",
+      "control": "weak_branch_investigate",
+      "review": "no_additional_issue_identified",
+      "reason": "对照现有事实、限制与建议标准，未发现上述工具能力混淆；这不是独立人工验收。",
+      "answer_sha256": "5001adaf4d43db9d7ae9f07aca91eb3019fafb3e3780f1444634469b1ec15b2b"
+    },
+    {
+      "case": "mixed_clients",
+      "control": "advice_scope_complete",
+      "review": "no_additional_issue_identified",
+      "reason": "对照现有事实、限制与建议标准，未发现上述工具能力混淆；这不是独立人工验收。",
+      "answer_sha256": "dcc0224bcd7c8cf8bfd3a8769ef5c8d4dda9bf796902b65c0735839a0a499be7"
+    },
+    {
+      "case": "authorized_maintenance",
+      "control": "separate_actions",
+      "review": "no_additional_issue_identified",
+      "reason": "对照现有事实、限制与建议标准，未发现上述工具能力混淆；这不是独立人工验收。",
+      "answer_sha256": "ff21acf46e920f0aaf2235ff3a46faab4288144a55ffa99ca133ad7b4db03854"
+    },
+    {
+      "case": "confirmed_attack",
+      "control": "unfamiliar_only",
+      "review": "no_additional_issue_identified",
+      "reason": "对照现有事实、限制与建议标准，未发现上述工具能力混淆；这不是独立人工验收。",
+      "answer_sha256": "27085dd82358d3f87e3087fc478ff45b65ce46f79db47c4356871d8ec8bba3af"
+    }
+  ]
+}

@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"openxdr/server/ent/decoyobservation"
 	"strings"
@@ -27,7 +28,19 @@ type DecoyObservation struct {
 	// Generation holds the value of the "generation" field.
 	Generation string `json:"-"`
 	// ReceivedAt holds the value of the "received_at" field.
-	ReceivedAt   time.Time `json:"received_at,omitempty"`
+	ReceivedAt time.Time `json:"received_at,omitempty"`
+	// RevisionID holds the value of the "revision_id" field.
+	RevisionID *uuid.UUID `json:"revision_id,omitempty"`
+	// SessionID holds the value of the "session_id" field.
+	SessionID string `json:"session_id,omitempty"`
+	// TriggerKey holds the value of the "trigger_key" field.
+	TriggerKey string `json:"trigger_key,omitempty"`
+	// PayloadHash holds the value of the "payload_hash" field.
+	PayloadHash string `json:"-"`
+	// OccurredAt holds the value of the "occurred_at" field.
+	OccurredAt *time.Time `json:"occurred_at,omitempty"`
+	// Details holds the value of the "details" field.
+	Details      map[string]interface{} `json:"details,omitempty"`
 	selectValues sql.SelectValues
 }
 
@@ -36,11 +49,13 @@ func (*DecoyObservation) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case decoyobservation.FieldIncidentID:
+		case decoyobservation.FieldIncidentID, decoyobservation.FieldRevisionID:
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
-		case decoyobservation.FieldKind, decoyobservation.FieldGeneration:
+		case decoyobservation.FieldDetails:
+			values[i] = new([]byte)
+		case decoyobservation.FieldKind, decoyobservation.FieldGeneration, decoyobservation.FieldSessionID, decoyobservation.FieldTriggerKey, decoyobservation.FieldPayloadHash:
 			values[i] = new(sql.NullString)
-		case decoyobservation.FieldReceivedAt:
+		case decoyobservation.FieldReceivedAt, decoyobservation.FieldOccurredAt:
 			values[i] = new(sql.NullTime)
 		case decoyobservation.FieldID, decoyobservation.FieldDeploymentID:
 			values[i] = new(uuid.UUID)
@@ -96,6 +111,46 @@ func (_m *DecoyObservation) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.ReceivedAt = value.Time
 			}
+		case decoyobservation.FieldRevisionID:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field revision_id", values[i])
+			} else if value.Valid {
+				_m.RevisionID = new(uuid.UUID)
+				*_m.RevisionID = *value.S.(*uuid.UUID)
+			}
+		case decoyobservation.FieldSessionID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field session_id", values[i])
+			} else if value.Valid {
+				_m.SessionID = value.String
+			}
+		case decoyobservation.FieldTriggerKey:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field trigger_key", values[i])
+			} else if value.Valid {
+				_m.TriggerKey = value.String
+			}
+		case decoyobservation.FieldPayloadHash:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field payload_hash", values[i])
+			} else if value.Valid {
+				_m.PayloadHash = value.String
+			}
+		case decoyobservation.FieldOccurredAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field occurred_at", values[i])
+			} else if value.Valid {
+				_m.OccurredAt = new(time.Time)
+				*_m.OccurredAt = value.Time
+			}
+		case decoyobservation.FieldDetails:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field details", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.Details); err != nil {
+					return fmt.Errorf("unmarshal field details: %w", err)
+				}
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -147,6 +202,27 @@ func (_m *DecoyObservation) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("received_at=")
 	builder.WriteString(_m.ReceivedAt.Format(time.ANSIC))
+	builder.WriteString(", ")
+	if v := _m.RevisionID; v != nil {
+		builder.WriteString("revision_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("session_id=")
+	builder.WriteString(_m.SessionID)
+	builder.WriteString(", ")
+	builder.WriteString("trigger_key=")
+	builder.WriteString(_m.TriggerKey)
+	builder.WriteString(", ")
+	builder.WriteString("payload_hash=<sensitive>")
+	builder.WriteString(", ")
+	if v := _m.OccurredAt; v != nil {
+		builder.WriteString("occurred_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("details=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Details))
 	builder.WriteByte(')')
 	return builder.String()
 }

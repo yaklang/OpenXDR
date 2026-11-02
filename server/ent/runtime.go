@@ -15,7 +15,9 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/commandpolicy"
 	"openxdr/server/ent/decoydeployment"
+	"openxdr/server/ent/decoyenginerelease"
 	"openxdr/server/ent/decoyobservation"
+	"openxdr/server/ent/decoyrevision"
 	"openxdr/server/ent/enrolltoken"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/externalticket"
@@ -46,6 +48,7 @@ import (
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/task"
 	"openxdr/server/ent/taskrun"
+	"openxdr/server/ent/triagerun"
 	"openxdr/server/ent/trustedsource"
 	"openxdr/server/ent/user"
 	"openxdr/server/ent/vulnrecord"
@@ -241,10 +244,50 @@ func init() {
 	decoydeploymentDescResource := decoydeploymentFields[11].Descriptor()
 	// decoydeployment.DefaultResource holds the default value on creation for the resource field.
 	decoydeployment.DefaultResource = decoydeploymentDescResource.Default.(string)
+	// decoydeploymentDescRuntimePending is the schema descriptor for runtime_pending field.
+	decoydeploymentDescRuntimePending := decoydeploymentFields[18].Descriptor()
+	// decoydeployment.RuntimePendingValidator is a validator for the "runtime_pending" field. It is called by the builders before save.
+	decoydeployment.RuntimePendingValidator = func() func(int) error {
+		validators := decoydeploymentDescRuntimePending.Validators
+		fns := [...]func(int) error{
+			validators[0].(func(int) error),
+			validators[1].(func(int) error),
+		}
+		return func(runtime_pending int) error {
+			for _, fn := range fns {
+				if err := fn(runtime_pending); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// decoydeploymentDescRuntimeError is the schema descriptor for runtime_error field.
+	decoydeploymentDescRuntimeError := decoydeploymentFields[19].Descriptor()
+	// decoydeployment.DefaultRuntimeError holds the default value on creation for the runtime_error field.
+	decoydeployment.DefaultRuntimeError = decoydeploymentDescRuntimeError.Default.(string)
+	// decoydeploymentDescStopRequested is the schema descriptor for stop_requested field.
+	decoydeploymentDescStopRequested := decoydeploymentFields[26].Descriptor()
+	// decoydeployment.DefaultStopRequested holds the default value on creation for the stop_requested field.
+	decoydeployment.DefaultStopRequested = decoydeploymentDescStopRequested.Default.(bool)
 	// decoydeploymentDescID is the schema descriptor for id field.
 	decoydeploymentDescID := decoydeploymentFields[0].Descriptor()
 	// decoydeployment.DefaultID holds the default value on creation for the id field.
 	decoydeployment.DefaultID = decoydeploymentDescID.Default.(func() uuid.UUID)
+	decoyenginereleaseFields := schema.DecoyEngineRelease{}.Fields()
+	_ = decoyenginereleaseFields
+	// decoyenginereleaseDescEnabled is the schema descriptor for enabled field.
+	decoyenginereleaseDescEnabled := decoyenginereleaseFields[6].Descriptor()
+	// decoyenginerelease.DefaultEnabled holds the default value on creation for the enabled field.
+	decoyenginerelease.DefaultEnabled = decoyenginereleaseDescEnabled.Default.(bool)
+	// decoyenginereleaseDescCreatedAt is the schema descriptor for created_at field.
+	decoyenginereleaseDescCreatedAt := decoyenginereleaseFields[7].Descriptor()
+	// decoyenginerelease.DefaultCreatedAt holds the default value on creation for the created_at field.
+	decoyenginerelease.DefaultCreatedAt = decoyenginereleaseDescCreatedAt.Default.(func() time.Time)
+	// decoyenginereleaseDescID is the schema descriptor for id field.
+	decoyenginereleaseDescID := decoyenginereleaseFields[0].Descriptor()
+	// decoyenginerelease.DefaultID holds the default value on creation for the id field.
+	decoyenginerelease.DefaultID = decoyenginereleaseDescID.Default.(func() uuid.UUID)
 	decoyobservationFields := schema.DecoyObservation{}.Fields()
 	_ = decoyobservationFields
 	// decoyobservationDescGeneration is the schema descriptor for generation field.
@@ -255,6 +298,32 @@ func init() {
 	decoyobservationDescReceivedAt := decoyobservationFields[5].Descriptor()
 	// decoyobservation.DefaultReceivedAt holds the default value on creation for the received_at field.
 	decoyobservation.DefaultReceivedAt = decoyobservationDescReceivedAt.Default.(func() time.Time)
+	// decoyobservationDescSessionID is the schema descriptor for session_id field.
+	decoyobservationDescSessionID := decoyobservationFields[7].Descriptor()
+	// decoyobservation.DefaultSessionID holds the default value on creation for the session_id field.
+	decoyobservation.DefaultSessionID = decoyobservationDescSessionID.Default.(string)
+	// decoyobservationDescTriggerKey is the schema descriptor for trigger_key field.
+	decoyobservationDescTriggerKey := decoyobservationFields[8].Descriptor()
+	// decoyobservation.DefaultTriggerKey holds the default value on creation for the trigger_key field.
+	decoyobservation.DefaultTriggerKey = decoyobservationDescTriggerKey.Default.(string)
+	// decoyobservationDescPayloadHash is the schema descriptor for payload_hash field.
+	decoyobservationDescPayloadHash := decoyobservationFields[9].Descriptor()
+	// decoyobservation.DefaultPayloadHash holds the default value on creation for the payload_hash field.
+	decoyobservation.DefaultPayloadHash = decoyobservationDescPayloadHash.Default.(string)
+	decoyrevisionFields := schema.DecoyRevision{}.Fields()
+	_ = decoyrevisionFields
+	// decoyrevisionDescNumber is the schema descriptor for number field.
+	decoyrevisionDescNumber := decoyrevisionFields[2].Descriptor()
+	// decoyrevision.NumberValidator is a validator for the "number" field. It is called by the builders before save.
+	decoyrevision.NumberValidator = decoyrevisionDescNumber.Validators[0].(func(int) error)
+	// decoyrevisionDescCreatedAt is the schema descriptor for created_at field.
+	decoyrevisionDescCreatedAt := decoyrevisionFields[5].Descriptor()
+	// decoyrevision.DefaultCreatedAt holds the default value on creation for the created_at field.
+	decoyrevision.DefaultCreatedAt = decoyrevisionDescCreatedAt.Default.(func() time.Time)
+	// decoyrevisionDescID is the schema descriptor for id field.
+	decoyrevisionDescID := decoyrevisionFields[0].Descriptor()
+	// decoyrevision.DefaultID holds the default value on creation for the id field.
+	decoyrevision.DefaultID = decoyrevisionDescID.Default.(func() uuid.UUID)
 	enrolltokenFields := schema.EnrollToken{}.Fields()
 	_ = enrolltokenFields
 	// enrolltokenDescCreatedAt is the schema descriptor for created_at field.
@@ -793,6 +862,56 @@ func init() {
 	taskrunDescID := taskrunFields[0].Descriptor()
 	// taskrun.DefaultID holds the default value on creation for the id field.
 	taskrun.DefaultID = taskrunDescID.Default.(func() uuid.UUID)
+	triagerunFields := schema.TriageRun{}.Fields()
+	_ = triagerunFields
+	// triagerunDescStartedAt is the schema descriptor for started_at field.
+	triagerunDescStartedAt := triagerunFields[2].Descriptor()
+	// triagerun.DefaultStartedAt holds the default value on creation for the started_at field.
+	triagerun.DefaultStartedAt = triagerunDescStartedAt.Default.(func() time.Time)
+	// triagerunDescModel is the schema descriptor for model field.
+	triagerunDescModel := triagerunFields[7].Descriptor()
+	// triagerun.DefaultModel holds the default value on creation for the model field.
+	triagerun.DefaultModel = triagerunDescModel.Default.(string)
+	// triagerunDescErrorCode is the schema descriptor for error_code field.
+	triagerunDescErrorCode := triagerunFields[8].Descriptor()
+	// triagerun.DefaultErrorCode holds the default value on creation for the error_code field.
+	triagerun.DefaultErrorCode = triagerunDescErrorCode.Default.(string)
+	// triagerunDescDurationMs is the schema descriptor for duration_ms field.
+	triagerunDescDurationMs := triagerunFields[9].Descriptor()
+	// triagerun.DefaultDurationMs holds the default value on creation for the duration_ms field.
+	triagerun.DefaultDurationMs = triagerunDescDurationMs.Default.(int64)
+	// triagerunDescModelMs is the schema descriptor for model_ms field.
+	triagerunDescModelMs := triagerunFields[10].Descriptor()
+	// triagerun.DefaultModelMs holds the default value on creation for the model_ms field.
+	triagerun.DefaultModelMs = triagerunDescModelMs.Default.(int64)
+	// triagerunDescToolMs is the schema descriptor for tool_ms field.
+	triagerunDescToolMs := triagerunFields[11].Descriptor()
+	// triagerun.DefaultToolMs holds the default value on creation for the tool_ms field.
+	triagerun.DefaultToolMs = triagerunDescToolMs.Default.(int64)
+	// triagerunDescModelCalls is the schema descriptor for model_calls field.
+	triagerunDescModelCalls := triagerunFields[12].Descriptor()
+	// triagerun.DefaultModelCalls holds the default value on creation for the model_calls field.
+	triagerun.DefaultModelCalls = triagerunDescModelCalls.Default.(int)
+	// triagerunDescToolCalls is the schema descriptor for tool_calls field.
+	triagerunDescToolCalls := triagerunFields[13].Descriptor()
+	// triagerun.DefaultToolCalls holds the default value on creation for the tool_calls field.
+	triagerun.DefaultToolCalls = triagerunDescToolCalls.Default.(int)
+	// triagerunDescToolErrors is the schema descriptor for tool_errors field.
+	triagerunDescToolErrors := triagerunFields[14].Descriptor()
+	// triagerun.DefaultToolErrors holds the default value on creation for the tool_errors field.
+	triagerun.DefaultToolErrors = triagerunDescToolErrors.Default.(int)
+	// triagerunDescInputTokens is the schema descriptor for input_tokens field.
+	triagerunDescInputTokens := triagerunFields[16].Descriptor()
+	// triagerun.DefaultInputTokens holds the default value on creation for the input_tokens field.
+	triagerun.DefaultInputTokens = triagerunDescInputTokens.Default.(int)
+	// triagerunDescOutputTokens is the schema descriptor for output_tokens field.
+	triagerunDescOutputTokens := triagerunFields[17].Descriptor()
+	// triagerun.DefaultOutputTokens holds the default value on creation for the output_tokens field.
+	triagerun.DefaultOutputTokens = triagerunDescOutputTokens.Default.(int)
+	// triagerunDescID is the schema descriptor for id field.
+	triagerunDescID := triagerunFields[0].Descriptor()
+	// triagerun.DefaultID holds the default value on creation for the id field.
+	triagerun.DefaultID = triagerunDescID.Default.(func() uuid.UUID)
 	trustedsourceFields := schema.TrustedSource{}.Fields()
 	_ = trustedsourceFields
 	// trustedsourceDescCreatedAt is the schema descriptor for created_at field.

@@ -1,0 +1,92 @@
+{
+  "reviewer": "执行代理逐条工程复核；非独立人工验收",
+  "reviewed_run": "v2.jsonl",
+  "release_gate": "not_accepted",
+  "independent_human_review": "pending",
+  "items": [
+    {
+      "case": "shared_cdn",
+      "repeat": 1,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在当前样本边界内未发现需阻止交付的事实或处置扩展；不代表总体准确率或人工审签。"
+    },
+    {
+      "case": "shared_cdn",
+      "repeat": 2,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在当前样本边界内未发现需阻止交付的事实或处置扩展；不代表总体准确率或人工审签。"
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 1,
+      "automated_pass": true,
+      "engineering_review": "needs_review",
+      "reason": "未知进程周期性解析并伴随外连即可申请处置，是否仍把弱线索接入处置需要独立复核。"
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 2,
+      "automated_pass": true,
+      "engineering_review": "fail",
+      "reason": "输入只说没有进程来源或连接数据，kill_chain 却说发起进程与解析结果未采集；actions 还以进程异常等单一分支触发处置。"
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 1,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在当前样本边界内未发现需阻止交付的事实或处置扩展；不代表总体准确率或人工审签。"
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 2,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在当前样本边界内未发现需阻止交付的事实或处置扩展；不代表总体准确率或人工审签。"
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 1,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在当前样本边界内未发现需阻止交付的事实或处置扩展；不代表总体准确率或人工审签。"
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 2,
+      "automated_pass": true,
+      "engineering_review": "fail",
+      "reason": "输入只有没有客户端进程或连接记录，不能证明采集未启用；结论却写未采集客户端日志。"
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 1,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在当前样本边界内未发现需阻止交付的事实或处置扩展；不代表总体准确率或人工审签。"
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 2,
+      "automated_pass": true,
+      "engineering_review": "needs_review",
+      "reason": "SSH→systemctl→systemd 的箭头容易误称父子关系；输入没有提供完整父 PID 证据，systemd 创建符号链接不能证明 systemctl 是其父进程。"
+    },
+    {
+      "case": "confirmed_attack",
+      "repeat": 1,
+      "automated_pass": true,
+      "engineering_review": "fail",
+      "reason": "陌生落地二进制不等于首次出现的可执行文件；输入未提供首次出现的时间或历史基线。"
+    },
+    {
+      "case": "confirmed_attack",
+      "repeat": 2,
+      "automated_pass": true,
+      "engineering_review": "pass",
+      "reason": "在当前样本边界内未发现需阻止交付的事实或处置扩展；不代表总体准确率或人工审签。"
+    }
+  ]
+}

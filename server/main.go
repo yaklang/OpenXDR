@@ -35,10 +35,13 @@ import (
 	"openxdr/server/internal/beacon"
 	"openxdr/server/internal/cluster"
 	"openxdr/server/internal/commandgate"
+	"openxdr/server/internal/commandreview"
 	"openxdr/server/internal/correlate"
 	"openxdr/server/internal/enroll"
+	"openxdr/server/internal/eventarchive"
 	"openxdr/server/internal/eventbus"
 	"openxdr/server/internal/eventpart"
+	"openxdr/server/internal/eventsearch"
 	"openxdr/server/internal/fpstats"
 	"openxdr/server/internal/grpcsvc"
 	"openxdr/server/internal/hostimport"
@@ -81,7 +84,10 @@ func main() {
 
 	suppressions := suppress.New(client, time.Duration(getenvInt("SUPPRESSION_RELOAD_SECONDS", 30))*time.Second)
 	go suppressions.Run(ctx)
-	intelStore, intelFeeds := startIntel(ctx, db, client)
+	credentialVault := loadCredentialVault()
+	aiConf := newAIConf(client, credentialVault)
+	conf := func() aiconf.Config { return aiConf.Get(ctx) }
+	intelStore, intelFeeds := startIntel(ctx, db, client, func(ctx context.Context) string { return aiConf.Get(ctx).AbuseCHKey })
 
 	rulesPath := getenv("RULES_PATH", "../rules")
 	rules, temporalRules, err := loadDetectionRules(ctx, rulesPath, os.Getenv("TEMPORAL_RULES_PATH"), time.Duration(getenvInt("RULES_RELOAD_SECONDS", 30))*time.Second)
@@ -97,9 +103,6 @@ func main() {
 	}
 	startAnalytics(ctx, db, client, rules, suppressions)
 
-	credentialVault := loadCredentialVault()
-	aiConf := newAIConf(client, credentialVault)
-	conf := func() aiconf.Config { return aiConf.Get(ctx) }
 	// 研判与资产标注共用一个端点与模型，每次调用按当时的配置，用量按用途分开记
 	llmFor := func(feature string) *triage.LLM { return newLLM(client, conf, feature) }
 	assetEngine := startAssetMap(ctx, db, client, llmFor, conf)
@@ -116,7 +119,7 @@ func main() {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		telemetry.NewCollectorHealth(db), telemetry.NewIntegrationQueue(db), integration.RateLimitedRequests)
-	events, router := startEventBus(db, rules, temporalRules, suppressions, intelStore, dedupWindow, hub, registry)
+	events, router := startEventBus(ctx, db, rules, temporalRules, suppressions, intelStore, dedupWindow, hub, registry)
 	if router != nil {
 		defer router.Close()
 	}
@@ -137,15 +140,18 @@ func main() {
 	enrollSvc := loadEnroll(client, silentAfter)
 	routes := http.NewServeMux()
 	registerSQLRoutes(routes, db)
+	routes.Handle("GET /api/trusted-sources/candidates", api.TrustedCandidates(client, db))
 	registerHostRoutes(ctx, routes, db, client, rules, credentialVault, enrollSvc, conf)
 	registerSettingsRoutes(routes, db, client, credentialVault, notifySettings, webhook, aiConf, intelFeeds, enrollSvc, dists)
-	registerAIRoutes(routes, client, llmFor, assetEngine)
+	// 冷归档读取默认关闭：EVENT_ARCHIVE_READ=1 才把连接交给 /api/events 与问 AI 入口，关着时行为与改动前一致
+	archiveRead := archiveConn(ctx, db)
+	registerAIRoutes(routes, client, archiveRead, llmFor, assetEngine)
 	outboundAllow := &integration.OutboundAllow{DB: client, Locked: os.Getenv("INTEGRATION_WEBHOOK_ALLOW")}
 	integrations := api.Integrations(client, credentialVault, outboundAllow)
 	routes.Handle("/api/system-integrations", integrations)
 	routes.Handle("/api/system-integrations/", integrations)
 	startIntegrationDelivery(ctx, client, credentialVault, outboundAllow)
-	routes.Handle("/", api.Handler(client, rules, hub, suppressions, intelStore, allowlist, chat))
+	routes.Handle("/", api.Handler(client, archiveRead, rules, hub, suppressions, intelStore, allowlist, chat))
 	mux := publicMux(auth.Middleware(client, routes), db, client, registry, enrollSvc, dists, events)
 	// 经反向代理时还原客户端地址，登录退避与审计才按真人计
 	trustedProxies, err := realip.Parse(os.Getenv("TRUSTED_PROXIES"))
@@ -154,6 +160,10 @@ func main() {
 		os.Exit(1)
 	}
 	httpServer := &http.Server{Addr: httpAddr, Handler: realip.Middleware(trustedProxies, mux), ReadHeaderTimeout: 10 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx }}
+	if err := api.StartDeceptionHost(ctx, client, os.Getenv("DYGK_CONTROL_SOCKET")); err != nil {
+		slog.Error("欺骗引擎控制通道启动失败", "err", err)
+		os.Exit(1)
+	}
 	serveUntilDone(ctx, httpServer, chat, scheduler, grpcServer)
 }
 
@@ -177,7 +187,7 @@ func migrateSchema(ctx context.Context, db *sql.DB, client *ent.Client) error {
 	if err := eventpart.Migrate(ctx, client, db); err != nil {
 		return err
 	}
-	ensureSearchIndex(ctx, db)
+	eventsearch.Ensure(ctx, db)
 	// 旧版 AI 免审批名单换成高风险名单；放在 schema 锁里，多节点同时启动只迁一次
 	if err := commandgate.MigrateAllowToDeny(ctx, client); err != nil {
 		return err
@@ -223,11 +233,11 @@ func startDirectorySync(ctx context.Context, db *sql.DB) {
 }
 
 // startIntel 情报库定时重载与情报订阅。
-func startIntel(ctx context.Context, db *sql.DB, client *ent.Client) (*intel.Store, *intel.Feeds) {
+func startIntel(ctx context.Context, db *sql.DB, client *ent.Client, authKey func(context.Context) string) (*intel.Store, *intel.Feeds) {
 	intelStore := intel.New(client, time.Duration(getenvInt("INTEL_RELOAD_SECONDS", 30))*time.Second)
 	go intelStore.Run(ctx)
 	// 情报订阅：内置公开源，控制台开关，单活定时拉取；落库后由 intelStore 下个重载周期生效
-	intelFeeds := &intel.Feeds{DB: db, Client: client, HTTP: &http.Client{},
+	intelFeeds := &intel.Feeds{DB: db, Client: client, HTTP: &http.Client{}, AuthKey: authKey,
 		Interval: time.Duration(getenvInt("INTEL_FEED_INTERVAL_HOURS", 6)) * time.Hour}
 	go cluster.RunLeader(ctx, db, "intel-feeds", intelFeeds.Run)
 	return intelStore, intelFeeds
@@ -268,10 +278,11 @@ func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules s
 	}
 
 	janitorEngine := &janitor.Janitor{
-		SQL:       db,
-		DB:        client,
-		Retention: time.Duration(getenvInt("RETENTION_DAYS", 30)) * 24 * time.Hour,
-		Interval:  time.Duration(getenvInt("RETENTION_INTERVAL_MINUTES", 60)) * time.Minute,
+		SQL:          db,
+		DB:           client,
+		Retention:    time.Duration(getenvInt("RETENTION_DAYS", 30)) * 24 * time.Hour,
+		Interval:     time.Duration(getenvInt("RETENTION_INTERVAL_MINUTES", 60)) * time.Minute,
+		GapRetention: time.Duration(getenvInt("TEMPORAL_GAP_RETENTION_DAYS", 30)) * 24 * time.Hour,
 	}
 	go cluster.RunLeader(ctx, db, "janitor", janitorEngine.Run)
 	// 事件日分区预建与保留期退役无关：RETENTION_DAYS=0 也要按天建分区
@@ -314,7 +325,8 @@ func newAIConf(client *ent.Client, credentialVault *hostimport.Vault) *aiconf.St
 	return &aiconf.Store{DB: client, Vault: credentialVault, Default: aiconf.Config{
 		BaseURL: getenv("AI_BASE_URL", "http://localhost:11434/v1"), APIKey: os.Getenv("AI_API_KEY"),
 		Model: os.Getenv("AI_MODEL"), PiModel: os.Getenv("PI_MODEL"),
-		PTR: getenv("IPINFO_PTR", "true") == "true", VTKey: os.Getenv("VT_API_KEY"), VTAlertMin: getenvInt("VT_ALERT_MIN_ENGINES", 3),
+		AbuseCHKey: os.Getenv("ABUSE_CH_AUTH_KEY"),
+		PTR:        getenv("IPINFO_PTR", "true") == "true", VTKey: os.Getenv("VT_API_KEY"), VTAlertMin: getenvInt("VT_ALERT_MIN_ENGINES", 3),
 	}}
 }
 
@@ -440,11 +452,34 @@ func startAutomation(ctx context.Context, db *sql.DB, client *ent.Client, webhoo
 
 // startEventBus 事件处理管道：配了 NATS_URL 走 JetStream 持久队列并挂上跨节点指令路由，
 // 否则单机直连，返回的 router 为 nil。
-func startEventBus(db *sql.DB, rules sigma.Catalog, temporalRules *temporal.Store, suppressions *suppress.Store, intelStore *intel.Store, dedupWindow time.Duration, hub *response.Hub, registry *prometheus.Registry) (eventbus.Bus, *response.NATSRouter) {
+func startEventBus(ctx context.Context, db *sql.DB, rules sigma.Catalog, temporalRules *temporal.Store, suppressions *suppress.Store, intelStore *intel.Store, dedupWindow time.Duration, hub *response.Hub, registry *prometheus.Registry) (eventbus.Bus, *response.NATSRouter) {
 	metrics := telemetry.New(registry)
+	// ingest 用可选接口记整批耗时，漏实现只会静默失效，在接线处钉死
+	var _ interface{ Batch(int, time.Duration) } = metrics
 	processor := &ingest.Processor{
 		DB: db, Rules: rules, Temporal: temporalRules, Suppress: suppressions, Intel: intelStore,
 		DedupWindow: dedupWindow, Metrics: metrics,
+	}
+	// 冷归档重传判重默认关闭：EVENT_ARCHIVE_DEDUP=1 才接上，不设时 Processor.Archive 为 nil，
+	// 接入路径一行代码都不多跑。与 EVENT_ARCHIVE_READ 相互独立（一个管读接口、一个管接入），
+	// 但只要用 eventarchive swap 切走过分区，这里就必须为 1，否则重放的老事件会重新入库、
+	// 重复告警——见 docs/event-archive.md。
+	if getenv("EVENT_ARCHIVE_DEDUP", "") == "1" {
+		archive := ingest.NewCachedArchive(archiveDedup{db: db})
+		processor.Archive = archive
+		// ingest 用可选接口探测计数器，漏实现不会报错、只会静默失效，所以在接线的位置钉死它。
+		var _ interface{ ArchiveFailOpen(string) } = (*telemetry.Metrics)(nil)
+		// 启动时探一次边界：把边界写进启动日志，也让第一个事件就吃到缓存。
+		// 冷层不可用不影响 server 起来，按 fail-open（没有归档）运行并如实告警。
+		last, ok, err := archive.ArchiveBoundary(ctx)
+		switch {
+		case err != nil:
+			slog.Warn("冷归档重传判重已启用，但读不到归档边界，本次按没有归档运行（fail-open）", "err", err)
+		case ok:
+			slog.Info("冷归档重传判重已启用", "boundary", last, "cache_ttl", ingest.DefaultArchiveBoundaryTTL)
+		default:
+			slog.Info("冷归档重传判重已启用，当前冷归档为空")
+		}
 	}
 	var events eventbus.Bus = eventbus.NewDirect(processor, metrics)
 	hostname, _ := os.Hostname()
@@ -457,7 +492,7 @@ func startEventBus(db *sql.DB, rules sigma.Catalog, temporalRules *temporal.Stor
 	queued, err := eventbus.NewJetStream(natsURL,
 		instance, getenvInt("QUEUE_SHARDS", 32), getenvInt("QUEUE_REPLICAS", 1),
 		int64(getenvInt("QUEUE_MAX_BYTES_GB", 20))*1024*1024*1024,
-		time.Duration(getenvInt("QUEUE_MAX_AGE_HOURS", 0))*time.Hour, processor, metrics)
+		time.Duration(getenvInt("QUEUE_MAX_AGE_HOURS", 0))*time.Hour, processor, metrics, getenvInt("QUEUE_BATCH_SIZE", 1))
 	if err != nil {
 		slog.Error("JetStream 初始化失败", "err", err)
 		os.Exit(1)
@@ -468,7 +503,7 @@ func startEventBus(db *sql.DB, rules sigma.Catalog, temporalRules *temporal.Stor
 		os.Exit(1)
 	}
 	hub.Router = router
-	slog.Info("事件队列已启用", "url", natsURL, "shards", getenvInt("QUEUE_SHARDS", 32))
+	slog.Info("事件队列已启用", "url", natsURL, "shards", getenvInt("QUEUE_SHARDS", 32), "batch_size", queued.BatchSize())
 	return queued, router
 }
 
@@ -559,7 +594,7 @@ func startQueryRoles(ctx context.Context, db *sql.DB, client *ent.Client, dsn st
 
 // newPiRuntime 配了沙箱就让 Pi 在远端隔离容器里用默认工具干活；没配退回本机 runner 与平台自定义工具
 func newPiRuntime() piruntime.Runtime {
-	piRuntime := piruntime.Runtime{Runner: getenv("PI_RUNNER_PATH", "/app/pi-runtime/runner.mjs"), Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 1800)) * time.Second}
+	piRuntime := piruntime.Runtime{Runner: getenv("PI_RUNNER_PATH", "/app/pi-runtime/runner.mjs"), Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 14400)) * time.Second}
 	url := os.Getenv("SANDBOX_URL")
 	if url == "" {
 		return piRuntime
@@ -580,12 +615,16 @@ func newPiRuntime() piruntime.Runtime {
 // startChat Pi 会话服务，并恢复上次退出时未完成的会话。
 func startChat(ctx context.Context, client *ent.Client, rules sigma.Catalog, hub *response.Hub, webhook *notify.Webhook, conf func() aiconf.Config, queryRoles *queryrole.Provisioner) *agentchat.Service {
 	piRuntime := newPiRuntime()
-	chat := &agentchat.Service{Base: ctx, Rules: rules, Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 1800)) * time.Second, DB: client, Gate: &commandgate.Gate{DB: client, Hub: hub, ApprovalTimeout: time.Duration(getenvInt("PI_APPROVAL_TIMEOUT_SECONDS", 600)) * time.Second, Notify: webhook.Send},
+	chat := &agentchat.Service{Base: ctx, Rules: rules, Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 14400)) * time.Second, DB: client, Gate: &commandgate.Gate{DB: client, Hub: hub, ApprovalTimeout: time.Duration(getenvInt("PI_APPROVAL_TIMEOUT_SECONDS", 600)) * time.Second, Notify: webhook.Send},
 		Runtime: piRuntime, Sandboxed: piRuntime.Sandboxed(),
 		AI: func() (string, string, string) { c := conf(); return c.BaseURL, c.APIKey, c.PiModel }, Query: queryRoles,
-		GroupDailyTokens: getenvInt("PI_GROUP_DAILY_TOKENS", 0),
+		GroupDailyTokens: getenvInt("PI_GROUP_DAILY_TOKENS", 0), MaxTurns: getenvInt("PI_MAX_TURNS", 500),
 		// 长会话折叠较早的工具结果与思考过程再发给模型，库里与界面仍是原文
 		FoldAbove: getenvInt("PI_HISTORY_FOLD_KB", 64) * 1024}
+	// AI 发起的待批准命令由 AI 审计员当场评审（同一个推理端点、会话自己的模型），不再阻塞等人
+	reviewer := &commandreview.Reviewer{DB: client, OnUsage: aiconf.Recorder(client, "review"),
+		Endpoint: func() (string, string) { c := conf(); return c.BaseURL, c.APIKey }}
+	chat.Gate.Reviewer = reviewer.Review
 	go chat.Recover(ctx)
 	return chat
 }
@@ -603,7 +642,7 @@ func startScheduler(ctx context.Context, db *sql.DB, client *ent.Client, chat *a
 		Interval:     time.Duration(getenvInt("SCHEDULE_INTERVAL_SECONDS", 30)) * time.Second,
 		DefaultModel: func() string { return conf().PiModel },
 		Notify:       webhook.Send,
-		Timeout:      time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 1800)) * time.Second,
+		Timeout:      time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 14400)) * time.Second,
 		MaxRunning:   getenvInt("SCHEDULE_MAX_RUNNING", schedule.DefaultMaxRunning),
 	}
 	// 常驻：任务定义照常同步到库里，Pi 模型配上才运行
@@ -638,6 +677,40 @@ func newImportLLM(conf func() aiconf.Config, model string) *triage.LLM {
 		return c.BaseURL, cmp.Or(model, c.Model, c.PiModel), c.APIKey
 	}
 	return l
+}
+
+// archiveConn 冷归档读取用的连接：只有 EVENT_ARCHIVE_READ=1 才接上，默认关闭。
+// 开启时先确保冷归档表存在；建表失败只记日志并降级为「没有冷层」——事件页不能因为
+// 冷归档起不来就整页报错，server 更不该因此起不来。阶段 B1 只读，归档写入仍然走 CLI。
+func archiveConn(ctx context.Context, db *sql.DB) *sql.DB {
+	if getenv("EVENT_ARCHIVE_READ", "") != "1" {
+		// 关着时检索与改动前一致、不报冷层缺口；库里已经有冷块却没开读，是部署配置错了，
+		// 在启动日志里如实告警，而不是让每次检索都弹提示
+		if ext, err := eventarchive.ArchiveExtent(ctx, db); err == nil && ext.Has {
+			slog.Warn("库里有冷归档数据，但 EVENT_ARCHIVE_READ 未开启：事件检索与调查不会覆盖已归档的历史",
+				"first", ext.First, "last", ext.Last)
+		}
+		return nil
+	}
+	if err := eventarchive.EnsureSchema(ctx, db); err != nil {
+		slog.Warn("冷归档读取已开启，但初始化冷归档表失败，本次按没有冷层运行", "err", err)
+		return nil
+	}
+	return db
+}
+
+// archiveDedup 把冷归档的两个只读函数接到接入路径的最小接口（ingest.ArchiveDedup）上：
+// 依赖方向仍是 main → 两个包，ingest 不 import eventarchive，eventarchive 也不知道自己在被谁调用。
+type archiveDedup struct{ db *sql.DB }
+
+// Archived 只在事件时间不晚于归档边界时被调用（罕见的重传路径）。
+func (a archiveDedup) Archived(ctx context.Context, id uuid.UUID) (bool, error) {
+	return eventarchive.Exists(ctx, a.db, id)
+}
+
+// ArchiveBoundary 由 ingest 侧的 CachedArchive 缓存 60 秒，不会逐条事件查库。
+func (a archiveDedup) ArchiveBoundary(ctx context.Context) (time.Time, bool, error) {
+	return eventarchive.Boundary(ctx, a.db)
 }
 
 // registerSQLRoutes 直接查库的接口：时序缺口、指令核验与身份观测。
@@ -693,12 +766,14 @@ func registerSettingsRoutes(routes *http.ServeMux, db *sql.DB, client *ent.Clien
 	routes.Handle("/api/enroll-tokens/", enrollTokens)
 }
 
-// registerAIRoutes 日志检索「问 AI」与资产图谱接口。
-func registerAIRoutes(routes *http.ServeMux, client *ent.Client, llmFor func(string) *triage.LLM, assetEngine *assetmap.Engine) {
+// registerAIRoutes 日志检索「问 AI」与资产图谱接口。conn 是冷归档读取连接（受
+// EVENT_ARCHIVE_READ 闸门控制，由调用方传入）：热表查不到的日志按 id 定位冷事件，
+// 与 /api/events 共用同一个受控连接。
+func registerAIRoutes(routes *http.ServeMux, client *ent.Client, conn *sql.DB, llmFor func(string) *triage.LLM, assetEngine *assetmap.Engine) {
 	// 日志检索里的「问 AI」：交互式调用，同样关掉隐式思考、限住输出，等得起
 	explainLLM := llmFor("explain")
 	explainLLM.NoThinking, explainLLM.MaxTokens = true, 1500
-	eventAI := api.EventAI(client, explainLLM)
+	eventAI := api.EventAI(client, conn, explainLLM)
 	for _, path := range api.EventAIPaths {
 		routes.Handle(path, eventAI)
 	}
@@ -730,6 +805,7 @@ func publicMux(app http.Handler, db *sql.DB, client *ent.Client, registry *prome
 	// 接入端点免登录：安装脚本与二进制公开，注册靠令牌
 	mux.Handle("/api/enroll/", enrollSvc.Public(dists))
 	mux.Handle("/api/decoy-runtime/", api.DecoyRuntime(client))
+	mux.Handle("/api/deception-runtime/", api.DeceptionRuntime(client))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if err := db.PingContext(r.Context()); err != nil || !events.Ready() {
@@ -789,22 +865,6 @@ func configureLogging() {
 		return
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, opts)))
-}
-
-// ensureSearchIndex 事件全文检索的 trgm 索引。没有它，关键词检索在大表上
-// 是全表扫。CREATE EXTENSION 需要数据库权限，失败只降级警告——检索仍然可用，
-// 只是慢，比起启动失败这是正确的取舍。
-func ensureSearchIndex(ctx context.Context, db *sql.DB) {
-	stmts := []string{
-		"CREATE EXTENSION IF NOT EXISTS pg_trgm",
-		"CREATE INDEX IF NOT EXISTS events_raw_trgm ON events USING gin ((raw::text) gin_trgm_ops)",
-	}
-	for _, stmt := range stmts {
-		if _, err := db.ExecContext(ctx, stmt); err != nil {
-			slog.Warn("检索索引未启用，大数据量下关键词搜索会退化为全表扫描", "err", err)
-			return
-		}
-	}
 }
 
 // isolationAllowlist 隔离主机时必须放行的地址。默认放行 server 的 gRPC 端点，

@@ -15,22 +15,6 @@ import (
 	"openxdr/server/ent"
 )
 
-func TestEscapeLikeTriage(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"plain", "plain"},
-		{"100%", `100\%`},
-		{"a_b", `a\_b`},
-		{`path\file`, `path\\file`},
-		{`%_\`, `\%\_\\`},
-		{"", ""},
-	}
-	for _, c := range cases {
-		if got := escapeLike(c.in); got != c.want {
-			t.Errorf("escapeLike(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
 func TestBrief(t *testing.T) {
 	ts := time.Date(2026, 8, 8, 14, 30, 0, 0, time.UTC)
 	long := strings.Repeat("x", 400)
@@ -139,5 +123,30 @@ func TestLLMChatErrors(t *testing.T) {
 	l2 := NewLLM(srv2.URL, "llama3", "", time.Second)
 	if _, err := l2.Chat(context.Background(), []Message{{Role: "user", Content: "x"}}, nil); err == nil {
 		t.Error("空 choices 应返回错误")
+	}
+}
+
+func TestBriefUsesNormalizedProcessIdentity(t *testing.T) {
+	id, asset, process, parent := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	ev := &ent.Event{ID: id, AssetID: &asset, ProcessGUID: &process, ParentProcessGUID: &parent, Raw: []byte(`{"process_guid":"forged","parent_process_guid":"forged"}`)}
+	b := briefLimit(ev, 4)
+	if b.EventID != id.String() || b.ProcessGUID != process.String() || b.ParentProcessGUID != parent.String() || !b.RawTruncated {
+		t.Fatalf("%+v", b)
+	}
+	ev.ParentProcessGUID = nil
+	b = brief(ev)
+	if b.ParentProcessGUID != "" {
+		t.Fatal("不能从 raw 补写父进程")
+	}
+	raw, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := fields["parent_process_guid"]; exists {
+		t.Fatal("未知父进程必须保持缺失")
 	}
 }

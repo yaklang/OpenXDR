@@ -114,7 +114,7 @@ func (e *Engine) batch(ctx context.Context) (int, error) {
 	assets := map[uuid.UUID]bool{}
 	for k := range fresh {
 		// 旧版基线可能存着合并前的写法，一并查出来
-		paths = append(paths, k.exe, legacyPath(k.exe))
+		paths = append(paths, BaselinePaths(k.exe)...)
 		assets[k.asset] = true
 	}
 	known, err := e.DB.ProcessBaseline.Query().
@@ -245,4 +245,10 @@ func legacyPath(p string) string {
 		return q
 	}
 	return p
+}
+
+// BaselinePaths 返回与检测引擎一致的规范路径及旧版基线路径，供只读查证复用。
+func BaselinePaths(path string) []string {
+	canonical := canonicalPath(path)
+	return []string{canonical, legacyPath(canonical)}
 }

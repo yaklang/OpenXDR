@@ -64,7 +64,7 @@ func query(ctx context.Context, dsn, statement string) (string, error) {
 		return "", sqlError("只读 SQL 查询失败，请检查语法与视图权限", err)
 	}
 	defer rows.Close()
-	result := queryResult{Columns: []string{}, Rows: [][]json.RawMessage{}}
+	result := queryResult{Columns: []string{}, Rows: [][]json.RawMessage{}, Coverage: queryScope}
 	for rows.Next() {
 		if len(result.Rows) == 200 {
 			result.Truncated = true
@@ -127,6 +127,27 @@ type queryResult struct {
 	Columns   []string            `json:"columns"`
 	Rows      [][]json.RawMessage `json:"rows"`
 	Truncated bool                `json:"truncated"`
+	// Coverage 是静态范围声明，每次结果都带（见 queryScope）。
+	Coverage queryCoverage `json:"coverage"`
+}
+
+// queryCoverage 声明 query 工具的数据边界，不解析 SQL、不承诺行级覆盖度：
+// 这是声明，不是对具体语句的分析。任意 SQL 里到底碰了哪些表（子查询、CTE、
+// information_schema 都能绕开字符串匹配）靠解析是说不清的——说不清还硬说，
+// 比每次都带同一条真实边界更危险。模型拿到任何结果都知道：查不到 ≠ 没发生。
+type queryCoverage struct {
+	// Tables 列出只覆盖热表（events 现存行）的事件数据视图
+	Tables []string `json:"tables"`
+	// HotOnly 为 true 表示上述视图不含已归档冷数据
+	HotOnly bool   `json:"hot_only"`
+	Note    string `json:"note"`
+}
+
+// queryScope 与 queryrole 的视图定义同一口径（见 service.go 的 queryDescription），改视图时一起改。
+var queryScope = queryCoverage{
+	Tables:  []string{"events", "alert_events"},
+	HotOnly: true,
+	Note:    "events 与 alert_events 只覆盖仍保留在热表的事件；已归档冷数据（swap/retire 移出热表）不在任何 SQL 可查范围内，组视图同样；查不到不等于没发生",
 }
 
 // 按数据库输出顺序解码，不用 map 丢失列序或同名列。

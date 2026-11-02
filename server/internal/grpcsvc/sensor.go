@@ -13,6 +13,9 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
+	// 注册 gzip 编码器：探针开了 SENSOR_GRPC_COMPRESSION=gzip 后上行消息带
+	// grpc-encoding: gzip，没有这个空导入 grpc-go 会以 "Decompressor is not installed" 拒收。
+	_ "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/status"
 
 	"openxdr/server/ent"
@@ -88,6 +91,8 @@ func (s *SensorServer) enqueue(ctx context.Context, batch *pb.FlowBatch) error {
 	if err != nil {
 		return err
 	}
+	var pending []ingest.Envelope
+	bytes := 0
 	for _, f := range batch.Flows {
 		classUID := classNetworkActivity
 		if f.DnsQuery != "" {
@@ -101,15 +106,21 @@ func (s *SensorServer) enqueue(ctx context.Context, batch *pb.FlowBatch) error {
 		}
 		id := ingest.StableID(batch.SensorId, strconv.FormatInt(f.StartUnixNs, 10),
 			strconv.FormatInt(f.EndUnixNs, 10), connTuple(f), string(raw))
-		if err := s.Events.Publish(ctx, ingest.Envelope{
+		pending = append(pending, ingest.Envelope{
 			Version: ingest.EnvelopeVersion, ID: id, PartitionKey: partitionKey,
 			Timestamp: time.Unix(0, f.StartUnixNs), ClassUID: classUID, Source: "sensor",
 			AssetID: assetID, AssetOS: assetOS, ConnTuple: connTuple(f), Raw: raw,
-		}); err != nil {
-			return fmt.Errorf("流事件入队: %w", err)
+		})
+		bytes += len(raw)
+		if len(pending) >= eventbus.BatchSize(s.Events) || bytes >= 256<<10 {
+			if err := eventbus.PublishBatch(ctx, s.Events, pending); err != nil {
+				return fmt.Errorf("流事件入队: %w", err)
+			}
+			pending = nil
+			bytes = 0
 		}
 	}
-	return nil
+	return eventbus.PublishBatch(ctx, s.Events, pending)
 }
 
 func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, deduper *dedup.Deduper) error {
@@ -260,10 +271,16 @@ func flowRaw(f *pb.FlowRecord) json.RawMessage {
 			body["answers"] = answers
 		}
 	}
-	if f.TlsSni != "" || f.Ja3 != "" || f.Ja3S != "" || f.TlsCertSubject != "" || f.TlsHandshakeOnly {
+	if f.TlsSni != "" || f.Ja3 != "" || f.Ja3S != "" || f.TlsVersion != "" || f.TlsAlpn != "" || f.TlsCertSubject != "" || f.TlsHandshakeOnly {
 		tls := map[string]any{}
 		if f.TlsSni != "" {
 			tls["sni"] = f.TlsSni
+		}
+		if f.TlsVersion != "" {
+			tls["version"] = f.TlsVersion
+		}
+		if f.TlsAlpn != "" {
+			tls["alpn"] = f.TlsAlpn
 		}
 		if f.Ja3 != "" {
 			tls["ja3_hash"] = f.Ja3

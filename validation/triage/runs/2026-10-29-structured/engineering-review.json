@@ -1,0 +1,18 @@
+{
+  "reviewer": "executing_agent",
+  "independent_human_review": "pending",
+  "release_gate": "not_accepted",
+  "source_sha256": "18004bd362d09a689069129569a619411b56faeb3be7449d7e18ab39322022e8",
+  "evaluations": [
+    {
+      "repeat": 1,
+      "status": "fail",
+      "reason": "建议 raw 模式去掉正文截断，但该模式只扩大搜索字段范围，工具返回仍经 brief 裁剪；血缘工具也没有时间/进程范围参数。自动评分漏判。"
+    },
+    {
+      "repeat": 2,
+      "status": "pass",
+      "reason": "引用与夹具匹配，未扩写人工记录缺失，建议为核实补证；自动评分调用失败，保留原错误，不补写自动通过。"
+    }
+  ]
+}

@@ -15,7 +15,7 @@ OpenXDR 采用 OCSF 风格事件模型。本文列出所有事件类别、字段
 | 4003 | DNS 活动（DNS Activity） | agent / sensor | agent dnswatch 本机与容器的 DNS 问答（Linux AF_PACKET）、dnswatch_win 系统解析器的查询（Windows ETW DNS-Client）；sensor 会话带 dns_query 时判定 |
 | 1005 | 模块活动（Module Activity） | agent | Linux kmodwatch（/proc/modules diff） |
 | 5001 | 设备清单（Device Inventory Info） | agent | inventory：监听端口（含服务进程所属的包）与云环境快照，供资产图谱与攻击面 |
-| 5020 | 软件清单（Software Inventory Info） | agent | software：发行版与 dpkg 已装包（包名、版本、源码包、源码版本），供漏洞匹配，见 [vulns.md](vulns.md) |
+| 5020 | 软件清单（Software Inventory Info） | agent | software：发行版与 dpkg / RPM 已装包（包名、版本、源码包、源码版本）；漏洞匹配目前仅支持 Debian / Ubuntu 的 dpkg 包，见 [vulns.md](vulns.md) |
 | 201002 | 注册表值活动（Registry Value Activity） | agent | Windows persistwatch 注册表键/服务快照 |
 | 100001 | 应用日志（OCSF 私有段） | syslog | server syslog 接入 |
 
@@ -49,7 +49,7 @@ agent 侧组装（`agent/src/collector/mod.rs:233` `process_event`）。
 - 进程在容器或 Proxmox 虚拟机里时（Linux 按 cgroup 识别），顶层加
   `"container": { "runtime": "docker|podman|containerd|cri-o|lxc|qemu|nspawn", "uid": "<容器 ID 前 12 位或 VMID>", "name": "<名字，读不到省略>" }`
 - 平台下发的指令拉起的进程（及其后代）顶层带 `"platform_command": { "uid": "<指令 ID>" }`，网络与 DNS 事件同样带，
-  见 [检测链路 · 平台指令触发的告警](detection.md#平台指令触发的告警servercmdorigin)
+  见 [检测链路 · 平台指令触发的告警](detection.md#平台指令触发的告警serverinternalcmdorigin)
 - Linux 上属于某次 SSH 登录会话的进程（按内核审计会话号认）顶层带
   `"login_session": { "uid": "<审计会话号>", "user", "src_ip", "src_port", "auth_method", "key_type", "key_fp": "SHA256:…" }`；
   对应的认证成功事件（3002）也带同一对象（无 `uid`）。只在认证日志出处核对通过（root 身份的 sshd）时才有，
@@ -58,6 +58,10 @@ agent 侧组装（`agent/src/collector/mod.rs:233` `process_event`）。
   eBPF（exit_group）与 netlink 路径的退出事件带 `exit_code`（被信号杀掉的为 null）；
   知道启动时间的（启动事件或启动快照里见过）带 `process.created_time`（毫秒）与顶层 `duration_ms`；
   ETW Stop 与轮询消失 pid 的退出事件只有 pid 等少量字段（进程已退场，补不到细节）
+- **短命且成功退出的进程不再产生 Terminate 事件**：退出码为 0、存活不到 2 秒的（采集开关
+  `suppressTrivialExit`，默认开，见 [采集端详解](collection.md#进程采集三级降级)）只留启动事件。
+  退出码非零或未知（被信号杀、内核/ETW 拿不到）、启动时间读不到、存活 ≥ 2 秒的照旧上报——
+  判不准就不抑制，宁可多报
 - 字段质量随采集路径变化，写规则时注意：
   - Linux eBPF/netlink：username 由 /proc status 的 uid 查 /etc/passwd 解析
     （passwd 查不到退化为 uid 数字串）；exe 路径来自内核或

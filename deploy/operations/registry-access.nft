@@ -1,0 +1,8 @@
+table inet openxdr_registry_guard {
+ chain ingress {
+  type filter hook prerouting priority -110; policy accept;
+  iifname "lo" accept
+  fib daddr type local tcp dport 5000 ip saddr { 10.1.1.189, 10.1.1.192, 10.1.1.193 } counter accept
+  fib daddr type local tcp dport 5000 counter drop
+ }
+}

@@ -39,7 +39,7 @@ func TestGroupLifecycleSeedsAndCleansUp(t *testing.T) {
 	ctx, client := testdb.New(t)
 	queries := &fakeQueries{}
 	chat := &agentchat.Service{DB: client, Query: queries}
-	ts := httptest.NewServer(asAdmin(Handler(client, loadRules(t), response.NewHub(client, false),
+	ts := httptest.NewServer(asAdmin(Handler(client, nil, loadRules(t), response.NewHub(client, false),
 		suppress.New(client, time.Hour), intel.New(client, time.Hour), nil, chat)))
 	t.Cleanup(ts.Close)
 

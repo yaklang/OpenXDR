@@ -15,6 +15,7 @@ import (
 )
 
 // Router 把指令送到持有目标 agent gRPC 长连接的任意 server 实例。
+// 同一 agent 在另一节点重连时，旧节点的 deliver 会收到 nil，用于通知 Hub 关闭半开旧通道。
 type Router interface {
 	Attach(uuid.UUID, func(*pb.Command) error) func()
 	Deliver(context.Context, uuid.UUID, *pb.Command) error
@@ -36,8 +37,10 @@ func NewNATSRouter(url, instance string) (*NATSRouter, error) {
 }
 
 func (r *NATSRouter) Attach(agentID uuid.UUID, deliver func(*pb.Command) error) func() {
-	subject := "openxdr.commands." + agentID.String()
-	sub, err := r.nc.QueueSubscribe(subject, "agent-"+agentID.String(), func(msg *nats.Msg) {
+	id := agentID.String()
+	token := uuid.NewString()
+	subject := "openxdr.commands." + id
+	sub, err := r.nc.QueueSubscribe(subject, "agent-"+id, func(msg *nats.Msg) {
 		var cmd pb.Command
 		if proto.Unmarshal(msg.Data, &cmd) != nil {
 			_ = msg.Respond([]byte("invalid"))
@@ -52,15 +55,36 @@ func (r *NATSRouter) Attach(agentID uuid.UUID, deliver func(*pb.Command) error) 
 	if err != nil {
 		return func() {}
 	}
-	presence, err := r.nc.QueueSubscribe("openxdr.presence."+agentID.String(), "presence-"+agentID.String(), func(msg *nats.Msg) {
+	presence, err := r.nc.QueueSubscribe("openxdr.presence."+id, "presence-"+id, func(msg *nats.Msg) {
 		_ = msg.Respond([]byte("ok"))
 	})
 	if err != nil {
 		_ = sub.Unsubscribe()
 		return func() {}
 	}
+	// 同一 agent 换节点重连时，广播挤掉其它节点残留的半开连接与队列订阅，避免指令落入死连接。
+	evictSubject := "openxdr.evict." + id
+	evict, err := r.nc.Subscribe(evictSubject, func(msg *nats.Msg) {
+		if string(msg.Data) == token {
+			return
+		}
+		_ = sub.Unsubscribe()
+		_ = presence.Unsubscribe()
+		_ = msg.Sub.Unsubscribe()
+		_ = deliver(nil)
+	})
+	if err != nil {
+		_ = sub.Unsubscribe()
+		_ = presence.Unsubscribe()
+		return func() {}
+	}
+	_ = r.nc.Publish(evictSubject, []byte(token))
 	_ = r.nc.Flush()
-	return func() { _ = sub.Unsubscribe(); _ = presence.Unsubscribe() }
+	return func() {
+		_ = sub.Unsubscribe()
+		_ = presence.Unsubscribe()
+		_ = evict.Unsubscribe()
+	}
 }
 
 func (r *NATSRouter) Online(ctx context.Context, agentID uuid.UUID) bool {

@@ -80,7 +80,8 @@ export function eventSummary(classUid: number, raw: unknown, t: T, withAction = 
       const flow = r.connection_info?.direction === 'inbound'
         ? [endpoint(r.dst_endpoint), '←', endpoint(r.src_endpoint)]
         : [endpoint(r.src_endpoint), '→', endpoint(r.dst_endpoint)]
-      return join(inContainer(r), r.process?.name, udp, ...flow, host ? `(${host})` : undefined)
+      const tlsTag = [r.tls?.version, r.tls?.alpn].filter(Boolean).join('/')
+      return join(inContainer(r), r.process?.name, udp, ...flow, host ? `(${host})` : undefined, tlsTag ? `[${tlsTag}]` : undefined)
     }
     case 4003: {
       const answers = Array.isArray(r.answers) ? r.answers.map((a: Raw) => a.ip || a.rdata).filter(Boolean).join(', ') : ''

@@ -22,10 +22,11 @@ import (
 // 喂回去，第二轮模型给出结论。验证工具执行、消息回传、verdict 落库全链路。
 func TestInvestigateWithTools(t *testing.T) {
 	ctx, client := testdb.New(t)
+	host := client.Asset.Create().SetHostname("investigation-host").SaveX(ctx)
 
 	// 库里放一条含目标 IP 的事件，工具查询应能带回它
 	if err := client.Event.Create().
-		SetTs(time.Now()).SetClassUID(4001).SetSource("sensor").
+		SetAssetID(host.ID).SetTs(time.Now()).SetClassUID(4001).SetSource("sensor").
 		SetRaw(json.RawMessage(`{"dst_endpoint":{"ip":"6.6.6.6","port":443}}`)).
 		Exec(ctx); err != nil {
 		t.Fatal(err)
@@ -44,30 +45,32 @@ func TestInvestigateWithTools(t *testing.T) {
 		turns++
 		switch turns {
 		case 1:
-			if len(req.Tools) != 3 {
-				t.Errorf("第一轮应带 3 个工具，实际 %d", len(req.Tools))
+			if len(req.Tools) != 4 {
+				t.Errorf("第一轮应带 4 个工具，实际 %d", len(req.Tools))
 			}
 			// 模型要求调查 6.6.6.6
 			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"",
 				"tool_calls":[{"id":"call-1","type":"function",
 				"function":{"name":"query_events","arguments":"{\"keyword\":\"6.6.6.6\"}"}}]}}]}`))
 		default:
-			// 第二轮应收到 tool 角色消息，内容是真实查询结果
-			last := req.Messages[len(req.Messages)-1]
-			if last.Role != "tool" || last.ToolCallID != "call-1" {
-				t.Errorf("第二轮末条消息应为 tool 结果，实际 %+v", last)
+			// 工具结果后附服务端台账；两者都必须保留。
+			for _, msg := range req.Messages {
+				if msg.Role == "tool" && msg.ToolCallID == "call-1" {
+					sawToolResult = msg.Content
+				}
 			}
-			sawToolResult = last.Content
+			last := req.Messages[len(req.Messages)-1]
+			if last.Role != "system" || !strings.Contains(last.Content, `"id":"query-1"`) || !strings.Contains(last.Content, `"event_id"`) {
+				t.Errorf("第二轮应有服务端事件台账，实际 %+v", last)
+			}
 			w.Write([]byte(`{"choices":[{"message":{"role":"assistant",
-				"content":"{\"verdict\":\"malicious\",\"confidence\":90,\"summary\":\"C2 外连\"}"}}]}`))
+				"content":"{\"verdict\":\"malicious\",\"action_codes\":[\"monitor\"],\"confidence\":90,\"summary\":\"C2 外连\",\"evidence_claims\":[{\"evidence_id\":\"query-1\",\"field\":\"status\",\"value\":\"ok\"}]}"}}]}`))
 		}
 	}))
 	t.Cleanup(llmSrv.Close)
 
-	e := &Engine{
-		DB:  client,
-		LLM: NewLLM(llmSrv.URL, "test-model", "", 10*time.Second),
-	}
+	e := scopedToolEngine(ctx, client, host.ID)
+	e.LLM = NewLLM(llmSrv.URL, "test-model", "", 10*time.Second)
 	answer, err := e.investigate(ctx, "# 事件: 可疑外连")
 	if err != nil {
 		t.Fatal(err)
@@ -79,10 +82,14 @@ func TestInvestigateWithTools(t *testing.T) {
 		t.Errorf("工具结果应包含库里的事件，实际 %s", sawToolResult)
 	}
 	var v struct {
-		Verdict string `json:"verdict"`
+		Verdict  string          `json:"verdict"`
+		Evidence []queryEvidence `json:"query_evidence"`
 	}
 	if err := json.Unmarshal(parseVerdict("t", answer), &v); err != nil || v.Verdict != "malicious" {
 		t.Errorf("最终结论解析失败：%s", answer)
+	}
+	if len(v.Evidence) != 1 || len(v.Evidence[0].Records) != 1 {
+		t.Fatalf("结论缺少查询与事件台账: %s", answer)
 	}
 }
 
@@ -91,7 +98,7 @@ func TestInvestigateWithoutTools(t *testing.T) {
 	ctx, client := testdb.New(t)
 
 	llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"verdict\":\"benign\",\"confidence\":80,\"summary\":\"例行维护\"}"}}]}`))
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"verdict\":\"benign\",\"action_codes\":[\"monitor\"],\"confidence\":80,\"summary\":\"例行维护\"}"}}]}`))
 	}))
 	t.Cleanup(llmSrv.Close)
 
@@ -118,7 +125,7 @@ func TestBatchTriagesAndPersistsVerdict(t *testing.T) {
 
 	var onVerdict atomic.Int32
 	e := &Engine{DB: client}
-	e.LLM = oneShotLLM(t, `{"verdict":"malicious","confidence":88,"summary":"确认外连"}`)
+	e.LLM = oneShotLLM(t, `{"action_codes":["monitor"],"verdict":"malicious","confidence":88,"summary":"确认外连"}`)
 	e.OnVerdict = func(_ context.Context, id uuid.UUID, v json.RawMessage) {
 		onVerdict.Add(1)
 	}
@@ -167,7 +174,7 @@ func TestBatchVerdictFlipClearsNotified(t *testing.T) {
 		return inc
 	}
 	flip, same := mk("benign"), mk("suspicious")
-	e := &Engine{DB: client, LLM: oneShotLLM(t, `{"verdict":"malicious","confidence":90,"summary":"复发后确认外连"}`)}
+	e := &Engine{DB: client, LLM: oneShotLLM(t, `{"action_codes":["monitor"],"verdict":"malicious","confidence":90,"summary":"复发后确认外连"}`)}
 	if err := e.batch(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +186,7 @@ func TestBatchVerdictFlipClearsNotified(t *testing.T) {
 	}
 
 	stay := mk("benign")
-	e.LLM = oneShotLLM(t, `{"verdict":"benign","confidence":80,"summary":"仍是例行探测"}`)
+	e.LLM = oneShotLLM(t, `{"action_codes":["monitor"],"verdict":"benign","confidence":80,"summary":"仍是例行探测"}`)
 	if err := e.batch(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -191,32 +198,33 @@ func TestBatchVerdictFlipClearsNotified(t *testing.T) {
 // toolProcessLineage：按 process_guid 追祖先链与直接子进程。
 func TestToolProcessLineage(t *testing.T) {
 	ctx, client := testdb.New(t)
+	host := client.Asset.Create().SetHostname("lineage-host").SaveX(ctx)
 	grandparent := uuid.New()
 	parent := uuid.New()
 	child := uuid.New()
 
 	// 祖先链：child → parent → grandparent
 	if err := client.Event.Create().
-		SetTs(time.Now()).SetClassUID(1007).SetSource("agent").
+		SetAssetID(host.ID).SetTs(time.Now()).SetClassUID(1007).SetSource("agent").
 		SetProcessGUID(grandparent).SetRaw(json.RawMessage(`{"process":{"name":"init"}}`)).
 		Exec(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.Event.Create().
-		SetTs(time.Now()).SetClassUID(1007).SetSource("agent").
+		SetAssetID(host.ID).SetTs(time.Now()).SetClassUID(1007).SetSource("agent").
 		SetProcessGUID(parent).SetParentProcessGUID(grandparent).
 		SetRaw(json.RawMessage(`{"process":{"name":"bash"}}`)).Save(ctx); err != nil {
 		t.Fatal(err)
 	}
 	// 两个子进程指向 parent
 	if _, err := client.Event.Create().
-		SetTs(time.Now()).SetClassUID(1007).SetSource("agent").
+		SetAssetID(host.ID).SetTs(time.Now()).SetClassUID(1007).SetSource("agent").
 		SetProcessGUID(child).SetParentProcessGUID(parent).
 		SetRaw(json.RawMessage(`{"process":{"name":"evil"}}`)).Save(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	e := &Engine{DB: client}
+	e := scopedToolEngine(ctx, client, host.ID)
 	out, err := e.toolProcessLineage(ctx, `{"process_guid":"`+child.String()+`"}`)
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +258,7 @@ func TestToolHostAlerts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	e := &Engine{DB: client}
+	e := scopedToolEngine(ctx, client, asset.ID)
 	out, err := e.toolHostAlerts(ctx, `{"asset_id":"`+asset.ID.String()+`"}`)
 	if err != nil {
 		t.Fatal(err)

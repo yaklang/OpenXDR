@@ -109,7 +109,25 @@ func (m *Migrator) Run(ctx context.Context, step string, confirm bool, day strin
 		return errors.New("另一个迁移进程正在运行")
 	}
 	defer conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext($1))`, lockKey)
+	if err := requireOwner(ctx, conn); err != nil {
+		return err
+	}
 	return fn(ctx, conn)
+}
+
+// requireOwner 迁移建出的新表、分区与函数归执行身份所有，必须与 events 的属主（server 的连接身份）一致：
+// 生产上曾以超级用户执行，events_next 归 postgres，老表镜像触发器以 server 身份写新表被拒，入库停了约 5 分钟；
+// 切换时建的函数归错人，server 启动 CREATE OR REPLACE 也会失败。超级用户在连接串里加 role=<属主> 即可。
+func requireOwner(ctx context.Context, q queryer) error {
+	var owner, current string
+	err := q.QueryRowContext(ctx, `SELECT pg_get_userbyid(relowner), current_user FROM pg_class WHERE oid = to_regclass($1)`, Parent).Scan(&owner, &current)
+	if err != nil {
+		return fmt.Errorf("读取 events 属主: %w", err)
+	}
+	if owner != current {
+		return fmt.Errorf("当前身份 %s 不是 events 的属主 %s：迁移建的表与函数会归错人，server 写入会被拒。以 %[2]s 连接，或在连接串加 role=%[2]s", current, owner)
+	}
+	return nil
 }
 
 func (m *Migrator) printf(format string, args ...any) { fmt.Fprintf(m.Out, format+"\n", args...) }
@@ -326,13 +344,17 @@ func preflight(ctx context.Context, q queryer) error {
 			return fmt.Errorf("索引名 %s 太长，加后缀会被截断", d.name)
 		}
 	}
+	// openxdr_assetmap_release 是资产图谱队列只给普通表挂的删除触发器（graphqueue.EnsureSchema）：
+	// 切换时随老表改名成 events_old、回滚时随它回来；分区表上同样的清理由 openxdr_events_release
+	// 与分区退役接手（见 schema.go 的 assetmap_queue），不需要迁移搬它。
 	var blockers string
 	if err := q.QueryRowContext(ctx, `SELECT coalesce(string_agg(x, ', '), '') FROM (
  SELECT 'materialized view ' || v.oid::regclass AS x FROM pg_depend d JOIN pg_rewrite r ON r.oid = d.objid JOIN pg_class v ON v.oid = r.ev_class
   WHERE d.classid = 'pg_rewrite'::regclass AND d.refobjid = 'events'::regclass AND v.relkind = 'm'
  UNION ALL SELECT 'publication ' || p.pubname FROM pg_publication_rel pr JOIN pg_publication p ON p.oid = pr.prpubid WHERE pr.prrelid = 'events'::regclass
  UNION ALL SELECT 'policy ' || polname FROM pg_policy WHERE polrelid = 'events'::regclass
- UNION ALL SELECT 'trigger ' || tgname FROM pg_trigger WHERE tgrelid = 'events'::regclass AND NOT tgisinternal) t`).Scan(&blockers); err != nil {
+ UNION ALL SELECT 'trigger ' || tgname FROM pg_trigger WHERE tgrelid = 'events'::regclass AND NOT tgisinternal
+  AND tgname <> 'openxdr_assetmap_release') t`).Scan(&blockers); err != nil {
 		return err
 	}
 	if blockers != "" {

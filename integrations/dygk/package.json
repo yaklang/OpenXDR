@@ -1,0 +1,14 @@
+{
+  "name": "@openxdr/dygk-connector",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "prepare:upstream": "node scripts/prepare-upstream.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:upstream": "node scripts/test-upstream.mjs",
+    "release:info": "node web/main.mjs --print-release",
+    "start": "node web/manager.mjs"
+  }
+}

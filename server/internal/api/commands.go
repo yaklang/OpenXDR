@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -205,6 +206,12 @@ func mapCommands(api *http.ServeMux, db *ent.Client, rules sigma.Catalog, hub *r
 			return
 		}
 		q := db.Command.Query().Where(s.command()...)
+		switch r.URL.Query().Get("view") {
+		case "", "full", "summary":
+		default:
+			http.Error(w, "view 必须是 summary 或 full", http.StatusBadRequest)
+			return
+		}
 		if v := r.URL.Query().Get("incidentId"); v != "" {
 			id, err := uuid.Parse(v)
 			if err != nil {
@@ -221,7 +228,34 @@ func mapCommands(api *http.ServeMux, db *ent.Client, rules sigma.Catalog, hub *r
 			}
 			q = q.Where(entcommand.AssetIDEQ(id))
 		}
-		cmds, err := q.Order(ent.Desc(entcommand.FieldCreatedAt)).Limit(100).All(r.Context())
+		limit, offset, total := 100, 0, 0
+		paginated := r.URL.Query().Has("page")
+		if paginated {
+			page, err := strconv.Atoi(r.URL.Query().Get("page"))
+			size := r.URL.Query().Get("pageSize")
+			if size == "" {
+				size = "20"
+			}
+			limit, _ = strconv.Atoi(size)
+			if err != nil || page < 1 || page > 100000 || limit < 1 || limit > 100 {
+				http.Error(w, "分页参数无效", 400)
+				return
+			}
+			offset = (page - 1) * limit
+			total, err = q.Clone().Count(r.Context())
+			if err != nil {
+				http.Error(w, "读取指令数量失败", 500)
+				return
+			}
+		}
+		if r.URL.Query().Get("view") == "summary" {
+			// 列表不读取大段命令与输出；完整内容仍由详情接口提供。
+			q.Select(entcommand.FieldID, entcommand.FieldCreatedAt, entcommand.FieldKind,
+				entcommand.FieldStatus, entcommand.FieldAssetID, entcommand.FieldIncidentID,
+				entcommand.FieldIssuedBy, entcommand.FieldDetail, entcommand.FieldCompletedAt,
+				entcommand.FieldTarget, entcommand.FieldExitCode, entcommand.FieldTruncated)
+		}
+		cmds, err := q.Order(ent.Desc(entcommand.FieldCreatedAt), ent.Desc(entcommand.FieldID)).Offset(offset).Limit(limit).All(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -232,6 +266,10 @@ func mapCommands(api *http.ServeMux, db *ent.Client, rules sigma.Catalog, hub *r
 		}
 		if err := withDetections(r.Context(), db, rules, out); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if paginated {
+			writeJSON(w, map[string]any{"items": out, "total": total})
 			return
 		}
 		writeJSON(w, out)

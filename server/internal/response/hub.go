@@ -79,12 +79,32 @@ func (h *Hub) Attach(agentID uuid.UUID) chan *pb.Command {
 	h.conns[agentID] = ch
 	if h.Router != nil {
 		h.routeDetach[agentID] = h.Router.Attach(agentID, func(cmd *pb.Command) error {
+			if cmd == nil {
+				h.evict(agentID, ch)
+				return nil
+			}
 			_, err := h.enqueue(agentID, ch, cmd)
 			return err
 		})
 	}
 	h.mu.Unlock()
 	return ch
+}
+
+// evict 另一集群节点认领同一 agent 时，关闭本节点的半开旧通道并摘除路由订阅。
+func (h *Hub) evict(agentID uuid.UUID, ch chan *pb.Command) {
+	h.mu.Lock()
+	var detach func()
+	if cur, ok := h.conns[agentID]; ok && cur == ch {
+		delete(h.conns, agentID)
+		close(ch)
+		detach = h.routeDetach[agentID]
+		delete(h.routeDetach, agentID)
+	}
+	h.mu.Unlock()
+	if detach != nil {
+		detach()
+	}
 }
 
 // Detach 连接结束时摘除通道，只摘自己那条。

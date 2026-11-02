@@ -76,14 +76,14 @@ func TestAISettings(t *testing.T) {
 	}
 	withVault := &aiconf.Store{DB: client, Vault: vault, Default: def}
 	do = serve(withVault)
-	if resp, v := do("PUT", "/api/settings/ai", `{"apiKey":"sk-console-abcdefgh","vtKey":"vt-console-12345678"}`); resp.StatusCode != 200 || v["apiKeyHint"] != "efgh" || v["vtKeySet"] != true {
+	if resp, v := do("PUT", "/api/settings/ai", `{"apiKey":"sk-console-abcdefgh","vtKey":"vt-console-12345678","abuseCHKey":"abuse-console-87654321"}`); resp.StatusCode != 200 || v["apiKeyHint"] != "efgh" || v["vtKeySet"] != true || v["abuseCHKeySet"] != true || v["abuseCHKeyHint"] != "4321" {
 		t.Fatalf("保存密钥失败: %d %v", resp.StatusCode, v)
 	}
 	row, _ := client.Setting.Get(ctx, "ai")
-	if strings.Contains(string(row.Value), "sk-console") || strings.Contains(string(row.Value), "vt-console") {
+	if strings.Contains(string(row.Value), "sk-console") || strings.Contains(string(row.Value), "vt-console") || strings.Contains(string(row.Value), "abuse-console") {
 		t.Fatal("密钥不应明文入库")
 	}
-	if c := withVault.Get(ctx); c.APIKey != "sk-console-abcdefgh" || c.VTKey != "vt-console-12345678" {
+	if c := withVault.Get(ctx); c.APIKey != "sk-console-abcdefgh" || c.VTKey != "vt-console-12345678" || c.AbuseCHKey != "abuse-console-87654321" {
 		t.Fatalf("密钥解密不对: %+v", c)
 	}
 	if resp, v := do("PUT", "/api/settings/ai", `{"reset":["apiKey","model"]}`); resp.StatusCode != 200 || v["model"] != "env-model" || v["apiKeyHint"] != "5678" {

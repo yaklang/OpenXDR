@@ -64,3 +64,30 @@ func TestDeepSeekNoThinking(t *testing.T) {
 		}
 	}
 }
+
+// 自部署 vLLM 的路径型模型名：开关打开才发两种模板参数，已识别的模型仍走各自协议
+func TestTemplateNoThinking(t *testing.T) {
+	defer func(v bool) { templateNoThinking = v }(templateNoThinking)
+	for _, c := range []struct {
+		model   string
+		enabled bool
+		want    bool
+	}{{"/model", true, true}, {"/model", false, false}, {"deepseek-v4-flash", true, false}} {
+		var got map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{}"}}]}`))
+		}))
+		templateNoThinking = c.enabled
+		l := NewLLM(srv.URL, c.model, "", time.Second)
+		l.NoThinking = true
+		if _, err := l.Chat(context.Background(), []Message{{Role: "user", Content: "x"}}, nil); err != nil {
+			t.Fatal(err)
+		}
+		srv.Close()
+		kwargs, ok := got["chat_template_kwargs"].(map[string]any)
+		if ok != c.want || (ok && (kwargs["thinking"] != false || kwargs["enable_thinking"] != false)) {
+			t.Errorf("%s enabled=%t: kwargs=%v", c.model, c.enabled, got["chat_template_kwargs"])
+		}
+	}
+}

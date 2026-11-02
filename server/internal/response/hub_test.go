@@ -12,17 +12,26 @@ import (
 
 // fakeRouter 内存版 Router：记录 attach 的 agent，配合 Hub 的通道状态机测试。
 type fakeRouter struct {
-	online map[uuid.UUID]bool
-	sent   map[uuid.UUID][]*pb.Command
+	online  map[uuid.UUID]bool
+	deliver map[uuid.UUID]func(*pb.Command) error
+	sent    map[uuid.UUID][]*pb.Command
 }
 
 func newFakeRouter() *fakeRouter {
-	return &fakeRouter{online: map[uuid.UUID]bool{}, sent: map[uuid.UUID][]*pb.Command{}}
+	return &fakeRouter{
+		online:  map[uuid.UUID]bool{},
+		deliver: map[uuid.UUID]func(*pb.Command) error{},
+		sent:    map[uuid.UUID][]*pb.Command{},
+	}
 }
 
-func (f *fakeRouter) Attach(id uuid.UUID, _ func(*pb.Command) error) func() {
+func (f *fakeRouter) Attach(id uuid.UUID, fn func(*pb.Command) error) func() {
 	f.online[id] = true
-	return func() { delete(f.online, id) }
+	f.deliver[id] = fn
+	return func() {
+		delete(f.online, id)
+		delete(f.deliver, id)
+	}
 }
 func (f *fakeRouter) Deliver(_ context.Context, id uuid.UUID, c *pb.Command) error {
 	f.sent[id] = append(f.sent[id], c)
@@ -196,12 +205,27 @@ func TestHubAttachDetach(t *testing.T) {
 	}
 
 	// 摘除旧通道（非当前）不应影响状态
-	h.Attach(id)
+	ch3 := h.Attach(id)
 	h.Detach(id, ch1) // ch1 早被关闭，是"旧"连接
 	if !h.Online(id) {
 		t.Error("摘除旧连接不应影响当前在线状态")
 	}
-	h.Detach(id, h.conns[id])
+
+	// 另一集群节点重连同一 agent 时，Router 通过 deliver(nil) 通知挤掉本节点的半开旧通道
+	if err := fr.deliver[id](nil); err != nil {
+		t.Fatalf("跨节点挤掉旧通道不应报错: %v", err)
+	}
+	select {
+	case _, ok := <-ch3:
+		if ok {
+			t.Fatal("被跨节点挤掉的通道应已关闭")
+		}
+	default:
+		t.Fatal("被跨节点挤掉的通道应立即关闭")
+	}
+	if h.Online(id) {
+		t.Error("被跨节点挤掉后本地与路由旧订阅都应已摘除")
+	}
 }
 
 // Online 在无 Router 时只查本地通道；有 Router 时才问远端。

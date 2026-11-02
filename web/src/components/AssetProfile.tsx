@@ -6,9 +6,10 @@ import {
 import { useState } from 'react'
 import {
   assignAssetZone, fetchAssetProfile, fetchZones, requestAnnotate, saveAssetProfile,
-  type AssetProfile, type ExposureLevel, type Listener, type ProfileEdit, type ZoneKind, type ZoneRef,
+  type AssetProfile, type ExposureLevel, type Listener, type PeerStat, type ProfileEdit, type ZoneKind, type ZoneRef,
 } from '../api'
 import { useI18n, type MsgKey } from '../i18n'
+import { Ago } from './Ago'
 import { LoadError } from './LoadError'
 import { PublicDestList } from './PublicDests'
 import { errText, fmtTime } from './format'
@@ -97,11 +98,12 @@ function groupPeers(items: string[], dir: 'outbound' | 'inbound'): Peer[] {
   return [...by.values()]
 }
 
-function PeerList({ items, notes }: { items: Peer[]; notes: Record<string, string> }) {
+function PeerList({ items, notes, stats }: { items: Peer[]; notes: Record<string, string>; stats: Record<string, PeerStat> }) {
   const { t } = useI18n()
   const [all, setAll] = useState(false)
-  // 有关系说明的排前面（AI 认出来的往往是关键依赖），再按端口多少
-  const sorted = [...items].sort((a, b) => Number(!!notes[b.peer]) - Number(!!notes[a.peer]) || b.ports.length - a.ports.length || a.peer.localeCompare(b.peer))
+  // 有关系说明的排前面（AI 认出来的往往是关键依赖），再按连接次数
+  const count = (p: Peer) => stats[p.peer]?.count ?? 0
+  const sorted = [...items].sort((a, b) => Number(!!notes[b.peer]) - Number(!!notes[a.peer]) || count(b) - count(a) || a.peer.localeCompare(b.peer))
   const shown = all ? sorted : sorted.slice(0, 8)
   if (!items.length) return <Typography.Text type="secondary">-</Typography.Text>
   return (
@@ -112,6 +114,11 @@ function PeerList({ items, notes }: { items: Peer[]; notes: Record<string, strin
             <Space size={6} wrap>
               <Typography.Text className={/^[\d.:a-f]+$/i.test(p.peer) ? 'mono' : undefined} strong>{p.peer}</Typography.Text>
               <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>{p.ports.join(' ')}</Typography.Text>
+              {stats[p.peer] && (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {t('connCount', { n: stats[p.peer].count.toLocaleString() })} · <Ago iso={stats[p.peer].lastSeen} />
+                </Typography.Text>
+              )}
             </Space>
             {(notes[p.peer] || p.procs.length > 0) && (
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -170,12 +177,12 @@ export function AssetProfileView({ assetId, hostname, groupId, canEdit, isGroupA
         : <Typography.Text type="secondary">{t('notAnnotated')}</Typography.Text>
 
   return (
-    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={20} style={{ width: '100%' }}>
       {/* 说明文字可以折行，按钮固定在右侧，卡片窄时不被挤到下一行 */}
-      <Flex justify="space-between" align="start" gap={8}>
+      <Flex justify="space-between" align="center" gap={8} className="cmd-item">
         <div style={{ minWidth: 0 }}>{annotation}</div>
         {canEdit && (
-          <Space size={4} style={{ flex: 'none' }}>
+          <Space size={6} style={{ flex: 'none' }}>
             <Button size="small" icon={<EditOutlined />} onClick={() => setEditing(true)}>{t('editProfile')}</Button>
             {p.aiEnabled && <Button size="small" icon={<ReloadOutlined />} loading={busy} disabled={!!p.annotateRequestedAt}
               onClick={() => run(() => requestAnnotate(assetId), t('annotateQueued'))}>{t('reannotate')}</Button>}
@@ -239,7 +246,7 @@ export function AssetProfileView({ assetId, hostname, groupId, canEdit, isGroupA
       {(['outbound', 'inbound'] as const).map(dir => (
         <div key={dir}>
           <Typography.Text strong>{t(dir === 'outbound' ? 'dependsOn' : 'dependedBy')}</Typography.Text>
-          <div style={{ marginTop: 8 }}><PeerList items={groupPeers(p[dir] ?? [], dir)} notes={p.relationNotes ?? {}} /></div>
+          <div style={{ marginTop: 8 }}><PeerList items={groupPeers(p[dir] ?? [], dir)} notes={p.relationNotes ?? {}} stats={p[`${dir}Stats`] ?? {}} /></div>
         </div>
       ))}
 

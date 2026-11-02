@@ -18,20 +18,30 @@ import { useI18n } from '../i18n'
 
 // 心跳超过 5 分钟视为失联——agent 掉线本身就是值得注意的信号
 const UNGROUPED = '__none__'
+const STATE_ORDER: Record<ReturnType<typeof hostState>, number> = { silent: 1, stale: 2, imported: 3, online: 4 }
+
+function assetSource(a: Asset): 'agent' | 'sensor' | 'imported' | 'log' {
+  if (a.agentId) return 'agent'
+  if (a.sensorSeen) return 'sensor'
+  if (hostState(a) === 'imported') return 'imported'
+  return 'log'
+}
 
 export function AssetsPage() {
   const { t } = useI18n()
   const { message, modal } = App.useApp()
   const client = useQueryClient()
   const { groups, isAdmin } = useSession()
-  // 搜索与组筛选放 URL：从详情页返回、刷新都还在
+  // 搜索与组、状态、来源筛选放 URL：从详情页返回、刷新都还在
   const [params, setParams] = useSearchParams()
   const q = params.get('q') ?? ''
   const [draft, setDraft] = useState(q)
   useEffect(() => setDraft(q), [q])
   const groupFilter = params.get('group') ?? ''
-  const setFilter = (patch: { q?: string; group?: string }) =>
-    setParams(Object.fromEntries(Object.entries({ q, group: groupFilter, ...patch }).filter(([, v]) => v)), { replace: true })
+  const statusFilter = params.get('status') ?? ''
+  const sourceFilter = params.get('source') ?? ''
+  const setFilter = (patch: { q?: string; group?: string; status?: string; source?: string }) =>
+    setParams(Object.fromEntries(Object.entries({ q, group: groupFilter, status: statusFilter, source: sourceFilter, ...patch }).filter(([, v]) => v)), { replace: true })
   const [adding, setAdding] = useState(false)
   const [importing, setImporting] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -46,9 +56,13 @@ export function AssetsPage() {
   const canChat = useCanChat()
   const handoff = useHandoff()
   const imported = (a: Asset) => hostState(a) === 'imported'
+  const activeQ = (draft || q).trim().toLowerCase()
+  const hasFilters = Boolean(activeQ || groupFilter || statusFilter || sourceFilter)
   const rows = (data ?? []).filter(a =>
-    (!q || a.hostname.toLowerCase().includes(q.toLowerCase()) || a.ipAddrs?.some(ip => ip.includes(q))) &&
-    (!groupFilter || (groupFilter === UNGROUPED ? !a.groupId : a.groupId === groupFilter)),
+    (!activeQ || a.hostname.toLowerCase().includes(activeQ) || (a.osDisplay ?? a.os ?? '').toLowerCase().includes(activeQ) || a.ipAddrs?.some(ip => ip.toLowerCase().includes(activeQ))) &&
+    (!groupFilter || (groupFilter === UNGROUPED ? !a.groupId : a.groupId === groupFilter)) &&
+    (!statusFilter || hostState(a) === statusFilter) &&
+    (!sourceFilter || (sourceFilter === 'agent' ? Boolean(a.agentId) : sourceFilter === 'sensor' ? Boolean(a.sensorSeen) : assetSource(a) === sourceFilter)),
   )
 
   // 归组只有全局 admin 能改：一台主机只属于一个组，选新组即离开旧组，原组成员当场失去权限，先确认
@@ -95,9 +109,10 @@ export function AssetsPage() {
       <ImportHostsModal open={importing} onClose={() => setImporting(false)} />
       <AddHostModal open={adding} onClose={() => setAdding(false)} />
       <FilterCard
-        onReset={q || groupFilter || draft ? () => { setDraft(''); setParams({}, { replace: true }) } : undefined}
+        onReset={hasFilters ? () => { setDraft(''); setParams({}, { replace: true }) } : undefined}
         extra={(
           <Space wrap>
+            {hasFilters && <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>{t('filteredCount', { n: rows.length, total })}</Typography.Text>}
             <Refreshed at={dataUpdatedAt} fetching={isFetching} onRefresh={() => refetch()} />
             {selected.length > 0 && (
               <>
@@ -113,38 +128,70 @@ export function AssetsPage() {
         )}
         filters={
           <Space wrap>
-            <Input.Search allowClear style={{ width: 280 }} placeholder={t('assetSearchHint')} value={draft} onSearch={v => setFilter({ q: v })} onChange={e => { setDraft(e.target.value); if (!e.target.value) setFilter({ q: '' }) }} />
-            <Select showSearch optionFilterProp="label" aria-label={t('group')} style={{ width: 180 }} value={groupFilter} onChange={v => setFilter({ group: v })} options={[{ value: '', label: t('allGroups') }, ...groupOptions]} />
+            <Input.Search allowClear style={{ width: 250 }} placeholder={t('assetSearchHint')} value={draft} onSearch={v => setFilter({ q: v })} onChange={e => { setDraft(e.target.value); if (!e.target.value) setFilter({ q: '' }) }} />
+            <Select showSearch optionFilterProp="label" aria-label={t('group')} style={{ width: 170 }} value={groupFilter} onChange={v => setFilter({ group: v })} options={[{ value: '', label: t('allGroups') }, ...groupOptions]} />
+            <Select aria-label={t('thStatus')} style={{ width: 140 }} value={statusFilter} onChange={v => setFilter({ status: v })}
+              options={[
+                { value: '', label: t('allStatuses') },
+                { value: 'online', label: t('online') },
+                { value: 'stale', label: t('stale') },
+                { value: 'silent', label: t('silent') },
+                { value: 'imported', label: t('hostNotEnrolled') },
+              ]}
+            />
+            <Select aria-label={t('thSource')} style={{ width: 140 }} value={sourceFilter} onChange={v => setFilter({ source: v })}
+              options={[
+                { value: '', label: t('allSources') },
+                { value: 'agent', label: 'Agent' },
+                { value: 'sensor', label: 'Sensor' },
+                { value: 'imported', label: t('hostImportedSource') },
+                { value: 'log', label: t('sourceLog') },
+              ]}
+            />
           </Space>
         }
       >
         {isError ? <LoadError error={error} onRetry={() => refetch()} /> : <Table<Asset>
           sticky={STICKY_HEADER}
           scroll={wideTable ? { x: 1100 } : undefined}
-          locale={{ emptyText: <EmptyHint title={t(q || groupFilter ? 'noMatch' : 'noAssets')} hint={q || groupFilter ? undefined : t('noAssetsHint')} /> }}
+          locale={{ emptyText: <EmptyHint title={t(hasFilters ? 'noMatch' : 'noAssets')} hint={hasFilters ? undefined : t('noAssetsHint')} /> }}
           rowKey="id"
           rowClassName="row-link"
           onRow={rowLink}
           rowSelection={{ selectedRowKeys: selected, onChange: keys => setSelected(keys as string[]) }}
           loading={isPending}
           dataSource={rows}
-          pagination={{ pageSize: 20, hideOnSinglePage: true }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, hideOnSinglePage: true }}
           columns={[
             {
-              title: t('thStatus'), width: 100,
+              title: t('thStatus'), width: 110,
+              sorter: (a, b) => STATE_ORDER[hostState(a)] - STATE_ORDER[hostState(b)],
               // 已发过失联通知的标红：这是要人去处理的，不只是暂时没数据
               render: (_, a) => <HostStateBadge asset={a} />,
             },
             { title: t('thHostname'), dataIndex: 'hostname', sorter: (a, b) => a.hostname.localeCompare(b.hostname), render: (v, a) => <Link to={`/assets/${a.id}`}>{v}</Link> },
-            { responsive: WIDE_ONLY, title: 'OS', dataIndex: 'os', width: 140, render: (_: unknown, a: Asset) => a.osDisplay ?? a.os ?? '-' },
-            { responsive: WIDE_ONLY, title: t('thIP'), dataIndex: 'ipAddrs', render: v => v?.length ? <Typography.Text copyable={{ text: v.join(', ') }}>{v.join(', ')}</Typography.Text> : '-' },
+            {
+              responsive: WIDE_ONLY, title: 'OS', dataIndex: 'os', width: 150,
+              sorter: (a, b) => (a.osDisplay ?? a.os ?? '').localeCompare(b.osDisplay ?? b.os ?? ''),
+              render: (_: unknown, a: Asset) => a.osDisplay ?? a.os ?? '-',
+            },
+            {
+              responsive: WIDE_ONLY, title: t('thIP'), dataIndex: 'ipAddrs',
+              sorter: (a, b) => (a.ipAddrs?.[0] ?? '').localeCompare(b.ipAddrs?.[0] ?? ''),
+              render: v => v?.length ? <Typography.Text className="mono" copyable={{ text: v.join(', ') }}>{v.join(', ')}</Typography.Text> : '-',
+            },
             {
               responsive: WIDE_ONLY, title: t('group'), dataIndex: 'groupId', width: 200,
+              sorter: (a, b) => (groups.find(g => g.id === a.groupId)?.name ?? '').localeCompare(groups.find(g => g.id === b.groupId)?.name ?? ''),
               render: (v, a) => isAdmin
                 ? <Select size="small" style={{ width: 170 }} value={v ?? UNGROUPED} options={groupOptions} onChange={g => move(a, g)} />
                 : groups.find(g => g.id === v)?.name ?? <Tag>{t('ungrouped')}</Tag>,
             },
-            { responsive: WIDE_ONLY, title: t('thSource'), dataIndex: 'agentId', width: 140, render: (v, a) => v || a.sensorSeen ? <Space size={4}>{v && <Tag>agent</Tag>}{a.sensorSeen && <Tag>sensor</Tag>}</Space> : <Tag>{t(imported(a) ? 'hostImportedSource' : 'sourceLog')}</Tag> },
+            {
+              responsive: WIDE_ONLY, title: t('thSource'), dataIndex: 'agentId', width: 140,
+              sorter: (a, b) => assetSource(a).localeCompare(assetSource(b)),
+              render: (v, a) => v || a.sensorSeen ? <Space size={4}>{v && <Tag>agent</Tag>}{a.sensorSeen && <Tag>sensor</Tag>}</Space> : <Tag>{t(imported(a) ? 'hostImportedSource' : 'sourceLog')}</Tag>,
+            },
             { title: t('thLastSeen'), dataIndex: 'lastSeen', width: wideTable ? 180 : 120, render: (_, a) => imported(a) ? '—' : <Ago iso={hostSeen(a)} />, sorter: (a, b) => hostSeen(a).localeCompare(hostSeen(b)) },
           ]}
         />}

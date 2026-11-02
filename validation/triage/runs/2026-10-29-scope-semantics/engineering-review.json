@@ -1,0 +1,98 @@
+{
+  "reviewer": "executing_agent",
+  "independent_human_review": "pending",
+  "complete": true,
+  "semantic_gate": "failed",
+  "report_sha256": "dc4150655d367bf63c1a17f439f747f9abab1c5f3736b4a298d1deb44ad396ce",
+  "engineering_counts": {
+    "pass": 10,
+    "fail": 2
+  },
+  "rows": [
+    {
+      "case": "shared_cdn",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "共享 IP 与 TTL 仅作背景，未据域名字面推出随机生成或攻击链；采集缺口与归属未知保持，建议限核实、补证、保全和监测。",
+      "answer_sha256": "8e26f487365a1b0dda4c3cf0bb94ac5c8fa98f5a18ec94f717fae43a4ca76f0e"
+    },
+    {
+      "case": "shared_cdn",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "共享 IP 与 TTL 仅作背景，未据域名字面推出随机生成或攻击链；采集缺口与归属未知保持，建议限核实、补证、保全和监测。",
+      "answer_sha256": "9b2c9b8c63e194452f55d8c67029e29e19e87cb8c3933c30a032c3157b0b31f2"
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "AI 记忆明确不构成人工确认或良性依据；缺少来源/后续连接数据没有被扩写为采集关闭，建议限核实与补证。",
+      "answer_sha256": "7745e3095d65be3025d1f2ab5a190bad3124e2690f874a1b6bfeccf73142a444"
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "AI 记忆明确不构成人工确认或良性依据；缺少来源/后续连接数据没有被扩写为采集关闭，建议限核实与补证。",
+      "answer_sha256": "c439c761f4c1b48002af10e36a4a67fdd37c9ccade1d24dd733b678287564b00"
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "结果条数截断、正文裁剪与血缘超时分开说明，未用正文裁剪解释归一化父进程字段缺失；授权结论限定本次证据，不以工单缺失否定其他授权来源。引用与已给台账匹配，建议为固定目录。",
+      "answer_sha256": "5bbddf16faa1e1548d648b151e4c7e7c94128ab254f3107f078f086ea66c0f09"
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "结果条数截断、正文裁剪与血缘超时分开说明，未用正文裁剪解释归一化父进程字段缺失；授权结论限定本次证据，不以工单缺失否定其他授权来源。引用与已给台账匹配，建议为固定目录。",
+      "answer_sha256": "8bbd42b7e452d2f4478c75a87e8db52db0cfe193c8f1eac5ff618844a5d36258"
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 1,
+      "status": "fail",
+      "reason": "摘要区分转发器、三个客户端及当前 .13；但固定 verify_source 只要求核实本事件，未满足原 rubric 的分别核实各客户端要求。该建议已在后续本地代码修正，本轮仍按旧输出判失败。",
+      "answer_sha256": "d20e362748643f88b4e82905be3d790afdfc3149b9bb6e7b35a3c5a02f2d8784",
+      "grading_disagreement": "自动 facts 把“本次证据未提供业务归属”当作无依据的不存在断言，uncertainty 又要求固定的计数不完整提醒；本答案已限定保留记录与应用未知，这两项按工程复核不另计失败，actions 缺口仍成立。"
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 2,
+      "status": "fail",
+      "reason": "摘要区分转发器、三个客户端及当前 .13；但固定 verify_source 只要求核实本事件，未满足原 rubric 的分别核实各客户端要求。该建议已在后续本地代码修正，本轮仍按旧输出判失败。",
+      "answer_sha256": "2b7a0c1f4982c7ffba9987c2be9fdf6e80cace81442625c4c624397b46e968a3"
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "人工工单与主机、窗口、命令逐项对应，未虚构 SSH 到 systemd 父子关系；结案建议不扩展未来授权。",
+      "answer_sha256": "8e2ddb4c4d59e6150639f55449daf2e25e80a6fd4d6b525583ee7d81e96b6f62"
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "人工工单与主机、窗口、命令逐项对应，未虚构 SSH 到 systemd 父子关系；结案建议不扩展未来授权。",
+      "answer_sha256": "3f8fd01e0927b4082479c7b68dca020b8583881994d5beec938b9990614574f7"
+    },
+    {
+      "case": "confirmed_attack",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "凭据读取、同进程暂存与上传内容哈希对应、自启动和人工业务核实均有输入支持；范围限已证实主机与地址，不把暂存哈希当程序哈希。",
+      "answer_sha256": "138cadf214e957e756e68bae08c280c398cba8c6f69adb0f505a4cedd7ad34fc"
+    },
+    {
+      "case": "confirmed_attack",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "凭据读取、同进程暂存与上传内容哈希对应、自启动和人工业务核实均有输入支持；范围限已证实主机与地址，不把暂存哈希当程序哈希。",
+      "answer_sha256": "99f59b0afdf30f68b3a0046beb6df7dcf457f498c8df84cfefa2450f31dca676"
+    }
+  ]
+}

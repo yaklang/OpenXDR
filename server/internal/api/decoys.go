@@ -11,13 +11,13 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
+	"openxdr/server/deception/contract"
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
 	"openxdr/server/ent/decoydeployment"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/decoy"
-	"openxdr/server/internal/sshdecoy"
 	"path"
 	"strings"
 )
@@ -41,10 +41,11 @@ func mapSSHDecoys(mux *http.ServeMux, db *ent.Client) {
 	})
 	mapDecoyRuntimeManagement(mux, db)
 	mapDecoyReview(mux, db)
+	mapDeceptionManagement(mux, db)
 
 	mux.HandleFunc("GET /api/ssh-decoy-profiles", func(w http.ResponseWriter, r *http.Request) {
 		if decoyAuthenticated(w, r) {
-			writeJSON(w, sshdecoy.Profiles())
+			writeJSON(w, contract.SSHProfiles())
 		}
 	})
 	mux.HandleFunc("GET /api/ssh-decoys", func(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +84,7 @@ func mapSSHDecoys(mux *http.ServeMux, db *ent.Client) {
 			*ent.DecoyDeployment
 			RuntimeStatus     string `json:"runtime_status"`
 			RemoteInstallable bool   `json:"remote_installable"`
+			Hosted            bool   `json:"hosted"`
 		}
 		items := make([]deploymentView, 0, len(rows))
 		now := time.Now()
@@ -90,7 +92,15 @@ func mapSSHDecoys(mux *http.ServeMux, db *ent.Client) {
 			if row.InstallState == decoydeployment.InstallStateInstalling && row.InstallStartedAt != nil && now.Sub(*row.InstallStartedAt) > 3*time.Minute {
 				row.InstallState = decoydeployment.InstallStateUnconfirmed
 			}
-			items = append(items, deploymentView{row, decoyRuntimeStatus(row, now), row.Status == decoydeployment.StatusRegistered && row.InstallState == decoydeployment.InstallStateIdle && row.RuntimeInstanceID == nil && row.TokenHash == "" && row.Kind != decoydeployment.KindShell && (row.Port == 0 || row.Port >= 1024)})
+			hosted := false
+			if row.ActiveRevisionID != nil {
+				if rev, e := db.DecoyRevision.Get(r.Context(), *row.ActiveRevisionID); e == nil {
+					if cfg, e := revisionConfig(rev); e == nil {
+						hosted = cfg.Hosted
+					}
+				}
+			}
+			items = append(items, deploymentView{row, decoyRuntimeStatus(row, now), row.ActiveRevisionID == nil && row.Status == decoydeployment.StatusRegistered && row.InstallState == decoydeployment.InstallStateIdle && row.RuntimeInstanceID == nil && row.TokenHash == "" && row.Kind != decoydeployment.KindShell && (row.Port == 0 || row.Port >= 1024), hosted})
 		}
 		writeJSON(w, struct {
 			Items []deploymentView `json:"items"`
@@ -177,7 +187,7 @@ func mapSSHDecoys(mux *http.ServeMux, db *ent.Client) {
 		if !lockDecoyAsset(w, r, tx, row.AssetID) {
 			return
 		}
-		n, err := tx.DecoyDeployment.Update().Where(decoydeployment.IDEQ(id), decoydeployment.StatusEQ(decoydeployment.StatusRegistered)).SetStatus(decoydeployment.StatusRevoked).ClearTokenHash().ClearTokenExpiresAt().ClearTokenGroupID().SetRevokedAt(time.Now()).SetRevokedBy(auth.From(r.Context()).Username).Save(r.Context())
+		n, err := tx.DecoyDeployment.Update().Where(decoydeployment.IDEQ(id), decoydeployment.StatusEQ(decoydeployment.StatusRegistered)).SetStatus(decoydeployment.StatusRevoked).ClearTokenHash().ClearTokenExpiresAt().ClearTokenGroupID().ClearTokenRevisionID().SetRevokedAt(time.Now()).SetRevokedBy(auth.From(r.Context()).Username).Save(r.Context())
 		if err == nil && n > 0 {
 			err = decoyAudit(r, tx, "decoy_registration_revoked", id)
 		}

@@ -40,6 +40,7 @@ services:
       DATABASE_URL: postgres://openxdr:${POSTGRES_PASSWORD}@postgres:5432/openxdr?sslmode=disable
       NATS_URL: nats://nats:4222
       QUEUE_REPLICAS: 1
+      ABUSE_CH_AUTH_KEY: ${ABUSE_CH_AUTH_KEY:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # 文档导入的凭据与控制台保存的模型密钥都用它加密；丢了就解不开，和数据库一起备份
       HOST_CREDENTIAL_KEY: ${HOST_CREDENTIAL_KEY:?缺少 HOST_CREDENTIAL_KEY，先运行 install.sh}
@@ -59,16 +60,42 @@ services:
       AI_MODEL: ${AI_MODEL:-}
       AI_API_KEY: ${AI_API_KEY:-}
       PI_MODEL: ${PI_MODEL:-}
+      # 自部署 vLLM 且模型名是路径（如 /model）时设 true，后台短输出才能关掉思考
+      AI_TEMPLATE_NO_THINKING: ${AI_TEMPLATE_NO_THINKING:-false}
       # 每组近 24 小时 Pi 用量上限（输入加输出 token），0 不限
       PI_GROUP_DAILY_TOKENS: ${PI_GROUP_DAILY_TOKENS:-0}
       RESPONSE_ENABLED: ${RESPONSE_ENABLED:-false}
       RETENTION_DAYS: ${RETENTION_DAYS:-30}
       # 跨事件的计数与序列检测（开发中，默认关闭）：在 .env 写 TEMPORAL_RULES_PATH=/opt/openxdr/temporal-rules 开启，规则已随镜像带上
       TEMPORAL_RULES_PATH: ${TEMPORAL_RULES_PATH:-}
+      DYGK_CONTROL_SOCKET: /run/openxdr/deception/control.sock
     volumes:
       - ./certs:/certs:ro
+      - deception-control:/run/openxdr/deception
     ports:
       - "8081:8081"
+
+  deception:
+    profiles: [dygk]
+    image: ghcr.io/yaklang/openxdr-deception:${DYGK_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      DYGK_CONTROL_SOCKET: /run/openxdr/deception/control.sock
+      DYGK_STATE_DIR: /data
+      DYGK_LISTEN_HOST: 0.0.0.0
+    volumes:
+      - deception-control:/run/openxdr/deception
+      - deception-data:/data
+    ports:
+      - "${DYGK_BIND_IP:-127.0.0.1}:${DYGK_PORT_RANGE:-18080-18179}:${DYGK_PORT_RANGE:-18080-18179}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    pids_limit: 64
+    stop_grace_period: 30s
 
   web:
     image: ghcr.io/yaklang/openxdr-web:${OPENXDR_VERSION:-latest}
@@ -99,3 +126,5 @@ volumes:
   pgdata:
   natsdata:
   caddydata:
+  deception-control:
+  deception-data:

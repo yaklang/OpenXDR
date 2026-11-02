@@ -26,7 +26,7 @@ func TestAPIReportRender(t *testing.T) {
 	bob := client.User.Create().SetUsername("bob").SetPasswordHash("x").SetRole("viewer").SaveX(ctx)
 	client.GroupMember.Create().SetGroupID(gB.ID).SetUserID(bob.ID).SetRole("viewer").SaveX(ctx)
 
-	h := Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
+	h := Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
 	admin := httptest.NewServer(asAdmin(h))
 	t.Cleanup(admin.Close)
 	other := httptest.NewServer(as(bob, h))
@@ -62,7 +62,7 @@ func TestAPIReportReads(t *testing.T) {
 	r2 := client.Report.Create().SetSessionID(session.ID).SetGroupID(g.ID).SetTitle("二").SetMarkdown("## 结论").SaveX(ctx)
 	elsewhere := client.Report.Create().SetSessionID(session.ID).SetGroupID(other.ID).SetTitle("别组").SetMarkdown("## 结论").SaveX(ctx)
 	users := map[string]*httptest.Server{}
-	h := Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
+	h := Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
 	for _, name := range []string{"alice", "carol"} {
 		u := client.User.Create().SetUsername(name).SetPasswordHash("x").SetRole("viewer").SaveX(ctx)
 		client.GroupMember.Create().SetGroupID(g.ID).SetUserID(u.ID).SetRole("viewer").SaveX(ctx)

@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenXDR journal centralized archive
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/openxdr-ha/deploy/ha/logs/archive.py collect --config /etc/openxdr-log-archive.json
+UMask=0077
+TimeoutStartSec=100
+Nice=10
+MemoryMax=256M
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/openxdr-logs
+PrivateTmp=true

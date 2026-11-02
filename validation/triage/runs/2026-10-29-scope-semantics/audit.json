@@ -1,0 +1,58 @@
+{
+  "complete": true,
+  "report_sha256": "dc4150655d367bf63c1a17f439f747f9abab1c5f3736b4a298d1deb44ad396ce",
+  "rows": 41,
+  "calibration_pass": 21,
+  "calibration_count": 27,
+  "negative_pass": 14,
+  "negative_count": 18,
+  "positive_pass": 7,
+  "positive_count": 9,
+  "automated_evaluation_pass": 10,
+  "evaluation_count": 12,
+  "errors": [
+    {
+      "case": "ai_memory",
+      "control": "previous_v2_2",
+      "repeat": null,
+      "detail": {
+        "stage": "full_review",
+        "code": "invalid_quote"
+      }
+    },
+    {
+      "case": "mixed_clients",
+      "control": "previous_v2_2",
+      "repeat": null,
+      "detail": {
+        "stage": "full_review",
+        "code": "incomplete_output",
+        "finish_reason": "length"
+      }
+    },
+    {
+      "case": "authorized_maintenance",
+      "control": "invented_parent",
+      "repeat": null,
+      "detail": {
+        "stage": "full_review",
+        "code": "invalid_schema"
+      }
+    },
+    {
+      "case": "confirmed_attack",
+      "control": "previous_v2_1",
+      "repeat": null,
+      "detail": {
+        "stage": "full_review",
+        "code": "incomplete_output",
+        "finish_reason": "length"
+      }
+    }
+  ],
+  "failed_checks": 8,
+  "automated_pass": false,
+  "engineering_review": "pending",
+  "independent_human_review": "pending",
+  "scope": "frozen_snapshot_report_integrity_only"
+}

@@ -27,6 +27,16 @@ type Group struct {
 
 // LoadGroup 只取最近 linkTTL 内还出现过的边
 func LoadGroup(ctx context.Context, db *ent.Client, groupID uuid.UUID) (*Group, error) {
+	return load(ctx, db, func(a *ent.Asset) bool { return a.GroupID != nil && *a.GroupID == groupID },
+		db.Zone.Query().Where(zone.GroupIDEQ(groupID)))
+}
+
+// LoadAll 全平台当成一个组：跨组的连接连成主机到主机的边。只给全局 admin，别组主机名不受组隔离保护
+func LoadAll(ctx context.Context, db *ent.Client) (*Group, error) {
+	return load(ctx, db, func(*ent.Asset) bool { return true }, db.Zone.Query())
+}
+
+func load(ctx context.Context, db *ent.Client, keep func(*ent.Asset) bool, zones *ent.ZoneQuery) (*Group, error) {
 	w, err := LoadWorld(ctx, db)
 	if err != nil {
 		return nil, err
@@ -35,13 +45,13 @@ func LoadGroup(ctx context.Context, db *ent.Client, groupID uuid.UUID) (*Group, 
 	var ids []uuid.UUID
 	var ips []string
 	for _, a := range w.Assets {
-		if a.GroupID != nil && *a.GroupID == groupID {
+		if keep(a) {
 			g.Assets = append(g.Assets, a)
 			ids = append(ids, a.ID)
 			ips = append(ips, a.IPAddrs...)
 		}
 	}
-	if g.Zones, err = db.Zone.Query().Where(zone.GroupIDEQ(groupID)).Order(ent.Asc(zone.FieldName)).All(ctx); err != nil {
+	if g.Zones, err = zones.Order(ent.Asc(zone.FieldName)).All(ctx); err != nil {
 		return nil, err
 	}
 	if len(ids) == 0 {
@@ -109,6 +119,8 @@ type Node struct {
 	Online      bool     `json:"online,omitempty"`
 	Listening   int      `json:"listening,omitempty"`
 	Ports       []string `json:"ports,omitempty"` // 未纳管地址上被连过的端口
+	// 资产所在的组：全部组视图里点开详情要按资产自己的组取区域等
+	GroupID *uuid.UUID `json:"groupId,omitempty"`
 }
 
 // Edge 图谱边：同一对节点的连接合并，端口与进程去重
@@ -141,6 +153,7 @@ func (g *Group) Graph(now time.Time) Graph {
 			Role: a.Role, Criticality: a.Criticality, OS: a.Os,
 			Online:    a.SilentSince == nil && now.Sub(a.LastSeen) < 24*time.Hour,
 			Listening: len(listenersOf(a)),
+			GroupID:   a.GroupID,
 		}
 	}
 	type pair struct{ from, to string }

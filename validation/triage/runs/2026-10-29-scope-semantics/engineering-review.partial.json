@@ -1,0 +1,51 @@
+{
+  "reviewer": "executing_agent",
+  "independent_human_review": "pending",
+  "complete": false,
+  "semantic_gate": "failed_calibration",
+  "snapshot_sha256": "3160ca162b509b4357572932d8f9cb3172bdd93ee11e457418cd11ecc2d5463e",
+  "rows": [
+    {
+      "case": "shared_cdn",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "共享 IP 与 TTL 仅作背景，未据域名字面推出随机生成或攻击链；采集缺口与归属未知保持，建议限核实、补证、保全和监测。",
+      "answer_sha256": "8e26f487365a1b0dda4c3cf0bb94ac5c8fa98f5a18ec94f717fae43a4ca76f0e"
+    },
+    {
+      "case": "shared_cdn",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "共享 IP 与 TTL 仅作背景，未据域名字面推出随机生成或攻击链；采集缺口与归属未知保持，建议限核实、补证、保全和监测。",
+      "answer_sha256": "9b2c9b8c63e194452f55d8c67029e29e19e87cb8c3933c30a032c3157b0b31f2"
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "AI 记忆明确不构成人工确认或良性依据；缺少来源/后续连接数据没有被扩写为采集关闭，建议限核实与补证。",
+      "answer_sha256": "7745e3095d65be3025d1f2ab5a190bad3124e2690f874a1b6bfeccf73142a444"
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "AI 记忆明确不构成人工确认或良性依据；缺少来源/后续连接数据没有被扩写为采集关闭，建议限核实与补证。",
+      "answer_sha256": "c439c761f4c1b48002af10e36a4a67fdd37c9ccade1d24dd733b678287564b00"
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "结果条数截断、正文裁剪与血缘超时分开说明，未用正文裁剪解释归一化父进程字段缺失；授权结论限定本次证据，不以工单缺失否定其他授权来源。引用与已给台账匹配，建议为固定目录。",
+      "answer_sha256": "5bbddf16faa1e1548d648b151e4c7e7c94128ab254f3107f078f086ea66c0f09"
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "结果条数截断、正文裁剪与血缘超时分开说明，未用正文裁剪解释归一化父进程字段缺失；授权结论限定本次证据，不以工单缺失否定其他授权来源。引用与已给台账匹配，建议为固定目录。",
+      "answer_sha256": "8bbd42b7e452d2f4478c75a87e8db52db0cfe193c8f1eac5ff618844a5d36258"
+    }
+  ]
+}

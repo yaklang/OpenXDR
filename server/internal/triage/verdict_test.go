@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
 
-const validVerdict = `{"verdict":"benign","confidence":88,"summary":"系统维护","kill_chain":[],"actions":[]}`
+const validVerdict = `{"verdict":"benign","confidence":88,"summary":"系统维护","kill_chain":[],"action_codes":["monitor"]}`
 
 func verdictLLM(t *testing.T, answers []Message) (*LLM, *int) {
 	t.Helper()
@@ -55,8 +56,29 @@ func TestVerdictCorrection(t *testing.T) {
 			if (err != nil) != tc.wantErr || *calls != tc.calls {
 				t.Fatalf("calls=%d err=%v", *calls, err)
 			}
-			if !tc.wantErr && got != validVerdict {
-				t.Fatalf("结论=%s", got)
+			if !tc.wantErr {
+				var actual, expected map[string]any
+				if err := json.Unmarshal([]byte(got), &actual); err != nil {
+					t.Fatal(err)
+				}
+				_ = json.Unmarshal([]byte(validVerdict), &expected)
+				ledger, ok := actual["query_evidence"].([]any)
+				if !ok || len(ledger) != 0 {
+					t.Fatalf("没有执行工具却出现查询证据: %s", got)
+				}
+				delete(actual, "query_evidence")
+				observations, ok := actual["evidence_observations"].([]any)
+				if !ok || len(observations) != 0 {
+					t.Fatalf("没有工具引用却出现证据摘录: %s", got)
+				}
+				delete(actual, "evidence_observations")
+				if actions, ok := actual["actions"].([]any); !ok || len(actions) != 1 {
+					t.Fatalf("缺少服务端建议: %s", got)
+				}
+				delete(actual, "actions")
+				if !reflect.DeepEqual(actual, expected) {
+					t.Fatalf("结论=%s", got)
+				}
 			}
 		})
 	}

@@ -1,32 +1,37 @@
 package intel
 
 import (
+	"io"
 	"os"
 	"testing"
 )
 
-func parseFixture(t *testing.T, name string, parse func(r *os.File) []Entry) []Entry {
+func parseFixture(t *testing.T, name string, parse func(io.Reader) ([]Entry, error)) []Entry {
 	t.Helper()
 	f, err := os.Open("testdata/" + name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	return parse(f)
+	entries, err := parse(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries
 }
 
 func TestParseFeeds(t *testing.T) {
-	feodo := parseFixture(t, "feodo.txt", func(f *os.File) []Entry { return parseList(f) })
+	feodo := parseFixture(t, "feodo.txt", parseList)
 	if len(feodo) != 5 || feodo[0] != (Entry{Kind: "ip", Value: "162.243.103.246"}) {
 		t.Errorf("Feodo 应解析出 5 个 IP，实际 %v", feodo)
 	}
 
-	urlhaus := parseFixture(t, "urlhaus.txt", func(f *os.File) []Entry { return parseHostsFile(f) })
+	urlhaus := parseFixture(t, "urlhaus.txt", parseHostsFile)
 	if len(urlhaus) == 0 || urlhaus[0].Kind != "domain" || urlhaus[0].Value != "123.ywxww.net" {
 		t.Errorf("URLhaus 应解析出域名，实际 %v", urlhaus)
 	}
 
-	tf := parseFixture(t, "threatfox.csv", func(f *os.File) []Entry { return parseThreatFox(f) })
+	tf := parseFixture(t, "threatfox.csv", parseThreatFox)
 	got := map[string]string{}
 	for _, e := range tf {
 		got[e.Kind+":"+e.Value] = e.Note
@@ -60,6 +65,12 @@ func TestNormalize(t *testing.T) {
 		{"ip", "192.168.0.1", false, ""},
 		{"ip", "127.0.0.1", false, ""},
 		{"ip", "0.0.0.0", false, ""},
+		{"ip", "100.64.0.0", false, ""},
+		{"ip", "100.100.100.100", false, ""},
+		{"ip", "100.127.255.255", false, ""},
+		{"ip", "::ffff:100.64.0.1", false, ""},
+		{"ip", "100.63.255.255", true, "100.63.255.255"},
+		{"ip", "100.128.0.0", true, "100.128.0.0"},
 		{"ip", "::ffff:1.2.3.4", true, "1.2.3.4"},
 		{"domain", "Evil.Example.COM.", true, "evil.example.com"},
 		{"domain", "localhost", false, ""},
@@ -76,9 +87,15 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
-func TestDedupe(t *testing.T) {
+func TestFeedEntriesDedupe(t *testing.T) {
 	in := []Entry{{Kind: "ip", Value: "1.2.3.4", Note: "a"}, {Kind: "ip", Value: "1.2.3.4", Note: "b"}, {Kind: "domain", Value: "1.2.3.4"}}
-	out := dedupe(in)
+	var collected feedEntries
+	for _, e := range in {
+		if err := collected.add(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := collected.entries
 	if len(out) != 2 || out[0].Note != "a" {
 		t.Errorf("同值只留第一条，实际 %v", out)
 	}

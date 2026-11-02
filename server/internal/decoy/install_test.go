@@ -5,11 +5,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestInstallScriptBoundaries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Linux 安装脚本的权限及符号链接验收")
+	}
 	dir := t.TempDir()
 	data := make([]byte, 64)
 	copy(data, []byte{127, 'E', 'L', 'F', 2, 1, 1})

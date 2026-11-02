@@ -8,7 +8,7 @@ import { useSession } from '../app/session'
 import { HostLink } from '../components/HostLink'
 import { ApprovalActions } from '../components/ApprovalActions'
 import { LoadError } from '../components/LoadError'
-import { Page } from '../components/Page'
+import { Page, STICKY_HEADER } from '../components/Page'
 import { EmptyHint } from '../components/Ago'
 import { fmtTime, errText } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
@@ -116,26 +116,26 @@ export function ApprovalsPage() {
 
   return (
     <Page title={t('navApprovals')} subtitle={t('approvalsSubtitle', { name: group.name })}>
-      <Card>
+      <Card styles={{ body: { paddingTop: 8 } }}>
         <Tabs
           items={[
             {
               key: 'pending',
               label: t('apTabQueue', { n: pending.length }),
-              children: approvals.isError ? <LoadError error={approvals.error} onRetry={() => approvals.refetch()} /> : <Table<Approval> scroll={{ x: 1050 }} rowKey="id" size="small" loading={approvals.isPending} dataSource={pending} pagination={false} columns={columns(true)} locale={{ emptyText: <EmptyHint title={t('apNone')} hint={t('apNoneHint')} /> }} />,
+              children: approvals.isError ? <LoadError error={approvals.error} onRetry={() => approvals.refetch()} /> : <Table<Approval> sticky={STICKY_HEADER} scroll={{ x: 1050 }} rowKey="id" size="small" loading={approvals.isPending} dataSource={pending} pagination={false} columns={columns(true)} locale={{ emptyText: <EmptyHint title={t('apNone')} hint={t('apNoneHint')} /> }} />,
             },
             {
               key: 'history',
               label: t('apTabHistory'),
-              children: approvals.isError ? <LoadError error={approvals.error} onRetry={() => approvals.refetch()} /> : <Table<Approval> scroll={{ x: 1050 }} rowKey="id" size="small" dataSource={all.filter(a => a.status !== 'pending')} pagination={{ pageSize: 20, hideOnSinglePage: true }} columns={columns(false)} />,
+              children: approvals.isError ? <LoadError error={approvals.error} onRetry={() => approvals.refetch()} /> : <Table<Approval> sticky={STICKY_HEADER} scroll={{ x: 1050 }} rowKey="id" size="small" dataSource={all.filter(a => a.status !== 'pending')} pagination={{ pageSize: 20, hideOnSinglePage: true }} columns={columns(false)} />,
             },
             {
               key: 'policies',
               label: t('apTabPolicies'),
               children: policies.isError ? <LoadError error={policies.error} onRetry={() => policies.refetch()} /> : policies.isPending ? <Spin /> : (
-                <Space orientation="vertical" size={16} style={{ width: '100%' }}>
+                <Space orientation="vertical" size={20} style={{ width: '100%' }}>
                   <Alert type="info" showIcon title={t('policyRegexHint')} />
-                  <Row gutter={[16, 16]}>
+                  <Row gutter={[20, 20]}>
                     <Col xs={24} lg={12}><PolicyCard key={`${group.id}:ai`} groupId={group.id} origin="ai" rows={policies.data ?? []} /></Col>
                     <Col xs={24} lg={12}><PolicyCard key={`${group.id}:human`} groupId={group.id} origin="human" rows={policies.data ?? []} /></Col>
                   </Row>

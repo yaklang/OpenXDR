@@ -44,7 +44,7 @@ func TestAPIGroupScope(t *testing.T) {
 	alice := client.User.Create().SetUsername("alice").SetPasswordHash("x").SetRole("analyst").SaveX(ctx)
 	client.GroupMember.Create().SetGroupID(gA.ID).SetUserID(alice.ID).SetRole("viewer").SaveX(ctx)
 
-	h := Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
+	h := Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
 	ts := httptest.NewServer(as(alice, h))
 	t.Cleanup(ts.Close)
 
@@ -56,7 +56,14 @@ func TestAPIGroupScope(t *testing.T) {
 		}
 		var list []json.RawMessage
 		if err := json.Unmarshal(body, &list); err != nil {
-			t.Fatal(err)
+			// /api/events 已是对象契约 {items,...}：数 items 长度
+			var obj struct {
+				Items []json.RawMessage `json:"items"`
+			}
+			if json.Unmarshal(body, &obj) != nil {
+				t.Fatal(err)
+			}
+			list = obj.Items
 		}
 		return len(list)
 	}
@@ -69,6 +76,15 @@ func TestAPIGroupScope(t *testing.T) {
 	}
 	if n := count("/api/events"); n != 2 {
 		t.Errorf("事件应只见 a1 的 2 条，得到 %d", n)
+	}
+	if n := count("/api/events?assetId=" + a1.ID.String()); n != 2 {
+		t.Errorf("组内资产应返回 2 条事件，实际 %d", n)
+	}
+	if n := count("/api/events?assetId=" + b1.ID.String()); n != 0 {
+		t.Errorf("组外资产不应返回事件，实际 %d", n)
+	}
+	if resp, _ := get(t, ts, "/api/events?assetId=invalid"); resp.StatusCode != 400 {
+		t.Errorf("组内 viewer 的非法资产筛选应返回 400，实际 %d", resp.StatusCode)
 	}
 	if n := count("/api/incidents"); n != 1 {
 		t.Errorf("incident 应只见 A，跨组的 AB 不可见，得到 %d", n)
@@ -134,7 +150,7 @@ func TestAPISuppressionScope(t *testing.T) {
 		client.GroupMember.Create().SetGroupID(gA.ID).SetUserID(u.ID).SetRole(role).SaveX(ctx)
 		return u
 	}
-	h := Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
+	h := Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
 	serve := func(u *ent.User) *httptest.Server {
 		ts := httptest.NewServer(as(u, h))
 		t.Cleanup(ts.Close)

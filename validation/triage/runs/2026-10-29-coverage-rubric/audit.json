@@ -1,0 +1,100 @@
+{
+  "complete": true,
+  "report_sha256": "5e2c34666befe2f39fd65c845e48c465bd745d96ca1d081469f1e6974891f991",
+  "rows": 43,
+  "calibration_pass": 23,
+  "calibration_count": 29,
+  "negative_pass": 15,
+  "negative_count": 19,
+  "positive_pass": 8,
+  "positive_count": 10,
+  "automated_evaluation_pass": 7,
+  "evaluation_count": 12,
+  "errors": [
+    {
+      "case": "ai_memory",
+      "control": "collection_invented",
+      "repeat": null,
+      "detail": {
+        "stage": "full_review",
+        "code": "incomplete_output",
+        "finish_reason": "length"
+      }
+    },
+    {
+      "case": "ai_memory",
+      "control": "previous_v2_2",
+      "repeat": null,
+      "detail": {
+        "stage": "full_review",
+        "code": "incomplete_output",
+        "finish_reason": "length"
+      }
+    },
+    {
+      "case": "ai_memory",
+      "control": null,
+      "repeat": 2,
+      "detail": {
+        "stage": "full_review",
+        "code": "incomplete_output",
+        "finish_reason": "length"
+      }
+    },
+    {
+      "case": "incomplete_query",
+      "control": "verified_refs_actual_2",
+      "repeat": null,
+      "detail": {
+        "stage": "full_review",
+        "code": "incomplete_output",
+        "finish_reason": "length"
+      }
+    },
+    {
+      "case": "incomplete_query",
+      "control": null,
+      "repeat": 1,
+      "detail": {
+        "stage": "full_review",
+        "code": "incomplete_output",
+        "finish_reason": "length"
+      }
+    },
+    {
+      "case": "incomplete_query",
+      "control": null,
+      "repeat": 2,
+      "detail": {
+        "stage": "full_review",
+        "code": "incomplete_output",
+        "finish_reason": "length"
+      }
+    },
+    {
+      "case": "mixed_clients",
+      "control": "previous_v2_2",
+      "repeat": null,
+      "detail": {
+        "stage": "full_review",
+        "code": "incomplete_output",
+        "finish_reason": "length"
+      }
+    },
+    {
+      "case": "mixed_clients",
+      "control": null,
+      "repeat": 1,
+      "detail": {
+        "stage": "full_review",
+        "code": "incomplete_output",
+        "finish_reason": "length"
+      }
+    }
+  ],
+  "failed_checks": 11,
+  "automated_pass": false,
+  "engineering_review": "pending",
+  "independent_human_review": "pending",
+  "scope": "frozen_snapshot_report_integrity_only"
+}

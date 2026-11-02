@@ -58,6 +58,16 @@ curl -fsS https://<地址>/ -o /dev/null -w '%{http_code}\n'   # 自建 CA 时�
 3. **添加主机**：「资产 → 添加主机」选组，复制安装命令到主机上执行（Linux root / Windows 管理员）。agent 安装包已内置在 server 镜像里，
    之后升级 OpenXDR，在线 agent 会自动跟着升级。
 
+自部署 vLLM 若使用 `/model` 等路径型模型名，且测试连接返回空内容或资产标注被思考耗尽预算，可在 `.env` 设置 `AI_TEMPLATE_NO_THINKING=true`，执行 `docker compose up -d server` 重建服务端容器。此项不由控制台覆盖，只对请求关闭思考的调用生效；已识别模型沿用原协议。
+
+### 旧 Linux 内核的采集检查
+
+Linux Agent 的 systemd 安装单元设置 `LimitMEMLOCK=134217728`（128 MiB 上限，不是预分配内存），Agent 进程在首次加载 eBPF 前也会主动将 `RLIMIT_MEMLOCK` 抬升至 128 MiB（兼容二进制热升级的存量主机）。
+旧内核的 eBPF map 受锁定内存限制，默认 64 KiB 可能导致 map 创建失败并退回 netlink。
+若宿主机或容器环境额外通过安全策略限制了 `CAP_SYS_RESOURCE`，可在 `systemctl edit openxdr-agent` 的 `[Service]` 中设置 `LimitMEMLOCK=134217728`，
+执行 `systemctl daemon-reload` 和 `systemctl restart openxdr-agent`，再核对控制台采集能力、事件与缓存回执。
+不要仅凭服务 running 判断 eBPF 已启用。旧内核缺少 fanotify 名字报告时仍降级为 inotify，这个限制不能靠提高 memlock 消除。
+
 ### 放一台流量探针（可选）
 
 在公网入口（反代网关）上或交换机镜像口旁放一台 sensor，就能看到「只握手不发请求」的扫描、TLS 指纹（JA3 / JA3S）、
@@ -117,3 +127,15 @@ sensor 安装包同样内置在 server 镜像里，升级 OpenXDR 后在线探�
 ### 队列持久确认
 
 安装脚本同时下载该 Release 的 `nats.conf`，编排将其只读挂载给 NATS。配置包含 4 MiB 消息上限与 `sync_interval: 1s`（每秒落盘，断电最多丢 1 秒已确认事件，理由与实测见 cluster.md）；手动安装也需下载同版本配置，不能退回只带 `--jetstream` 的默认启动方式。
+
+### 独立欺骗引擎
+
+DYGK 使用同一份 `.env` 和主启动命令：设置 `COMPOSE_PROFILES=dygk`，继续 `docker compose up -d`。平台自动识别版本、下发配置并签发运行身份；无需逐个填写连接器参数。引擎可通过同一配置里的 `DYGK_VERSION` 独立升级，状态和控制通道使用命名卷，无开发机路径依赖。使用与回退见 [独立欺骗引擎运行包](../integrations/dygk/README.md)。
+
+自行构建引擎镜像时，源码来源同样在 `.env` 选择：默认 `DYGK_SOURCE=local` 使用模块内提供的私有源码，显式设置 `remote` 才拉取远端；缺失源码不会自动回退。预构建镜像运行时无需这些构建选项。详见 [源码来源配置](../integrations/dygk/README.md#源码来源配置)。
+
+### 情报订阅认证
+
+ThreatFox 与 URLhaus 需要 abuse.ch Auth-Key。可在「系统设置 → 外部情报查询」保存（需要
+`HOST_CREDENTIAL_KEY`），或在部署 `.env` 中设置 `ABUSE_CH_AUTH_KEY` 后重建 server 容器。
+不要把密钥或包含密钥的下载链接提交到仓库。配置后在「威胁情报」点击「立即同步」，以最近成功时间和同步结果验收。

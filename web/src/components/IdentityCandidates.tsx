@@ -25,11 +25,11 @@ export function IdentityCandidates({ eventId, scope }: { eventId: string; scope:
           { title: t('username'), dataIndex: 'username' },
           { title: t('directoryObserved'), dataIndex: 'observedAt', width: 170, render: fmtTime },
           { title: t('identityCandidatesFreshness'), dataIndex: 'seenInLatestSync', width: 150, render: value => t(value ? 'identityCandidatesSeen' : 'identityCandidatesOld') },
-        ]} expandable={{ expandedRowRender: row => <Space orientation="vertical">
+        ]} expandable={{ expandedRowRender: row => <div className="ev-expand"><Space orientation="vertical">
           <Typography.Text copyable>{row.accountId}</Typography.Text>
           <Typography.Text copyable>{row.sid}</Typography.Text>
           <Typography.Text>{t('directoryLastSuccess')}: {row.lastSuccessfulSync ? fmtTime(row.lastSuccessfulSync) : '—'}</Typography.Text>
-        </Space> }} />
+        </Space></div> }} />
     </>}
   </Space>
 }

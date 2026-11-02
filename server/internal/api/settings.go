@@ -227,7 +227,7 @@ func changedFields(p aiconf.Patch) string {
 			out = append(out, name)
 		}
 	}
-	for name, k := range map[string]*string{"apiKey": p.APIKey, "vtKey": p.VTKey} {
+	for name, k := range map[string]*string{"apiKey": p.APIKey, "vtKey": p.VTKey, "abuseCHKey": p.AbuseCHKey} {
 		if k != nil {
 			out = append(out, name+map[bool]string{true: "（清空）", false: "（设置）"}[*k == ""])
 		}

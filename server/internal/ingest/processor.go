@@ -12,6 +12,9 @@ import (
 
 	"openxdr/server/internal/automation"
 	"openxdr/server/internal/cmdorigin"
+	"openxdr/server/internal/eventarchive"
+	"openxdr/server/internal/eventpart"
+	"openxdr/server/internal/graphqueue"
 	"openxdr/server/internal/identity"
 	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
@@ -32,6 +35,9 @@ type Processor struct {
 	Intel       *intel.Store
 	DedupWindow time.Duration
 	Metrics     Metrics
+	// Archive 是冷归档判重（分区被切走后的重放）；nil = 不启用，行为与改动前一致。
+	// 由 main.go 按 EVENT_ARCHIVE_DEDUP 注入，见 archive.go。
+	Archive ArchiveDedup
 }
 
 // EnsureSchema 创建事务处理状态。temporal_matches 是已消费命中的持久记录，
@@ -58,32 +64,31 @@ CREATE INDEX IF NOT EXISTS temporal_matches_event ON temporal_matches(event_id);
 	if err := temporal.EnsureSchema(ctx, db); err != nil {
 		return err
 	}
-	return identity.EnsureSchema(ctx, db)
-}
-
-func (p *Processor) Process(ctx context.Context, e Envelope) (err error) {
-	started := time.Now()
-	alerts := 0
-	duplicate := false
-	var temporalSkipped []string
-	defer func() {
-		if p.Metrics != nil {
-			if err != nil {
-				p.Metrics.Failed("process")
-			} else {
-				p.Metrics.Processed(e.Source, duplicate, alerts, time.Since(started))
-				if metrics, ok := p.Metrics.(interface{ TemporalSkipped(string) }); ok {
-					for _, reason := range temporalSkipped {
-						metrics.TemporalSkipped(reason)
-					}
-				}
-			}
-		}
-	}()
-	if err = e.Validate(); err != nil {
+	if err := identity.EnsureSchema(ctx, db); err != nil {
 		return err
 	}
+	return graphqueue.EnsureSchema(ctx, db)
+}
 
+func (p *Processor) Process(ctx context.Context, e Envelope) error {
+	return p.ProcessBatch(ctx, []Envelope{e})
+}
+
+// ProcessBatch 按接收顺序处理整批，在同一事务内提交事件及所有派生状态。
+func (p *Processor) ProcessBatch(ctx context.Context, events []Envelope) (err error) {
+	if len(events) == 0 {
+		return nil
+	}
+	defer func() {
+		if err != nil && p.Metrics != nil {
+			p.Metrics.Failed("process")
+		}
+	}()
+	for _, e := range events {
+		if err := e.Validate(); err != nil {
+			return err
+		}
+	}
 	var snapshot *temporal.Snapshot
 	if p.Temporal != nil {
 		snapshot = p.Temporal.Current()
@@ -91,27 +96,60 @@ func (p *Processor) Process(ctx context.Context, e Envelope) (err error) {
 			return fmt.Errorf("时序规则已配置但没有有效快照")
 		}
 	}
-	tx, err := p.DB.BeginTx(ctx, nil)
+	begun := time.Now()
+	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	envelopes, external, err := suricataHit(ctx, tx, e)
-	if err != nil {
+	if err := p.lockReferenceDays(ctx, tx, events, snapshot); err != nil {
 		return err
 	}
-	// 东西向 Suricata 告警两端各有一台资产时各落一份证据，如同两端 agent 各自看到这条连接
-	duplicate = true
-	for _, item := range envelopes {
-		stored, n, skipped, err := p.store(ctx, tx, item, snapshot, external)
+	type result struct {
+		elapsed   time.Duration
+		duplicate bool
+		alerts    int
+		skipped   []string
+	}
+	results := make([]result, len(events))
+	for i, e := range events {
+		started := time.Now()
+		envelopes, external, err := suricataHit(ctx, tx, e)
 		if err != nil {
 			return err
 		}
-		duplicate = duplicate && !stored
-		alerts += n
-		temporalSkipped = append(temporalSkipped, skipped...)
+		results[i].duplicate = true
+		for _, item := range envelopes {
+			stored, n, skipped, err := p.store(ctx, tx, item, snapshot, external)
+			if err != nil {
+				return err
+			}
+			results[i].duplicate = results[i].duplicate && !stored
+			results[i].alerts += n
+			results[i].skipped = append(results[i].skipped, skipped...)
+		}
+		results[i].elapsed = time.Since(started)
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// 仅提交成功才计入成功数。单事件耗时只算它自己的处理，不含等同批其他事件与提交——
+	// 否则批越大数越大，与「单事件处理耗时」的口径和告警阈值对不上；整批（含取锁与提交）另记一份。
+	if p.Metrics != nil {
+		if metrics, ok := p.Metrics.(interface{ Batch(int, time.Duration) }); ok {
+			metrics.Batch(len(events), time.Since(begun))
+		}
+		for i, e := range events {
+			r := results[i]
+			p.Metrics.Processed(e.Source, r.duplicate, r.alerts, r.elapsed)
+			if metrics, ok := p.Metrics.(interface{ TemporalSkipped(string) }); ok {
+				for _, reason := range r.skipped {
+					metrics.TemporalSkipped(reason)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // store 在调用方事务内落一条事件并产出告警；事件已存在（重传）时返回 stored=false。
@@ -123,6 +161,30 @@ func (p *Processor) store(ctx context.Context, tx *sql.Tx, e Envelope, snapshot 
 			return false, 0, nil, err
 		}
 	}
+	// 冷归档判重：分区被 `eventarchive swap` 切走之后，这条事件在 events 里已经没有行了，
+	// 下面的 INSERT ... ON CONFLICT 看不到它，迟到/重传会被当成新事件重新入库、重新检测。
+	//
+	// 为什么是「先查后插」而不是「插入后再删」：插入再删有一段窗口让行重新可见（并可能被
+	// 并发读到），而且检测副作用（告警、时序命中、身份观测）已经发生，删掉事件行并不能回滚
+	// 它们；先查则命中时一次都不落库，幂等是由「不写」实现的，不是由「写完再撤销」实现的。
+	// 查询只在时间闸门命中时才发（见 archivedBefore），代价压在罕见的重传路径上。
+	//
+	// 竞态分析：
+	//   - 并发重传同一条事件仍由下面的 INSERT ... ON CONFLICT 兜底，本检查不承担并发去重。
+	//   - 与 Swap 并发：RewriteDay 在事务里先对该日分区加 SHARE 锁再重建；冷块早在
+	//     shadow + verify 阶段就写好了，与切换本身无关。所以 Archived 读到的是切换前或
+	//     切换后的确定状态，两种落点都不丢事件：
+	//     读到「已归档」→ 本次不入库，而该日分区随后也只会移走这一行（本来就不该留在热表）；
+	//     读到「不在归档」→ 这条事件不在 run 口径内（类别/来源之外，或仍被 pin 在热表里），
+	//     Swap 不会移走它，插入照常成立。只有「口径内、未 pin、闸门通过之后恰好被同一次
+	//     切换带走」这一瞬间的插入会随分区重建消失，它的副本仍在冷块里，下一次重传会被判为
+	//     已归档——数据不丢，也不会有第二种结果。
+	//   - 闸门边界有 60 秒缓存：刚归档/刚切走的时段最多 60 秒内仍可能被判成「不在归档」，
+	//     后果与接线前一样（重复入库 + 告警去重窗口吸收），不会反过来丢事件（见 CachedArchive）。
+	if p.archivedBefore(ctx, e) {
+		return false, 0, nil, nil
+	}
+	// R1 引用生命周期锁已由 ProcessBatch 在事务开头按整批取齐（见 lockReferenceDays）。
 	// 不写冲突列：分区表主键是 (id, ts)，老表是 id。稳定 ID 由含时间戳的来源字段算出，同一 id 必是同一 ts，两者等价
 	result, err := tx.ExecContext(ctx, `INSERT INTO events
   (id, ts, class_uid, source, asset_id, process_guid, parent_process_guid, username, conn_tuple, raw)
@@ -135,6 +197,9 @@ ON CONFLICT DO NOTHING`, e.ID, e.Timestamp, e.ClassUID, e.Source,
 	}
 	if inserted, _ := result.RowsAffected(); inserted == 0 {
 		return false, 0, nil, nil
+	}
+	if err := graphqueue.Capture(ctx, tx, e.ID, e.Timestamp, e.ClassUID); err != nil {
+		return false, 0, nil, err
 	}
 
 	if e.Source == "agent" && e.ClassUID == 3002 && e.AssetID != nil {
@@ -226,7 +291,43 @@ type origin struct {
 	watch      bool
 }
 
+// lockReferenceDays 在整批事务开头一次取齐本事务要写的全部事件引用（alerts / temporal_evidence /
+// 已出告警的时序锚点）所涉 UTC 日的共享生命周期锁（R1）。锁内插入事件与引用，与同日 swap / retire /
+// 到期清理的排他锁互斥：要么引用先落定（swap 的锁内重读把目标行判为 pin 留热），要么破坏性操作先做完
+// （本事务等它提交后按「热行缺失 → 冷层物化补链」继续，见 upsertAlert / temporal / EnsureHotEvents）。
+//
+// 整批一条语句、按 UTC 日升序取（升序是全局锁序，与按日升序取排他锁的一方互相不成环）：
+// 逐条事件各取一次既多一次往返，批内日期乱序时取锁顺序也不再升序。
+//   - 无时序规则：引用只有事件自身（sigma / 情报 / 时序告警的 event_id 都是刚插入的这条），锁事件所在日；
+//   - 有时序规则：时序候选与锚点可能落在 e.Timestamp ± MaxWindow 内的任何一天（窗口不超过 24 小时，
+//     两端加中点就覆盖了区间内每一天），一次把整段锁齐。归档只覆盖 min-age 之外的老日子，
+//     常规流量锁的是新日子，与 swap 天然错开；只有迟到事件会在老日子上排队，这正是要保护的对象。
+//
+// Suricata 派生的信封与原事件同一时间戳，按外层事件算即可。之后各写入点再取同日锁是幂等的。
+func (p *Processor) lockReferenceDays(ctx context.Context, tx *sql.Tx, events []Envelope, snapshot *temporal.Snapshot) error {
+	var window time.Duration
+	if snapshot != nil {
+		window = snapshot.MaxWindow()
+	}
+	ts := make([]time.Time, 0, 3*len(events))
+	for _, e := range events {
+		ts = append(ts, e.Timestamp.Add(-window), e.Timestamp, e.Timestamp.Add(window))
+	}
+	return eventpart.LifecycleLockShared(ctx, tx, ts...)
+}
+
 func (p *Processor) upsertAlert(ctx context.Context, tx *sql.Tx, e Envelope, hit intel.Hit, from origin) (bool, error) {
+	// R1 引用写入点：alerts.event_id 是 PinnedIDs 的第一支。先取目标事件归属日的共享
+	// 生命周期锁（store 的入口已随 ±时序窗口取齐，这里幂等补上独立调用场景），再锁内
+	// 重读目标热行——本事务刚插入的事件必命中（接入热路径零行为差异）；独立路径遇到
+	// 热行缺失时由 EnsureHotEvents 从冷层物化回热表再写引用，物化不了（冷层也没有 /
+	// 定位状态说不清 / 块损坏）就返回错误让整个引用事务失败，不提交悬空引用。
+	if err := eventpart.LifecycleLockShared(ctx, tx, e.Timestamp); err != nil {
+		return false, err
+	}
+	if err := eventarchive.EnsureHotEvents(ctx, tx, e.ID); err != nil {
+		return false, err
+	}
 	fingerprint := alertFingerprint(e, hit, from)
 	// 同一指纹的所有集群节点在事务内串行，窗口判断与告警计数不会竞争。
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, fingerprint); err != nil {

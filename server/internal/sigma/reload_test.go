@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -138,4 +139,60 @@ func TestZeroValueEngine(t *testing.T) {
 	if eng.TitleOf("x") != "" {
 		t.Fatal("零值引擎 TitleOf 应为空")
 	}
+}
+
+// 不同快照的字段顺序和 selection 数量不同，切换期间不能借用另一版的缓存。
+func TestEvaluateConcurrentSnapshotSwap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rule.yml")
+	versions := []string{
+		`id: before
+logsource: {category: process_creation}
+detection:
+  command: {CommandLine: Alpha}
+  condition: command
+`,
+		`id: after
+logsource: {category: process_creation}
+detection:
+  image: {Image: /usr/bin/Beta}
+  command: {CommandLine: Alpha}
+  missing: {User: null}
+  condition: image and command and missing
+`,
+	}
+	states := make([]*engineState, len(versions))
+	for i, body := range versions {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		state, report := loadState(dir)
+		if report.Loaded != 1 {
+			t.Fatalf("规则快照加载失败: %+v", report)
+		}
+		states[i] = state
+	}
+	eng := &Engine{}
+	eng.state.Store(states[0])
+	var workers sync.WaitGroup
+	for range 8 {
+		workers.Go(func() {
+			for range 500 {
+				raw := map[string]any{"process": map[string]any{"cmd_line": "Alpha", "file": map[string]any{"path": "/usr/bin/Beta"}}}
+				hits := eng.Evaluate(1007, "linux", raw)
+				if len(hits) != 1 || (hits[0].ID != "before" && hits[0].ID != "after") {
+					t.Errorf("并发切换必须命中完整快照: %v", ruleIDs(hits))
+					return
+				}
+				if hits := eng.Evaluate(1007, "linux", nil); len(hits) != 0 {
+					t.Errorf("空事件不能继承旧缓存: %v", ruleIDs(hits))
+					return
+				}
+			}
+		})
+	}
+	for i := range 1000 {
+		eng.state.Store(states[i%len(states)])
+	}
+	workers.Wait()
 }

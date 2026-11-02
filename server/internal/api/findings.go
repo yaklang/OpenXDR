@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,10 +46,47 @@ func mapFindings(mux *http.ServeMux, db *ent.Client) {
 		if !s.all {
 			q = q.Where(finding.GroupIDIn(s.groups...))
 		}
+		if v := r.URL.Query().Get("assetId"); v != "" {
+			id, err := uuid.Parse(v)
+			if err != nil {
+				http.Error(w, "无效的 assetId", http.StatusBadRequest)
+				return
+			}
+			q = q.Where(finding.AssetIDEQ(id))
+		}
 		if status := r.URL.Query().Get("status"); status != "" {
 			q = q.Where(finding.StatusEQ(status))
 		}
-		rows, err := q.Order(ent.Desc(finding.FieldLastSeen)).Limit(500).All(r.Context())
+		if values, present := r.URL.Query()["ids"]; present {
+			parts := strings.Split(strings.Join(values, ","), ",")
+			if len(parts) > 10 {
+				http.Error(w, "一次最多查询 10 条待办", http.StatusBadRequest)
+				return
+			}
+			ids := make([]uuid.UUID, len(parts))
+			for i, part := range parts {
+				id, err := uuid.Parse(part)
+				if err != nil {
+					http.Error(w, "无效的待办 ID", http.StatusBadRequest)
+					return
+				}
+				ids[i] = id
+			}
+			q = q.Where(finding.IDIn(ids...))
+		}
+		limit, offset := 500, 0
+		if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil {
+			limit = min(max(n, 1), 500)
+		}
+		if n, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil && n > 0 {
+			offset = n
+		}
+		total, err := q.Clone().Count(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rows, err := q.Order(ent.Desc(finding.FieldLastSeen), ent.Desc(finding.FieldID)).Limit(limit).Offset(offset).All(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -69,6 +108,10 @@ func mapFindings(mux *http.ServeMux, db *ent.Client) {
 		for i, f := range rows {
 			out[i] = findingRow{f.ID, f.GroupID, f.AssetID, names[f.AssetID], f.Key, f.Title, f.Detail, f.Severity,
 				f.Status, f.FirstSeen, f.LastSeen, f.SessionID, f.ResolvedAt, f.ResolvedBy, f.Note}
+		}
+		w.Header().Set("X-Total-Count", strconv.Itoa(total))
+		if len(rows) < total-offset {
+			w.Header().Set("X-Truncated", "1")
 		}
 		writeJSON(w, out)
 	})

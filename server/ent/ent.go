@@ -18,7 +18,9 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/commandpolicy"
 	"openxdr/server/ent/decoydeployment"
+	"openxdr/server/ent/decoyenginerelease"
 	"openxdr/server/ent/decoyobservation"
+	"openxdr/server/ent/decoyrevision"
 	"openxdr/server/ent/enrolltoken"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/externalticket"
@@ -48,6 +50,7 @@ import (
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/task"
 	"openxdr/server/ent/taskrun"
+	"openxdr/server/ent/triagerun"
 	"openxdr/server/ent/trustedsource"
 	"openxdr/server/ent/user"
 	"openxdr/server/ent/vulnrecord"
@@ -130,7 +133,9 @@ func checkColumn(t, c string) error {
 			command.Table:                 command.ValidColumn,
 			commandpolicy.Table:           commandpolicy.ValidColumn,
 			decoydeployment.Table:         decoydeployment.ValidColumn,
+			decoyenginerelease.Table:      decoyenginerelease.ValidColumn,
 			decoyobservation.Table:        decoyobservation.ValidColumn,
+			decoyrevision.Table:           decoyrevision.ValidColumn,
 			enrolltoken.Table:             enrolltoken.ValidColumn,
 			event.Table:                   event.ValidColumn,
 			externalticket.Table:          externalticket.ValidColumn,
@@ -160,6 +165,7 @@ func checkColumn(t, c string) error {
 			suppression.Table:             suppression.ValidColumn,
 			task.Table:                    task.ValidColumn,
 			taskrun.Table:                 taskrun.ValidColumn,
+			triagerun.Table:               triagerun.ValidColumn,
 			trustedsource.Table:           trustedsource.ValidColumn,
 			user.Table:                    user.ValidColumn,
 			vulnrecord.Table:              vulnrecord.ValidColumn,

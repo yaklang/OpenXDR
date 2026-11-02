@@ -1,7 +1,9 @@
 # SSH 诱饵：独立服务与运行策略
 
+运行实现已抽离至独立引擎，统一接入与云端部署见 [运行包说明](../integrations/dygk/README.md)。
+
 本原型验证“认证 Banner 是否进入工具输出，以及标记是否被跟随”。它不是生产防护，也不能据此确认访问者是 AI。
-实现：`server/internal/sshdecoy/server.go`；显式启动入口：`server/cmd/sshdecoy/main.go`。
+实现：`server/deception/sshdecoy/server.go`；显式启动入口：`server/cmd/sshdecoy/main.go`。
 
 三层策略、证据边界与待接入项见 [三层诱饵防御](decoy-defense.md)。运行时选择 `-profile decoy|pause|padding`，不能与 `-template` 同时使用；不传两者时默认 `decoy`。`-list-profiles` 只输出目录并退出。
 
@@ -64,7 +66,7 @@ go build -o /tmp/openxdr-sshdecoy ./cmd/sshdecoy
 
 ## 验证与后续接入
 
-`go test -race ./internal/sshdecoy ./cmd/sshdecoy` 使用真实 SSH 握手验证 Banner、标记关联、重放抑制、禁止登录、隐私字段不落盘、停机和持久化失败传播；另测试容量、过期、实例隔离与非法配置。
+`go test -race ./deception/sshdecoy ./cmd/sshdecoy` 使用真实 SSH 握手验证 Banner、标记关联、重放抑制、禁止登录、隐私字段不落盘、停机和持久化失败传播；另测试容量、过期、实例隔离与非法配置。
 
 已用 BoxPwnr 原生 XML 策略和 PentestGPT legacy 流程完成受限本地实验，见 [首轮报告](ssh-decoy-evaluation.md) 与 [第二轮注入测试](ssh-decoy-evaluation-round2.md)。这不是完整 CLI 或生产验收，尚未做人工对照。工具是否显示 Banner 取决于客户端，不能由服务端准备事件推断。
 靶场应独立记录四个阶段：服务端准备模板、工具是否展示、代理上下文是否包含、后续动作是否跟随；没有后续行为不能直接算作劝止成功。

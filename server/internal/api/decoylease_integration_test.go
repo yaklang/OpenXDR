@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"openxdr/server/deception/sdk"
 	"openxdr/server/ent/decoydeployment"
-	"openxdr/server/internal/decoy"
 	"openxdr/server/internal/testdb"
 )
 
@@ -24,9 +24,9 @@ func TestDecoyLeaseLifecycle(t *testing.T) {
 	row := db.DecoyDeployment.Create().SetAssetID(host.ID).SetKind(decoydeployment.KindHTTP).SetProfile("decoy").SetTemplate("http-decoy-v1").SetPort(8088).SetCreatedBy("test").SetTokenHash(decoyTokenHash(token)).SetTokenGroupID(group.ID).SetTokenExpiresAt(time.Now().Add(time.Hour)).SaveX(ctx)
 	ts := httptest.NewServer(DecoyRuntime(db))
 	defer ts.Close()
-	newClient := func() *decoy.Client {
+	newClient := func() *sdk.Client {
 		t.Helper()
-		c, e := decoy.NewClient(ts.URL, row.ID.String(), token)
+		c, e := sdk.NewClient(ts.URL, row.ID.String(), token)
 		if e != nil {
 			t.Fatal(e)
 		}

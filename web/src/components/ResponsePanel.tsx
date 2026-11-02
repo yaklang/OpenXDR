@@ -1,7 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Card, Collapse, Empty, Input, Select, Space, Typography } from 'antd'
+import { App, Button, Card, Collapse, Empty, Input, Pagination, Select, Space, Typography } from 'antd'
 import { useState } from 'react'
-import { fetchCommands, issueCommand } from '../api'
+import { fetchCommandsPage, issueCommand } from '../api'
+import { CommandDetailDrawer } from './CommandDetailDrawer'
+import { LoadError } from './LoadError'
 import { useI18n, type MsgKey } from '../i18n'
 import { CommandStatusTag, commandKind, fmtTime, errText } from './format'
 
@@ -21,7 +23,9 @@ export function ResponsePanel({ incidentId, assetId, canAct }: { incidentId: str
   const { modal, message } = App.useApp()
   const client = useQueryClient()
   const [busy, setBusy] = useState(false)
-  const history = useQuery({ queryKey: ['commands', incidentId], queryFn: () => fetchCommands({ incidentId }), refetchInterval: 5_000 })
+  const [page, setPage] = useState(1)
+  const [detail, setDetail] = useState<string | null>(null)
+  const history = useQuery({ queryKey: ['commands', incidentId, page], queryFn: () => fetchCommandsPage({ incidentId }, page), refetchInterval: 5_000 })
 
   const [kind, setKind] = useState<string>()
   const [target, setTarget] = useState('')
@@ -79,11 +83,12 @@ export function ResponsePanel({ incidentId, assetId, canAct }: { incidentId: str
             </>
           )}
           {/* 右侧窄栏放不下表格，记录按行排：动作 · 状态，下一行时间与结果 */}
-          {history.isPending ? null : (history.data ?? []).length === 0 ? (
+          {history.isError && <LoadError error={history.error} onRetry={() => history.refetch()} />}
+          {history.isPending ? null : (history.data?.items ?? []).length === 0 ? (
             <Typography.Text type="secondary">{t('noCommands')}</Typography.Text>
           ) : (
             <div className="cmd-list">
-              {history.data!.map(c => (
+              {history.data!.items.map(c => (
                 <div key={c.id} className="cmd-item">
                   <Space size={6} wrap>
                     <Typography.Text strong>{commandKind(c.kind, t)}</Typography.Text>
@@ -93,6 +98,7 @@ export function ResponsePanel({ incidentId, assetId, canAct }: { incidentId: str
                   <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
                     {fmtTime(c.createdAt)}{c.issuedBy ? ` · ${c.issuedBy}` : ''}
                   </Typography.Text>
+                  <Button type="link" size="small" onClick={() => setDetail(c.id)}>{t('commandViewDetail')}</Button>
                   {c.detail && <Typography.Text style={{ fontSize: 12 }} ellipsis={{ tooltip: c.detail }}>{c.detail}</Typography.Text>}
                 </div>
               ))}
@@ -100,6 +106,8 @@ export function ResponsePanel({ incidentId, assetId, canAct }: { incidentId: str
           )}
         </Space>
       )}
+      <Pagination size="small" current={page} pageSize={10} total={history.data?.total ?? 0} onChange={setPage} showSizeChanger={false} hideOnSinglePage />
+      {detail && <CommandDetailDrawer id={detail} onClose={() => setDetail(null)} />}
     </Card>
   )
 }

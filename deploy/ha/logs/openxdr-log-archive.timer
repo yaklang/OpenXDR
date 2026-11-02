@@ -1,0 +1,10 @@
+[Unit]
+Description=Collect OpenXDR logs every 30 seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

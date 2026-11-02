@@ -3,18 +3,18 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { useTheme } from '../app/theme'
 
-// 图表配色：单序列只用分类色第 1 位（蓝），亮暗各取校验通过的一档；级别用固定状态色
+// 图表配色：单序列采用 Gemini 主色蓝，亮暗各取校验通过的一档；级别用固定状态色
 export function useSeriesColor() {
   const { dark } = useTheme()
-  return dark ? '#3987e5' : '#2a78d6'
+  return dark ? '#4c8df6' : '#0b57d0'
 }
 
 export const SEVERITY_COLOR: Record<number, string> = {
-  5: '#d03b3b', // critical
-  4: '#ec835a', // serious
-  3: '#fab219', // warning
-  2: '#5598e7', // 低危与标签同为蓝，取单色蓝阶中的一档
-  1: '#c3c2b7',
+  5: '#d93025', // critical
+  4: '#e8710a', // serious
+  3: '#f29900', // warning
+  2: '#4c8df6', // 低危与标签同为蓝，取单色蓝阶中的一档
+  1: '#9aa0a6',
 }
 
 // 1,284 / 12.9K / 3.4M
@@ -77,7 +77,7 @@ export function ColumnChart({ data, height = 200, xLabel, tip, dim }: {
             const x = axisW + i * slot
             const h = (d.value / max) * plotH
             const bx = x + (slot - barW) / 2
-            const r = Math.min(4, h, barW / 2)
+            const r = Math.min(6, h, barW / 2)
             const base = padTop + plotH
             const label = xLabel(i)
             return (

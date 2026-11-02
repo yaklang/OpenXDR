@@ -36,7 +36,7 @@ func TestAPITasks(t *testing.T) {
 	alice := client.User.Create().SetUsername("alice").SetPasswordHash("x").SetRole("viewer").SaveX(ctx)
 	client.GroupMember.Create().SetGroupID(gA.ID).SetUserID(alice.ID).SetRole("viewer").SaveX(ctx)
 
-	h := Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
+	h := Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
 	admin := httptest.NewServer(asAdmin(h))
 	t.Cleanup(admin.Close)
 	viewer := httptest.NewServer(as(alice, h))
@@ -143,7 +143,7 @@ func TestAPITaskGroups(t *testing.T) {
 	alice := client.User.Create().SetUsername("alice").SetPasswordHash("x").SetRole("viewer").SaveX(ctx)
 	client.GroupMember.Create().SetGroupID(gA.ID).SetUserID(alice.ID).SetRole("viewer").SaveX(ctx)
 
-	h := Handler(client, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
+	h := Handler(client, nil, loadRules(t), response.NewHub(client, false), suppress.New(client, time.Hour), intel.New(client, time.Hour), nil)
 	admin := httptest.NewServer(asAdmin(h))
 	t.Cleanup(admin.Close)
 	groupAdmin := httptest.NewServer(as(bob, h))

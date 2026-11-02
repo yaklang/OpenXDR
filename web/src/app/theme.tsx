@@ -16,19 +16,21 @@ const stored = (): ThemeMode => {
   return v === 'light' || v === 'dark' ? v : 'system'
 }
 
-// 苹果系统色：亮暗两套各自取官方值，状态色只给级别与状态用，强调色只有一个蓝
+// Google Gemini / Material 3 调色板：亮暗两套采用柔和色调表面（Tonal Surface）分出层次，弱化生硬描边
 const PALETTE = {
   light: {
-    primary: '#0071e3', success: '#34c759', warning: '#ff9500', error: '#ff3b30',
-    layout: '#f5f5f7', panel: '#ffffff', elevated: '#ffffff',
-    text: '#1d1d1f', text2: '#6e6e73', text3: '#86868b', border: '#d2d2d7', hairline: 'rgba(0,0,0,.08)',
-    fill: 'rgba(0,0,0,.05)', fill2: 'rgba(0,0,0,.035)', fill3: 'rgba(0,0,0,.025)', fill4: 'rgba(0,0,0,.015)',
+    primary: '#0b57d0', success: '#1e8e3e', warning: '#e37400', error: '#d93025',
+    layout: '#f4f7fc', sider: '#eaf0f9', panel: '#ffffff', elevated: '#ffffff',
+    text: '#1f1f1f', text2: '#444746', text3: '#747775', border: '#c4c7c5', hairline: 'rgba(11,87,208,.075)',
+    fill: 'rgba(11,87,208,.09)', fill2: '#e7eef8', fill3: '#eff4fb', fill4: '#f6f9fe',
+    menuSelectedBg: '#d3e3fd', menuSelectedColor: '#041e49',
   },
   dark: {
-    primary: '#0a84ff', success: '#30d158', warning: '#ff9f0a', error: '#ff453a',
-    layout: '#000000', panel: '#1c1c1e', elevated: '#2c2c2e',
-    text: '#f5f5f7', text2: '#a1a1a6', text3: '#8e8e93', border: '#3a3a3c', hairline: 'rgba(255,255,255,.1)',
-    fill: 'rgba(255,255,255,.12)', fill2: 'rgba(255,255,255,.08)', fill3: 'rgba(255,255,255,.06)', fill4: 'rgba(255,255,255,.04)',
+    primary: '#4c8df6', success: '#34a853', warning: '#fbbc04', error: '#ea4335',
+    layout: '#131314', sider: '#1b1c1e', panel: '#1e1f22', elevated: '#282a2e',
+    text: '#e3e3e3', text2: '#c4c7c5', text3: '#8e918f', border: '#444746', hairline: 'rgba(255,255,255,.075)',
+    fill: 'rgba(168,199,250,.14)', fill2: '#282a2e', fill3: '#222428', fill4: 'rgba(255,255,255,.04)',
+    menuSelectedBg: 'rgba(168,199,250,.18)', menuSelectedColor: '#c2e7ff',
   },
 }
 
@@ -58,21 +60,21 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         locale={locale === 'zh' ? zhCN : enUS}
         // 两个汉字的按钮不插空格：「保存」「关闭」和其他按钮读起来一致
         button={{ autoInsertSpace: false }}
-        // 标签一律浅色填充无描边，和苹果的胶囊标签一致
+        // 标签一律浅色填充无描边，胶囊质感
         tag={{ variant: 'filled' }}
         theme={{
           algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
           token: {
             colorPrimary: c.primary,
             colorInfo: c.primary,
-            colorLink: c.primary,
+            colorLink: dark ? '#a8c7fa' : c.primary,
             colorError: c.error,
             colorWarning: c.warning,
             colorSuccess: c.success,
             colorText: c.text,
             colorTextSecondary: c.text2,
             colorTextTertiary: c.text3,
-            colorTextQuaternary: dark ? '#636366' : '#aeaeb2',
+            colorTextQuaternary: dark ? '#5e6060' : '#9aa0a6',
             colorBgLayout: c.layout,
             colorBgContainer: c.panel,
             colorBgElevated: c.elevated,
@@ -83,58 +85,64 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
             colorFillSecondary: c.fill2,
             colorFillTertiary: c.fill3,
             colorFillQuaternary: c.fill4,
-            borderRadius: 10,
-            borderRadiusLG: 14,
-            borderRadiusSM: 6,
-            fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Hiragino Sans GB", Inter, "Segoe UI", "Microsoft YaHei", sans-serif',
-            fontFamilyCode: 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace',
-            // 阴影只用来分层，不制造立体感：卡片靠一条细线，弹层才有柔和投影
-            boxShadow: dark ? '0 8px 28px rgba(0,0,0,.5)' : '0 8px 28px rgba(0,0,0,.12), 0 0 0 .5px rgba(0,0,0,.06)',
-            boxShadowSecondary: dark ? '0 12px 40px rgba(0,0,0,.6)' : '0 12px 40px rgba(0,0,0,.14), 0 0 0 .5px rgba(0,0,0,.06)',
+            borderRadius: 12,
+            borderRadiusLG: 18,
+            borderRadiusSM: 8,
+            fontFamily: '"Google Sans", Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Segoe UI", "Microsoft YaHei", sans-serif',
+            fontFamilyCode: '"Google Sans Mono", "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace',
+            // 柔和漫射投影，靠色调表面区分主次
+            boxShadow: dark ? '0 8px 28px rgba(0,0,0,.48)' : '0 6px 24px rgba(11,87,208,.08), 0 1px 4px rgba(0,0,0,.04)',
+            boxShadowSecondary: dark ? '0 14px 44px rgba(0,0,0,.6)' : '0 12px 36px rgba(11,87,208,.11), 0 2px 8px rgba(0,0,0,.05)',
             boxShadowTertiary: 'none',
-            controlOutline: dark ? 'rgba(10,132,255,.35)' : 'rgba(0,113,227,.25)',
-            motionDurationMid: '0.18s',
+            controlOutline: dark ? 'rgba(168,199,250,.32)' : 'rgba(11,87,208,.2)',
+            motionDurationMid: '0.2s',
           },
           components: {
-            // 顶栏半透明磨砂（见 index.css），侧栏与页面同底色，只用一条细线分隔
-            Layout: { headerHeight: 56, headerPadding: '0 16px', headerBg: 'transparent', lightSiderBg: c.layout, bodyBg: c.layout },
+            // Gemini 壳层：侧栏采用柔和次级表面色，与主画布自然过渡
+            Layout: { headerHeight: 60, headerPadding: '0 24px', headerBg: 'transparent', lightSiderBg: c.sider, siderBg: c.sider, bodyBg: c.layout },
             Menu: {
               itemBg: 'transparent',
-              itemHeight: 34,
-              itemMarginBlock: 1,
-              itemMarginInline: 8,
-              itemBorderRadius: 8,
+              subMenuItemBg: 'transparent',
+              itemHeight: 40,
+              itemMarginBlock: 3,
+              itemMarginInline: 12,
+              itemBorderRadius: 999,
               groupTitleFontSize: 11,
               groupTitleColor: c.text3,
-              iconMarginInlineEnd: 10,
+              iconMarginInlineEnd: 12,
               activeBarBorderWidth: 0,
-              itemColor: c.text,
-              itemSelectedBg: c.fill,
-              itemSelectedColor: c.text,
+              itemColor: c.text2,
+              itemSelectedBg: c.menuSelectedBg,
+              itemSelectedColor: c.menuSelectedColor,
               itemHoverBg: c.fill2,
             },
-            Card: { headerFontSize: 15, headerHeight: 52, headerFontSizeSM: 14 },
+            Card: { headerFontSize: 15.5, headerHeight: 58, headerFontSizeSM: 14.5, borderRadiusLG: 22, bodyPadding: 24, bodyPaddingSM: 18 },
             Table: {
               headerBg: 'transparent', headerColor: c.text3, headerSplitColor: 'transparent',
-              borderColor: c.hairline, rowHoverBg: c.fill4, cellPaddingBlock: 11, headerSortActiveBg: 'transparent', headerSortHoverBg: 'transparent',
-              rowSelectedBg: dark ? 'rgba(10,132,255,.14)' : 'rgba(0,113,227,.06)', rowSelectedHoverBg: dark ? 'rgba(10,132,255,.2)' : 'rgba(0,113,227,.09)',
+              borderColor: c.hairline, rowHoverBg: c.fill4,
+              cellPaddingBlock: 14, cellPaddingInline: 16,
+              cellPaddingBlockSM: 11, cellPaddingInlineSM: 14,
+              headerSortActiveBg: 'transparent', headerSortHoverBg: 'transparent',
+              rowSelectedBg: dark ? 'rgba(168,199,250,.14)' : 'rgba(11,87,208,.07)', rowSelectedHoverBg: dark ? 'rgba(168,199,250,.2)' : 'rgba(11,87,208,.11)',
             },
-            // 次要按钮是浅灰底无边框（苹果的 gray 按钮），主按钮实心无投影
+            Descriptions: { itemPaddingBottom: 12 },
+            // 按钮默认采用 Gemini / Material 3 胶囊圆角，次要按钮为柔和表面色无描边（Tonal Button）
             Button: {
+              borderRadius: 999, borderRadiusSM: 999, borderRadiusLG: 999,
               primaryShadow: 'none', defaultShadow: 'none', dangerShadow: 'none',
               defaultBg: c.fill2, defaultBorderColor: 'transparent', defaultHoverBg: c.fill, defaultHoverBorderColor: 'transparent',
               defaultActiveBg: c.fill, defaultActiveBorderColor: 'transparent', defaultColor: c.text, defaultHoverColor: c.text,
               fontWeight: 500,
             },
-            Segmented: { trackBg: c.fill2, itemSelectedBg: dark ? '#636366' : '#ffffff', trackPadding: 2 },
-            Tabs: { itemColor: c.text2, inkBarColor: c.text, itemSelectedColor: c.text, itemHoverColor: c.text, titleFontSize: 14 },
-            Input: { activeShadow: `0 0 0 3px ${dark ? 'rgba(10,132,255,.35)' : 'rgba(0,113,227,.2)'}` },
-            Select: { activeOutlineColor: dark ? 'rgba(10,132,255,.35)' : 'rgba(0,113,227,.2)' },
-            Tag: { defaultBg: c.fill2, defaultColor: c.text2 },
+            Segmented: { trackBg: c.fill2, itemSelectedBg: dark ? '#383a3e' : '#ffffff', trackPadding: 3, borderRadius: 999, borderRadiusSM: 999, borderRadiusLG: 999 },
+            Tabs: { itemColor: c.text2, inkBarColor: c.primary, itemSelectedColor: c.primary, itemHoverColor: c.text, titleFontSize: 14 },
+            Input: { activeShadow: `0 0 0 3px ${dark ? 'rgba(168,199,250,.25)' : 'rgba(11,87,208,.15)'}` },
+            Select: { activeOutlineColor: dark ? 'rgba(168,199,250,.25)' : 'rgba(11,87,208,.15)' },
+            Tag: { defaultBg: c.fill2, defaultColor: c.text2, borderRadiusSM: 999 },
             Statistic: { contentFontSize: 28 },
-            Modal: { titleFontSize: 17 },
-            Drawer: { footerPaddingBlock: 12 },
-            Tooltip: { colorBgSpotlight: dark ? '#3a3a3c' : 'rgba(29,29,31,.92)' },
+            Modal: { titleFontSize: 18, borderRadiusLG: 24 },
+            Drawer: { footerPaddingBlock: 14 },
+            Tooltip: { colorBgSpotlight: dark ? '#303134' : 'rgba(31,31,31,.92)', borderRadius: 8 },
           },
         }}
       >

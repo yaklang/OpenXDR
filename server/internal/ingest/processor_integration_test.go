@@ -43,7 +43,7 @@ func testProcessor(t *testing.T) (*Processor, *ent.Client, *sql.DB) {
 		t.Fatal(err)
 	}
 	// 派生表不再有指向 events 的外键，TRUNCATE events CASCADE 带不走它们，要点名清
-	if _, err := db.Exec(`TRUNCATE alert_dedup_state, alerts, events, assets, temporal_matches, temporal_candidates,
+	if _, err := db.Exec(`TRUNCATE assetmap_queue, alert_dedup_state, alerts, events, assets, temporal_matches, temporal_candidates,
  temporal_evaluation_gaps, temporal_detections, identity_observations, identity_local_snapshots CASCADE`); err != nil {
 		t.Fatal(err)
 	}

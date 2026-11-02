@@ -49,6 +49,10 @@ const (
 	FieldRuntimeInstanceID = "runtime_instance_id"
 	// FieldRuntimeSeenAt holds the string denoting the runtime_seen_at field in the database.
 	FieldRuntimeSeenAt = "runtime_seen_at"
+	// FieldRuntimePending holds the string denoting the runtime_pending field in the database.
+	FieldRuntimePending = "runtime_pending"
+	// FieldRuntimeError holds the string denoting the runtime_error field in the database.
+	FieldRuntimeError = "runtime_error"
 	// FieldRuntimeState holds the string denoting the runtime_state field in the database.
 	FieldRuntimeState = "runtime_state"
 	// FieldRuntimeGeneration holds the string denoting the runtime_generation field in the database.
@@ -57,6 +61,12 @@ const (
 	FieldInstallState = "install_state"
 	// FieldInstallStartedAt holds the string denoting the install_started_at field in the database.
 	FieldInstallStartedAt = "install_started_at"
+	// FieldActiveRevisionID holds the string denoting the active_revision_id field in the database.
+	FieldActiveRevisionID = "active_revision_id"
+	// FieldTokenRevisionID holds the string denoting the token_revision_id field in the database.
+	FieldTokenRevisionID = "token_revision_id"
+	// FieldStopRequested holds the string denoting the stop_requested field in the database.
+	FieldStopRequested = "stop_requested"
 	// Table holds the table name of the decoydeployment in the database.
 	Table = "decoy_deployments"
 )
@@ -81,10 +91,15 @@ var Columns = []string{
 	FieldTokenExpiresAt,
 	FieldRuntimeInstanceID,
 	FieldRuntimeSeenAt,
+	FieldRuntimePending,
+	FieldRuntimeError,
 	FieldRuntimeState,
 	FieldRuntimeGeneration,
 	FieldInstallState,
 	FieldInstallStartedAt,
+	FieldActiveRevisionID,
+	FieldTokenRevisionID,
+	FieldStopRequested,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -104,6 +119,12 @@ var (
 	DefaultCreatedAt func() time.Time
 	// DefaultResource holds the default value on creation for the "resource" field.
 	DefaultResource string
+	// RuntimePendingValidator is a validator for the "runtime_pending" field. It is called by the builders before save.
+	RuntimePendingValidator func(int) error
+	// DefaultRuntimeError holds the default value on creation for the "runtime_error" field.
+	DefaultRuntimeError string
+	// DefaultStopRequested holds the default value on creation for the "stop_requested" field.
+	DefaultStopRequested bool
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
@@ -312,6 +333,16 @@ func ByRuntimeSeenAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRuntimeSeenAt, opts...).ToFunc()
 }
 
+// ByRuntimePending orders the results by the runtime_pending field.
+func ByRuntimePending(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRuntimePending, opts...).ToFunc()
+}
+
+// ByRuntimeError orders the results by the runtime_error field.
+func ByRuntimeError(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRuntimeError, opts...).ToFunc()
+}
+
 // ByRuntimeState orders the results by the runtime_state field.
 func ByRuntimeState(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRuntimeState, opts...).ToFunc()
@@ -330,4 +361,19 @@ func ByInstallState(opts ...sql.OrderTermOption) OrderOption {
 // ByInstallStartedAt orders the results by the install_started_at field.
 func ByInstallStartedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldInstallStartedAt, opts...).ToFunc()
+}
+
+// ByActiveRevisionID orders the results by the active_revision_id field.
+func ByActiveRevisionID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldActiveRevisionID, opts...).ToFunc()
+}
+
+// ByTokenRevisionID orders the results by the token_revision_id field.
+func ByTokenRevisionID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTokenRevisionID, opts...).ToFunc()
+}
+
+// ByStopRequested orders the results by the stop_requested field.
+func ByStopRequested(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldStopRequested, opts...).ToFunc()
 }

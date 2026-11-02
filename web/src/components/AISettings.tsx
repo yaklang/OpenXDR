@@ -10,7 +10,7 @@ import { errText } from './format'
 function Source({ field, view, onReset }: { field: string; view: AISettings; onReset: (f: string) => void }) {
   const { t } = useI18n()
   return view.source[field] === 'console'
-    ? <Space size={4}><Tag color="blue" variant="filled">{t('srcConsole')}</Tag><Button type="link" size="small" style={{ padding: 0 }} onClick={() => onReset(field)}>{t('srcReset')}</Button></Space>
+    ? <Space size={4}><Tag color="blue" variant="filled">{t('srcConsole')}</Tag><Button type="link" size="small" aria-label={t('srcReset')} style={{ padding: 0 }} onClick={() => onReset(field)}>{t('srcReset')}</Button></Space>
     : <Tag variant="filled">{t('srcEnv')}</Tag>
 }
 
@@ -20,10 +20,10 @@ function SecretField({ name, label, set, hint, view, onReset, onClear, extra }: 
 }) {
   const { t } = useI18n()
   return (
-    <Form.Item label={<Space>{label}<Source field={name} view={view} onReset={onReset} /></Space>} extra={extra}>
+    <Form.Item htmlFor={name} label={<Space>{label}<Source field={name} view={view} onReset={onReset} /></Space>} extra={extra}>
       <Space.Compact style={{ width: '100%', maxWidth: 520 }}>
         <Form.Item name={name} noStyle>
-          <Input.Password autoComplete="new-password" disabled={!view.canSaveSecrets}
+          <Input.Password id={name} aria-label={label} autoComplete="new-password" disabled={!view.canSaveSecrets}
             placeholder={set ? t('secretKeep', { hint: hint ? `····${hint}` : '' }) : t('secretEmpty')} />
         </Form.Item>
         {set && <Button disabled={!view.canSaveSecrets} onClick={onClear}>{t('secretClear')}</Button>}
@@ -117,19 +117,21 @@ export function IntelLookupSettings() {
   if (query.isError) return <LoadError error={query.error} onRetry={() => query.refetch()} />
   if (!query.data) return <Card><Skeleton active /></Card>
   const view = query.data
-  const patch = () => diff(form.getFieldsValue(), view, ['ptr', 'vtAlertMin'], ['vtKey'])
+  const patch = () => diff(form.getFieldsValue(), view, ['ptr', 'vtAlertMin'], ['vtKey', 'abuseCHKey'])
 
   return (
     <Card title={t('settingsIntelLookup')}>
       <Typography.Paragraph type="secondary">{t('settingsIntelLookupHint')}</Typography.Paragraph>
       {!view.canSaveSecrets && <Alert type="info" showIcon style={{ marginBottom: 16 }} title={t('noVaultHint')} />}
       <Form form={form} layout="vertical" style={{ maxWidth: 640 }} disabled={busy} initialValues={view} key={JSON.stringify(view)}
-        onFinish={async () => { if (await save(patch())) form.setFieldsValue({ vtKey: '' }) }}>
+        onFinish={async () => { if (await save(patch())) form.setFieldsValue({ vtKey: '', abuseCHKey: '' }) }}>
         <Form.Item name="ptr" valuePropName="checked" label={<Space>{t('ptrLabel')}<Source field="ptr" view={view} onReset={reset} /></Space>} extra={t('ptrHint')}>
           <Switch />
         </Form.Item>
         <SecretField name="vtKey" label={t('vtKeyLabel')} set={view.vtKeySet} hint={view.vtKeyHint} view={view} onReset={reset}
           onClear={() => save({ vtKey: '' }, t('secretCleared'))} extra={t('vtKeyHint')} />
+        <SecretField name="abuseCHKey" label={t('abuseCHKeyLabel')} set={view.abuseCHKeySet} hint={view.abuseCHKeyHint} view={view} onReset={reset}
+          onClear={() => save({ abuseCHKey: '' }, t('secretCleared'))} extra={t('abuseCHKeyHint')} />
         <Form.Item name="vtAlertMin" label={<Space>{t('vtAlertMinLabel')}<Source field="vtAlertMin" view={view} onReset={reset} /></Space>} extra={t('vtAlertMinHint')}>
           <InputNumber min={0} max={100} style={{ width: 120 }} />
         </Form.Item>

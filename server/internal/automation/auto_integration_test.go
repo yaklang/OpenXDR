@@ -209,7 +209,7 @@ func TestAutoIdentify(t *testing.T) {
 		t.Fatalf("生效应以 system 落审计，实际 %d 条", n)
 	}
 
-	assessments, _, err := Assess(w.ctx, w.db, w.auto.Config, &w.group, w.base)
+	assessments, _, err := Assess(w.ctx, w.db, w.auto.SQL, w.auto.Config, &w.group, w.base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +439,7 @@ func TestAutoSplitsByAddress(t *testing.T) {
 	w.alert(script, 3, &inc, nil, false)
 	w.logins(4, 1, human)
 	w.sweep(w.base)
-	got, _, err := Assess(w.ctx, w.db, w.auto.Config, &w.group, w.base)
+	got, _, err := Assess(w.ctx, w.db, w.auto.SQL, w.auto.Config, &w.group, w.base)
 	if err != nil {
 		t.Fatal(err)
 	}

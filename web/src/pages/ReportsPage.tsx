@@ -1,23 +1,53 @@
 import { TableActions } from '../components/TableActions'
 import { ExportOutlined, FilePdfOutlined, FileSearchOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Drawer, Empty, Input, Segmented, Space, Table, Tag, Typography } from 'antd'
+import { App, Button, Collapse, Drawer, Empty, Input, Segmented, Space, Table, Tag, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { downloadAgentPdf, fetchAgentReports, markAllReportsRead, markReportRead, reportHtmlUrl, type AgentReport } from '../api'
 import { useSession } from '../app/session'
+import { GeminiSparkle } from '../components/Logo'
 import { Markdown } from '../components/Markdown'
 import { EmptyHint, Refreshed } from '../components/Ago'
-import { FilterCard, Page, WIDE_ONLY, useWideTable } from '../components/Page'
+import { FilterCard, Page, STICKY_HEADER, WIDE_ONLY, useWideTable } from '../components/Page'
 import { fmtTime, errText } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
 import { LoadError } from '../components/LoadError'
 
+function splitReportMarkdown(raw: string): { top: string; fold: string } {
+  const md = raw.replace(/^\s*#\s+[^\n]*\n/, '').trim()
+  const lines = md.split('\n')
+  const topBlocks: string[] = []
+  const foldBlocks: string[] = []
+  let cur: string[] = []
+  let curIsFold = false
+  const flush = () => {
+    if (!cur.length) return
+    const block = cur.join('\n').trim()
+    if (block) {
+      if (curIsFold) foldBlocks.push(block)
+      else topBlocks.push(block)
+    }
+    cur = []
+  }
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith('## ') && !trimmed.startsWith('### ')) {
+      flush()
+      const h = trimmed.slice(3).replace(/^[^\u4e00-\u9fa5a-zA-Z]+|[一二三四五六七八九十、.\s]+/g, '')
+      curIsFold = h.startsWith('证据') || h.startsWith('推断') || h.startsWith('未验证')
+    }
+    cur.push(line)
+  }
+  flush()
+  return { top: topBlocks.join('\n\n'), fold: foldBlocks.join('\n\n') }
+}
+
 // 报告级别：无异常的只存档，有事项与紧急的会推送通知
-const LEVEL: Record<AgentReport['level'], { color: string; key: MsgKey }> = {
-  ok: { color: 'success', key: 'reportLevelOk' },
-  attention: { color: 'warning', key: 'reportLevelAttention' },
-  urgent: { color: 'error', key: 'reportLevelUrgent' },
+const LEVEL: Record<AgentReport['level'], { color: string; key: MsgKey; rank: number }> = {
+  ok: { color: 'success', key: 'reportLevelOk', rank: 1 },
+  attention: { color: 'warning', key: 'reportLevelAttention', rank: 2 },
+  urgent: { color: 'error', key: 'reportLevelUrgent', rank: 3 },
 }
 
 // 报告中心：Pi 会话（含定时巡检）提交的报告，按当前组列出
@@ -79,16 +109,18 @@ export function ReportsPage() {
         extra={<Refreshed at={dataUpdatedAt} fetching={isFetching} onRefresh={() => refetch()} />}
       >
         {isError ? <LoadError error={error} onRetry={() => refetch()} /> : <Table<AgentReport>
+          sticky={STICKY_HEADER}
           scroll={wideTable ? { x: 800 } : undefined}
           rowKey="id"
           loading={isPending}
           dataSource={rows}
-          pagination={{ pageSize: 20, hideOnSinglePage: true }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, hideOnSinglePage: true }}
           locale={{ emptyText: search ? <EmptyHint title={t('noMatch')} /> : <EmptyHint title={t('noReports')} hint={t('noReportsHint')}
             action={canChat && <Link to={`/chat?${new URLSearchParams({ prompt: t('reportPrompt') })}`}><Button type="primary">{t('reportAskAI')}</Button></Link>} /> }}
           columns={[
             {
               title: t('reportTitle'), dataIndex: 'title',
+              sorter: (a, b) => a.title.localeCompare(b.title),
               render: (v, r) => (
                 <div>
                   <Button type="link" className="report-title-button" icon={<FileSearchOutlined aria-hidden />} onClick={() => open(r)} style={r.read ? undefined : { fontWeight: 600 }}>{v}</Button>
@@ -97,8 +129,8 @@ export function ReportsPage() {
                 </div>
               ),
             },
-            { title: t('reportLevel'), dataIndex: 'level', width: 90, render: (v: AgentReport['level']) => <Tag color={LEVEL[v]?.color}>{t(LEVEL[v]?.key ?? 'reportLevelAttention')}</Tag> },
-            { responsive: WIDE_ONLY, title: t('thCreatedAt'), dataIndex: 'created_at', width: 190, render: fmtTime },
+            { title: t('reportLevel'), dataIndex: 'level', width: 95, sorter: (a, b) => (LEVEL[a.level]?.rank ?? 0) - (LEVEL[b.level]?.rank ?? 0), render: (v: AgentReport['level']) => <Tag color={LEVEL[v]?.color}>{t(LEVEL[v]?.key ?? 'reportLevelAttention')}</Tag> },
+            { responsive: WIDE_ONLY, title: t('thCreatedAt'), dataIndex: 'created_at', width: 190, sorter: (a, b) => a.created_at.localeCompare(b.created_at), render: fmtTime },
             { responsive: WIDE_ONLY, title: t('sourceSession'), dataIndex: 'session_id', width: 140, render: v => <Link to={`/chat/${v}`}>{t('openSession')}</Link> },
             {
               responsive: WIDE_ONLY, title: t('actions'), width: 200,
@@ -119,21 +151,38 @@ export function ReportsPage() {
         onClose={() => setPreview(null)}
         extra={preview && (
           <Space>
-            <Button icon={<ExportOutlined aria-hidden />} onClick={() => html(preview)}>HTML</Button>
-            <Button icon={<FilePdfOutlined aria-hidden />} loading={downloads.has(preview.id)} onClick={() => pdf(preview)}>PDF</Button>
+            <Button shape="round" icon={<ExportOutlined aria-hidden />} onClick={() => html(preview)}>HTML</Button>
+            <Button shape="round" icon={<FilePdfOutlined aria-hidden />} loading={downloads.has(preview.id)} onClick={() => pdf(preview)}>PDF</Button>
           </Space>
         )}
       >
-        {preview && <>
-          {/* 页头由平台给：级别、时间与一句话结论，各报告一致；正文是模型写的 */}
-          <Space wrap style={{ marginBottom: 12 }}>
-            <Tag color={LEVEL[preview.level]?.color}>{t(LEVEL[preview.level]?.key ?? 'reportLevelAttention')}</Tag>
-            <Typography.Text type="secondary">{fmtTime(preview.created_at)}</Typography.Text>
-            <Link to={`/chat/${preview.session_id}`}>{t('openSession')}</Link>
-          </Space>
-          {preview.summary && <Typography.Paragraph strong style={{ borderLeft: '4px solid #1677ff', padding: '6px 12px', background: 'rgba(22,119,255,0.06)' }}>{preview.summary}</Typography.Paragraph>}
-          <Markdown text={preview.markdown.replace(/^\s*#\s+[^\n]*\n/, '')} />
-        </>}
+        {preview && (() => {
+          const { top, fold } = splitReportMarkdown(preview.markdown)
+          return <>
+            {/* 页头由平台给：级别、时间与一句话结论，各报告一致；正文是模型写的 */}
+            <div className="cmd-item" style={{ marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+              <Space wrap size={8}>
+                <Tag color={LEVEL[preview.level]?.color}>{t(LEVEL[preview.level]?.key ?? 'reportLevelAttention')}</Tag>
+                <Typography.Text type="secondary">{fmtTime(preview.created_at)}</Typography.Text>
+              </Space>
+              <Link to={`/chat/${preview.session_id}`}>{t('openSession')}</Link>
+            </div>
+            {preview.summary && (
+              <div className="gemini-report-summary">
+                <GeminiSparkle size={18} />
+                <Typography.Paragraph strong style={{ margin: 0, flex: 1 }}>{preview.summary}</Typography.Paragraph>
+              </div>
+            )}
+            <Markdown text={top} />
+            {fold && (
+              <Collapse size="small" style={{ marginTop: 16 }} items={[{
+                key: 'evidence',
+                label: t('reportFoldLabel'),
+                children: <Markdown text={fold} />,
+              }]} />
+            )}
+          </>
+        })()}
       </Drawer>
     </Page>
   )

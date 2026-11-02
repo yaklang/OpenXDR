@@ -1,0 +1,19 @@
+{
+  "scope": "calibration_only",
+  "complete_product_review": false,
+  "matched": 3,
+  "controls": 4,
+  "false_accepts": [
+    {
+      "control": "previous_v2_2",
+      "dimension": "facts",
+      "quote": "未采集客户端日志，不等于客户端没有外联",
+      "observed_evidence": "severity=3，转发器 resolver-b 最近 7 天对 nonce.service.example 的 10 条保留 DNS 记录来自三个客户端：10.20.0.11 五条、10.20.0.12 四条、10.20.0.13 一条。当前事件只对应 .13。没有任何客户端进程或连接记录，无法确认这三个客户端是否运行同一应用。未提供人工授权。",
+      "finding": "证据仅说明没有客户端进程或连接记录，没有提供采集关闭或明确未采集状态；答案却断言未采集客户端日志。评分 uncertainty 理由直接把该断言视为对采集缺口的承认，漏掉了事实扩写。",
+      "expected": "fail",
+      "actual": "pass"
+    }
+  ],
+  "next_requirement": "独立复核事实范围；不能用本评分器自动全通过作为发布证明。",
+  "snapshot_sha256": "6dc26b355dbd55400088a23b629e6274179110f2604e3c280c9fcf87e5a3f657"
+}

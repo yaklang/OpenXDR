@@ -1,0 +1,105 @@
+{
+  "reviewer": "executing_agent",
+  "independent_human_review": "pending",
+  "source_sha256": "011cdcfe3cb79eebe003e7eff43b989d989293acd0f910637d7686b7de2eb2cd",
+  "structural_acceptance": "passed",
+  "semantic_acceptance": "incomplete",
+  "evaluations": [
+    {
+      "case": "shared_cdn",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "保留共享 IP 与归属未知的边界，未据 TTL 或域名字面排除攻击。",
+      "answer_sha256": "8ff9d00f5d560372206c24dc006c420554d76953e10d830f88074e41e965cdf9",
+      "action_catalog_match": true
+    },
+    {
+      "case": "shared_cdn",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "保留共享 IP 与归属未知的边界，未据 TTL 或域名字面排除攻击。",
+      "answer_sha256": "1455739b81a0950df568608419ab7dc9623567d7a32e2ff39fe9af1143a284e2",
+      "action_catalog_match": true
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "AI 记忆没有被当作人工确认，缺少来源和后续行为数据的限制被保留。",
+      "answer_sha256": "f05c1b54f759b9e273b420980ba66943722335ff8be8e5d9a4e84e213d91b078",
+      "action_catalog_match": true
+    },
+    {
+      "case": "ai_memory",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "AI 记忆没有被当作人工确认，缺少来源和后续行为数据的限制被保留。",
+      "answer_sha256": "3797f6267d9ebe141ced49cf2a65e8678f49f631db97a67262e6757abfd44ce1",
+      "action_catalog_match": true
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "截断与血缘失败未被写成阴性；表述限定本次输入未提供授权依据，没有断言外部人工记录不存在。",
+      "answer_sha256": "78f6f1c6a24ac484a7f25be920ba98f9f9447cfc7cc5b06e52ec5783bd5558cf",
+      "action_catalog_match": true
+    },
+    {
+      "case": "incomplete_query",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "截断与血缘失败未被写成阴性；表述限定本次输入未提供授权依据，没有断言外部人工记录不存在。",
+      "answer_sha256": "11403b66f4bee5ebe820ba2140c59c88a827e67381d16c4832353387d4aaadd5",
+      "action_catalog_match": true
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "保留三客户端计数与当前 .13 的范围，没有归并为同一应用；授权保持未提供。",
+      "answer_sha256": "bb460bc3ecc6295c5d6a2cf1706d8fb40efd499cc84701f56e467b269b765002",
+      "action_catalog_match": true
+    },
+    {
+      "case": "mixed_clients",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "保留三客户端计数与当前 .13 的范围，没有归并为同一应用；授权保持未提供。",
+      "answer_sha256": "279f95176f958fa20809e612cf296cfb6c392fefb6808f08feaf2450d525f96b",
+      "action_catalog_match": true
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "良性限定既定工单的主机、窗口与命令；生成建议只要求分析师核对后结案，不扩大授权。",
+      "answer_sha256": "d931fa9e071d666e06bbc76c264f30b0530c559901c233dfc8a51a6ec62c88c7",
+      "action_catalog_match": true
+    },
+    {
+      "case": "authorized_maintenance",
+      "repeat": 2,
+      "status": "needs_review",
+      "reason": "主体授权匹配正确，但“操作由合法管理员 SSH 会话发起、处于同一进程树”紧接 systemd 建立符号链接，主语范围可能误读为 systemd 也在同一树内；输入只明确 systemctl 在该树内，待收窄表述。",
+      "answer_sha256": "b77caee57209a3b4b806248a9112010dc0334da5e92f8941a9821e67914c05a7",
+      "action_catalog_match": true
+    },
+    {
+      "case": "confirmed_attack",
+      "repeat": 1,
+      "status": "pass",
+      "reason": "凭据暂存/上传哈希与持久化链条有输入支持；只确认本机与目的地址，未把暂存哈希当作程序哈希。",
+      "answer_sha256": "5b0c03ee28a70df7e9fae2ccc25a32f83cc24f0798ccc68383d456c309257666",
+      "action_catalog_match": true
+    },
+    {
+      "case": "confirmed_attack",
+      "repeat": 2,
+      "status": "pass",
+      "reason": "凭据暂存/上传哈希与持久化链条有输入支持；只确认本机与目的地址，未把暂存哈希当作程序哈希。",
+      "answer_sha256": "37059457c8d99ff46c4736a527b6f50d13d6a56d28cb6fdfd9776bd82955647e",
+      "action_catalog_match": true
+    }
+  ]
+}

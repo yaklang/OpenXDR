@@ -1,0 +1,36 @@
+# 仅放到选定的一个 HA 应用节点，与 docker-compose.ha-node.yml 合并使用。
+# DYGK_IMAGE 在该节点 .env 中固定为已验收的镜像标签或摘要。
+services:
+  server:
+    environment:
+      DYGK_CONTROL_SOCKET: /run/openxdr/deception/control.sock
+    volumes:
+      - deception-control:/run/openxdr/deception
+
+  deception:
+    image: ${DYGK_IMAGE:?请设置已验收的独立引擎镜像}
+    profiles: [dygk]
+    logging:
+      driver: journald
+      options:
+        tag: openxdr-ha
+    restart: unless-stopped
+    environment:
+      DYGK_CONTROL_SOCKET: /run/openxdr/deception/control.sock
+      DYGK_STATE_DIR: /data
+      DYGK_LISTEN_HOST: 0.0.0.0
+    volumes:
+      - deception-control:/run/openxdr/deception
+      - deception-data:/data
+    ports:
+      - "127.0.0.1:18179:18179"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    pids_limit: 64
+    stop_grace_period: 30s
+
+volumes:
+  deception-control:
+  deception-data:

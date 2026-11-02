@@ -3,10 +3,15 @@
 //! 三个环境变量都配齐才启用 TLS；一个都没配则明文（仅适合本机调试）；
 //! 配了一半属于配置错误，直接失败而不是悄悄降级成明文。
 
+use std::time::Duration;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Identity};
 
 pub async fn connect(server: &str) -> Result<Channel, Box<dyn std::error::Error + Send + Sync>> {
-    let endpoint = Endpoint::from_shared(server.to_string())?;
+    let endpoint = Endpoint::from_shared(server.to_string())?
+        .http2_keep_alive_interval(Duration::from_secs(60))
+        .keep_alive_timeout(Duration::from_secs(20))
+        .keep_alive_while_idle(true)
+        .tcp_keepalive(Some(Duration::from_secs(60)));
     let ca = std::env::var("OPENXDR_CA").ok();
     let cert = std::env::var("OPENXDR_CERT").ok();
     let key = std::env::var("OPENXDR_KEY").ok();

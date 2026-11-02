@@ -1,9 +1,9 @@
 import {
-  ArrowDownOutlined, MenuOutlined, AlertOutlined, CloudServerOutlined, GlobalOutlined, LoginOutlined, PlusOutlined, PushpinOutlined, RobotOutlined, SendOutlined, StopOutlined,
+  ArrowDownOutlined, ArrowUpOutlined, MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined, AlertOutlined, CloudServerOutlined, GlobalOutlined, LoginOutlined, PlusOutlined, PushpinOutlined, StopOutlined, TeamOutlined,
 } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert, App, Button, Card, Col, Drawer, Empty, Flex, Grid, Input, Result, Row, Segmented, Space, Spin, Tag, Tooltip, Typography, theme,
+  Alert, App, Button, Col, Drawer, Empty, Flex, Grid, Input, Result, Row, Segmented, Space, Spin, Tag, Tooltip, Typography, theme,
 } from 'antd'
 import { useCallback, useEffect, useRef, useState, type ReactNode, type Dispatch, type SetStateAction } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
@@ -16,10 +16,11 @@ import { useSession } from '../app/session'
 import { ChatConversation, textOf, type ChatRow } from '../components/ChatConversation'
 import { ApprovalActions } from '../components/ApprovalActions'
 import { SubjectsBar } from '../components/Handoff'
+import { GeminiSparkle } from '../components/Logo'
 import { SessionStatusTag, fmtTime, errText } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
 
-// 常用提问模板：空会话时给出，点了只是填进输入框，发不发由人决定
+// 常用提问模板：Gemini 风格建议卡片，点了只是填进输入框，发不发由人决定
 const TEMPLATES: { key: string; icon: ReactNode; title: MsgKey; prompt: MsgKey }[] = [
   { key: 'inspect', icon: <CloudServerOutlined />, title: 'tplInspectTitle', prompt: 'tplInspectPrompt' },
   { key: 'login', icon: <LoginOutlined />, title: 'tplLoginTitle', prompt: 'tplLoginPrompt' },
@@ -29,23 +30,26 @@ const TEMPLATES: { key: string; icon: ReactNode; title: MsgKey; prompt: MsgKey }
 
 function Templates({ onPick }: { onPick: (prompt: string) => void }) {
   const { t } = useI18n()
-  const { token } = theme.useToken()
   return (
-    <Row gutter={[12, 12]} style={{ maxWidth: 760, width: '100%' }}>
+    <Row gutter={[16, 16]} className="gemini-templates">
       {TEMPLATES.map(x => (
-        <Col key={x.key} xs={24} md={12}>
-          <Card size="small" hoverable role="button" tabIndex={0} aria-label={t(x.title)}
+        <Col key={x.key} xs={24} sm={12} xl={6}>
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label={t(x.title)}
+            className="gemini-tpl-card"
             onKeyDown={e => {
               if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(t(x.prompt)) }
-            }} onClick={() => onPick(t(x.prompt))} style={{ height: '100%' }}>
-            <Space align="start">
-              <span style={{ color: token.colorPrimary, fontSize: 18 }}>{x.icon}</span>
-              <div>
-                <Typography.Text strong>{t(x.title)}</Typography.Text>
-                <Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }} style={{ margin: 0, fontSize: 12 }}>{t(x.prompt)}</Typography.Paragraph>
-              </div>
-            </Space>
-          </Card>
+            }}
+            onClick={() => onPick(t(x.prompt))}
+          >
+            <div className="gemini-tpl-body">
+              <Typography.Text strong className="gemini-tpl-title">{t(x.title)}</Typography.Text>
+              <Typography.Paragraph type="secondary" ellipsis={{ rows: 3 }} className="gemini-tpl-desc">{t(x.prompt)}</Typography.Paragraph>
+            </div>
+            <span className="gemini-tpl-icon">{x.icon}</span>
+          </div>
         </Col>
       ))}
     </Row>
@@ -70,19 +74,21 @@ function InlineApprovals({ rows, hosts, onDecided }: { rows: Approval[]; hosts: 
   ))
 }
 
-// 输入框：欢迎页与会话里共用，Enter 发送、Shift+Enter 换行，输入法组字时不发
-function Composer({ value, onChange, onSubmit, disabled, placeholder, inputRef, action }: {
+// Gemini 双层悬浮圆角输入框：上层无边框输入区，下层工具栏左放当前组/模型胶囊、右放圆形发送按钮
+function Composer({ value, onChange, onSubmit, disabled, placeholder, inputRef, meta, action }: {
   value: string
   onChange: (v: string) => void
   onSubmit: () => void
   disabled: boolean
   placeholder: string
   inputRef: { current: HTMLTextAreaElement | null }
+  meta?: ReactNode
   action: ReactNode
 }) {
   return (
     <div className="chat-composer">
       <Input.TextArea
+        variant="borderless"
         aria-label={placeholder}
         ref={r => { inputRef.current = r?.resizableTextArea?.textArea ?? null }}
         value={value}
@@ -97,7 +103,10 @@ function Composer({ value, onChange, onSubmit, disabled, placeholder, inputRef, 
           }
         }}
       />
-      {action}
+      <div className="chat-composer-toolbar">
+        <div className="chat-composer-chips">{meta}</div>
+        <div className="chat-composer-actions">{action}</div>
+      </div>
     </div>
   )
 }
@@ -124,7 +133,7 @@ function ChatWorkspace({ prompt, setPrompt, filter, setFilter }: {
   filter: SessionFilter
   setFilter: Dispatch<SetStateAction<SessionFilter>>
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const { me, group, setGroupId } = useSession()
   const { sessionId } = useParams()
   const [params, setParams] = useSearchParams()
@@ -138,6 +147,12 @@ function ChatWorkspace({ prompt, setPrompt, filter, setFilter }: {
   const { search, kind } = filter
   const wide = !!Grid.useBreakpoint().lg
   const [sessionsOpen, setSessionsOpen] = useState(false)
+  const [railCollapsed, setRailCollapsed] = useState(() => localStorage.getItem('chatRailCollapsed') === '1')
+  const toggleRail = () => {
+    const next = !railCollapsed
+    localStorage.setItem('chatRailCollapsed', next ? '1' : '0')
+    setRailCollapsed(next)
+  }
   const log = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
   const [away, setAway] = useState(false)
@@ -326,95 +341,136 @@ function ChatWorkspace({ prompt, setPrompt, filter, setFilter }: {
     return <Empty style={{ marginTop: 120 }} description={t('noGroupsHint')} />
   }
 
-  const sessionList = (
-      <Card
-        className="chat-sessions"
-        title={t('sessions')}
-        size="small"
-        extra={canChat && <Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => { navigate('/chat'); setSessionsOpen(false) }}>{t('newChat')}</Button>}
-        styles={{ body: { padding: 0, overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column' } }}
-      >
-        <div className="chat-session-filter">
-          <Input.Search size="small" allowClear value={search} placeholder={t('searchSessions')} onChange={e => setFilter(f => ({ ...f, search: e.target.value }))} />
-          <Segmented size="small" block value={kind} onChange={v => setFilter(f => ({ ...f, kind: v as SessionFilter['kind'] }))}
-            options={[{ value: '', label: t('all') }, { value: 'chat', label: t('chatSession') }, { value: 'task', label: t('taskSession') }]} />
-        </div>
-        <div style={{ overflow: 'auto', flex: 1 }}>
-          {sessions.isError && <Alert type="error" showIcon title={errText(sessions.error, t)} />}
-          {sessions.isPending && <Spin style={{ display: 'block', margin: 24 }} />}
-          {sessions.data && shown.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('noSessions')} />}
-          {buckets.filter(b => b.items.length).map(b => (
-            <div key={b.key}>
-              <div className="chat-session-bucket">{t(b.key)}</div>
-              {b.items.map(s => (
-                <div key={s.id} className="chat-session-entry" style={s.id === sessionId ? { background: token.controlItemBgActive } : undefined}>
-                <button
-                  type="button"
-                  aria-current={s.id === sessionId ? 'page' : undefined}
-                  className="chat-session-item"
-                  onClick={() => { navigate(`/chat/${s.id}`); setSessionsOpen(false) }}
-                >
-                  <Flex align="center" gap={4}>
-                    <Typography.Text ellipsis strong style={{ flex: 1 }}>
-                      {s.title || t(s.kind === 'task' ? 'taskSession' : 'chatSession')}
-                    </Typography.Text>
+  const composerChips = (
+    <>
+      <span className="gemini-context-chip"><TeamOutlined /> {group.name}</span>
+      <span className="gemini-context-chip"><GeminiSparkle size={13} /> {session?.model || 'Pi Agent'}</span>
+    </>
+  )
 
-                  </Flex>
-                  <Space size={4} wrap style={{ marginTop: 4 }}>
-                    <SessionStatusTag value={s.id === sessionId && isRunning ? 'running' : s.status} />
-                    {s.kind === 'task' && <Tag>{t('taskSession')}</Tag>}
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>{fmtTime(s.created_at).slice(b.key === 'sessionsEarlier' || b.key === 'sessionsPinned' ? 5 : 11, 16)}</Typography.Text>
-                  </Space>
-                </button>
-                    <Tooltip title={t(pinned.includes(s.id) ? 'unpin' : 'pin')}>
-                      <button type="button" aria-label={t(pinned.includes(s.id) ? 'unpin' : 'pin')}
-                        className={pinned.includes(s.id) ? 'session-pin pinned' : 'session-pin'}
-                        onClick={() => togglePin(s.id)}>
-                        <PushpinOutlined />
-                      </button>
-                    </Tooltip>
+  const sessionList = (
+    <aside className="chat-sessions" aria-label={t('sessions')}>
+      <div className="chat-sessions-top">
+        {canChat ? (
+          <Button type="primary" shape="round" icon={<PlusOutlined />} className="gemini-new-chat-btn" onClick={() => { navigate('/chat'); setSessionsOpen(false) }}>
+            {t('newChat')}
+          </Button>
+        ) : <Typography.Text strong>{t('sessions')}</Typography.Text>}
+        {wide && (
+          <Tooltip title={t('sessions')}>
+            <Button type="text" shape="circle" size="small" icon={<MenuFoldOutlined />} aria-label={t('sessions')} onClick={toggleRail} />
+          </Tooltip>
+        )}
+      </div>
+      <div className="chat-session-filter">
+        <Input.Search size="small" variant="filled" allowClear value={search} placeholder={t('searchSessions')} onChange={e => setFilter(f => ({ ...f, search: e.target.value }))} />
+        <Segmented size="small" block value={kind} onChange={v => setFilter(f => ({ ...f, kind: v as SessionFilter['kind'] }))}
+          options={[{ value: '', label: t('all') }, { value: 'chat', label: t('chatSession') }, { value: 'task', label: t('taskSession') }]} />
+      </div>
+      <div className="chat-session-scroll">
+        {sessions.isError && <Alert type="error" showIcon title={errText(sessions.error, t)} />}
+        {sessions.isPending && <Spin style={{ display: 'block', margin: 24 }} />}
+        {sessions.data && shown.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('noSessions')} />}
+        {buckets.filter(b => b.items.length).map(b => (
+          <div key={b.key}>
+            <div className="chat-session-bucket">{t(b.key)}</div>
+            {b.items.map(s => {
+              const status = s.id === sessionId && isRunning ? 'running' : s.status
+              return (
+                <div key={s.id} className={s.id === sessionId ? 'chat-session-entry active' : 'chat-session-entry'}>
+                  <button
+                    type="button"
+                    aria-current={s.id === sessionId ? 'page' : undefined}
+                    className="chat-session-item"
+                    onClick={() => { navigate(`/chat/${s.id}`); setSessionsOpen(false) }}
+                  >
+                    <Flex align="center" gap={8}>
+                      <span className={`session-status-dot status-${status}`} aria-hidden />
+                      <Typography.Text ellipsis strong={s.id === sessionId} style={{ flex: 1, fontSize: 13.5 }}>
+                        {s.title || t(s.kind === 'task' ? 'taskSession' : 'chatSession')}
+                      </Typography.Text>
+                      <Typography.Text type="secondary" style={{ fontSize: 11, flex: 'none' }}>
+                        {fmtTime(s.created_at).slice(b.key === 'sessionsEarlier' || b.key === 'sessionsPinned' ? 5 : 11, 16)}
+                      </Typography.Text>
+                    </Flex>
+                    {s.kind === 'task' && (
+                      <div style={{ paddingLeft: 16, marginTop: 2 }}>
+                        <Tag style={{ fontSize: 11, lineHeight: '16px', paddingInline: 6 }}>{t('taskSession')}</Tag>
+                      </div>
+                    )}
+                  </button>
+                  <Tooltip title={t(pinned.includes(s.id) ? 'unpin' : 'pin')}>
+                    <button type="button" aria-label={t(pinned.includes(s.id) ? 'unpin' : 'pin')}
+                      className={pinned.includes(s.id) ? 'session-pin pinned' : 'session-pin'}
+                      onClick={() => togglePin(s.id)}>
+                      <PushpinOutlined />
+                    </button>
+                  </Tooltip>
                 </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      </Card>
+              )
+            })}
+          </div>
+        ))}
+      </div>
+    </aside>
   )
 
   return (
     <div className="chat-page">
-      {wide ? sessionList : <Drawer title={t('sessions')} open={sessionsOpen} onClose={() => setSessionsOpen(false)} placement="left" size={320} styles={{ body: { padding: 0, display: 'flex' } }}>{sessionList}</Drawer>}
+      {wide ? (!railCollapsed && sessionList) : <Drawer title={t('sessions')} open={sessionsOpen} onClose={() => setSessionsOpen(false)} placement="left" size={308} styles={{ body: { padding: 0, display: 'flex' } }}>{sessionList}</Drawer>}
 
-      <Card className="chat-main" size="small" styles={{ body: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: 0 } }}
-        // 欢迎页不要空标题栏；窄屏仍保留打开会话列表的按钮
-        title={(session || !wide) && (
-          <Space style={{ maxWidth: '100%' }}>
-            {!wide && <Button type="text" icon={<MenuOutlined />} aria-label={t('sessions')} onClick={() => setSessionsOpen(true)} />}
-            {session && <>
-            <span>{session.title || t('chatSession')}</span>
-            <SessionStatusTag value={isRunning ? 'running' : session.status} />
-            </>}
-          </Space>
+      <section className="chat-main">
+        {(session || !wide || railCollapsed) && (
+          <header className="chat-main-topbar">
+            <Space style={{ minWidth: 0 }}>
+              {(!wide || railCollapsed) && (
+                <Tooltip title={t('sessions')}>
+                  <Button type="text" shape="circle" icon={wide ? <MenuUnfoldOutlined /> : <MenuOutlined />} aria-label={t('sessions')} onClick={() => (wide ? toggleRail() : setSessionsOpen(true))} />
+                </Tooltip>
+              )}
+              {(!wide || railCollapsed) && canChat && (
+                <Tooltip title={t('newChat')}>
+                  <Button type="text" shape="circle" icon={<PlusOutlined />} aria-label={t('newChat')} onClick={() => navigate('/chat')} />
+                </Tooltip>
+              )}
+              {session && (
+                <Space size={8} style={{ minWidth: 0 }}>
+                  <GeminiSparkle size={18} active={isRunning} />
+                  <Typography.Text strong ellipsis style={{ fontSize: 15 }}>{session.title || t('chatSession')}</Typography.Text>
+                  <SessionStatusTag value={isRunning ? 'running' : session.status} />
+                </Space>
+              )}
+            </Space>
+            {wide && session && (
+              <span className="gemini-model-pill">{session.initiator} · {session.model}</span>
+            )}
+          </header>
         )}
-        extra={wide && session && <Typography.Text type="secondary">{session.initiator} · {session.model}</Typography.Text>}
-      >
+
         {sessionId && current.isError ? (
-          <Result status="warning" title={t('sessionGone')} subTitle={errText(current.error, t)} extra={<Button onClick={() => navigate('/chat')}>{t('backToList')}</Button>} />
+          <Result status="warning" title={t('sessionGone')} subTitle={errText(current.error, t)} extra={<Button shape="round" onClick={() => navigate('/chat')}>{t('backToList')}</Button>} />
         ) : sessionId && !session ? <Spin style={{ margin: 'auto' }} /> : !session ? (
-          <Flex vertical align="center" gap={20} className="chat-welcome">
-            <RobotOutlined style={{ fontSize: 48, color: token.colorPrimary }} />
-            <div style={{ textAlign: 'center' }}>
-              <Typography.Title level={4} style={{ margin: 0 }}>{t('welcomeTitle')}</Typography.Title>
-              <Typography.Text type="secondary">{t('welcomeSubtitle', { name: group.name })}</Typography.Text>
+          <Flex vertical justify="center" gap={32} className="chat-welcome">
+            <div className="gemini-hero-head">
+              <div className="gemini-greeting-row">
+                <GeminiSparkle size={38} active={busy} />
+                <Typography.Title level={1} className="gemini-greeting-title">
+                  {locale === 'zh' ? `你好，${me.username}` : `Hello, ${me.username}`}
+                </Typography.Title>
+              </div>
+              <div className="gemini-greeting-sub">{t('welcomeTitle')}</div>
             </div>
             {canChat ? (
               <>
                 <div className="welcome-composer">
                   <Composer value={prompt} onChange={setPrompt} onSubmit={startWith} disabled={busy} placeholder={t('chatPlaceholder')} inputRef={input}
-                    action={<Button type="primary" icon={<SendOutlined />} loading={busy} disabled={!prompt.trim()} onClick={startWith}>{t('send')}</Button>} />
-                  <Typography.Text type="secondary" className="welcome-hint">{t('sessionExecHint')}</Typography.Text>
+                    meta={composerChips}
+                    action={
+                      <Button type="primary" shape="circle" size="large" className="gemini-send-btn" icon={<ArrowUpOutlined />} aria-label={t('send')} loading={busy} disabled={!prompt.trim()} onClick={startWith} />
+                    } />
                 </div>
                 <Templates onPick={p => { setPrompt(p); input.current?.focus() }} />
+                <Typography.Text type="secondary" className="welcome-hint">{t('sessionExecHint')}</Typography.Text>
               </>
             ) : <Alert type="info" showIcon title={t('chatReadonly')} />}
           </Flex>
@@ -426,35 +482,54 @@ function ChatWorkspace({ prompt, setPrompt, filter, setFilter }: {
               follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
               setAway(!follow.current)
             }}>
-              {messages.isPending && <Spin />}
-              {messages.isError && <Alert type="error" showIcon title={errText(messages.error, t)} />}
-              {messages.isSuccess && rows.length === 0 && canSend && (
-                <Flex vertical align="center" gap={16} className="chat-welcome">
-                  <Typography.Text type="secondary">{t('templatesHint')}</Typography.Text>
-                  <Templates onPick={p => { setPrompt(p); input.current?.focus() }} />
-                </Flex>
-              )}
-              <ChatConversation rows={rows} hosts={hosts} />
-              <InlineApprovals rows={inline} hosts={hosts} onDecided={() => approvals.refetch()} />
-              {isRunning && !isGroupAdmin && <Alert className="chat-indent" type="info" showIcon title={t('chatNeedsApprover')} />}
-              {isRunning && (
-                <Space className="chat-indent" style={{ color: token.colorTextSecondary }}><Spin size="small" />{t('thinking')}</Space>
-              )}
-              {session.error && <Alert className="chat-indent" type={session.status === 'succeeded' ? 'warning' : 'error'} showIcon title={session.error} />}
-              {error && <Alert className="chat-indent" type="error" showIcon title={error} />}
-
+              <div className="chat-stream-inner">
+                {messages.isPending && <Spin />}
+                {messages.isError && <Alert type="error" showIcon title={errText(messages.error, t)} />}
+                {messages.isSuccess && rows.length === 0 && canSend && (
+                  <Flex vertical gap={24} className="chat-welcome">
+                    <div className="gemini-hero-head">
+                      <div className="gemini-greeting-row">
+                        <GeminiSparkle size={32} />
+                        <Typography.Title level={2} className="gemini-greeting-title">{t('welcomeTitle')}</Typography.Title>
+                      </div>
+                      <div className="gemini-greeting-sub">{t('templatesHint')}</div>
+                    </div>
+                    <Templates onPick={p => { setPrompt(p); input.current?.focus() }} />
+                  </Flex>
+                )}
+                <ChatConversation rows={rows} hosts={hosts} />
+                <InlineApprovals rows={inline} hosts={hosts} onDecided={() => approvals.refetch()} />
+                {isRunning && !isGroupAdmin && <Alert className="chat-indent" type="info" showIcon title={t('chatNeedsApprover')} />}
+                {isRunning && (
+                  <div className="chat-indent gemini-thinking">
+                    <Space size={10} style={{ color: token.colorTextSecondary }}>
+                      <GeminiSparkle size={20} active />
+                      <span>{t('thinking')}</span>
+                    </Space>
+                    <div className="gemini-shimmer" aria-hidden>
+                      <span className="gemini-shimmer-bar" style={{ width: '72%' }} />
+                      <span className="gemini-shimmer-bar" style={{ width: '48%' }} />
+                    </div>
+                  </div>
+                )}
+                {session.error && <Alert className="chat-indent" type={session.status === 'succeeded' ? 'warning' : 'error'} showIcon title={session.error} />}
+                {error && <Alert className="chat-indent" type="error" showIcon title={error} />}
+              </div>
             </div>
-            {away && <Button className="chat-latest" size="small" icon={<ArrowDownOutlined />} onClick={scrollLatest}>{t('backToLatest')}</Button>}
-            <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}` }}>
-              <Composer value={prompt} onChange={setPrompt} onSubmit={() => submit()} disabled={!canSend} inputRef={input}
-                placeholder={canSend ? t('chatPlaceholder') : isRunning ? t('runningInBackground') : t('chatReadonly')}
-                action={canStop
-                  ? <Button danger icon={<StopOutlined />} onClick={stop}>{t('stop')}</Button>
-                  : <Button type="primary" icon={<SendOutlined />} disabled={!canSend || !prompt.trim()} onClick={() => submit()}>{t('send')}</Button>} />
+            {away && <Button className="chat-latest" shape="round" size="small" icon={<ArrowDownOutlined />} onClick={scrollLatest}>{t('backToLatest')}</Button>}
+            <div className="chat-composer-bar">
+              <div className="welcome-composer chat-session-composer">
+                <Composer value={prompt} onChange={setPrompt} onSubmit={() => submit()} disabled={!canSend} inputRef={input}
+                  placeholder={canSend ? t('chatPlaceholder') : isRunning ? t('runningInBackground') : t('chatReadonly')}
+                  meta={composerChips}
+                  action={canStop
+                    ? <Button danger shape="circle" size="large" className="gemini-send-btn" icon={<StopOutlined />} aria-label={t('stop')} onClick={stop} />
+                    : <Button type="primary" shape="circle" size="large" className="gemini-send-btn" icon={<ArrowUpOutlined />} aria-label={t('send')} disabled={!canSend || !prompt.trim()} onClick={() => submit()} />} />
+              </div>
             </div>
           </>
         )}
-      </Card>
+      </section>
 
     </div>
   )

@@ -67,16 +67,18 @@ func TestFlowRawDNSNoAnswers(t *testing.T) {
 
 func TestFlowRawTLSJA3S(t *testing.T) {
 	m := rawToMap(t, &pb.FlowRecord{
-		Protocol: 6,
-		TlsSni:   "c2.example",
-		Ja3:      "ja3-hash",
-		Ja3S:     "ja3s-hash",
+		Protocol:   6,
+		TlsSni:     "c2.example",
+		TlsVersion: "TLS 1.3",
+		TlsAlpn:    "h2",
+		Ja3:        "ja3-hash",
+		Ja3S:       "ja3s-hash",
 	})
 	tls, ok := m["tls"].(map[string]any)
 	if !ok {
 		t.Fatalf("应有 tls 对象：%v", m)
 	}
-	if tls["sni"] != "c2.example" || tls["ja3_hash"] != "ja3-hash" || tls["ja3s_hash"] != "ja3s-hash" {
+	if tls["sni"] != "c2.example" || tls["version"] != "TLS 1.3" || tls["alpn"] != "h2" || tls["ja3_hash"] != "ja3-hash" || tls["ja3s_hash"] != "ja3s-hash" {
 		t.Fatalf("tls 对象字段不对：%v", tls)
 	}
 }

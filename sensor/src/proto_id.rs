@@ -54,6 +54,9 @@ pub fn probe(flow: &mut Flow, pkt: &Packet) {
         if let Some(hello) = parse_client_hello(pkt.payload) {
             flow.meta.tls_sni = hello.sni;
             flow.meta.ja3 = Some(hello.ja3);
+            if flow.meta.tls_alpn.is_none() {
+                flow.meta.tls_alpn = hello.alpn;
+            }
             flow.probed = true;
             return;
         }
@@ -154,6 +157,12 @@ fn scan_handshakes(body: &[u8], meta: &mut Metadata) -> bool {
                 if let Some(sh) = parse_server_hello_hs(hs) {
                     meta.ja3s = Some(sh.ja3s);
                     meta.tls13 = sh.tls13;
+                    if sh.version.is_some() {
+                        meta.tls_version = sh.version;
+                    }
+                    if sh.alpn.is_some() {
+                        meta.tls_alpn = sh.alpn;
+                    }
                     if sh.tls13 || meta.cert_not_after != 0 || meta.cert_subject.is_some() {
                         return true;
                     }
@@ -361,10 +370,11 @@ fn parse_dns_response(payload: &[u8]) -> Option<DnsResponse> {
 
 pub struct ClientHello {
     pub sni: Option<String>,
+    pub alpn: Option<String>,
     pub ja3: String,
 }
 
-/// TLS ClientHello：一次遍历同时取出 SNI 和 JA3 指纹。
+/// TLS ClientHello：一次遍历同时取出 SNI、ALPN 首选协议和 JA3 指纹。
 /// JA3 = md5(版本,密码套件,扩展,椭圆曲线,曲线点格式)，GREASE 值按规范剔除。
 fn parse_client_hello(payload: &[u8]) -> Option<ClientHello> {
     // TLS record: type(1) version(2) length(2)；0x16 = handshake
@@ -393,6 +403,7 @@ fn parse_client_hello(payload: &[u8]) -> Option<ClientHello> {
     let end = (pos + ext_total).min(hs.len());
 
     let mut sni = None;
+    let mut alpn = None;
     let mut extensions = Vec::new();
     let mut curves = Vec::new();
     let mut point_formats = Vec::new();
@@ -412,6 +423,7 @@ fn parse_client_hello(payload: &[u8]) -> Option<ClientHello> {
             0x000a if body.len() >= 2 => curves = u16_list(&body[2..]),
             // ec_point_formats: len(1) + u8 列表
             0x000b if !body.is_empty() => point_formats = body[1..].to_vec(),
+            0x0010 => alpn = parse_alpn(body),
             _ => {}
         }
         pos += ext_len;
@@ -431,6 +443,7 @@ fn parse_client_hello(payload: &[u8]) -> Option<ClientHello> {
     );
     Some(ClientHello {
         sni,
+        alpn,
         ja3: md5_hex(&ja3_str),
     })
 }
@@ -451,6 +464,8 @@ struct ServerHelloInfo {
     ja3s: String,
     /// supported_versions(0x002b) 选了 0x0304 → TLS1.3，证书加密传输
     tls13: bool,
+    version: Option<String>,
+    alpn: Option<String>,
 }
 
 /// 作用于 handshake 消息切片（type 字节 + 3字节长度开头）的 ServerHello 解析，
@@ -471,7 +486,8 @@ fn parse_server_hello_hs(hs: &[u8]) -> Option<ServerHelloInfo> {
 
     // 扩展块可选：老服务端的 ServerHello 可能没有
     let mut extensions = Vec::new();
-    let mut tls13 = false;
+    let mut selected_version = version;
+    let mut alpn = None;
     if hs.get(pos).is_some() {
         let ext_total = be16(hs, pos)? as usize;
         pos += 2;
@@ -480,21 +496,57 @@ fn parse_server_hello_hs(hs: &[u8]) -> Option<ServerHelloInfo> {
             let ext_type = be16(hs, pos)?;
             let ext_len = be16(hs, pos + 2)? as usize;
             pos += 4;
+            let body = hs.get(pos..(pos + ext_len).min(hs.len()))?;
             if !is_grease(ext_type) {
                 extensions.push(ext_type);
             }
-            // ServerHello 的 supported_versions 扩展体即选中的版本号
-            if ext_type == 0x002b && be16(hs, pos) == Some(0x0304) {
-                tls13 = true;
+            match ext_type {
+                0x0010 => alpn = parse_alpn(body),
+                // ServerHello 的 supported_versions 扩展体即选中的版本号
+                0x002b => {
+                    if let Some(v) = be16(body, 0) {
+                        selected_version = v;
+                    }
+                }
+                _ => {}
             }
             pos += ext_len;
         }
     }
+    let tls13 = selected_version == 0x0304;
 
     Some(ServerHelloInfo {
         ja3s: md5_hex(&format!("{},{},{}", version, cipher, join_u16(&extensions))),
         tls13,
+        version: tls_version_name(selected_version).map(str::to_string),
+        alpn,
     })
+}
+
+fn tls_version_name(v: u16) -> Option<&'static str> {
+    match v {
+        0x0304 => Some("TLS 1.3"),
+        0x0303 => Some("TLS 1.2"),
+        0x0302 => Some("TLS 1.1"),
+        0x0301 => Some("TLS 1.0"),
+        _ => None,
+    }
+}
+
+/// ALPN（RFC 7301，扩展 0x0010）：ProtocolNameList = list_len(2) + 重复(name_len(1) + name)。
+/// ServerHello 里只有服务端选定的唯一协议；ClientHello 里按优先级排列，取首个非空可见 ASCII 协议名。
+fn parse_alpn(body: &[u8]) -> Option<String> {
+    let list_len = be16(body, 0)? as usize;
+    if list_len == 0 || 2 + list_len > body.len() {
+        return None;
+    }
+    let name_len = *body.get(2)? as usize;
+    if name_len == 0 || name_len > 64 || 3 + name_len > 2 + list_len {
+        return None;
+    }
+    let name = body.get(3..3 + name_len)?;
+    let s = std::str::from_utf8(name).ok()?;
+    (!s.is_empty() && s.bytes().all(|b| b.is_ascii_graphic())).then(|| s.to_string())
 }
 
 /// md5 摘要转小写十六进制，JA3/JA3S 共用。
@@ -1082,14 +1134,54 @@ mod tests {
 
     #[test]
     fn probe_tls13_stops_without_cert() {
-        // TLS1.3：supported_versions 选 0x0304，证书永远等不到 → JA3S 到手即完成
+        // TLS1.3：supported_versions 选 0x0304，证书永远等不到 → JA3S 到手即完成，同时记下版本与 ALPN
         let mut flow = default_flow();
-        let sh = server_hello_exts(0x1301, &[(0x002b, &[0x03, 0x04])]);
+        // ALPN 扩展体：list_len=3, name_len=2, "h2"
+        let sh = server_hello_exts(
+            0x1301,
+            &[
+                (0x002b, &[0x03, 0x04]),
+                (0x0010, &[0x00, 0x03, 0x02, b'h', b'2']),
+            ],
+        );
         probe(&mut flow, &pkt(443, 52000, &sh));
         assert!(flow.probed_server, "TLS1.3 不应等证书");
         assert!(flow.meta.ja3s.is_some());
+        assert_eq!(flow.meta.tls_version.as_deref(), Some("TLS 1.3"));
+        assert_eq!(flow.meta.tls_alpn.as_deref(), Some("h2"));
         assert!(flow.tls_hs_buf.is_empty());
         assert!(flow.meta.cert_subject.is_none());
+    }
+
+    #[test]
+    fn tls_alpn_parsing_and_negotiation() {
+        // 合法 ALPN 列表：取首个协议；服务端选定值覆盖客户端候选
+        assert_eq!(
+            parse_alpn(&[
+                0x00, 0x0c, 0x02, b'h', b'2', 0x08, b'h', b't', b't', b'p', b'/', b'1', b'.', b'1'
+            ])
+            .as_deref(),
+            Some("h2")
+        );
+        // 截断或空名应静默返回 None
+        assert_eq!(parse_alpn(&[]), None);
+        assert_eq!(parse_alpn(&[0x00, 0x05, 0x02, b'h']), None);
+        assert_eq!(parse_alpn(&[0x00, 0x01, 0x00]), None);
+
+        // TLS 1.2 ServerHello 无 supported_versions 扩展时，version 回退取握手头 0x0303 -> "TLS 1.2"
+        let mut flow = default_flow();
+        let sh12 = server_hello_exts(
+            0xc02f,
+            &[(
+                0x0010,
+                &[
+                    0x00, 0x09, 0x08, b'h', b't', b't', b'p', b'/', b'1', b'.', b'1',
+                ],
+            )],
+        );
+        probe(&mut flow, &pkt(443, 52000, &sh12));
+        assert_eq!(flow.meta.tls_version.as_deref(), Some("TLS 1.2"));
+        assert_eq!(flow.meta.tls_alpn.as_deref(), Some("http/1.1"));
     }
 
     #[test]

@@ -66,6 +66,10 @@ pub struct Metadata {
     pub cert_not_after: i64,
     /// ServerHello 选了 TLS 1.3（supported_versions = 0x0304）
     pub tls13: bool,
+    /// ServerHello 选定的 TLS 版本（如 "TLS 1.3"、"TLS 1.2"）
+    pub tls_version: Option<String>,
+    /// ALPN 应用层协议（如 "h2"、"http/1.1"），服务端选定值优先，回退取客户端首个协议
+    pub tls_alpn: Option<String>,
 }
 
 /// 客户端方向 TLS record 跟踪：从 ClientHello 起逐个 record 往前走，数带载荷的应用数据，

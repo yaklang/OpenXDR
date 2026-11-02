@@ -21,8 +21,10 @@ func decoyLeaseAllows(row *ent.DecoyDeployment, instance, token string, now time
 // 调用方已认证令牌并持有资产锁；租约、轮换、撤销和迁组不会交叉提交。
 func updateDecoyLease(w http.ResponseWriter, r *http.Request, tx *ent.Tx, row *ent.DecoyDeployment, token string) {
 	var body struct {
-		Instance uuid.UUID `json:"instance"`
-		State    string    `json:"state"`
+		Instance  uuid.UUID `json:"instance"`
+		State     string    `json:"state"`
+		Pending   *int      `json:"pending,omitempty"`
+		ErrorCode string    `json:"errorCode,omitempty"`
 	}
 	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
 	d.DisallowUnknownFields()
@@ -34,6 +36,16 @@ func updateDecoyLease(w http.ResponseWriter, r *http.Request, tx *ent.Tx, row *e
 	case "starting", "running", "stopped", "failed":
 	default:
 		http.Error(w, "运行状态无效", 400)
+		return
+	}
+	if body.Pending != nil && (*body.Pending < 0 || *body.Pending > 10000) {
+		http.Error(w, "积压数量无效", 400)
+		return
+	}
+	switch body.ErrorCode {
+	case "", "delivery_failed", "platform_unavailable", "startup_failed", "pending_on_stop":
+	default:
+		http.Error(w, "错误码无效", 400)
 		return
 	}
 	now := time.Now()
@@ -67,6 +79,12 @@ func updateDecoyLease(w http.ResponseWriter, r *http.Request, tx *ent.Tx, row *e
 	// 撤销、迁组与轮换仍立即失效，停止心跳的令牌照常到期。
 	if body.State == "starting" || body.State == "running" {
 		update.SetTokenExpiresAt(now.Add(decoyTokenTTL))
+	}
+	if body.Pending != nil {
+		update.SetRuntimePending(*body.Pending).SetRuntimeError(body.ErrorCode)
+	}
+	if body.State == "starting" && !same {
+		update.ClearRuntimePending().SetRuntimeError("")
 	}
 	err := update.Exec(r.Context())
 	if err == nil {
