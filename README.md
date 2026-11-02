@@ -1,6 +1,6 @@
 # OpenXDR
 
-[![CI](https://github.com/yaklang/OpenXDR/actions/workflows/ci.yml/badge.svg)](https://github.com/yaklang/OpenXDR/actions/workflows/ci.yml)
+[![CI](https://github.com/professoxrmoriarty/OpenXDR/actions/workflows/ci.yml/badge.svg)](https://github.com/professoxrmoriarty/OpenXDR/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 [中文](README.md) | English
@@ -118,7 +118,7 @@ These screenshots come from a fictional demo environment; all hosts, addresses a
 On a Linux server with Docker, one command:
 
 ```bash
-curl -fsSL https://github.com/yaklang/OpenXDR/releases/latest/download/install.sh | sudo sh -s -- <console-domain-or-ip>
+curl -fsSL https://github.com/professoxrmoriarty/OpenXDR/releases/latest/download/install.sh | sudo sh -s -- <console-domain-or-ip>
 ```
 
 The script generates passwords and keys, issues mTLS certificates and sets up HTTPS (a Let's Encrypt certificate for
@@ -129,7 +129,7 @@ command from "Assets → Add host" onto the hosts you want to monitor. Running i
 **Or let your AI agent do it** (Claude Code, Codex, Cursor, … running on the target server) — send it this:
 
 ```text
-Install OpenXDR on this server, following https://github.com/yaklang/OpenXDR/blob/master/docs/install.md exactly:
+Install OpenXDR on this server, following https://github.com/professoxrmoriarty/OpenXDR/blob/master/docs/install.md exactly:
 check the environment, ask me which domain or IP the console should use, run the installer, then tell me the console URL,
 the admin password and the commands managed hosts need to trust the CA.
 ```
