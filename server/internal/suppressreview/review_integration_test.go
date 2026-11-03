@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -98,7 +99,7 @@ func TestApprove(t *testing.T) {
 	}
 }
 
-// 拒绝与评审出错都记为拒绝；会话已不在时退到平台模型
+// 拒绝与回复不合格都记为拒绝；会话已不在时退到平台模型
 func TestRejectAndError(t *testing.T) {
 	f := setup(t)
 	gone := uuid.New()
@@ -118,10 +119,11 @@ func TestRejectAndError(t *testing.T) {
 		t.Fatalf("审计: %q", detail)
 	}
 
+	// 收到了回复但不合格：按拒绝
 	e := f.draft(nil, time.Now())
 	f.answer = func() (bool, string, error) { return false, "", errors.New("审计员回复不是 JSON：好的") }
 	if status, reason, err := f.r.Review(f.ctx, e.ID); err != nil || status != "rejected" || !strings.Contains(reason, "评审失败") {
-		t.Fatalf("出错应按拒绝: %s %q %v", status, reason, err)
+		t.Fatalf("回复不合格应按拒绝: %s %q %v", status, reason, err)
 	}
 	if detail := f.audit(e.ID); !strings.HasPrefix(detail, "rejected: 审计员评审失败") {
 		t.Fatalf("审计: %q", detail)
@@ -153,5 +155,37 @@ func TestSweep(t *testing.T) {
 	}
 	if len(f.models) != 1 {
 		t.Fatalf("应只评审一条: %v", f.models)
+	}
+}
+
+// 模型调不通：草案留在待批准、不写审计，兜底循环本轮遇到就停，下一轮再试
+func TestUnavailable(t *testing.T) {
+	f := setup(t)
+	f.answer = func() (bool, string, error) { return false, "", fmt.Errorf("%w：connection refused", ErrUnavailable) }
+	a := f.draft(nil, time.Now().Add(-2*time.Hour))
+	b := f.draft(nil, time.Now().Add(-time.Hour))
+	if status, _, err := f.r.Review(f.ctx, a.ID); !errors.Is(err, ErrUnavailable) || status != "proposed" {
+		t.Fatalf("调不通应返回 ErrUnavailable 且留在待批准: %s %v", status, err)
+	}
+	if err := f.r.Sweep(f.ctx, time.Now().Add(-settle)); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("本轮应因调不通结束: %v", err)
+	}
+	if len(f.models) != 2 {
+		t.Fatalf("遇到调不通就停，不该逐条重试: %v", f.models)
+	}
+	for _, d := range []*ent.Suppression{a, b} {
+		if got := f.db.Suppression.GetX(f.ctx, d.ID); got.Status != "proposed" || got.ReviewedBy != nil || f.audit(d.ID) != "" {
+			t.Fatalf("调不通不该改动草案或写审计: %+v", got)
+		}
+	}
+	// 端点恢复后下一轮评审
+	f.answer = func() (bool, string, error) { return true, "ok", nil }
+	if err := f.r.Sweep(f.ctx, time.Now().Add(-settle)); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []*ent.Suppression{a, b} {
+		if got := f.db.Suppression.GetX(f.ctx, d.ID); got.Status != "active" {
+			t.Fatalf("恢复后应评审: %s", got.Status)
+		}
 	}
 }

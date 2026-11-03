@@ -1,13 +1,15 @@
 // Package suppressreview AI 审计员评审抑制草案：Pi 的 suppress 提议与误报统计的草案不再等组管理员点批准
 // （没人会点，草案一等数天，噪声照旧刷告警、反复送研判）。草案一生成就评审，后台单活循环兜底积压与重启。
 // 有会话的用会话自己的模型，没有的用平台配置的模型；没配模型就留在待批准，人工审批照常可用。
-// 评审出错按拒绝，与命令审计员同一口径。
+// 与命令不同，草案多等一会儿没有代价，拒绝却会让误报统计冷却 30 天：模型调不通（端点、超时、HTTP 错误）时
+// 草案留在待批准、下一轮重试；只有收到了回复但不合格才按拒绝。
 package suppressreview
 
 import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -28,7 +30,10 @@ import (
 	"openxdr/server/internal/triage"
 )
 
-// Judge 评审一份材料，返回是否批准与一句理由
+// ErrUnavailable 模型调不通：草案留在待批准，兜底循环下一轮重试
+var ErrUnavailable = errors.New("AI 审计员暂时不可用")
+
+// Judge 评审一份材料，返回是否批准与一句理由。调不通的错误要包上 ErrUnavailable，其余错误视为回复不合格、按拒绝
 type Judge func(ctx context.Context, model, material string) (approve bool, reason string, err error)
 
 type Reviewer struct {
@@ -56,7 +61,7 @@ func New(db *ent.Client, store *suppress.Store, rules sigma.Catalog, endpoint fu
 			llm.NoThinking, llm.MaxTokens, llm.OnUsage = true, 512, onUsage
 			reply, err := llm.Chat(ctx, []triage.Message{{Role: "system", Content: prompt}, {Role: "user", Content: material}}, nil)
 			if err != nil {
-				return false, "", err
+				return false, "", fmt.Errorf("%w：%v", ErrUnavailable, err)
 			}
 			return commandreview.Verdict(reply.Content)
 		}}
@@ -75,7 +80,7 @@ const prompt = `你是 OpenXDR 的抑制审计员，替组管理员决定一条�
 const reviewTimeout = 2 * time.Minute
 
 // Review 评审一条草案，返回评审后的状态（active / rejected；没配模型或已被处理时为库里当前状态）与理由。
-// 只有读写库失败与 ctx 取消才返回错误，模型出错按拒绝记下
+// 读写库失败、ctx 取消与模型调不通（ErrUnavailable）返回错误，草案不动；回复不合格按拒绝记下
 func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (string, string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -100,6 +105,10 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (string, string, er
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", "", ctx.Err()
+		}
+		if errors.Is(err, ErrUnavailable) {
+			slog.Warn("AI 审计员调用失败，抑制草案留待下一轮评审", "id", s.ID, "model", model, "err", err)
+			return s.Status, "", err
 		}
 		approve, reason = false, "审计员评审失败："+err.Error()
 	}
@@ -159,7 +168,7 @@ func (r *Reviewer) Run(ctx context.Context) {
 	ticker := time.NewTicker(r.Interval)
 	defer ticker.Stop()
 	for {
-		if err := r.Sweep(ctx, time.Now().Add(-settle)); err != nil && ctx.Err() == nil {
+		if err := r.Sweep(ctx, time.Now().Add(-settle)); err != nil && ctx.Err() == nil && !errors.Is(err, ErrUnavailable) {
 			slog.Error("抑制草案评审失败", "err", err)
 		}
 		select {
@@ -170,7 +179,7 @@ func (r *Reviewer) Run(ctx context.Context) {
 	}
 }
 
-// Sweep 评审 before 之前生成、仍待批准的草案，先来先审
+// Sweep 评审 before 之前生成、仍待批准的草案，先来先审。模型调不通就结束本轮，不对着坏端点逐条重试
 func (r *Reviewer) Sweep(ctx context.Context, before time.Time) error {
 	ids, err := r.DB.Suppression.Query().
 		Where(suppression.StatusEQ("proposed"), suppression.AssetIDNotNil(), suppression.CreatedAtLT(before)).
@@ -189,7 +198,7 @@ func (r *Reviewer) Sweep(ctx context.Context, before time.Time) error {
 // Submit 草案生成后在后台评审，不阻塞生成方（误报统计一轮可能出好几条）
 func (r *Reviewer) Submit(ctx context.Context, id uuid.UUID) {
 	go func() {
-		if _, _, err := r.Review(ctx, id); err != nil && ctx.Err() == nil {
+		if _, _, err := r.Review(ctx, id); err != nil && ctx.Err() == nil && !errors.Is(err, ErrUnavailable) {
 			slog.Error("抑制草案评审失败", "id", id, "err", err)
 		}
 	}()

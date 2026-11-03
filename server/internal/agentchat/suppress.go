@@ -129,8 +129,8 @@ func (s *Service) suppress(ctx context.Context, session *ent.AgentSession, args 
 	status, reason, err := s.ReviewSuppression(ctx, p.ID)
 	switch {
 	case err != nil:
-		// 草案已落库，兜底循环会接着评审
-		return marshal(map[string]any{"status": "proposed", "id": p.ID, "note": "已提交，评审稍后进行"})
+		// 审计员调不通时草案留在待批准，后台会自动重试
+		return marshal(map[string]any{"status": "proposed", "id": p.ID, "note": "已提交，AI 审计员暂时不可用，草案待评审：后台会自动重试，组管理员也可手动审批。不要重复提交"})
 	case status == "active":
 		return marshal(map[string]any{"status": "active", "id": p.ID, "note": "AI 审计员已批准，已生效：" + reason})
 	case status == "rejected":

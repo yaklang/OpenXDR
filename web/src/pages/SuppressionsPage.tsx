@@ -25,7 +25,7 @@ export function SuppressionsPage() {
   const [statusFilter, setStatusFilter] = useState('')
   const { data, isPending, isError, error, refetch } = useQuery({ queryKey: ['suppressions'], queryFn: fetchSuppressions })
   const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
-  // AI 提议由主机所在组的管理员批准，与命令审批同一档权限
+  // AI 提议由 AI 审计员评审；仍待评审的可由主机所在组的管理员批准，与命令审批同一档权限
   const canReview = (s: Suppression) => {
     const groupId = assets.data?.find(a => a.id === s.assetId)?.groupId
     return isAdmin || groups.find(g => g.id === groupId)?.role === 'admin'

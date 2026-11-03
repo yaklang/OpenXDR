@@ -5,6 +5,7 @@ package agentchat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -97,5 +98,27 @@ func TestSuppressReviewedOnSpot(t *testing.T) {
 	}
 	if p := db.Suppression.Query().OnlyX(ctx); len(reviewed) != 1 || reviewed[0] != p.ID {
 		t.Fatalf("应评审刚落库的草案: %v", reviewed)
+	}
+}
+
+// 审计员调不通时告诉模型草案待评审，不是被拒
+func TestSuppressReviewerUnavailable(t *testing.T) {
+	ctx, db := testdb.New(t)
+	group := db.Group.Create().SetName("g").SaveX(ctx)
+	host := db.Asset.Create().SetHostname("pve1").SetGroupID(group.ID).SaveX(ctx)
+	session := db.AgentSession.Create().SetKind("chat").SetGroupID(group.ID).SetInitiator("a").SetModel("m").SetStatus("running").SaveX(ctx)
+	ev := db.Event.Create().SetTs(time.Now()).SetClassUID(4003).SetSource("agent").SetAssetID(host.ID).
+		SetRaw(json.RawMessage(`{"query":{"hostname":"a.example.com"}}`)).SaveX(ctx)
+	db.Alert.Create().SetTs(time.Now()).SetRuleID("probe").SetSeverity(2).SetAssetID(host.ID).SetEventID(ev.ID).SaveX(ctx)
+	s := &Service{DB: db, ReviewSuppression: func(context.Context, uuid.UUID) (string, string, error) {
+		return "proposed", "", errors.New("AI 审计员暂时不可用：timeout")
+	}}
+	out, err := s.tool(ctx, session, commandgate.Request{}, "suppress", json.RawMessage(
+		`{"host":"`+host.ID.String()+`","rule_id":"probe","reason":"例行解析更新域名，每天一次","conditions":[{"field":"query.hostname","op":"equals","value":"a.example.com"}]}`))
+	if err != nil || !strings.Contains(out, `"status":"proposed"`) || !strings.Contains(out, "自动重试") {
+		t.Fatalf("应告知待评审: %s %v", out, err)
+	}
+	if p := db.Suppression.Query().OnlyX(ctx); p.Status != "proposed" {
+		t.Fatalf("草案应留在待批准: %s", p.Status)
 	}
 }
