@@ -102,6 +102,8 @@ func (e *Engine) batchTx(ctx context.Context, tx *ent.Tx) error {
 	urgent := map[uuid.UUID]bool{}
 	crit := e.criticalOf()
 	ruleIn := map[string]bool{}
+	// pairs 批内各 incident 已有的（规则, 资产）
+	pairs := map[string]bool{}
 	// 标题跟随最高级别的告警：maxSev 是各 incident 当前最高级别，titles 是批内要改写的标题
 	maxSev := map[uuid.UUID]int16{}
 	titles := map[uuid.UUID]string{}
@@ -179,8 +181,10 @@ func (e *Engine) batchTx(ctx context.Context, tx *ent.Tx) error {
 		}
 		byAsset[bucket] = cachedIncident{incident: inc, lastTs: al.Ts}
 		// 已研判的 incident 收到新证据：记下时刻，研判引擎冷却到期后带新证据重新定性，旧结论在此之前继续有效。
-		// 同一实体同一规则又来一次不算新证据——周期扫描每来一次就重新研判一遍，
-		// 等于把拆开的 incident 换个形式又研判 N 次。按粗键并进来的不是同一实体（命令行不同、新冒出的程序），照常算。
+		// 普通规则按（规则, 资产）认新证据：这台机器上这条规则已在 incident 里，再来多少次、换什么命令行都不算——
+		// 健康检查、开发机上人和脚本的命令千变万化，按实体认会让 incident 每过冷却期就重研判一遍。
+		// 重复的告警照常并入、计数，下次因别的证据重研判时一并带上。资产不明的认不出是不是同一台机器，照常算。
+		// 高危例外规则仍按实体认：同一实体同一规则又来一次不算，换了实体（新命令行、新域名）要重新定性。
 		// 升级类证据不等冷却：级别升高，或这个 incident 里头一回出现的高危例外规则（情报命中、拿凭据、抹痕迹、
 		// 关防护、搞破坏，与可信来源的高危例外同一口径）。同一条高危规则再来只按普通新证据冷却，免得它自己成风暴。
 		// 还没研判过的照样记：首次研判可能正在进行，完成时据此知道有没看过的证据
@@ -191,9 +195,20 @@ func (e *Engine) batchTx(ctx context.Context, tx *ent.Tx) error {
 			evidence[inc.ID] = true
 		}
 		ruleIn[ruleKey] = true
-		if inc.Status != "triaged" || entity == "" || !seen[seenKey] && !e.seenIn(ctx, inc.ID, al, key) {
+		pairKey := ruleKey + "|"
+		if al.AssetID != nil {
+			pairKey += al.AssetID.String()
+		}
+		novel := func() bool {
+			if !crit(al.RuleID) {
+				return al.AssetID == nil || !pairs[pairKey] && !e.pairIn(ctx, inc.ID, al)
+			}
+			return entity == "" || !seen[seenKey] && !e.seenIn(ctx, inc.ID, al, key)
+		}
+		if inc.Status != "triaged" || novel() {
 			evidence[inc.ID] = true
 		}
+		pairs[pairKey] = true
 		if entity != "" {
 			seen[seenKey] = true
 			if e.RecurSpan > 0 {
@@ -284,6 +299,12 @@ func (e *Engine) criticalOf() func(ruleID string) bool {
 // ruleIn incident 里是否已有这条规则的告警；查不了按没有算，宁可多研判一次也不把高危压进冷却
 func (e *Engine) ruleIn(ctx context.Context, incID uuid.UUID, ruleID string) bool {
 	ok, err := e.DB.Alert.Query().Where(alert.IncidentIDEQ(incID), alert.RuleIDEQ(ruleID)).Exist(ctx)
+	return ok && err == nil
+}
+
+// pairIn incident 里是否已有这台资产上这条规则的告警；查不了按没有算，宁可多研判一次
+func (e *Engine) pairIn(ctx context.Context, incID uuid.UUID, al *ent.Alert) bool {
+	ok, err := e.DB.Alert.Query().Where(alert.IncidentIDEQ(incID), alert.RuleIDEQ(al.RuleID), alert.AssetIDEQ(*al.AssetID)).Exist(ctx)
 	return ok && err == nil
 }
 
