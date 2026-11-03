@@ -6,15 +6,20 @@ services:
         PATRONI_VERSION: 4.1.4
     restart: unless-stopped
     network_mode: host
+    # 不经环境变量传数据库口令：超级用户能 COPY ... FROM PROGRAM 以容器内 postgres 身份执行命令，
+    # 环境变量会出现在 /proc/*/environ、docker inspect 和每个子进程里。初始化用的 openxdr 口令
+    # 改为只读挂载的文件（0400，属主 postgres）；secrets 只挂 Patroni 连 etcd 用的三个文件。
     environment:
       PATRONI_LOG_LEVEL: INFO
-      OPENXDR_PASSWORD: ${OPENXDR_PASSWORD:?OPENXDR_PASSWORD must be set}
-      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:?REPLICATION_PASSWORD must be set}
+      PATRONICTL_CONFIG_FILE: /etc/patroni/patroni.yml
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./runtime/patroni.yml:/etc/patroni/patroni.yml:ro
+      - ./runtime/openxdr-db-password:/etc/patroni/openxdr-db-password:ro
       - ./deploy/ha/patroni/post-bootstrap.sh:/etc/patroni/post-bootstrap.sh:ro
-      - ./runtime/secrets:/run/secrets:ro
+      - ./runtime/secrets/ha-ca.crt:/run/secrets/ha-ca.crt:ro
+      - ./runtime/secrets/etcd-client.crt:/run/secrets/etcd-client.crt:ro
+      - ./runtime/secrets/etcd-client.key:/run/secrets/etcd-client.key:ro
     healthcheck:
       test: [CMD-SHELL, "curl -fsS http://127.0.0.1:8008/readiness"]
       interval: 5s
