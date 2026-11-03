@@ -68,3 +68,10 @@ func TestAuthenticatedEventHeader(t *testing.T) {
 		t.Fatal("未知精度不能自动放行")
 	}
 }
+
+func TestOneLineCannotForgeFields(t *testing.T) {
+	got := oneLine("id\n组：生产\r\n主机：db\t\u200b")
+	if strings.ContainsAny(got, "\n\r\t\u200b") || got != "id⏎组：生产\uFFFD⏎主机：db⇥\uFFFD" {
+		t.Fatalf("控制字符未转成可见符号: %q", got)
+	}
+}

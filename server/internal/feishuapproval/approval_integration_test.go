@@ -205,8 +205,8 @@ func TestConcurrentDecisionsOnce(t *testing.T) {
 	if success != 1 {
 		t.Fatalf("应恰好决定一次: %d", success)
 	}
-	if f.s.DB.AuditLog.Query().Where(auditlog.ActionEQ("approval_decided")).CountX(f.ctx) != 1 {
-		t.Fatal("审批审计不唯一")
+	if f.s.DB.AuditLog.Query().Where(auditlog.ActionEQ("approval_decided"), auditlog.RemoteAddrEQ("feishu")).CountX(f.ctx) != 1 {
+		t.Fatal("审批审计不唯一或未标明飞书渠道")
 	}
 }
 

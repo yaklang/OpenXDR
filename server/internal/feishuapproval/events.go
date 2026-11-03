@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/larksuite/oapi-sdk-go/v3/event"
@@ -15,6 +17,7 @@ import (
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
+	"openxdr/server/internal/commandgate"
 )
 
 // 官方 SDK 的默认日志包含事件内容和长连接 URL；这里禁止输出这些凭据与命令。
@@ -204,7 +207,7 @@ func (s *Service) decide(ctx context.Context, c Config, tenant, openID, messageI
 			return "", errors.New("请在平台查看完整命令")
 		}
 		// 唯一有权改变审批状态的入口；内部事务含组权限、有效期、状态 CAS 和审计。
-		if err = s.Gate.Decide(ctx, a.ID, u, action == "approve"); err != nil {
+		if err = s.Gate.Decide(commandgate.ViaChannel(ctx, "feishu"), a.ID, u, action == "approve"); err != nil {
 			return "", err
 		}
 		result = "已拒绝，命令不会因本次申请执行。"
@@ -223,11 +226,20 @@ func (s *Service) decide(ctx context.Context, c Config, tenant, openID, messageI
 	return result, err
 }
 
+// 长连接退出（如凭据错误这类不可重试的失败）后按指数退避重连，连上过则从头计时。
+const (
+	minBackoff = 3 * time.Second
+	maxBackoff = 5 * time.Minute
+)
+
 // Run 由集群租约驱动。配置改变时关闭旧长连接，并取消其在途回调。
 func (s *Service) Run(ctx context.Context) {
 	var active string
 	var cancel context.CancelFunc
 	var done chan struct{}
+	var ready *atomic.Bool
+	var backoff time.Duration
+	var retryAt time.Time
 	stop := func() {
 		if cancel != nil {
 			cancel()
@@ -244,11 +256,13 @@ func (s *Service) Run(ctx context.Context) {
 			s.setState("configuration_unavailable")
 		} else {
 			if c.Revision != active || !validConfig(c) {
+				// 配置变了从头计退避，改好的凭据立即生效。
+				backoff, retryAt = 0, time.Time{}
 				stop()
 				active = ""
 				s.setState("disabled")
 			}
-			if validConfig(c) && cancel == nil && s.Vault != nil {
+			if validConfig(c) && cancel == nil && s.Vault != nil && time.Now().After(retryAt) {
 				secret, e := s.Vault.Open(c.Sealed, "feishu-approval:"+c.AppID)
 				if e != nil {
 					s.setState("credential_unavailable")
@@ -256,14 +270,16 @@ func (s *Service) Run(ctx context.Context) {
 					runCtx, stopFn := context.WithCancel(ctx)
 					cancel = stopFn
 					done = make(chan struct{})
+					ready = new(atomic.Bool)
 					active = c.Revision
+					connected := func() { ready.Store(true); s.setState("connected") }
 					handler := dispatcher.NewEventDispatcher("", "").OnP2MessageReceiveV1(func(evtCtx context.Context, e *larkim.P2MessageReceiveV1) error { return s.message(runCtx, c, e) }).OnP2CardActionTrigger(func(evtCtx context.Context, e *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
 						callbackCtx, stop := context.WithTimeout(runCtx, 2500*time.Millisecond)
 						defer stop()
 						return s.action(callbackCtx, c, e)
 					})
 					handler.Config.Logger = quietLogger{service: s}
-					client := larkws.NewClient(c.AppID, secret.Password, larkws.WithEventHandler(handler), larkws.WithLogger(quietLogger{service: s}), larkws.WithHttpClient(&httpClient), larkws.WithOnReady(func() { s.setState("connected") }), larkws.WithOnReconnected(func() { s.setState("connected") }), larkws.WithOnError(func(error) { s.setState("connection_error") }), larkws.WithOnReconnecting(func() { s.setState("reconnecting") }), larkws.WithOnDisconnected(func() { s.setState("disconnected") }))
+					client := larkws.NewClient(c.AppID, secret.Password, larkws.WithEventHandler(handler), larkws.WithLogger(quietLogger{service: s}), larkws.WithHttpClient(&httpClient), larkws.WithOnReady(connected), larkws.WithOnReconnected(connected), larkws.WithOnError(func(error) { s.setState("connection_error") }), larkws.WithOnReconnecting(func() { s.setState("reconnecting") }), larkws.WithOnDisconnected(func() { s.setState("disconnected") }))
 					s.setState("connecting")
 					go func(done chan struct{}) { defer close(done); _ = client.Start(runCtx) }(done)
 				}
@@ -273,15 +289,24 @@ func (s *Service) Run(ctx context.Context) {
 				if e := s.enqueue(cycle, c); e == nil {
 					_ = s.deliver(cycle, c)
 				}
+				if e := s.fallback(cycle, c); e != nil {
+					slog.Error("审批通知回退检查失败", "err", e)
+				}
 				stopCycle()
 			}
 		}
-		_, _ = s.SQL.ExecContext(ctx, `DELETE FROM feishu_approval_codes WHERE expires_at<now(); DELETE FROM feishu_approval_deliveries WHERE expires_at<now()-interval '30 days'`)
+		_, _ = s.SQL.ExecContext(ctx, `DELETE FROM feishu_approval_codes WHERE expires_at<now(); DELETE FROM feishu_approval_deliveries WHERE expires_at<now()-interval '30 days'; DELETE FROM feishu_approval_fallbacks WHERE created_at<now()-interval '30 days'`)
 		if done != nil && cancel != nil {
 			select {
 			case <-done:
 				stop()
-				active = ""
+				if ready.Load() {
+					backoff = 0
+				}
+				backoff = min(max(2*backoff, minBackoff), maxBackoff)
+				retryAt = time.Now().Add(backoff)
+				s.setState("reconnect_wait")
+				slog.Warn("飞书长连接已退出，稍后重连", "after", backoff)
 			default:
 			}
 		}

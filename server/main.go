@@ -140,7 +140,7 @@ func main() {
 	scheduler := startScheduler(ctx, db, client, chat, conf, webhook)
 	enrollSvc := loadEnroll(client, silentAfter)
 	routes := http.NewServeMux()
-	feishu := &feishuapproval.Service{SQL: db, DB: client, Gate: chat.Gate, Vault: credentialVault}
+	feishu := &feishuapproval.Service{SQL: db, DB: client, Gate: chat.Gate, Vault: credentialVault, Fallback: webhook.Send}
 	if err := cluster.WithLock(ctx, db, "feishu-schema", func() error { return feishu.EnsureSchema(ctx) }); err != nil {
 		slog.Error("飞书审批初始化失败")
 		os.Exit(1)

@@ -34,6 +34,7 @@ type Service struct {
 	Gate          *commandgate.Gate
 	Vault         *hostimport.Vault
 	HTTP          *http.Client
+	Fallback      func(ctx context.Context, title, text, path string) error // 原审批通知器：卡片没送到任何有权审批人时改由它通知
 	mu            sync.RWMutex
 	state         string
 	diagnostic    map[string]any
@@ -80,6 +81,9 @@ func (s *Service) EnsureSchema(ctx context.Context) error {
    created_at timestamptz NOT NULL DEFAULT now(), outcome text NOT NULL DEFAULT '',
    UNIQUE(approval_id,user_id));
  CREATE INDEX IF NOT EXISTS feishu_approval_delivery_expiry ON feishu_approval_deliveries(expires_at);
+ CREATE TABLE IF NOT EXISTS feishu_approval_fallbacks (
+   approval_id uuid PRIMARY KEY REFERENCES approvals(id) ON DELETE CASCADE,
+   created_at timestamptz NOT NULL DEFAULT now());
  `)
 	return err
 }
