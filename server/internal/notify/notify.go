@@ -440,14 +440,15 @@ func (h *Webhook) SendTo(ctx context.Context, target Target, title, body, path s
 }
 
 func send(ctx context.Context, client *http.Client, url, format string, body []byte) error {
+	// 地址解析与请求错误都带完整地址，返回前去掉：所有调用方（推送、任务报告、失联、审批回退）都会把错误打进日志
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return redact(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return redact(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

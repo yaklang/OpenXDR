@@ -118,13 +118,19 @@ func (s *Settings) saveState(ctx context.Context, st sendState) {
 	}
 }
 
-// reason 失败原因去掉请求地址：webhook 地址里常带 token，不能进日志、接口与指标
-func reason(err error) string {
+// redact 去掉错误里的请求地址：webhook 地址里常带 token，不能进日志、接口与指标。
+// 只剥 url.Error 外壳，内层错误链（超时、取消）保留给调用方判断
+func redact(err error) error {
 	var ue *url.Error
-	if errors.As(err, &ue) {
-		err = ue.Err
+	if errors.As(err, &ue) && ue.Err != nil {
+		return ue.Err
 	}
-	r := []rune(err.Error())
+	return err
+}
+
+// reason 存进健康状态的失败原因：去掉地址并截断
+func reason(err error) string {
+	r := []rune(redact(err).Error())
 	if len(r) > 200 {
 		r = append(r[:200], '…')
 	}
