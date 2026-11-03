@@ -441,6 +441,70 @@ fn container_of(pid: u32) -> Option<Arc<Container>> {
     container::of(pid)
 }
 
+/// 新进程是不是 docker 容器配置的健康检查（HEALTHCHECK）：是就给容器打上标记，server 据此不把它的告警
+/// 送进关联与研判。dockerd 每隔几秒在容器里执行一次健康检查，nc -z、/dev/tcp 探测这类命令天天误中规则。
+///
+/// 只认两种情形，都限同一个容器：
+/// - 命令行与容器配置的健康检查逐字相同，且父进程不在这个容器里（dockerd 经 containerd-shim / runc 从宿主机拉起；
+///   容器里的进程自己跑一遍同样的命令不算）；
+/// - 健康检查进程拉起的后代，或它原地 exec 成的程序（sh -c 只有一条命令时直接 exec）。
+///
+/// 父进程说不清（没登记、已退场）、配置读不到都不标：认不出就照常告警
+#[cfg(target_os = "linux")]
+fn healthcheck_of(
+    registry: &ProcessRegistry,
+    pid: u32,
+    ppid: Option<u32>,
+    c: Arc<Container>,
+    cmd_line: Option<&str>,
+) -> Arc<Container> {
+    if c.runtime != "docker" {
+        return c;
+    }
+    // 登记里这个 pid 所在的容器：是不是同一个，是不是健康检查
+    let in_ours = |p: u32| {
+        registry.known(p).map(|k| {
+            k.container
+                .filter(|k| k.uid == c.uid)
+                .map(|k| k.healthcheck)
+        })
+    };
+    let inherited = [Some(pid), ppid]
+        .into_iter()
+        .flatten()
+        .any(|p| in_ours(p) == Some(Some(true)));
+    let root = || {
+        let parent_outside = ppid.is_some_and(|p| match in_ours(p) {
+            Some(theirs) => theirs.is_none(),
+            None => {
+                std::path::Path::new(&format!("/proc/{p}")).exists()
+                    && container::of(p).is_none_or(|k| k.uid != c.uid)
+            }
+        });
+        parent_outside
+            && cmd_line.is_some_and(|line| container::healthcheck(&c.uid).as_deref() == Some(line))
+    };
+    if inherited || root() {
+        Arc::new(Container {
+            healthcheck: true,
+            ..(*c).clone()
+        })
+    } else {
+        c
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn healthcheck_of(
+    _registry: &ProcessRegistry,
+    _pid: u32,
+    _ppid: Option<u32>,
+    c: Arc<Container>,
+    _cmd_line: Option<&str>,
+) -> Arc<Container> {
+    c
+}
+
 #[cfg(not(target_os = "linux"))]
 fn container_of(_pid: u32) -> Option<Arc<Container>> {
     None
@@ -650,8 +714,10 @@ fn process_event(
             let command = command_of(registry, pid, ppid);
             let login = login_of(registry, pid, ppid);
             parent = ppid.and_then(|p| registry.known(p));
-            let (guid, parent_guid) = registry.register(pid, ppid);
+            // 健康检查的认定要看这个 pid 之前的登记（原地 exec），登记新进程之前取
             let container = container_of(pid);
+            let container = container.map(|c| healthcheck_of(registry, pid, ppid, c, cmd_line));
+            let (guid, parent_guid) = registry.register(pid, ppid);
             registry.describe(pid, name, exe);
             registry.set_cmd_line(pid, cmd_line);
             registry.annotate(pid, Some(now), container.clone(), command.clone());
@@ -998,6 +1064,116 @@ mod tests {
             "python3.11-scri"
         );
         assert_eq!(full_name("abcdefghijklmno", None), "abcdefghijklmno");
+    }
+
+    /// docker 健康检查：命令行逐字相同、由容器外拉起的才算，后代与原地 exec 继承，别的容器不继承
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn healthcheck_marking() {
+        let docker = |uid: &str| {
+            Arc::new(Container {
+                runtime: "docker",
+                uid: uid.into(),
+                name: None,
+                healthcheck: false,
+            })
+        };
+        let hc = "/bin/sh -c nc -z 127.0.0.1 4822 || exit 1";
+        container::set_healthcheck("aaaaaaaaaaa1", hc);
+        container::set_healthcheck("bbbbbbbbbbb1", hc);
+        let mut reg = ProcessRegistry::default();
+        // 宿主机上的 containerd-shim（不在容器里）
+        reg.seed(100, "containerd-shim", None);
+        let mark = |reg: &mut ProcessRegistry, pid: u32, ppid: u32, uid: &str, cmd: &str| {
+            let c = healthcheck_of(reg, pid, Some(ppid), docker(uid), Some(cmd));
+            reg.register(pid, Some(ppid));
+            reg.annotate(pid, None, Some(c.clone()), None);
+            c.healthcheck
+        };
+        assert!(mark(&mut reg, 200, 100, "aaaaaaaaaaa1", hc));
+        // 子进程（nc）与孙进程继承
+        assert!(mark(
+            &mut reg,
+            201,
+            200,
+            "aaaaaaaaaaa1",
+            "nc -z 127.0.0.1 4822"
+        ));
+        assert!(mark(
+            &mut reg,
+            202,
+            201,
+            "aaaaaaaaaaa1",
+            "bash -c </dev/tcp/127.0.0.1/8001"
+        ));
+        // 原地 exec：同一个 pid 换成别的程序，父进程是容器外的 shim
+        assert!(mark(
+            &mut reg,
+            200,
+            100,
+            "aaaaaaaaaaa1",
+            "nc -z 127.0.0.1 4822"
+        ));
+        // 容器里的进程自己跑一遍同样的命令不算，它的后代也不算
+        reg.register(300, Some(100));
+        reg.annotate(300, None, Some(docker("aaaaaaaaaaa1")), None);
+        assert!(!mark(&mut reg, 301, 300, "aaaaaaaaaaa1", hc));
+        assert!(!mark(
+            &mut reg,
+            302,
+            301,
+            "aaaaaaaaaaa1",
+            "nc -z 10.0.0.1 22"
+        ));
+        // 命令行只差一点也不算
+        assert!(!mark(
+            &mut reg,
+            303,
+            100,
+            "aaaaaaaaaaa1",
+            "/bin/sh -c nc -z 127.0.0.1 4823 || exit 1"
+        ));
+        // 健康检查进程的 pid 被另一个容器复用：不继承
+        assert!(!mark(
+            &mut reg,
+            201,
+            200,
+            "bbbbbbbbbbb1",
+            "nc -z 127.0.0.1 4822"
+        ));
+        // 父进程说不清（没登记、也不在 /proc 里）不标
+        assert!(
+            !healthcheck_of(
+                &reg,
+                400,
+                Some(u32::MAX - 1),
+                docker("aaaaaaaaaaa1"),
+                Some(hc)
+            )
+            .healthcheck
+        );
+        // 没配健康检查的容器、非 docker 容器不标
+        assert!(!mark(&mut reg, 401, 100, "ccccccccccc1", hc));
+        let lxc = Arc::new(Container {
+            runtime: "lxc",
+            uid: "203".into(),
+            name: None,
+            healthcheck: false,
+        });
+        assert!(!healthcheck_of(&reg, 402, Some(100), lxc, Some(hc)).healthcheck);
+        // 标记随容器对象写进事件
+        let v = Container {
+            healthcheck: true,
+            ..(*docker("aaaaaaaaaaa1")).clone()
+        }
+        .to_json();
+        assert_eq!(v["healthcheck"], true);
+        assert!(
+            docker("aaaaaaaaaaa1")
+                .to_json()
+                .get("healthcheck")
+                .is_none()
+        );
     }
 
     /// 退出事件带运行时长与启动时间，并从注册表删掉登记

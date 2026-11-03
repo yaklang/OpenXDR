@@ -790,6 +790,7 @@ mod tests {
             runtime: "lxc",
             uid: "203".into(),
             name: None,
+            healthcheck: false,
         };
         let evt = dns_event(
             "a",

@@ -209,6 +209,7 @@ mod tests {
                     runtime: "lxc",
                     uid: "203".into(),
                     name: Some("dns".into()),
+                    healthcheck: false,
                 })),
                 hostname: None,
                 command: None,
