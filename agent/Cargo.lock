@@ -1078,6 +1078,7 @@ dependencies = [
  "prost",
  "protoc-bin-vendored",
  "rcgen",
+ "ring",
  "rustls",
  "serde",
  "serde_json",

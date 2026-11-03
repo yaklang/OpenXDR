@@ -141,11 +141,13 @@ async fn agent() {
                         }
                     }
                 }
+                let signer = pin_signer(&queue, &session.command_signer).await;
                 let mut commands = tokio::spawn(command_loop(
                     client.clone(),
                     session.agent_id.clone(),
                     session.config_json.clone(),
                     queue.clone(),
+                    signer,
                 ));
                 let reporting = tokio::spawn(health::report(
                     client.clone(),
@@ -351,10 +353,17 @@ async fn command_loop(
     agent_id: String,
     config: String,
     queue: delivery::Queue,
+    signer: Option<Vec<u8>>,
 ) {
     let receiving = async {
         loop {
-            command_stream(client.clone(), agent_id.clone(), queue.clone()).await;
+            command_stream(
+                client.clone(),
+                agent_id.clone(),
+                queue.clone(),
+                signer.as_deref(),
+            )
+            .await;
             eprintln!("指令通道断开，5 秒后重连");
             tokio::time::sleep(Duration::from_secs(5)).await;
             if session_changed(client.clone(), &agent_id, &config).await {
@@ -386,10 +395,32 @@ async fn session_changed(
     }
 }
 
+/// 固定指令签名公钥。读写失败按没有公钥处理：拒绝一切指令，采集照常
+async fn pin_signer(queue: &delivery::Queue, offered: &[u8]) -> Option<Vec<u8>> {
+    let offer = offered.to_vec();
+    match delivery::access(queue, move |spool| spool.pin_signer(&offer)).await {
+        Ok(Some(pinned)) => {
+            if !offered.is_empty() && offered != pinned.as_slice() {
+                eprintln!("server 给出的指令签名公钥与本机固定的不同，只认固定的那把");
+            }
+            Some(pinned)
+        }
+        Ok(None) => {
+            eprintln!("server 没有给出指令签名公钥，本机拒绝一切响应指令");
+            None
+        }
+        Err(err) => {
+            eprintln!("读取固定的指令签名公钥失败，拒绝一切响应指令：{err}");
+            None
+        }
+    }
+}
+
 async fn command_stream(
     mut client: AgentServiceClient<tonic::transport::Channel>,
     agent_id: String,
     queue: delivery::Queue,
+    signer: Option<&[u8]>,
 ) {
     let (tx, rx) = tokio::sync::mpsc::channel(32);
     // 认领消息：只带 agent_id，command_id 为空
@@ -412,7 +443,27 @@ async fn command_stream(
         }
     };
 
-    while let Ok(Some(cmd)) = inbound.message().await {
+    while let Ok(Some(sealed)) = inbound.message().await {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        let cmd = match respond::signed::open(&sealed, signer, &agent_id, now) {
+            Ok(cmd) => cmd,
+            Err(detail) => {
+                // 不占执行回执：伪造的指令不配消耗真实指令的 ID
+                eprintln!("拒绝指令 {}: {detail}", sealed.id);
+                let _ = tx
+                    .send(pb::CommandResult {
+                        agent_id: agent_id.clone(),
+                        command_id: sealed.id,
+                        status: pb::command_result::Status::Failed as i32,
+                        detail,
+                        ..Default::default()
+                    })
+                    .await;
+                continue;
+            }
+        };
         // exec 可能跑很久，并发执行；结束进程与隔离保持顺序，先隔离后解除不能颠倒
         if cmd.kind() == pb::CommandKind::Exec {
             tokio::spawn(run_command(
@@ -729,6 +780,7 @@ mod command_tests {
             "reconnect-test".into(),
             String::new(),
             queue,
+            None,
         ));
         let result = tokio::time::timeout(Duration::from_secs(8), async {
             assert!(calls.recv().await.is_some());
@@ -752,6 +804,7 @@ mod command_tests {
             "reconnect-test".into(),
             String::new(),
             queue,
+            None,
         ));
         assert!(calls.recv().await.is_some(), "先建立一次指令流");
         let ended = tokio::time::timeout(Duration::from_secs(10), commands).await;

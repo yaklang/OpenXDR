@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -111,6 +112,7 @@ func main() {
 	assetEngine := startAssetMap(ctx, db, client, llmFor, conf)
 
 	hub := response.NewHub(client, os.Getenv("RESPONSE_ENABLED") == "true")
+	hub.Signer = commandSigner(hub.Enabled)
 	allowlist := isolationAllowlist()
 	triageEngine := startTriage(ctx, db, client, rules, llmFor, hub, allowlist)
 	notifySettings, webhook := startNotify(ctx, db, client, rules, triageEngine.LLM.Enabled)
@@ -943,4 +945,23 @@ func startIntegrationDelivery(ctx context.Context, client *ent.Client, vault *ho
 		}
 	}
 	go worker.Run(ctx)
+}
+
+// commandSigner 指令签名私钥：启用响应必须配置；未启用时配了也加载，让 agent 提前固定公钥。
+// 不退回临时密钥——agent 固定的是第一把见到的公钥，换钥匙等于全网指令失效
+func commandSigner(enabled bool) ed25519.PrivateKey {
+	path := os.Getenv("COMMAND_SIGNING_KEY_FILE")
+	if path == "" {
+		if enabled {
+			slog.Error("RESPONSE_ENABLED=true 必须配置 COMMAND_SIGNING_KEY_FILE（gencerts 生成的 command-signing.key）")
+			os.Exit(1)
+		}
+		return nil
+	}
+	key, err := response.LoadSigner(path)
+	if err != nil {
+		slog.Error("指令签名私钥加载失败", "err", err)
+		os.Exit(1)
+	}
+	return key
 }

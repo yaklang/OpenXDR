@@ -73,6 +73,8 @@ services:
       ABUSE_CH_AUTH_KEY: ${ABUSE_CH_AUTH_KEY:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}
       RESPONSE_ENABLED: ${RESPONSE_ENABLED:-false}
+      # 响应指令签名私钥，两个节点必须是同一把；开了 RESPONSE_ENABLED 必须配
+      COMMAND_SIGNING_KEY_FILE: ${COMMAND_SIGNING_KEY_FILE:-}
       ISOLATION_ALLOW: ${ISOLATION_ALLOW:-10.1.1.199:8081}
       TLS_CA_FILE: /certs/ca.crt
       TLS_CERT_FILE: /certs/server.crt

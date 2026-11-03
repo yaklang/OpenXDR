@@ -47,6 +47,18 @@ message Command {
   // BLOCK_NETWORK / UNBLOCK_NETWORK：IP、网段（CIDR）或域名；QUARANTINE_FILE / RESTORE_FILE：文件绝对路径；
   // DISABLE_ACCOUNT / ENABLE_ACCOUNT：本机账号名
   string target = 9;
+  // 签名信封：序列化的 SignedCommand 与 server 指令签名私钥对它的 Ed25519 签名。
+  // agent 只执行验签通过的信封里的指令，上面的明文字段仅供 server 内部投递与回写，agent 不采信。
+  // 签名覆盖的是这串原始字节，不依赖两端对 protobuf 的重新编码一致
+  bytes envelope = 10;
+  bytes signature = 11;
+}
+
+// 签名信封的内容：绑定目标 agent 与有效期，抓到的指令换不了主机、也不能无限期重放
+message SignedCommand {
+  Command command = 1;    // 其中 envelope / signature 为空
+  string agent_id = 2;
+  int64 expires_unix = 3;
 }
 
 enum CommandKind {
@@ -107,6 +119,9 @@ message RegisterResponse {
   // 分发目录里放的是哪个版本，整片主机就收敛到哪个版本
   string upgrade_sha256 = 3;
   string upgrade_platform = 4;
+  // 指令签名公钥（Ed25519，32 字节）。agent 首次见到即固定在本地，之后只认这把；
+  // 与固定值不同时拒绝一切指令，不随注册响应更换
+  bytes command_signer = 5;
 }
 
 message AgentEvent {

@@ -80,6 +80,9 @@ func (s *Server) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.Reg
 		AgentId:    agentID.String(),
 		ConfigJson: string(a.Config),
 	}
+	if s.Hub != nil {
+		resp.CommandSigner = s.Hub.SignerPublic()
+	}
 	// 自动升级：分发目录里的版本与 agent 自身不同就让它换。不报哈希的老 agent 不会升级，也不会被要求
 	if platform := s.Dist.Platform(req.Os, req.Arch); s.AutoUpgrade && req.BinarySha256 != "" && platform != "" {
 		if want := s.Dist.SHA256(platform); want != "" && want != req.BinarySha256 {

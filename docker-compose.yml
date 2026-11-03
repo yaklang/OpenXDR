@@ -74,6 +74,8 @@ services:
       SYSLOG_ADDR: ${SYSLOG_ADDR:-}
       # 响应处置：结束进程 / 主机隔离
       RESPONSE_ENABLED: ${RESPONSE_ENABLED:-false}
+      # 指令签名私钥（gencerts 生成的 command-signing.key），开了 RESPONSE_ENABLED 必须配
+      COMMAND_SIGNING_KEY_FILE: ${COMMAND_SIGNING_KEY_FILE:-}
       ISOLATION_ALLOW: ${ISOLATION_ALLOW:-}
       # 自动响应：AI 高置信度判恶意时自动隔离主机，默认关闭；开了就是真执行
       AUTO_RESPONSE_ENABLED: ${AUTO_RESPONSE_ENABLED:-false}

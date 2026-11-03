@@ -106,10 +106,15 @@ impl Spool {
             let entry = entry?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name == "lock" || name == "session" || name == "receipts" || name == QUARANTINE {
+            if name == "lock"
+                || name == "session"
+                || name == "receipts"
+                || name == SIGNER
+                || name == QUARANTINE
+            {
                 continue;
             }
-            if name == "pending" || name == "session.pending" {
+            if name == "pending" || name == "session.pending" || name == "command-signer.pending" {
                 reject_symlink(&entry.path())?;
                 fs::remove_file(entry.path())?;
                 continue;
@@ -179,6 +184,28 @@ impl Spool {
             quarantine(&self.dir, &session)?;
         }
         Ok(())
+    }
+
+    /// 指令签名公钥：第一次见到就固定，之后只认这把，server 给出别的也不换。
+    /// 返回本机固定的公钥；还没固定且 server 也没给时为 None（拒绝一切指令）
+    pub fn pin_signer(&self, offered: &[u8]) -> io::Result<Option<Vec<u8>>> {
+        let path = self.dir.join(SIGNER);
+        reject_symlink(&path)?;
+        match fs::read(&path) {
+            Ok(pinned) if pinned.len() == 32 => return Ok(Some(pinned)),
+            Ok(_) => return Err(invalid("固定的指令签名公钥已损坏")),
+            Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+            Err(_) if offered.len() != 32 => return Ok(None),
+            Err(_) => {}
+        }
+        let pending = self.dir.join("command-signer.pending");
+        let mut file = private_file(&pending, true)?;
+        file.write_all(offered)?;
+        file.sync_all()?;
+        drop(file);
+        replace_file(&pending, &path)?;
+        sync_dir(&self.dir)?;
+        Ok(Some(offered.to_vec()))
     }
 
     pub fn save_session(&self, session: &crate::pb::RegisterResponse) -> io::Result<()> {
@@ -301,6 +328,8 @@ impl Spool {
 
 /// 隔离区子目录名。缓存与回执目录各有一个
 pub(crate) const QUARANTINE: &str = "quarantine";
+/// 固定的指令签名公钥。不随注册身份退役：它认的是 server，不是本机身份
+const SIGNER: &str = "command-signer";
 
 /// 把损坏或认不出的文件移进隔离区，保留原名加时间戳，等人核实
 pub(crate) fn quarantine(dir: &Path, path: &Path) -> io::Result<()> {
@@ -477,6 +506,25 @@ mod tests {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
+    /// 公钥第一次见到就固定：之后 server 给别的不换，重开缓存与退役身份都不丢
+    #[test]
+    fn signer_is_pinned_once_and_survives_reopen() {
+        let dir = Temp::new();
+        let mut spool = Spool::open(&dir.0, 64 << 20).unwrap();
+        assert_eq!(spool.pin_signer(&[]).unwrap(), None);
+        assert_eq!(spool.pin_signer(&[1; 32]).unwrap(), Some(vec![1; 32]));
+        assert_eq!(spool.pin_signer(&[2; 32]).unwrap(), Some(vec![1; 32]));
+        spool.retire_identity().unwrap();
+        drop(spool);
+        let spool = Spool::open(&dir.0, 64 << 20).unwrap();
+        assert_eq!(spool.pin_signer(&[2; 32]).unwrap(), Some(vec![1; 32]));
+        fs::write(dir.0.join(SIGNER), b"short").unwrap();
+        assert!(
+            spool.pin_signer(&[2; 32]).is_err(),
+            "损坏的固定值不能被新公钥覆盖"
+        );
+    }
+
     fn event() -> AgentEvent {
         AgentEvent {
             agent_id: "agent".into(),

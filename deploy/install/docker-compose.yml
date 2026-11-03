@@ -49,6 +49,8 @@ services:
       TLS_CERT_FILE: /certs/server.crt
       TLS_KEY_FILE: /certs/server.key
       TLS_CA_KEY_FILE: /certs/ca.key
+      # 响应指令签名私钥：agent 首次注册就固定它的公钥，换了全网指令都会被拒，和 CA 一起备份
+      COMMAND_SIGNING_KEY_FILE: /certs/command-signing.key
       # 控制台「添加主机」给出的安装命令用这两个地址
       ENROLL_PUBLIC_URL: https://${OPENXDR_HOST}
       ENROLL_GRPC_URL: https://${OPENXDR_HOST}:8081

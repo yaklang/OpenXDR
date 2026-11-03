@@ -100,9 +100,9 @@ IMAGE=ghcr.io/yaklang/openxdr-server:$VERSION
 say "拉取镜像"
 docker compose --progress quiet pull --policy missing
 
-# 首次安装或地址变了才签证书（沿用已有 CA）；私钥给 server 容器里的 openxdr 用户（uid 10001）读
+# 首次安装、地址变了或缺指令签名私钥（旧版装的）才签（沿用已有 CA 与签名私钥）；私钥给 server 容器里的 openxdr 用户（uid 10001）读
 CHANGED=""
-if [ ! -f certs/server.crt ] || [ "$PREV_HOST" != "$HOST" ]; then
+if [ ! -f certs/server.crt ] || [ ! -f certs/command-signing.key ] || [ "$PREV_HOST" != "$HOST" ]; then
   say "签发 mTLS 证书"
   docker run --rm --user 0 -v "$DIR/certs:/certs" --entrypoint openxdr-gencerts "$IMAGE" /certs "$HOST" >/dev/null
   chown -R 10001 certs && chmod 600 certs/*.key

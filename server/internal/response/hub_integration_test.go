@@ -4,11 +4,13 @@ package response
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/proto"
 
 	"openxdr/server/internal/testdb"
 	"openxdr/server/pb"
@@ -81,6 +83,13 @@ func TestExecRoundTrip(t *testing.T) {
 	sent := <-ch
 	if sent.Kind != pb.CommandKind_EXEC || sent.Cmd != line || sent.TimeoutMs != 5000 {
 		t.Fatalf("下发内容不符: %+v", sent)
+	}
+	// 推给 agent 的是签名信封：绑定这台 agent，内容就是这条指令
+	var env pb.SignedCommand
+	if !ed25519.Verify(hub.SignerPublic(), append([]byte(signContext), sent.Envelope...), sent.Signature) ||
+		proto.Unmarshal(sent.Envelope, &env) != nil ||
+		env.AgentId != agentID.String() || env.Command.GetId() != cmd.ID.String() || env.Command.GetCmd() != line {
+		t.Fatalf("签名信封不符: %+v", &env)
 	}
 	if replay := hub.ToProto(cmd); replay.Cmd != line || replay.TimeoutMs != 5000 {
 		t.Fatalf("序列化丢了命令行: %+v", replay)
