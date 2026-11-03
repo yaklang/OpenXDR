@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"openxdr/server/ent/asset"
+	"openxdr/server/ent/event"
 	"openxdr/server/internal/memories"
 	"slices"
 	"strings"
@@ -436,12 +437,12 @@ const (
 
 func (e *Engine) buildContext(ctx context.Context, inc *ent.Incident) (string, error) {
 	limit := max(detailLimit>>min(inc.TriageFailures, 10), minDetailLimit)
-	alerts, err := e.DB.Alert.Query().
-		Where(alert.IncidentIDEQ(inc.ID)).
-		Order(ent.Asc(alert.FieldTs)).
-		Limit(limit).
-		WithEvent().
-		All(ctx)
+	scope := alert.IncidentIDEQ(inc.ID)
+	total, err := e.DB.Alert.Query().Where(scope).Count(ctx)
+	if err != nil {
+		return "", err
+	}
+	alerts, err := e.sampleAlerts(ctx, limit, scope, representatives(inc.ID, uuid.Nil), true)
 	if err != nil {
 		return "", err
 	}
@@ -453,13 +454,17 @@ func (e *Engine) buildContext(ctx context.Context, inc *ent.Incident) (string, e
 	}
 	fmt.Fprintf(&sb, "# 事件: %s\n创建时间: %s\n", title, inc.CreatedAt.Format(time.RFC3339))
 	fmt.Fprintf(&sb, "## 实体关系图\n%s\n", inc.Graph)
-	if err := e.appendRuleTally(ctx, &sb, "## 告警汇总（按规则统计同类重复，含明细未列出的）\n", alert.IncidentIDEQ(inc.ID)); err != nil {
+	if err := e.appendRuleTally(ctx, &sb, "## 告警汇总（按规则统计同类重复，含明细未列出的）\n", scope); err != nil {
 		return "", err
 	}
 	if err := e.appendRetriage(ctx, &sb, inc, limit); err != nil {
 		return "", err
 	}
-	fmt.Fprintf(&sb, "## 告警明细（%d 条，按时间排序）\n", len(alerts))
+	fmt.Fprintf(&sb, "## 告警明细（%d 条，共 %d 条，按时间排序）\n", len(alerts), total)
+	if len(alerts) < total {
+		sb.WriteString("明细是抽样不是全部：先取每条规则、每台主机、每个容器里级别最高中最新的一条（名额不够时级别高的优先），" +
+			"余下名额一半给级别最高的、一半给最新的。各规则的完整条数以上面的汇总为准，明细没列出不代表没发生。\n")
+	}
 	for _, a := range alerts {
 		e.writeAlert(ctx, &sb, a)
 	}
@@ -469,6 +474,106 @@ func (e *Engine) buildContext(ctx context.Context, inc *ent.Incident) (string, e
 	return sb.String(), nil
 }
 
+// sampleAlerts 在 n 条预算内挑告警明细：先取覆盖代表（cover，按级别高低截断），再补级别最高的；
+// fresh 为真时级别只补剩余名额的一半，另一半给最新的。每步都是带 LIMIT 的查询，
+// 几千条告警的 incident 也不整表加载。结果按时间正序，事件按 (id, ts) 挂上
+func (e *Engine) sampleAlerts(ctx context.Context, n int, scope, cover predicate.Alert, fresh bool) ([]*ent.Alert, error) {
+	var picked []*ent.Alert
+	more := func(upto int, order alert.OrderOption, where ...predicate.Alert) error {
+		if upto <= len(picked) {
+			return nil
+		}
+		ids := make([]uuid.UUID, len(picked))
+		for i, a := range picked {
+			ids[i] = a.ID
+		}
+		got, err := e.DB.Alert.Query().Where(append(where, scope, alert.IDNotIn(ids...))...).
+			Order(order).Limit(upto - len(picked)).All(ctx)
+		picked = append(picked, got...)
+		return err
+	}
+	bySeverity := ent.Desc(alert.FieldSeverity, alert.FieldTs, alert.FieldID)
+	if err := more(n, bySeverity, cover); err != nil {
+		return nil, err
+	}
+	upto := n
+	if fresh {
+		upto = len(picked) + (n-len(picked))/2
+	}
+	if err := more(upto, bySeverity); err != nil {
+		return nil, err
+	}
+	if err := more(n, ent.Desc(alert.FieldTs, alert.FieldID)); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(picked, func(a, b *ent.Alert) int {
+		return cmp.Or(a.Ts.Compare(b.Ts), strings.Compare(a.ID.String(), b.ID.String()))
+	})
+	return picked, e.attachEvents(ctx, picked)
+}
+
+// representatives 覆盖代表：incident 里（since 之后入库的）每条规则、每台主机、每个容器各取级别最高中最新的一条。
+// 容器取自事件原文 container.uid（没有 uid 用 name），按资产区分；events 按天分区，
+// 用 LATERAL 按 (id, ts) 逐条探主键，每次只碰一个分区（LIMIT 1 防止规划器把它展开成全分区哈希连接）
+func representatives(inc, since uuid.UUID) predicate.Alert {
+	return func(s *sql.Selector) {
+		s.Where(sql.P(func(b *sql.Builder) {
+			b.WriteString(s.C(alert.FieldID) + " IN ((SELECT DISTINCT ON (rule_id) id FROM alerts WHERE incident_id = ").Arg(inc).
+				WriteString(" AND id >= ").Arg(since).
+				WriteString(" ORDER BY rule_id, severity DESC, ts DESC, id DESC) UNION ALL (SELECT DISTINCT ON (asset_id) id FROM alerts WHERE incident_id = ").Arg(inc).
+				WriteString(" AND id >= ").Arg(since).
+				WriteString(" ORDER BY asset_id, severity DESC, ts DESC, id DESC) UNION ALL (SELECT DISTINCT ON (a.asset_id, c.k) a.id FROM alerts a" +
+					" CROSS JOIN LATERAL (SELECT coalesce(nullif(e.raw->'container'->>'uid', ''), nullif(e.raw->'container'->>'name', '')) AS k" +
+					" FROM events e WHERE e.id = a.event_id AND e.ts = a.ts LIMIT 1) c WHERE c.k IS NOT NULL AND a.incident_id = ").Arg(inc).
+				WriteString(" AND a.id >= ").Arg(since).
+				WriteString(" ORDER BY a.asset_id, c.k, a.severity DESC, a.ts DESC, a.id DESC))")
+		}))
+	}
+}
+
+// attachEvents 给告警挂上事件。events 按天分区，只按 id 查要在每个分区各探一次；告警时间就是事件时间，
+// 按 (id, ts) 查只碰一个分区。个别对不上时间的再按 id 补查
+func (e *Engine) attachEvents(ctx context.Context, alerts []*ent.Alert) error {
+	var pairs []predicate.Event
+	for _, a := range alerts {
+		if a.EventID != nil {
+			pairs = append(pairs, event.And(event.IDEQ(*a.EventID), event.TsEQ(a.Ts)))
+		}
+	}
+	if len(pairs) == 0 {
+		return nil
+	}
+	events, err := e.DB.Event.Query().Where(event.Or(pairs...)).All(ctx)
+	if err != nil {
+		return err
+	}
+	byID := map[uuid.UUID]*ent.Event{}
+	for _, ev := range events {
+		byID[ev.ID] = ev
+	}
+	var missing []uuid.UUID
+	for _, a := range alerts {
+		if a.EventID != nil && byID[*a.EventID] == nil {
+			missing = append(missing, *a.EventID)
+		}
+	}
+	if len(missing) > 0 {
+		rest, err := e.DB.Event.Query().Where(event.IDIn(missing...)).All(ctx)
+		if err != nil {
+			return err
+		}
+		for _, ev := range rest {
+			byID[ev.ID] = ev
+		}
+	}
+	for _, a := range alerts {
+		if a.EventID != nil {
+			a.Edges.Event = byID[*a.EventID]
+		}
+	}
+	return nil
+}
+
 // writeAlert 一条告警明细
 func (e *Engine) writeAlert(ctx context.Context, sb *strings.Builder, a *ent.Alert) {
 	raw := "{}"
@@ -476,8 +581,8 @@ func (e *Engine) writeAlert(ctx context.Context, sb *strings.Builder, a *ent.Ale
 		b, _ := json.Marshal(briefLimit(a.Edges.Event, 500))
 		raw = string(b)
 	}
-	fmt.Fprintf(sb, "- [%s] severity=%d count=%d rule=%s event=%s\n",
-		a.Ts.Format("15:04:05"), a.Severity, a.Count, e.ruleName(a.RuleID), raw)
+	fmt.Fprintf(sb, "- [%s] severity=%d count=%d rule=%s%s event=%s\n",
+		a.Ts.Format("15:04:05"), a.Severity, a.Count, e.ruleName(a.RuleID), containerTag(a.Edges.Event), raw)
 	// 合成检测（心跳等）的依据在 detail 里，单看那一条连接事件判断不出规律
 	if a.Detail != nil {
 		fmt.Fprintf(sb, "  依据：%s\n", *a.Detail)
@@ -494,6 +599,23 @@ func (e *Engine) writeAlert(ctx context.Context, sb *strings.Builder, a *ent.Ale
 	if a.Healthcheck {
 		sb.WriteString("  来源：docker 容器配置的健康检查命令或其后代（高危例外仍需研判：健康检查不该做这类事，警惕镜像或容器配置被篡改）\n")
 	}
+}
+
+// containerTag 告警事件所在容器，放在明细行首：事件原文截断后也看得出是不是同一个容器
+func containerTag(ev *ent.Event) string {
+	if ev == nil {
+		return ""
+	}
+	var raw struct {
+		Container struct {
+			UID  string `json:"uid"`
+			Name string `json:"name"`
+		} `json:"container"`
+	}
+	if json.Unmarshal(ev.Raw, &raw) != nil || raw.Container.UID+raw.Container.Name == "" {
+		return ""
+	}
+	return fmt.Sprintf(" container=%s(%s)", raw.Container.Name, excerpt(raw.Container.UID, 12))
 }
 
 func (e *Engine) ruleName(id string) string {
@@ -530,20 +652,16 @@ func (e *Engine) appendRetriage(ctx context.Context, sb *strings.Builder, inc *e
 	if inc.TriagedAt == nil {
 		return nil
 	}
-	since := alert.IDGTE(v7Floor(inc.TriagedAt.Add(-newAlertMargin)))
-	if err := e.appendRuleTally(ctx, sb, "### 上次研判之后新增的告警（按规则汇总）\n", alert.IncidentIDEQ(inc.ID), since); err != nil {
+	floor := v7Floor(inc.TriagedAt.Add(-newAlertMargin))
+	scope := alert.And(alert.IncidentIDEQ(inc.ID), alert.IDGTE(floor))
+	if err := e.appendRuleTally(ctx, sb, "### 上次研判之后新增的告警（按规则汇总）\n", scope); err != nil {
 		return err
 	}
-	fresh, err := e.DB.Alert.Query().
-		Where(alert.IncidentIDEQ(inc.ID), since).
-		Order(ent.Desc(alert.FieldSeverity), ent.Desc(alert.FieldTs)).
-		Limit(max(limit/5, 3)).
-		WithEvent().
-		All(ctx)
+	fresh, err := e.sampleAlerts(ctx, max(limit/5, 3), scope, representatives(inc.ID, floor), false)
 	if err != nil || len(fresh) == 0 {
 		return err
 	}
-	fmt.Fprintf(sb, "### 新增告警明细（级别最高、最新的 %d 条）\n", len(fresh))
+	fmt.Fprintf(sb, "### 新增告警明细（%d 条：每条规则、主机、容器先各取级别最高中最新的一条，再按级别补，按时间排序）\n", len(fresh))
 	for _, a := range fresh {
 		e.writeAlert(ctx, sb, a)
 	}
