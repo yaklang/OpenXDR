@@ -5,6 +5,22 @@
 
 ## [未发布]
 
+### 安全：HA 部署模板加固
+
+生产遭遇内网横向（无认证的 Patroni REST 被改写 pg_hba，再借超级用户 `COPY ... FROM PROGRAM`
+读走容器环境变量里的口令），模板据此收紧，详见 `deploy/ha/README.md` 的「安全边界」。
+
+- Patroni REST 写接口要求 Basic 认证（`patroni-admin`，新增必填渲染变量 `PATRONI_RESTAPI_PASSWORD`）；
+  只读探测接口不变，HAProxy 与 Prometheus 无需改。容器设 `PATRONICTL_CONFIG_FILE`，patronictl 自动带口令。
+- pg_hba 移到本地 `postgresql.pg_hba`，DCS 动态配置改不动；仅容器内 unix socket 用 `trust`，
+  TCP 只收本机与两个节点（`scram-sha-256`），initdb 留下的 127.0.0.1 / ::1 `trust` 行随之去掉。
+  删掉 Patroni 4 已不支持的 `bootstrap.users` 与 `bootstrap.pg_hba`。
+- patroni 容器不再收 `OPENXDR_PASSWORD`、`REPLICATION_PASSWORD` 环境变量：初始化读渲染出的
+  `runtime/openxdr-db-password`（0400），replicator 由 Patroni 创建；只挂 etcd 所需的三个证书文件。
+- 新增 `deploy/ha/guard.sh` 与 `openxdr-guard@.service`：节点 5432 / 8008、witness 2379 按来源放行。
+- **升级须知**：渲染需新增 `PATRONI_RESTAPI_PASSWORD`；重新渲染后先跑 `prepare-runtime.sh` 再重建 patroni，
+  逐节点进行；已手工装过防火墙的环境按 README 迁移，避免两套链并存。
+
 ### AI 全自动执行
 
 - AI 发起的高风险命令不再阻塞等人工审批：命中组名单时由 AI 审计员（`commandreview`，用会话自己的模型）当场评审，

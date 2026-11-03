@@ -53,6 +53,12 @@ Prometheus `:9090`、Grafana `:3000`。示例 Compose 的 PostgreSQL 是单节�
 用于本机验收；生产必须把 `DATABASE_URL` 指向 Patroni、CloudNativePG 或云厂商
 高可用 PostgreSQL，不能把示例数据库冒充完整 HA。
 
+自建 Patroni 时，数据库与 DCS 本身就是攻击面，至少做到：Patroni REST 写接口开认证；
+pg_hba 写在本地配置（优先于可经 REST / etcd 改写的动态配置），除容器内 unix socket 外不用
+`trust`，TCP 只放行数据库节点；数据库口令不经环境变量进容器；5432、8008、etcd 2379
+在宿主机防火墙上只放行节点（与监控）。仓库的跨宿主机模板已按此配置，原因与迁移步骤见
+[HA 部署的安全边界](../deploy/ha/README.md#安全边界)。
+
 syslog 示例只在 `server1:5514` 暴露 UDP/TCP。生产应在外部四层负载均衡上配置
 UDP/TCP 健康检查，或者部署独立 syslog gateway；HAProxy 只承载 HTTP/gRPC。
 
