@@ -66,3 +66,26 @@ func SourceIP(raw []byte) string {
 	}
 	return ""
 }
+
+// PeerIP 受害方视角的对端地址：登录事件（3002）与 sshd 日志（100001）的来源、agent 入站连接（4001 inbound）的对端。
+// 出站连接与探针会话的 src 是本机自己，不算；取不到返回空串
+func PeerIP(classUID int, raw []byte) string {
+	switch classUID {
+	case 3002, 100001:
+		return SourceIP(raw)
+	case 4001:
+		var doc struct {
+			Conn struct {
+				Direction string `json:"direction"`
+			} `json:"connection_info"`
+			Src struct {
+				IP string `json:"ip"`
+			} `json:"src_endpoint"`
+		}
+		if json.Unmarshal(raw, &doc) != nil || doc.Conn.Direction != "inbound" {
+			return ""
+		}
+		return CanonicalIP(doc.Src.IP)
+	}
+	return ""
+}

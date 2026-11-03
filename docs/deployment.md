@@ -33,6 +33,26 @@ WEBHOOK_LINK_BASE=http://<控制台地址>:5173 \
 docker compose up -d
 ```
 
+**通知看门狗**：推送目标被清空或连续 3 次发送失败时，需人工处理（与「待复核」同口径、且达到 `minSeverity`）、
+创建超过 15 分钟仍没推送的事件会被持续标出——admin 在控制台每个页面顶部、其他用户在总览页看到
+「通知未送达：N 个需人工处理的事件没有推送（原因）」，点进去就是通知设置；推送 leader 每 10 分钟打一条 WARN 日志
+`通知未送达：有需人工处理的事件没有推送`。接口 `GET /api/notify/health`（viewer 可读，积压按用户可见范围计）返回
+`status`（`ok` / `unconfigured` / `failing`）、`pendingIncidents`、`consecutiveFailures`、`lastSuccessAt`、`lastFailureAt`、`lastError`。
+发送结果存在 `settings` 表的 `notify.health` 里，任一节点读到的都一样；incident 推送与任务报告、主机失联、命令审批回退等
+`Webhook.Send` 都计入，「发送测试」不计；换推送地址或格式时连续失败清零。失败原因去掉了请求地址（地址里常带 token）。
+注意：没配目标期间积下的事件，配上之后按「启用前的历史事件不补发」落标记，不会补推——要逐件到事件列表里看。
+
+指标见 [cluster.md](cluster.md#健康与指标)。建议在 Grafana 里加一条告警（生产告警经 Grafana 推飞书，与产品通知是两条链路，
+产品通知断了它照样能喊人）：
+
+```promql
+# 通知渠道异常且有积压：未配置，或连续失败到 3 次
+max(openxdr_notify_pending_incidents) > 0
+  and (min(openxdr_notify_configured) == 0 or max(openxdr_notify_consecutive_failures) >= 3)
+```
+
+持续 10 分钟再触发；另加 `absent(openxdr_notify_configured)` 兜住指标查询失败（查询失败时这组指标整体缺失）。
+
 启用 AI 研判（不配置则只做规则告警和关联，不调用模型）：
 
 ```bash

@@ -75,6 +75,13 @@ UDP/TCP 健康检查，或者部署独立 syslog gateway；HAProxy 只承载 HTT
 | `openxdr_event_batch_seconds` / `openxdr_event_batch_size` | 整批入库事务耗时（含取锁与提交）与每批事件数 |
 | `openxdr_pipeline_failures_total{stage}` | 发布、解码或处理失败 |
 | `openxdr_alerts_created_total` | 新建告警数 |
+| `openxdr_notify_configured` | 通知推送目标是否已配置（1/0） |
+| `openxdr_notify_pending_incidents` | 需人工处理、创建超过 15 分钟仍没推送的事件数 |
+| `openxdr_notify_consecutive_failures` | 通知连续发送失败次数，成功一次清零 |
+| `openxdr_notify_last_success_timestamp_seconds` | 最近一次推送成功的 Unix 时间，0 表示从未成功 |
+
+`openxdr_notify_*` 抓取时现查数据库，每个节点报的是同一份（推送只在 leader 上跑，状态存在 `settings` 表），
+聚合时用 `max` 而不是 `sum`。告警规则见 [deployment.md](deployment.md) 的通知看门狗一节。
 
 Prometheus 预置节点离线、队列积压、副本不同步、处理失败和 P95 延迟规则（规则只负责判定，
 模板没有配 Alertmanager，要把这些告警接到外部监控才有人收到）；Grafana 预置

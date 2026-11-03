@@ -744,6 +744,18 @@ export interface Stats {
 
 export const fetchStats = () => get<Stats>('/api/stats')
 
+// 通知渠道健康：pendingIncidents 是需人工处理、超过 15 分钟仍没推送的事件（按可见范围计）
+export interface NotifyHealth {
+  status: 'ok' | 'unconfigured' | 'failing'
+  pendingIncidents: number
+  consecutiveFailures: number
+  lastSuccessAt?: string
+  lastFailureAt?: string
+  lastError?: string
+}
+
+export const fetchNotifyHealth = () => get<NotifyHealth>('/api/notify/health')
+
 export interface EventRow {
   id: string
   ts: string

@@ -44,14 +44,21 @@ func (s *Settings) Load(ctx context.Context) Target {
 	return t
 }
 
+// Save 换了推送地址或格式时，旧渠道的连续失败不再代表新渠道，清零
 func (s *Settings) Save(ctx context.Context, t Target) error {
 	value, err := json.Marshal(t)
 	if err != nil {
 		return err
 	}
+	old := s.Load(ctx)
 	n, err := s.DB.Setting.Update().Where(setting.IDEQ(settingKey)).SetValue(value).Save(ctx)
-	if err != nil || n > 0 {
-		return err
+	if err == nil && n == 0 {
+		err = s.DB.Setting.Create().SetID(settingKey).SetValue(value).Exec(ctx)
 	}
-	return s.DB.Setting.Create().SetID(settingKey).SetValue(value).Exec(ctx)
+	if err == nil && (old.URL != t.URL || old.Format != t.Format) {
+		st := s.state(ctx)
+		st.ConsecutiveFailures, st.LastError = 0, ""
+		s.saveState(ctx, st)
+	}
+	return err
 }

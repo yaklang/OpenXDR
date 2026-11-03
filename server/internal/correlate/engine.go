@@ -1,6 +1,6 @@
 // Package correlate 关联引擎：周期性把未归属的告警聚合成 incident。
-// 策略：进程血缘、同一资产时间窗口内的告警、同资产同规则同实体的复发与横向移动
-// 归入同一个 open/triaged incident。
+// 策略：进程血缘、受害方证据指向的横向源头、同一归属桶（资产 + 容器）时间窗口内的告警、
+// 同资产同规则同实体的复发与源主机连接记录里的横向移动归入同一个 open/triaged incident。
 package correlate
 
 import (
@@ -31,6 +31,7 @@ const maxLineageDepth = 16
 var (
 	errNoLineage = errors.New("无可用的进程血缘")
 	errNoLateral = errors.New("无横向移动痕迹")
+	errNoWindow  = errors.New("时间窗内无可归属的 incident")
 )
 
 type Engine struct {
@@ -88,19 +89,26 @@ func (e *Engine) batchTx(ctx context.Context, tx *ent.Tx) error {
 		return err
 	}
 
-	// 批内同资产且仍在时间窗内的告警命中缓存；批次边界不能改变关联语义。
-	type cachedIncident struct {
+	// 批内各归属桶（资产 + 容器）当前的 incident 与时间窗锚点，与库里的回查同一口径；批次边界不能改变关联语义。
+	// 锚点只由有意义的告警（级别 ≥ 3 或确知的高危例外）或 incident 的第一条告警推进：低危重复照常并入、不续期，
+	// 健康检查、巡检这类低危噪声撑不住一个 incident 无限延长，成了吞掉后来一切告警的黑洞
+	type window struct {
 		incident *ent.Incident
-		lastTs   time.Time
+		anchor   time.Time
 	}
-	byAsset := map[string]cachedIncident{}
+	windows := map[string]window{}
+	// 批内各资产已归属的告警，横向关联找源主机的 incident 时与库里已归属的一起比
+	byPeer := map[uuid.UUID][]peerCandidate{}
+	var owners map[string]*ent.Asset
+	known := e.ruleCache(automation.KnownCritical)
+	renews := func(a *ent.Alert) bool { return a.Severity >= 3 || known(a.RuleID) }
 	graphs := map[uuid.UUID]*Graph{}
 	created := map[uuid.UUID]bool{}
 	assign := map[uuid.UUID][]uuid.UUID{}
 	// 并入了新证据的 incident（研判按 evidence_at 判断是否待重研判），其中 urgent 是升级类、要立即重研判的
 	evidence := map[uuid.UUID]bool{}
 	urgent := map[uuid.UUID]bool{}
-	crit := e.criticalOf()
+	crit := e.ruleCache(automation.Watch)
 	ruleIn := map[string]bool{}
 	// pairs 批内各 incident 已有的（规则, 资产）
 	pairs := map[string]bool{}
@@ -114,8 +122,12 @@ func (e *Engine) batchTx(ctx context.Context, tx *ent.Tx) error {
 	escalate := map[uuid.UUID]bool{}
 
 	for _, al := range pending {
-		// 未归属的 Suricata 告警按组、探针与连接分桶，其余沿用全局 unknown 桶。
+		// 有资产的按资产 + 容器分桶；未归属的 Suricata 告警按组、探针与连接分桶，其余沿用全局 unknown 桶。
 		bucket := correlationBucket(al)
+		// 高危（级别 ≥ 4 或确知的高危例外）不被老 incident 吸收：经血缘、横向证据、同一归属桶的时间窗并入，
+		// 复发只认精确实体（同一 IOC、同一条命令行），不按粗键；血缘、横向与时间窗都不挂到 AI 已判良性的 incident 上——否则另开。
+		// 精确实体的复发是 AI 看过的同一件事又来了（情报 IP 隔几小时扫一次），良性结论照样适用，仍并回
+		high := al.Severity >= 4 || known(al.RuleID)
 
 		key, coarse := recurKeys(al)
 		if !e.RecurCoarse {
@@ -129,35 +141,48 @@ func (e *Engine) batchTx(ctx context.Context, tx *ent.Tx) error {
 			}
 		}
 
-		// 进程血缘优先于时间窗：父进程所在的 incident 就是这条告警的归属，
+		// 高危不按粗键复发：粗键置空，批内缓存与库里回查都只认精确键
+		recurCoarse, recurCoarseKey := coarseEntity, coarse
+		if high {
+			recurCoarse, recurCoarseKey = "", ""
+		}
+		if owners == nil && al.AssetID != nil {
+			if owners, err = e.addressOwners(ctx); err != nil {
+				return err
+			}
+		}
+		src := lateralSource(al, owners)
+
+		// 进程血缘优先：父进程所在的 incident 就是这条告警的归属，
 		// 攻击链因此能跨越时间窗——这是 XDR 区别于孤立告警系统的地方。
+		// 其次是受害方证据：登录来源、入站对端唯一属于另一台纳管主机（跨组同样算），这台机器上的告警
+		// 就是那台机器攻击故事的延续，直接并进源主机的 incident，不让本机的时间窗截走。
 		// 超出时间窗后，同资产同规则同实体的复发并回仍未结案的 incident（跨度有上限）。
-		// 本机没有故事可归时再看横向移动：时间窗内有别的主机连过来，
-		// 这台机器上的告警就是那台机器攻击故事的延续。
+		// 本机没有故事可归时最后看源主机侧的连接记录：时间窗内有别的主机连过来，同样算横向。
 		var inc *ent.Incident
 		var lateralFrom *ent.Asset
-		if found, err := e.findByLineage(ctx, al); err == nil {
+		fresh := false
+		if found, err := e.findByLineage(ctx, al); err == nil && !(high && benign(found)) {
 			inc = found
-		} else if cached, ok := byAsset[bucket]; ok &&
-			!al.Ts.Before(cached.lastTs) && al.Ts.Sub(cached.lastTs) <= e.Window {
-			inc = cached.incident
-		} else if found, err := e.findForAlert(ctx, al, al.Ts.Add(-e.Window)); err == nil {
+		} else if found, err := e.findPeer(ctx, src, al.Ts, byPeer); err == nil {
 			inc = found
-		} else if cached := cmp.Or(byEntity[entity], byEntity[coarseEntity]); cached != nil && al.Ts.Sub(cached.CreatedAt) <= e.RecurSpan {
-			inc = cached
-		} else if found, err := e.findRecurrence(ctx, al, key, coarse); err == nil {
-			inc = found
-		} else if found, src, err := e.findByLateral(ctx, al, func(id uuid.UUID) *ent.Incident {
-			// 本批刚建、尚未落库挂接的 incident 也要能被横向关联到
-			if cached, ok := byAsset[id.String()]; ok && al.Ts.Sub(cached.lastTs) <= e.Window {
-				return cached.incident
+			if src.ID != *al.AssetID {
+				lateralFrom = src
 			}
-			return nil
-		}); err == nil {
+		} else if w, ok := windows[bucket]; ok && !al.Ts.Before(w.anchor) && al.Ts.Sub(w.anchor) <= e.Window && !(high && benign(w.incident)) {
+			inc = w.incident
+		} else if found, err := e.findWindow(ctx, al, high, renews); err == nil {
 			inc = found
-			lateralFrom = src
+		} else if cached := cmp.Or(byEntity[entity], byEntity[recurCoarse]); cached != nil && al.Ts.Sub(cached.CreatedAt) <= e.RecurSpan {
+			inc = cached
+		} else if found, err := e.findRecurrence(ctx, al, key, recurCoarseKey); err == nil {
+			inc = found
+		} else if found, peer, err := e.findByLateral(ctx, al, byPeer); err == nil {
+			inc = found
+			lateralFrom = peer
 		}
 		if inc == nil {
+			fresh = true
 			inc, err = e.DB.Incident.Create().
 				SetGraph(json.RawMessage("{}")).
 				SetTitle(e.title(al)).
@@ -179,7 +204,20 @@ func (e *Engine) batchTx(ctx context.Context, tx *ent.Tx) error {
 			titles[inc.ID] = e.title(al)
 			escalate[inc.ID] = true
 		}
-		byAsset[bucket] = cachedIncident{incident: inc, lastTs: al.Ts}
+		// 窗口锚点：换了 incident 先清空（锚点在库里，回查自会找到）；有意义的告警与新建 incident 的第一条才推进。
+		// 内部横向喷洒没有事件，说不清来自主机上哪个容器，不当锚点（库里回查同样排除，见 findWindow）
+		if w := windows[bucket]; al.RuleID != sigma.RuleLateralSpray {
+			if w.incident == nil || w.incident.ID != inc.ID {
+				w = window{incident: inc}
+			}
+			if fresh || renews(al) {
+				w.anchor = al.Ts
+			}
+			windows[bucket] = w
+		}
+		if al.AssetID != nil {
+			byPeer[*al.AssetID] = append(byPeer[*al.AssetID], peerCandidate{incident: inc, severity: al.Severity, ts: al.Ts})
+		}
 		// 已研判的 incident 收到新证据：记下时刻，研判引擎冷却到期后带新证据重新定性，旧结论在此之前继续有效。
 		// 普通规则按（规则, 资产）认新证据：这台机器上这条规则已在 incident 里，再来多少次、换什么命令行都不算——
 		// 健康检查、开发机上人和脚本的命令千变万化，按实体认会让 incident 每过冷却期就重研判一遍。
@@ -282,14 +320,14 @@ func (e *Engine) title(al *ent.Alert) string {
 	return fmt.Sprintf("%s @ %s", e.alertTitle(al), hostname)
 }
 
-// criticalOf 本批次的高危例外判定（情报命中与高危战术/技术，见 automation.Watch），按规则缓存
-func (e *Engine) criticalOf() func(ruleID string) bool {
+// ruleCache 本批次的高危例外判定（情报命中与高危战术/技术，见 automation.Watch / KnownCritical），按规则缓存
+func (e *Engine) ruleCache(judge func(string, []*sigma.Rule) bool) func(ruleID string) bool {
 	rules := e.Rules.Rules()
 	cache := map[string]bool{}
 	return func(ruleID string) bool {
 		c, ok := cache[ruleID]
 		if !ok {
-			c = automation.Watch(ruleID, rules)
+			c = judge(ruleID, rules)
 			cache[ruleID] = c
 		}
 		return c
@@ -358,10 +396,11 @@ func (e *Engine) findByLineage(ctx context.Context, al *ent.Alert) (*ent.Inciden
 	return nil, errNoLineage
 }
 
-// findByLateral 横向移动：本机没有可归属的故事时，看时间窗内是否有别的
+// findByLateral 横向移动（源主机侧证据）：本机没有可归属的故事时，看时间窗内是否有别的
 // 主机向本机发起过网络会话（sensor 流事件按源 IP 归属，conn_tuple 的
-// 目的端是本机 IP），有则归并进对端的 incident。返回对端资产用于画图。
-func (e *Engine) findByLateral(ctx context.Context, al *ent.Alert, inBatch func(uuid.UUID) *ent.Incident) (*ent.Incident, *ent.Asset, error) {
+// 目的端是本机 IP），有则归并进对端的 incident（取法见 findPeer）。返回对端资产用于画图。
+// 只在同组内找；跨组的横向只认受害方证据（lateralSource）。
+func (e *Engine) findByLateral(ctx context.Context, al *ent.Alert, batch map[uuid.UUID][]peerCandidate) (*ent.Incident, *ent.Asset, error) {
 	if al.AssetID == nil || al.Edges.Asset == nil {
 		return nil, nil, errNoLateral
 	}
@@ -390,42 +429,12 @@ func (e *Engine) findByLateral(ctx context.Context, al *ent.Alert, inBatch func(
 			continue
 		}
 		for _, c := range conns {
-			if inBatch != nil {
-				if inc := inBatch(*c.AssetID); inc != nil {
-					return inc, c.Edges.Asset, nil
-				}
-			}
-			if inc, err := e.findOpen(ctx, c.AssetID, since); err == nil {
+			if inc, err := e.findPeer(ctx, c.Edges.Asset, al.Ts, batch); err == nil {
 				return inc, c.Edges.Asset, nil
 			}
 		}
 	}
 	return nil, nil, errNoLateral
-}
-
-// findOpen 找同一归属桶在时间窗内最近的 open/triaged incident。
-// assetID 为 nil 时找的是同样没有资产归属的告警所在的 incident。
-func (e *Engine) findOpen(ctx context.Context, assetID *uuid.UUID, since time.Time) (*ent.Incident, error) {
-	scope := alert.AssetIDIsNil()
-	if assetID != nil {
-		scope = alert.AssetIDEQ(*assetID)
-	} else {
-		scope = alert.And(scope, alert.Not(alert.HasEventWith(event.SourceEQ("suricata"))))
-	}
-	al, err := e.DB.Alert.Query().
-		Where(
-			scope,
-			alert.TsGTE(since),
-			alert.IncidentIDNotNil(),
-			alert.HasIncidentWith(incident.StatusIn("open", "triaged")),
-		).
-		Order(ent.Desc(alert.FieldTs)).
-		WithIncident().
-		First(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return al.Edges.Incident, nil
 }
 
 func (e *Engine) attach(ctx context.Context, g *Graph, al *ent.Alert) {

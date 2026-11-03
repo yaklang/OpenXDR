@@ -131,18 +131,36 @@ var (
 	watchTechniques = []string{"T1003", "T1070", "T1562", "T1485", "T1486", "T1490"}
 )
 
+// syntheticWatch 不在规则库里、按自身性质列入高危例外的平台合成规则：爆破得手（凭据）、内部横向喷洒
+var syntheticWatch = map[string]bool{
+	sigma.RuleBruteforceSuccess: true,
+	sigma.RuleLateralSpray:      true,
+}
+
 // Watch 来自可信来源的这条命中是否仍要进关联与研判。情报命中（已知恶意的地址、域名、文件）一律进；
 // 在本次命中的规则里找不到（不该发生）也进——拿不准就不放过
 func Watch(ruleID string, rules []*sigma.Rule) bool {
-	if strings.HasPrefix(ruleID, "intel:") {
-		return true
+	critical, known := watch(ruleID, rules)
+	return critical || !known
+}
+
+// KnownCritical 确知属于高危例外：情报命中、列名的合成规则、规则库里标了高危战术/技术的规则。
+// 查不到的规则不算——关联按它判断「高危不被吸收」，兜底算高危会让首次出现这类低危合成告警也不能复发归并
+func KnownCritical(ruleID string, rules []*sigma.Rule) bool {
+	critical, _ := watch(ruleID, rules)
+	return critical
+}
+
+func watch(ruleID string, rules []*sigma.Rule) (critical, known bool) {
+	if strings.HasPrefix(ruleID, "intel:") || syntheticWatch[ruleID] {
+		return true, true
 	}
 	for _, r := range rules {
 		if r.ID == ruleID {
-			return Critical(r)
+			return Critical(r), true
 		}
 	}
-	return true
+	return false, false
 }
 
 // Critical 规则是否属于高危例外

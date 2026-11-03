@@ -40,6 +40,8 @@ type Notifier struct {
 
 	// 推送目标启用的时刻；未配置目标时为零值
 	start time.Time
+	// 上次打"通知未送达"日志的时刻
+	warned time.Time
 }
 
 func (n *Notifier) Run(ctx context.Context) {
@@ -56,6 +58,7 @@ func (n *Notifier) Run(ctx context.Context) {
 			if err := n.sweep(ctx); err != nil {
 				slog.Error("通知批次失败", "err", err)
 			}
+			n.watch(ctx)
 		}
 	}
 }
@@ -383,7 +386,9 @@ func payload(format string, generic any, text string) []byte {
 }
 
 func (n *Notifier) post(ctx context.Context, t Target, m Message) error {
-	return send(ctx, n.Client, t.URL, t.Format, payload(t.Format, m, text(m)))
+	err := send(ctx, n.Client, t.URL, t.Format, payload(t.Format, m, text(m)))
+	n.Settings.Record(ctx, err)
+	return err
 }
 
 // Text 非 incident 的通知：任务报告、任务失败等。也是 generic 格式的推送体。
@@ -400,8 +405,14 @@ type Webhook struct {
 }
 
 // Send 的 path 是控制台内的相对链接，如 /?session=…，有链接前缀时才拼出来。
+// 结果计入通知健康；SendTo（发送测试）不计，未保存的配置不代表当前渠道。
 func (h *Webhook) Send(ctx context.Context, title, body, path string) error {
-	return h.SendTo(ctx, h.Settings.Load(ctx), title, body, path)
+	target := h.Settings.Load(ctx)
+	err := h.SendTo(ctx, target, title, body, path)
+	if target.URL != "" {
+		h.Settings.Record(ctx, err)
+	}
+	return err
 }
 
 // SendTo 推到指定目标，供"发送测试"在保存前验证配置。
@@ -429,14 +440,15 @@ func (h *Webhook) SendTo(ctx context.Context, target Target, title, body, path s
 }
 
 func send(ctx context.Context, client *http.Client, url, format string, body []byte) error {
+	// 地址解析与请求错误都带完整地址，返回前去掉：所有调用方（推送、任务报告、失联、审批回退）都会把错误打进日志
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return redact(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return redact(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
