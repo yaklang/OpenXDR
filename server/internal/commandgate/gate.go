@@ -323,6 +323,13 @@ func (g *Gate) notify(ctx context.Context, req Request, username string) {
 	}
 }
 
+type channelKey struct{}
+
+// ViaChannel 标记审批经控制台以外的渠道决定（如飞书私聊卡片），审计来源记为该渠道。
+func ViaChannel(ctx context.Context, channel string) context.Context {
+	return context.WithValue(ctx, channelKey{}, channel)
+}
+
 // Decide 在数据库中原子决定并写审计；多个节点竞争只能成功一次。
 func (g *Gate) Decide(ctx context.Context, id uuid.UUID, u *ent.User, approved bool) error {
 	a, err := g.DB.Approval.Get(ctx, id)
@@ -348,7 +355,11 @@ func (g *Gate) Decide(ctx context.Context, id uuid.UUID, u *ent.User, approved b
 	if n != 1 {
 		return errors.New("审批已结束或已过期")
 	}
-	if err := audit.Checked(ctx, tx.AuditLog.Create(), u.Username, "server", "approval_decided", id.String(), string(status)); err != nil {
+	source, _ := ctx.Value(channelKey{}).(string)
+	if source == "" {
+		source = "server"
+	}
+	if err := audit.Checked(ctx, tx.AuditLog.Create(), u.Username, source, "approval_decided", id.String(), string(status)); err != nil {
 		return err
 	}
 	return tx.Commit()

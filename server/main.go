@@ -42,6 +42,7 @@ import (
 	"openxdr/server/internal/eventbus"
 	"openxdr/server/internal/eventpart"
 	"openxdr/server/internal/eventsearch"
+	"openxdr/server/internal/feishuapproval"
 	"openxdr/server/internal/fpstats"
 	"openxdr/server/internal/grpcsvc"
 	"openxdr/server/internal/hostimport"
@@ -139,6 +140,13 @@ func main() {
 	scheduler := startScheduler(ctx, db, client, chat, conf, webhook)
 	enrollSvc := loadEnroll(client, silentAfter)
 	routes := http.NewServeMux()
+	feishu := &feishuapproval.Service{SQL: db, DB: client, Gate: chat.Gate, Vault: credentialVault, Fallback: webhook.Send}
+	if err := cluster.WithLock(ctx, db, "feishu-schema", func() error { return feishu.EnsureSchema(ctx) }); err != nil {
+		slog.Error("飞书审批初始化失败")
+		os.Exit(1)
+	}
+	feishu.Register(routes)
+	go cluster.RunLeader(ctx, db, "feishu-approval", feishu.Run)
 	registerSQLRoutes(routes, db)
 	routes.Handle("GET /api/trusted-sources/candidates", api.TrustedCandidates(client, db))
 	registerHostRoutes(ctx, routes, db, client, rules, credentialVault, enrollSvc, conf)
@@ -615,7 +623,7 @@ func newPiRuntime() piruntime.Runtime {
 // startChat Pi 会话服务，并恢复上次退出时未完成的会话。
 func startChat(ctx context.Context, client *ent.Client, rules sigma.Catalog, hub *response.Hub, webhook *notify.Webhook, conf func() aiconf.Config, queryRoles *queryrole.Provisioner) *agentchat.Service {
 	piRuntime := newPiRuntime()
-	chat := &agentchat.Service{Base: ctx, Rules: rules, Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 14400)) * time.Second, DB: client, Gate: &commandgate.Gate{DB: client, Hub: hub, ApprovalTimeout: time.Duration(getenvInt("PI_APPROVAL_TIMEOUT_SECONDS", 600)) * time.Second, Notify: webhook.Send},
+	chat := &agentchat.Service{Base: ctx, Rules: rules, Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 14400)) * time.Second, DB: client, Gate: &commandgate.Gate{DB: client, Hub: hub, ApprovalTimeout: time.Duration(getenvInt("PI_APPROVAL_TIMEOUT_SECONDS", 600)) * time.Second, Notify: feishuapproval.ApprovalNotifier(client, webhook.Send)},
 		Runtime: piRuntime, Sandboxed: piRuntime.Sandboxed(),
 		AI: func() (string, string, string) { c := conf(); return c.BaseURL, c.APIKey, c.PiModel }, Query: queryRoles,
 		GroupDailyTokens: getenvInt("PI_GROUP_DAILY_TOKENS", 0), MaxTurns: getenvInt("PI_MAX_TURNS", 500),

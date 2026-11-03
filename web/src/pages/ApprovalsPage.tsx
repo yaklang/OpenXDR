@@ -7,6 +7,7 @@ import { createPolicy, deletePolicy, fetchApprovals, fetchPolicies, type Approva
 import { useSession } from '../app/session'
 import { HostLink } from '../components/HostLink'
 import { ApprovalActions } from '../components/ApprovalActions'
+import { FeishuApproval } from '../components/FeishuApproval'
 import { LoadError } from '../components/LoadError'
 import { Page, STICKY_HEADER } from '../components/Page'
 import { EmptyHint } from '../components/Ago'
@@ -142,6 +143,8 @@ export function ApprovalsPage() {
                 </Space>
               ),
             },
+            // 不在该页时卸载，停止轮询飞书状态
+            { key: 'feishu', label: t('feishuTab'), destroyOnHidden: true, children: <FeishuApproval /> },
           ]}
         />
       </Card>
