@@ -74,8 +74,9 @@ func insertChunk(t *testing.T, ctx context.Context, db *sql.DB, seq int, events 
 }
 
 // archiveTime 造一个远离「当前 24 小时」的时间点，避免和别的用例默认窗口互相影响。
+// 取三天前的正午：用例在它前后一小时内造事件，不能跨过 UTC 零点，否则冷块头部的 day 对不上
 func archiveTime() time.Time {
-	return time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Minute)
+	return time.Now().UTC().Add(-72 * time.Hour).Truncate(24 * time.Hour).Add(12 * time.Hour)
 }
 
 func coldEvent(ts time.Time, asset *uuid.UUID, raw string) eventarchive.Event {

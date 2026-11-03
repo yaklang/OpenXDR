@@ -54,11 +54,12 @@ func r12HotExists(t *testing.T, ctx context.Context, db *sql.DB, id string) bool
 // sweep 只删真正无引用的行——「引用写入的日期在 sweep 完成前不被清理破坏」。
 func TestR12SweepWaitsForReferenceWriter(t *testing.T) {
 	ctx, client, db := r12Open(t)
-	now := time.Now().UTC()
-	// 落在默认分区（两天前没有日分区），正是 sweep 逐行清理的实际作用域
-	plain := client.Event.Create().SetTs(now.Add(-48 * time.Hour)).
+	// 落在默认分区（两天前没有日分区），正是 sweep 逐行清理的实际作用域。
+	// 两条必须同一天：锁是按日的，跨了 UTC 零点 plain 就不在被锁的那天
+	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-48 * time.Hour)
+	plain := client.Event.Create().SetTs(day.Add(time.Hour)).
 		SetClassUID(1007).SetSource("agent").SetRaw(json.RawMessage(`{"mark":"plain"}`)).SaveX(ctx)
-	target := client.Event.Create().SetTs(now.Add(-47 * time.Hour)).
+	target := client.Event.Create().SetTs(day.Add(2 * time.Hour)).
 		SetClassUID(1007).SetSource("agent").SetRaw(json.RawMessage(`{"mark":"target"}`)).SaveX(ctx)
 	j := &Janitor{DB: client, SQL: db, Retention: 24 * time.Hour, Interval: time.Hour}
 
