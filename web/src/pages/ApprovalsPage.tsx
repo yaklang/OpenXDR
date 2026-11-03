@@ -77,7 +77,7 @@ function PolicyCard({ groupId, origin, rows }: { groupId: string; origin: 'ai' |
 
 // 审批中心：命中黑名单的命令在这里批准或拒绝；黑名单也在这里配
 export function ApprovalsPage() {
-  const { t, locale } = useI18n()
+  const { t } = useI18n()
   const { group } = useSession()
   const isGroupAdmin = group?.role === 'admin'
   const approvals = useQuery({
@@ -120,7 +120,6 @@ export function ApprovalsPage() {
       <Card styles={{ body: { paddingTop: 8 } }}>
         <Tabs
           items={[
-            { key: 'feishu', label: locale === 'zh' ? '飞书私聊审批' : 'Feishu private approvals', children: <FeishuApproval /> },
             {
               key: 'pending',
               label: t('apTabQueue', { n: pending.length }),
@@ -144,6 +143,8 @@ export function ApprovalsPage() {
                 </Space>
               ),
             },
+            // 不在该页时卸载，停止轮询飞书状态
+            { key: 'feishu', label: t('feishuTab'), destroyOnHidden: true, children: <FeishuApproval /> },
           ]}
         />
       </Card>

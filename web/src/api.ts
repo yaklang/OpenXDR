@@ -1208,6 +1208,23 @@ export const createPolicy = (groupId: string, origin: 'ai' | 'human', pattern: s
   send('POST', '/api/command-policies', { groupId, origin, pattern })
 export const deletePolicy = (id: string) => send('DELETE', `/api/command-policies/${id}`)
 
+// 飞书私聊审批：本人绑定状态、连接状态与应用配置（密钥不回显）
+export interface FeishuApprovalState {
+  enabled: boolean
+  app_id: string
+  secret_set: boolean
+  bound: boolean
+  connection: string
+  callback_verified: boolean
+}
+export const fetchFeishuApproval = () => get<FeishuApprovalState>('/api/approvals/feishu')
+export const saveFeishuApproval = (body: { enabled: boolean; app_id: string; app_secret?: string }) =>
+  send('PUT', '/api/settings/feishu-approval', body)
+export const requestFeishuBinding = async () =>
+  (await send('POST', '/api/approvals/feishu/bind')).json() as Promise<{ code: string; expires_in: number }>
+export const unbindFeishu = () => send('DELETE', '/api/approvals/feishu/bind')
+export const sendFeishuTest = () => send('POST', '/api/approvals/feishu/test')
+
 // Pi 报告：库里只有 Markdown，HTML / PDF 由后端按需渲染
 export interface AgentReport {
   id: string
