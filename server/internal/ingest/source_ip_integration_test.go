@@ -16,8 +16,8 @@ import (
 
 const sourceRule = "id: by-source\nkind: event_count\ngroup_by: asset_source_ip\nwithin: 1m\nrules: [base]\nthreshold: 3\nlevel: high\n"
 
-// 真实仓库 Linux 认证规则走处理器，确认不是只有测试用 marker 规则可用。
-func TestNativeLinuxSourceIPRule(t *testing.T) {
+// 真实仓库 SSH 认证规则走处理器（syslog 原文回退解析来源），确认不是只有测试用 marker 规则可用。
+func TestNativeSSHSourceIPRule(t *testing.T) {
 	for _, split := range []bool{false, true} {
 		t.Run(fmt.Sprintf("split=%v", split), func(t *testing.T) {
 			f := sourceFixture(t)
@@ -35,17 +35,16 @@ func TestNativeLinuxSourceIPRule(t *testing.T) {
 					ip = "192.0.2.7"
 				}
 				e := sourceEvent(f, a, i, ip)
-				e.ClassUID = 3002
-				e.AssetOS = "linux"
-				e.Raw = json.RawMessage(fmt.Sprintf(`{"activity_id":1,"status_id":2,"src_endpoint":{"ip":%q}}`, ip))
+				e.ClassUID, e.Source, e.AssetOS = 100001, "syslog", "linux"
+				e.Raw = json.RawMessage(fmt.Sprintf(`{"metadata":{"product":{"name":"sshd"}},"message":"Failed password for root from %s port 22 ssh2"}`, ip))
 				f.process(e)
 			}
 			want := 1
 			if split {
 				want = 0
 			}
-			if f.detections("temporal:linux-auth-source-burst") != want {
-				t.Fatal("真实 Linux 登录规则同源阈值错误")
+			if f.detections("temporal:wazuh-gap-sshd-fail-burst") != want {
+				t.Fatal("真实 SSH 认证规则同源阈值错误")
 			}
 		})
 	}
@@ -85,14 +84,32 @@ func TestSourceIPIsolationAndLateReplay(t *testing.T) {
 	if entity != temporal.AssetSourceIPEntity(a, "192.0.2.10") || count != 1 || asset != a {
 		t.Fatal("告警归因错误")
 	}
-	// 终点先到、前序迟到补齐；另一来源应形成独立告警实体。
+	// 终点先到、前序迟到补齐；另一来源单独计数、单独命中，但同一主机的告警只有一条、计数累加。
 	f.process(sourceEvent(f, a, 12, "2001:db8::5"), sourceEvent(f, a, 11, "2001:db8::5"), sourceEvent(f, a, 10, "2001:db8::5"))
 	if f.detections("by-source") != 2 {
 		t.Fatal("迟到回放未补齐")
 	}
 	var alerts int
-	if err := f.p.DB.QueryRow(`SELECT count(DISTINCT alert_id) FROM temporal_detections WHERE rule_id='by-source'`).Scan(&alerts); err != nil || alerts != 2 {
-		t.Fatalf("不同攻击源告警被错误去重: %d %v", alerts, err)
+	if err := f.p.DB.QueryRow(`SELECT count(DISTINCT alert_id) FROM temporal_detections WHERE rule_id='by-source'`).Scan(&alerts); err != nil || alerts != 1 {
+		t.Fatalf("同一主机多个来源应并进一条告警: %d %v", alerts, err)
+	}
+	var detail string
+	if err := f.p.DB.QueryRow(`SELECT count,detail FROM alerts WHERE rule_id='by-source'`).Scan(&count, &detail); err != nil || count != 2 || detail != "首个来源 IP 192.0.2.10" {
+		t.Fatalf("来源合并计数或说明错误: %d %q %v", count, detail, err)
+	}
+}
+
+// 同一来源打两台主机：各自成告警，来源维度不把不同主机并到一起。
+func TestSourceIPAlertPerAsset(t *testing.T) {
+	f := sourceFixture(t)
+	group := uuid.New()
+	a, b := f.asset(group), f.asset(group)
+	for i := 0; i < 3; i++ {
+		f.process(sourceEvent(f, a, i, "192.0.2.10"), sourceEvent(f, b, i, "192.0.2.10"))
+	}
+	var alerts int
+	if err := f.p.DB.QueryRow(`SELECT count(*) FROM alerts WHERE rule_id='by-source'`).Scan(&alerts); err != nil || alerts != 2 {
+		t.Fatalf("不同主机应各自告警: %d %v", alerts, err)
 	}
 }
 

@@ -16,7 +16,9 @@ import (
 	"openxdr/server/internal/temporal"
 )
 
-// temporalAlert 告警绑定终点事件及其资产。账号维度命中可能跨资产，去重指纹按账号实体而非资产区分。
+// temporalAlert 告警绑定终点事件及其资产。账号维度命中可能跨资产，去重指纹按账号实体而非资产区分；
+// 来源 IP 维度只决定怎么计数（不同来源不凑同一个阈值），告警仍按资产去重：
+// 同一主机被多个来源各自打满阈值时并进一条告警累加计数，不按来源数各出一条。
 func (p *Processor) temporalAlert(ctx context.Context, tx *sql.Tx, match temporal.Match) (bool, error) {
 	// R1 引用写入点：时序告警引用锚点事件（alerts.event_id），且下面的 UPDATE 让
 	// temporal_detections 的锚点开始受保护（PinnedIDs 的第三支）。先取锚点日的共享生命
@@ -38,10 +40,13 @@ func (p *Processor) temporalAlert(ctx context.Context, tx *sql.Tx, match tempora
 		Scan(&e.Timestamp, &e.ClassUID, &e.Source, &asset, &username, &e.Raw); err != nil {
 		return false, err
 	}
+	var detail string
 	if temporal.IsSourceIPEntity(match.Scope.Entity) {
-		if match.Scope.Entity != temporal.AssetSourceIPEntity(asset, authfields.SourceIP(e.Raw)) {
+		ip := authfields.SourceIP(e.Raw)
+		if match.Scope.Entity != temporal.AssetSourceIPEntity(asset, ip) {
 			return false, fmt.Errorf("时序来源 IP 实体与终点事件不一致")
 		}
+		e.PartitionKey, detail = asset.String(), "首个来源 IP "+ip
 	} else if !temporal.IsAccountEntity(match.Scope.Entity) && match.Scope.Entity != asset.String() {
 		return false, fmt.Errorf("时序终点 %s 不属于命中资产 %s", match.Anchor, match.Scope.Entity)
 	}
@@ -58,7 +63,7 @@ func (p *Processor) temporalAlert(ctx context.Context, tx *sql.Tx, match tempora
 	if err != nil {
 		return false, err
 	}
-	hit := intel.Hit{RuleID: match.RuleID, Severity: match.Severity}
+	hit := intel.Hit{RuleID: match.RuleID, Severity: match.Severity, Detail: detail}
 	created, err := p.upsertAlert(ctx, tx, e, hit, origin{command: command})
 	if err != nil {
 		return false, err
