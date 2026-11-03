@@ -33,3 +33,22 @@ func TestSourceIPBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestPeerIP(t *testing.T) {
+	for _, tc := range []struct {
+		class int
+		raw   string
+		want  string
+	}{
+		{3002, `{"status_id":2,"src_endpoint":{"ip":"10.1.1.170"}}`, "10.1.1.170"},
+		{4001, `{"connection_info":{"direction":"inbound"},"src_endpoint":{"ip":"10.1.1.170","port":51234}}`, "10.1.1.170"},
+		{4001, `{"connection_info":{"direction":"outbound"},"src_endpoint":{"ip":"10.1.1.170"}}`, ""},
+		{4001, `{"src_endpoint":{"ip":"10.1.1.170"}}`, ""},
+		{100001, `{"metadata":{"product":{"name":"sshd"}},"message":"Failed password for root from 10.1.1.170 port 22 ssh2"}`, "10.1.1.170"},
+		{1007, `{"src_endpoint":{"ip":"10.1.1.170"}}`, ""},
+	} {
+		if got := PeerIP(tc.class, []byte(tc.raw)); got != tc.want {
+			t.Errorf("PeerIP(%d, %s) = %q，期望 %q", tc.class, tc.raw, got, tc.want)
+		}
+	}
+}

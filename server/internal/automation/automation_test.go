@@ -60,12 +60,23 @@ func TestWatch(t *testing.T) {
 	cases := map[string]bool{
 		"recon": false, "revshell": false, "lookalike": false,
 		"dump": true, "logclear": true, "auditoff": true, "wipe": true,
-		"intel:ip:1.2.3.4": true,
-		"不在命中列表里":          true,
+		"intel:ip:1.2.3.4":     true,
+		"不在命中列表里":              true,
+		sigma.RuleLateralSpray: true,
 	}
 	for id, want := range cases {
 		if got := Watch(id, rules); got != want {
 			t.Errorf("%s: Watch=%v，期望 %v", id, got, want)
+		}
+	}
+	// 确知的高危例外：查不到的规则不兜底
+	known := map[string]bool{
+		"recon": false, "dump": true, "intel:ip:1.2.3.4": true, "不在命中列表里": false,
+		sigma.RuleLateralSpray: true, sigma.RuleBruteforceSuccess: true, sigma.RuleNewProcess: false,
+	}
+	for id, want := range known {
+		if got := KnownCritical(id, rules); got != want {
+			t.Errorf("%s: KnownCritical=%v，期望 %v", id, got, want)
 		}
 	}
 }

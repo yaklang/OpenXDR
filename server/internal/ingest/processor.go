@@ -41,7 +41,7 @@ type Processor struct {
 }
 
 // EnsureSchema 创建事务处理状态。temporal_matches 是已消费命中的持久记录，
-// 不能在事件仍保留时清空，否则迟到回看可能重复生成告警。
+// 不能在事件仍保留时清空，否则迟到回看可能重复生成告警。lateral_evidence 是内部横向喷洒的受害方证据（见 lateral_spray.go）。
 // 指向事件的列都不建外键：分区表的唯一约束必须含 ts，删除级联由 eventpart 的触发器与分区退役负责。
 func EnsureSchema(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, `
@@ -57,7 +57,14 @@ CREATE TABLE IF NOT EXISTS temporal_matches (
  event_id uuid NOT NULL,
  PRIMARY KEY(rule_id,event_id)
 );
-CREATE INDEX IF NOT EXISTS temporal_matches_event ON temporal_matches(event_id);`)
+CREATE INDEX IF NOT EXISTS temporal_matches_event ON temporal_matches(event_id);
+CREATE TABLE IF NOT EXISTS lateral_evidence (
+ event_id uuid PRIMARY KEY,
+ src_asset uuid NOT NULL,
+ victim_asset uuid NOT NULL,
+ ts timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lateral_evidence_src_ts ON lateral_evidence(src_asset, ts);`)
 	if err != nil {
 		return err
 	}
@@ -254,6 +261,8 @@ ON CONFLICT DO NOTHING`, e.ID, e.Timestamp, e.ClassUID, e.Source,
 			from.healthcheck = automation.Healthcheck(raw)
 		}
 	}
+	// alerted 这条事件产出了进关联的告警（来源已知的不算），内部横向喷洒据此认「被告警命中的入站」
+	alerted := false
 	for _, hit := range hits {
 		if p.Suppress.Suppressed(hit.RuleID, e.AssetID, raw, e.Timestamp) {
 			continue
@@ -267,12 +276,20 @@ ON CONFLICT DO NOTHING`, e.ID, e.Timestamp, e.ClassUID, e.Source,
 		if created {
 			alerts++
 		}
+		alerted = alerted || from.command == nil && (from.automation == nil && !from.healthcheck || hitFrom.watch)
 	}
 	n, err := p.authSequence(ctx, tx, e, authStatus(raw))
 	if err != nil {
 		return false, 0, nil, err
 	}
 	alerts += n
+	sprayed, err := p.lateralSpray(ctx, tx, e, raw, alerted)
+	if err != nil {
+		return false, 0, nil, err
+	}
+	if sprayed {
+		alerts++
+	}
 	for _, match := range observation.Matches {
 		created, err := p.temporalAlert(ctx, tx, match)
 		if err != nil {
@@ -324,11 +341,14 @@ func (p *Processor) upsertAlert(ctx context.Context, tx *sql.Tx, e Envelope, hit
 	// 重读目标热行——本事务刚插入的事件必命中（接入热路径零行为差异）；独立路径遇到
 	// 热行缺失时由 EnsureHotEvents 从冷层物化回热表再写引用，物化不了（冷层也没有 /
 	// 定位状态说不清 / 块损坏）就返回错误让整个引用事务失败，不提交悬空引用。
-	if err := eventpart.LifecycleLockShared(ctx, tx, e.Timestamp); err != nil {
-		return false, err
-	}
-	if err := eventarchive.EnsureHotEvents(ctx, tx, e.ID); err != nil {
-		return false, err
+	// 没有事件的合成告警（内部横向喷洒）不引用事件，跳过
+	if e.ID != uuid.Nil {
+		if err := eventpart.LifecycleLockShared(ctx, tx, e.Timestamp); err != nil {
+			return false, err
+		}
+		if err := eventarchive.EnsureHotEvents(ctx, tx, e.ID); err != nil {
+			return false, err
+		}
 	}
 	fingerprint := alertFingerprint(e, hit, from)
 	// 同一指纹的所有集群节点在事务内串行，窗口判断与告警计数不会竞争。
@@ -353,7 +373,7 @@ func (p *Processor) upsertAlert(ctx context.Context, tx *sql.Tx, e Envelope, hit
 	alertID = uuid.Must(uuid.NewV7())
 	if _, err := tx.ExecContext(ctx, `INSERT INTO alerts
   (id, ts, rule_id, severity, event_id, asset_id, count, last_ts, command_id, automation_id, automation_watch, healthcheck, detail)
-VALUES ($1,$2,$3,$4,$5,$6,1,$2,$7,$8,$9,$10,$11)`, alertID, e.Timestamp, hit.RuleID, hit.Severity, e.ID, nullUUID(e.AssetID),
+VALUES ($1,$2,$3,$4,$5,$6,1,$2,$7,$8,$9,$10,$11)`, alertID, e.Timestamp, hit.RuleID, hit.Severity, nullUUID(&e.ID), nullUUID(e.AssetID),
 		nullUUID(from.command), nullUUID(from.automation), from.watch, from.healthcheck, nullString(hit.Detail)); err != nil {
 		return false, err
 	}
