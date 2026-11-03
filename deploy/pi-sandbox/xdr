@@ -42,7 +42,7 @@ usage() {
   xdr remember [主机名|-] <内容>          记下以后用得上的环境事实（- 表示整个组）
   xdr forget <记忆 id>                   删掉过时的 AI 记忆
   xdr suppress <主机名> <规则 id> <理由> <天数> <条件>...
-                                         提议抑制反复误报的命中（组管理员批准后生效）。条件 1–3 个，AND：
+                                         提议抑制反复误报的命中（AI 审计员评审通过后生效）。条件 1–3 个，AND：
                                          字段=值（等于）、字段~=值（包含）、字段$=值（结尾），字段为事件体 dot path
   xdr propose-close <事件 id> <false_positive|closed> <结案说明> [报告 id]
                                          给事件提结案建议，人在事件页一键采纳
