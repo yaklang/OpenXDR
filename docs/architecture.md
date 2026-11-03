@@ -42,10 +42,11 @@ agent (Rust)                    sensor (Rust)          syslog
 │ ③ PostgreSQL 持久去重（跨节点/重启窗口不丢）                  │
 │ ④ 告警落库                                                  │
 │   合成告警源：xdr:bruteforce-success（爆破得手，ingest 侧）   │
+│              xdr:internal-lateral-spray（内部横向喷洒）       │
 │        │                                                   │
 │        ▼  集群单活后台任务（PostgreSQL advisory lease）       │
 │ correlate: 未归属告警 → incident                             │
-│   血缘优先 → 同资产时间窗 → 横向移动（跨主机网络会话）          │
+│   血缘 → 受害方横向（可跨组）→ 资产+容器时间窗 → 复发 → 连接横向 │
 │ ueba: 新进程首次出现 → 合成 low 告警 xdr:new-process 进管线   │
 │ triage: open incident → LLM 研判 → verdict                  │
 │ notify: 研判后事件 → webhook（benign 不推，可设阈值）          │

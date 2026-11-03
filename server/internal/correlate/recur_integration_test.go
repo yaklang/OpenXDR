@@ -300,7 +300,8 @@ func TestRecurrenceCoarseKeepsApart(t *testing.T) {
 	}
 }
 
-// 粗键沿用复发归并的口径：已结案不并、超过跨度上限新开、级别升高立即重研判并清推送标记。
+// 粗键沿用复发归并的口径：已结案不并、超过跨度上限新开、级别升高立即重研判并清推送标记；
+// 高危（级别 ≥ 4）不按粗键复发，另开 incident。
 func TestRecurrenceCoarseLimits(t *testing.T) {
 	f := newRecurFixture(t)
 	hostA := f.asset("pve1")
@@ -322,8 +323,14 @@ func TestRecurrenceCoarseLimits(t *testing.T) {
 	afterClose := f.proc(hostA, now, "r-a", "root", "/usr/bin/pgrep", "/usr/sbin/cron", "pgrep b")
 	afterSpan := f.proc(hostB, now, "r-a", "root", "/usr/bin/pgrep", "/usr/sbin/cron", "pgrep b")
 	worse := f.proc(hostC, now, "r-a", "root", "/usr/bin/pgrep", "/usr/sbin/cron", "pgrep b")
-	f.client.Alert.UpdateOneID(worse.ID).SetSeverity(5).ExecX(f.ctx)
+	f.client.Alert.UpdateOneID(worse.ID).SetSeverity(3).ExecX(f.ctx)
 	f.batch()
+	high := f.proc(hostC, now.Add(time.Hour), "r-a", "root", "/usr/bin/pgrep", "/usr/sbin/cron", "pgrep c")
+	f.client.Alert.UpdateOneID(high.ID).SetSeverity(5).ExecX(f.ctx)
+	f.batch()
+	if f.incidentOf(high).ID == triaged.ID {
+		t.Error("高危不应按粗键并入")
+	}
 
 	if f.incidentOf(afterClose).ID == closed.ID {
 		t.Error("已结案的 incident 不应按粗键并入")
