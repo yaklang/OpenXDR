@@ -1,0 +1,25 @@
+title: PowerShell Screen Capture
+id: d44d370e-d126-5fc4-b011-b7a2e4c76dc1
+status: experimental
+description: |
+  检测 PowerShell 命令行或脚本块调用 CopyFromScreen 截屏。远程协助、自动化截图脚本也会用到，需看调用者与后续外传。
+author: OpenXDR
+tags:
+  - attack.collection
+  - attack.t1113
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  method:
+    CommandLine|re: '\bCopyFromScreen\s*\('
+  name:
+    process.name:
+      - 'powershell.exe'
+      - 'pwsh.exe'
+  image:
+    Image|endswith:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+  condition: method and (name or image)
+level: medium

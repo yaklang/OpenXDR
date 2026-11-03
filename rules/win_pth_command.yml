@@ -1,0 +1,21 @@
+title: Mimikatz Pass-the-Hash Command
+id: 7ab14c60-bb25-5bb1-b881-b7e7a9b09d80
+status: experimental
+description: |
+  检测命令行里显式的 sekurlsa::pth /ntlm:。只覆盖工具命令形态，不替代基于登录日志的 Pass-the-Hash 研判。
+references:
+  - https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0840-win_event_channel.xml
+author: OpenXDR
+tags:
+  - attack.lateral_movement
+  - attack.t1550.002
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    CommandLine|contains|all:
+      - 'sekurlsa::pth'
+      - '/ntlm:'
+  condition: selection
+level: high

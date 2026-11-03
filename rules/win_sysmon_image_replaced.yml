@@ -1,0 +1,21 @@
+title: Sysmon Process Image Replaced
+id: 2fa13aee-05ec-529d-96b7-a2ebcab604cb
+status: experimental
+description: |
+  检测 Sysmon Event 25（ProcessTampering）里明确的 Image is replaced——进程镂空的直接证据。
+  需预装 Sysmon 并在采集配置里开启 collectSysmon（默认关闭）。
+author: OpenXDR
+tags:
+  - attack.defense_evasion
+  - attack.t1055.012
+logsource:
+  category: process_tampering
+  product: windows
+detection:
+  selection:
+    sysmon.provider: 'Microsoft-Windows-Sysmon'
+    sysmon.event_id: 25
+    sysmon.tamper_type: 'Image is replaced'
+    sysmon.image|re: '^.+\.exe$'
+  condition: selection
+level: high

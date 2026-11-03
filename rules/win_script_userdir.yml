@@ -1,0 +1,23 @@
+title: Script Host Runs Script from Downloads or Temp
+id: d212fecb-638d-59b7-99a5-657168346c91
+status: experimental
+description: |
+  检测 wscript / cscript 执行 Downloads 或 Temp 目录下的 .vbs / .js / .jse / .vbe——钓鱼附件的常见落点。
+references:
+  - https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0800-sysmon_id_1.xml
+author: OpenXDR
+tags:
+  - attack.execution
+  - attack.t1059.005
+  - attack.t1059.007
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith:
+      - '\wscript.exe'
+      - '\cscript.exe'
+    CommandLine|re: '\\(downloads|temp)\\[^\r\n]*\.(vbs|js|jse|vbe)(["\s]|$)'
+  condition: selection
+level: medium

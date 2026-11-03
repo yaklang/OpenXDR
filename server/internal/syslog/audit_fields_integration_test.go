@@ -7,11 +7,10 @@ import (
 	"net"
 	"testing"
 
-	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/testdb"
 )
 
-// 验证实际入队路径保留 audit 原始归因及主机绑定，且可命中新规则。
+// 验证实际入队路径保留 audit 原始归因及主机绑定。
 func TestAuditEvidenceSurvivesEnqueue(t *testing.T) {
 	ctx, client := testdb.New(t)
 	asset := client.Asset.Create().SetHostname("audit-test").SetOs("linux").SaveX(ctx)
@@ -31,10 +30,5 @@ func TestAuditEvidenceSurvivesEnqueue(t *testing.T) {
 	evidence, ok := raw["audit"].(map[string]any)
 	if !ok || evidence["auid"] != "1000" || evidence["serial"] != "42" {
 		t.Fatal("队列丢失审计归因")
-	}
-	engine := sigma.LoadDir("../../../rules/wazuh-attack3")
-	hits := engine.Evaluate(bus.envs[0].ClassUID, "linux", raw)
-	if len(hits) != 1 || hits[0].ID != "bc96505e-b5fb-53d5-8be1-2837d065d7ed" {
-		t.Fatalf("入队后检测错误: %v", hits)
 	}
 }

@@ -1,0 +1,25 @@
+title: Linux Init Script Changed (时序信号)
+id: baf3aa4d-4b55-51e0-9044-568e259d4d56
+status: experimental
+description: |
+  时序信号，不单独告警：/etc/rc.local、/etc/init.d、/etc/rc*.d 下的启动脚本变更。
+  包管理器装卸服务会成批改这些目录（含 rc*.d 符号链接），只供时序规则关联。
+references:
+  - https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0015-ossec_rules.xml
+author: OpenXDR
+openxdr_signal: true
+tags:
+  - attack.persistence
+  - attack.t1037.004
+logsource:
+  category: file_event
+  product: linux
+detection:
+  selection:
+    activity_id:
+      - 1
+      - 3
+      - 4
+    TargetFilename|re: '^/etc/(rc\.local$|rc\.d/|init\.d/|rc[0-6S]\.d/)'
+  condition: selection
+level: informational

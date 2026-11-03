@@ -1,0 +1,20 @@
+title: SAM Hive Exported via reg save
+id: 5e2ad579-2d87-57b9-936e-3883c233b6ac
+status: experimental
+description: |
+  检测 reg save HKLM\SAM 导出 SAM 凭据库。
+references:
+  - https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0800-sysmon_id_1.xml
+author: OpenXDR
+tags:
+  - attack.credential_access
+  - attack.t1003.002
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith: '\reg.exe'
+    CommandLine|re: '\bsave\s+["\x27]?(hklm|hkey_local_machine)\\sam(["\x27\s]|$)'
+  condition: selection
+level: high

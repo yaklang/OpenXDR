@@ -1,0 +1,23 @@
+title: Fodhelper Spawns Shell
+id: ea83644a-dd62-5fe5-acd3-dd6ea3661a74
+status: experimental
+description: |
+  检测 fodhelper.exe 拉起 cmd / PowerShell——经典的 UAC 绕过。需采集到父进程路径，缺失时不命中。
+references:
+  - https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0800-sysmon_id_1.xml
+author: OpenXDR
+tags:
+  - attack.privilege_escalation
+  - attack.t1548.002
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    ParentImage|endswith: '\fodhelper.exe'
+    Image|endswith:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+  condition: selection
+level: high

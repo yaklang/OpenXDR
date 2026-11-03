@@ -1,0 +1,25 @@
+title: Linux Local Account Created (时序信号)
+id: 9faa9fdd-814a-5412-a494-3e92ca4f26b7
+status: experimental
+description: |
+  时序信号，不单独告警：useradd / adduser 带参数执行。装包建系统账号、配置管理开账号都会命中，只供时序规则关联。
+  排除只看帮助、版本与默认值的调用；排除项按独立参数匹配（前后须是空白或行首尾）。
+  引擎正则不区分大小写，-D 与 -d（家目录）无法区分，所以不排除 useradd -D。
+author: OpenXDR
+openxdr_signal: true
+tags:
+  - attack.persistence
+  - attack.t1136.001
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    Image|endswith:
+      - '/useradd'
+      - '/adduser'
+    CommandLine|re: '\b(?:useradd|adduser)\s+\S'
+  filter:
+    CommandLine|re: '(^|\s)(-h|--help|--version|--defaults)(\s|$)'
+  condition: selection and not filter
+level: informational

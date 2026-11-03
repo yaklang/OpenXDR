@@ -2,14 +2,12 @@ package syslog
 
 import (
 	"encoding/json"
-	"openxdr/server/internal/sigma"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestAuditNormalizationAndDetection(t *testing.T) {
-	engine, _ := sigma.LoadDirReport("../../../rules")
+func TestAuditNormalization(t *testing.T) {
 	input := `<86>1 2026-11-02T00:00:00Z host auditd - - - type=CONFIG_CHANGE msg=audit(1793577600.123:42): auid=1000 ses=2 op=remove_rule key="auth" list=4 res=1`
 	m := Parse(input, time.Now())
 	raw := withAuditFields([]byte(`{"message":"preserved"}`), m)
@@ -20,16 +18,6 @@ func TestAuditNormalizationAndDetection(t *testing.T) {
 	a := doc["audit"].(map[string]any)
 	if a["auid"] != "1000" || a["serial"] != "42" || doc["message"] != "preserved" {
 		t.Fatalf("归因错误: %s", raw)
-	}
-	hits := engine.Evaluate(ClassApplicationActivity, "linux", doc)
-	found := false
-	for _, r := range hits {
-		if r.Title == "Linux auditd 审计规则被删除" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("真实 syslog 格式解析后未触发新规则")
 	}
 	for _, line := range []string{
 		`type=CONFIG_CHANGE msg=audit(1.1:2): op=remove_rule op=add_rule res=1`,

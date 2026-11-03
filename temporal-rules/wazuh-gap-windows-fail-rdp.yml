@@ -1,17 +1,14 @@
-{
-  "id": "temporal:wazuh-gap-windows-fail-rdp",
-  "title": "Windows 同账号连续失败后 RDP 登录成功",
-  "author": "Local security operations",
-  "kind": "sequence",
-  "within": "10m",
-  "rules": [
-    "d2b870a5-1c34-4738-9f35-0b49bac2cb76",
-    "d2b870a5-1c34-4738-9f35-0b49bac2cb76",
-    "d2b870a5-1c34-4738-9f35-0b49bac2cb76",
-    "d2b870a5-1c34-4738-9f35-0b49bac2cb76",
-    "d2b870a5-1c34-4738-9f35-0b49bac2cb76",
-    "76ea3896-f180-5bdf-a8e3-e6d7f4e040d0"
-  ],
-  "level": "high",
-  "group_by": "account"
-}
+id: temporal:wazuh-gap-windows-fail-rdp
+title: Windows 同账号连续失败后 RDP 登录成功
+author: OpenXDR
+kind: sequence
+group_by: account
+within: 10m
+rules:
+  - d2b870a5-1c34-4738-9f35-0b49bac2cb76
+  - d2b870a5-1c34-4738-9f35-0b49bac2cb76
+  - d2b870a5-1c34-4738-9f35-0b49bac2cb76
+  - d2b870a5-1c34-4738-9f35-0b49bac2cb76
+  - d2b870a5-1c34-4738-9f35-0b49bac2cb76
+  - 76ea3896-f180-5bdf-a8e3-e6d7f4e040d0
+level: high

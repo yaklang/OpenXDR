@@ -1,13 +1,8 @@
-{
-  "id": "temporal:wazuh-gap-postgres-fail-burst",
-  "title": "PostgreSQL 同主机两分钟十次认证失败",
-  "author": "Local security operations",
-  "kind": "event_count",
-  "within": "2m",
-  "rules": [
-    "2291148d-3b73-5896-911d-9e37bcbf1fb5"
-  ],
-  "level": "high",
-  "group_by": "asset",
-  "threshold": 10
-}
+id: temporal:wazuh-gap-postgres-fail-burst
+title: PostgreSQL 同主机两分钟十次认证失败
+author: OpenXDR
+kind: event_count
+within: 2m
+rules: [2291148d-3b73-5896-911d-9e37bcbf1fb5]
+threshold: 10
+level: high
