@@ -7,6 +7,7 @@ import { createPolicy, deletePolicy, fetchApprovals, fetchPolicies, type Approva
 import { useSession } from '../app/session'
 import { HostLink } from '../components/HostLink'
 import { ApprovalActions } from '../components/ApprovalActions'
+import { FeishuApproval } from '../components/FeishuApproval'
 import { LoadError } from '../components/LoadError'
 import { Page, STICKY_HEADER } from '../components/Page'
 import { EmptyHint } from '../components/Ago'
@@ -76,7 +77,7 @@ function PolicyCard({ groupId, origin, rows }: { groupId: string; origin: 'ai' |
 
 // 审批中心：命中黑名单的命令在这里批准或拒绝；黑名单也在这里配
 export function ApprovalsPage() {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const { group } = useSession()
   const isGroupAdmin = group?.role === 'admin'
   const approvals = useQuery({
@@ -119,6 +120,7 @@ export function ApprovalsPage() {
       <Card styles={{ body: { paddingTop: 8 } }}>
         <Tabs
           items={[
+            { key: 'feishu', label: locale === 'zh' ? '飞书私聊审批' : 'Feishu private approvals', children: <FeishuApproval /> },
             {
               key: 'pending',
               label: t('apTabQueue', { n: pending.length }),
