@@ -101,6 +101,15 @@
   新库启动即建；**已有库启动时不现建**，按旧索引照常检索，在线建好新索引并重启后切换，步骤见
   [事件表分区](docs/event-partitioning.md#关键词检索索引)。
 
+### 通知看门狗
+
+- 推送目标为空或连续 3 次发送失败、且有需人工处理的事件超过 15 分钟没推送时，控制台常驻红色横幅
+  「通知未送达：N 个需人工处理的事件没有推送（原因）」（admin 全局、其他用户在总览），推送 leader 每 10 分钟一条 WARN 日志。
+  生产上推送目标被清空后几天没人发现，期间高危事件一条没推。
+- 新接口 `GET /api/notify/health`；新指标 `openxdr_notify_configured`、`openxdr_notify_pending_incidents`、
+  `openxdr_notify_consecutive_failures`、`openxdr_notify_last_success_timestamp_seconds`，建议的 Grafana 告警见 `docs/deployment.md`。
+- 发送结果（最近成功、最近失败与原因、连续失败数）存 `settings` 表 `notify.health`，集群各节点一致；换推送地址时清零连续失败。
+
 ### 修复
 
 - 队列监控先检查流副本健康，每轮流与分片查询共用 5 秒时限，避免多个分片依次超时导致副本健康指标长时间不更新。分片查询失败保留上次待办值，不将查询失败记成零积压；新增逐分片成功采样时间指标，并在超时后从下一分片继续轮询，避免后续分片长期饥饿。

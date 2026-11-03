@@ -17,6 +17,7 @@ import { useSession } from './session'
 import { ShortcutHelp, useGlobalKeys } from './shortcuts'
 import { useTheme, type ThemeMode } from './theme'
 import { TourProvider, useTour } from './tour'
+import { NotifyBanner } from '../components/NotifyBanner'
 
 // 菜单上的待办计数：与态势总览共用同一份查询缓存，不额外打接口
 function useNavCounts(): Record<string, number | undefined> {
@@ -270,6 +271,8 @@ function Shell() {
           <ApprovalBell />
         </AntLayout.Header>
         <AntLayout.Content className={isChat ? 'app-content app-content-chat' : 'app-content'}>
+          {/* 通知断了是全局问题：admin 在任何页面都看得到，会话页布局占满高度不放 */}
+          {isAdmin && !isChat && <NotifyBanner />}
           <Outlet />
         </AntLayout.Content>
         <CommandPalette open={palette} onClose={() => setPalette(false)} onHelp={() => setHelp(true)} />

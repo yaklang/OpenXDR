@@ -121,7 +121,8 @@ func main() {
 	dedupWindow := time.Duration(getenvInt("ALERT_DEDUP_WINDOW_MINUTES", 5)) * time.Minute
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-		telemetry.NewCollectorHealth(db), telemetry.NewIntegrationQueue(db), integration.RateLimitedRequests)
+		telemetry.NewCollectorHealth(db), telemetry.NewIntegrationQueue(db), integration.RateLimitedRequests,
+		notify.NewHealthCollector(notifySettings))
 	events, router := startEventBus(ctx, db, rules, temporalRules, suppressions, intelStore, dedupWindow, hub, registry)
 	if router != nil {
 		defer router.Close()
@@ -151,6 +152,7 @@ func main() {
 	go cluster.RunLeader(ctx, db, "feishu-approval", feishu.Run)
 	registerSQLRoutes(routes, db)
 	routes.Handle("GET /api/trusted-sources/candidates", api.TrustedCandidates(client, db))
+	routes.Handle("GET /api/notify/health", api.NotifyHealth(client, notifySettings))
 	registerHostRoutes(ctx, routes, db, client, rules, credentialVault, enrollSvc, conf)
 	registerSettingsRoutes(routes, db, client, credentialVault, notifySettings, webhook, aiConf, intelFeeds, enrollSvc, dists)
 	// 冷归档读取默认关闭：EVENT_ARCHIVE_READ=1 才把连接交给 /api/events 与问 AI 入口，关着时行为与改动前一致
