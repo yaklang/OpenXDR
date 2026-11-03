@@ -625,7 +625,7 @@ const RuleNewProcess = "xdr:new-process"
 // RuleBeacon 外联心跳合成检测：学习期满的资产上新出现的规律公网外联，逻辑在 internal/beacon
 const RuleBeacon = "xdr:beacon"
 
-// RuleLateralSpray 内部横向喷洒合成检测：同一台纳管主机的地址 10 分钟内在 ≥3 台其他纳管主机上出现登录失败
+// RuleLateralSpray 内部横向喷洒合成检测：同一台纳管主机的地址 60 分钟内在 ≥3 台其他纳管主机上出现登录失败
 // 或被告警命中的入站，告警落在源主机上。ATT&CK：lateral-movement，T1110.003（口令喷洒）/ T1021.004（SSH）。
 // 逻辑在 ingest 侧（lateral_spray.go）
 const RuleLateralSpray = "xdr:internal-lateral-spray"

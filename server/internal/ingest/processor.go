@@ -359,7 +359,12 @@ func (p *Processor) upsertAlert(ctx context.Context, tx *sql.Tx, e Envelope, hit
 	var first time.Time
 	err := tx.QueryRowContext(ctx, `SELECT alert_id, first_ts FROM alert_dedup_state WHERE fingerprint=$1`, fingerprint).
 		Scan(&alertID, &first)
-	if err == nil && !e.Timestamp.Before(first) && e.Timestamp.Sub(first) < p.DedupWindow {
+	// 内部横向喷洒按自己的回看窗口去重：一轮喷洒常常持续几十分钟，不按通用窗口切成多条
+	window := p.DedupWindow
+	if hit.RuleID == sigma.RuleLateralSpray {
+		window = sprayWindow
+	}
+	if err == nil && !e.Timestamp.Before(first) && e.Timestamp.Sub(first) < window {
 		if _, err := tx.ExecContext(ctx, `UPDATE alerts SET count=count+1, last_ts=GREATEST(COALESCE(last_ts,ts),$2) WHERE id=$1`, alertID, e.Timestamp); err != nil {
 			return false, err
 		}

@@ -16,7 +16,7 @@ import (
 	"openxdr/server/internal/sigma"
 )
 
-// 内部横向喷洒：10 分钟内同一台纳管主机的地址在 ≥3 台其他纳管主机上登录失败，告警落在源主机上，
+// 内部横向喷洒：60 分钟内同一台纳管主机的地址在 ≥3 台其他纳管主机上登录失败，告警落在源主机上，
 // 去重成一条、重投不多计；共用地址、窗口外、源主机自己都不算
 func TestLateralSpray(t *testing.T) {
 	p, client, db := testProcessor(t)
@@ -76,14 +76,14 @@ func TestLateralSpray(t *testing.T) {
 	if a.AssetID == nil || *a.AssetID != src || a.Severity != 5 || a.EventID != nil || !a.Ts.Equal(base.Add(70*time.Second)) {
 		t.Errorf("喷洒告警应落在源主机、级别 5、不挂事件、时间取第三台：%+v", a)
 	}
-	if a.Detail == nil || !strings.Contains(*a.Detail, "波及 4 台") || !strings.Contains(*a.Detail, "10.1.1.193 ×1") || strings.Contains(*a.Detail, "victim-") {
+	if a.Detail == nil || !strings.Contains(*a.Detail, "共波及 4 台") || !strings.Contains(*a.Detail, "10.1.1.193 ×1") || strings.Contains(*a.Detail, "victim-") {
 		t.Errorf("detail 应列出全部受害主机地址与次数、不带主机名：%v", a.Detail)
 	}
 
-	// 窗口外：另一台源主机隔 6 分钟各打一台，任一 10 分钟回看里都凑不齐三台
+	// 窗口外：另一台源主机隔 35 分钟各打一台，任一 60 分钟回看里都凑不齐三台
 	other := asset("range", "10.1.1.171")
-	process(failure(victims[0], 20*time.Minute, "10.1.1.171"), failure(victims[1], 26*time.Minute, "10.1.1.171"), failure(victims[2], 32*time.Minute, "10.1.1.171"))
+	process(failure(victims[0], 0, "10.1.1.171"), failure(victims[1], 35*time.Minute, "10.1.1.171"), failure(victims[2], 70*time.Minute, "10.1.1.171"))
 	if client.Alert.Query().Where(alert.RuleIDEQ(sigma.RuleLateralSpray), alert.AssetIDEQ(other)).ExistX(ctx) {
-		t.Error("10 分钟内不足三台受害主机不该告警")
+		t.Error("60 分钟内不足三台受害主机不该告警")
 	}
 }

@@ -1,6 +1,6 @@
 {
  "name": "2026-11-02 Prowl 跳板横向",
- "note": "生产事件形状脱敏回放，说明见 README.md；lizhen-dev、openxdr-test-linux 的喷洒时刻从真实的 23:30:01、00:22:27 挪进了 node2/node1 的同一个 10 分钟",
+ "note": "生产事件形状脱敏回放，时间为生产真实时刻（UTC），说明见 README.md",
  "assets": [
   {
    "name": "uos-server",
@@ -21,8 +21,17 @@
    ]
   },
   {
+   "name": "dynamicdefend-v2",
+   "group": "prowl",
+   "ips": [
+    "10.1.1.32",
+    "172.17.0.1",
+    "172.18.0.1"
+   ]
+  },
+  {
    "name": "openxdr-node1",
-   "group": "openxdr",
+   "group": "infra",
    "ips": [
     "10.1.1.198",
     "10.1.1.199",
@@ -32,11 +41,29 @@
   },
   {
    "name": "openxdr-node2",
-   "group": "openxdr",
+   "group": "infra",
    "ips": [
     "10.1.1.197",
     "172.18.0.1",
     "172.17.0.1"
+   ]
+  },
+  {
+   "name": "cache",
+   "group": "infra",
+   "ips": [
+    "10.1.1.30",
+    "172.17.0.1",
+    "172.18.0.1"
+   ]
+  },
+  {
+   "name": "termix",
+   "group": "infra",
+   "ips": [
+    "10.1.1.35",
+    "172.17.0.1",
+    "172.18.0.1"
    ]
   },
   {
@@ -50,42 +77,12 @@
  ],
  "timeline": [
   {
-   "id": "dnslog",
-   "at": "2026-11-02T21:00:12.568Z",
-   "asset": "uos-server",
-   "class": 4003,
-   "raw": {
-    "query": {
-     "type": "A",
-     "hostname": "3ey6d6.dnslog.cn",
-     "rcode_id": 2
-    },
-    "answers": [],
-    "activity_id": 6,
-    "process": {
-     "pid": 1713,
-     "file": {
-      "path": "/usr/bin/dockerd"
-     },
-     "name": "dockerd"
-    },
-    "dst_endpoint": {
-     "ip": "10.1.1.20",
-     "port": 53
-    },
-    "src_endpoint": {
-     "ip": "172.31.0.2",
-     "port": 40362
-    }
-   }
-  },
-  {
    "id": "ops-sed",
-   "at": "2026-11-02T21:02:21.198Z",
+   "at": "2026-11-02T18:01:05.889751Z",
    "asset": "uos-server",
    "class": 1007,
    "username": "root",
-   "repeat": 30,
+   "repeat": 78,
    "every": "5m",
    "raw": {
     "activity_id": 1,
@@ -117,11 +114,11 @@
   },
   {
    "id": "ops-whoami",
-   "at": "2026-11-02T21:02:21.231Z",
+   "at": "2026-11-02T18:01:05.923044Z",
    "asset": "uos-server",
    "class": 1007,
    "username": "root",
-   "repeat": 30,
+   "repeat": 78,
    "every": "5m",
    "raw": {
     "activity_id": 1,
@@ -152,40 +149,110 @@
    }
   },
   {
-   "id": "license-probe",
-   "at": "2026-11-02T21:03:20.578Z",
+   "at": "2026-11-02T18:20:00Z",
+   "triage": {
+    "incidentOf": "ops-whoami",
+    "verdict": "suspicious"
+   }
+  },
+  {
+   "id": "range-b64-exec-early",
+   "at": "2026-11-02T18:30:19.443002Z",
    "asset": "uos-server",
    "class": 1007,
-   "username": "root",
-   "repeat": 30,
-   "every": "5m",
+   "username": "ctf",
    "raw": {
     "activity_id": 1,
     "process": {
-     "pid": 571340,
+     "pid": 301122,
      "file": {
-      "path": "/bin/sh"
+      "path": "/usr/local/bin/python3"
      },
-     "name": "sh",
-     "cmd_line": "/bin/sh -c timeout 3 bash -c '</dev/tcp/127.0.0.1/18080' || exit 1"
+     "name": "python3",
+     "cmd_line": "python3 -c exec(__import__('base64').b64decode('aW1wb3J0IHNvY2tldCxjb25jdXJyZW50LmZ1dHVyZXMK'))"
     },
     "container": {
-     "uid": "2671cfd279d5",
-     "name": "license-service",
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
      "runtime": "docker"
     }
    }
   },
   {
-   "at": "2026-11-02T22:00:00Z",
-   "triage": {
-    "incidentOf": "dnslog",
-    "verdict": "suspicious"
+   "id": "range-nohup-lis",
+   "at": "2026-11-02T18:36:25.230874Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 305510,
+     "file": {
+      "path": "/usr/bin/nohup"
+     },
+     "name": "nohup",
+     "cmd_line": "nohup python3 /tmp/lis.py"
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "spray-cache",
+   "at": "2026-11-02T18:49:16.265817Z",
+   "asset": "cache",
+   "class": 3002,
+   "repeat": 10,
+   "every": "37.7us",
+   "users": [
+    "ubuntu",
+    "ctf"
+   ],
+   "raw": {
+    "user": {
+     "name": "ubuntu"
+    },
+    "service": {
+     "name": "sshd"
+    },
+    "status_id": 2,
+    "activity_id": 1,
+    "src_endpoint": {
+     "ip": "10.1.1.170"
+    }
+   }
+  },
+  {
+   "id": "spray-termix",
+   "at": "2026-11-02T18:49:16.500641Z",
+   "asset": "termix",
+   "class": 3002,
+   "repeat": 4,
+   "every": "143us",
+   "users": [
+    "ubuntu"
+   ],
+   "raw": {
+    "user": {
+     "name": "ubuntu"
+    },
+    "service": {
+     "name": "sshd"
+    },
+    "status_id": 2,
+    "activity_id": 1,
+    "src_endpoint": {
+     "ip": "10.1.1.170"
+    }
    }
   },
   {
    "id": "range-wget-view",
-   "at": "2026-11-02T22:31:31.021Z",
+   "at": "2026-11-02T22:31:31.021436Z",
    "asset": "uos-server",
    "class": 1007,
    "username": "ctf",
@@ -208,7 +275,7 @@
   },
   {
    "id": "range-b64-urlopen",
-   "at": "2026-11-02T22:33:59.960Z",
+   "at": "2026-11-02T22:33:59.96073Z",
    "asset": "uos-server",
    "class": 1007,
    "username": "ctf",
@@ -231,7 +298,7 @@
   },
   {
    "id": "range-recon",
-   "at": "2026-11-02T22:34:26.813Z",
+   "at": "2026-11-02T22:34:26.81324Z",
    "asset": "uos-server",
    "class": 1007,
    "username": "ctf",
@@ -254,7 +321,7 @@
   },
   {
    "id": "range-nohup-brute",
-   "at": "2026-11-02T22:34:56.022Z",
+   "at": "2026-11-02T22:34:56.022612Z",
    "asset": "uos-server",
    "class": 1007,
    "username": "ctf",
@@ -284,7 +351,7 @@
   },
   {
    "id": "range-setsid-pip",
-   "at": "2026-11-02T22:35:56.221Z",
+   "at": "2026-11-02T22:35:56.22144Z",
    "asset": "uos-server",
    "class": 1007,
    "username": "ctf",
@@ -307,7 +374,7 @@
   },
   {
    "id": "range-wget-jar",
-   "at": "2026-11-02T22:41:27.566Z",
+   "at": "2026-11-02T22:41:27.566587Z",
    "asset": "uos-server",
    "class": 1007,
    "username": "ctf",
@@ -344,8 +411,77 @@
    }
   },
   {
+   "id": "license-probe-0",
+   "at": "2026-11-02T22:45:43.093271Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "root",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 571340,
+     "file": {
+      "path": "/bin/sh"
+     },
+     "name": "sh",
+     "cmd_line": "/bin/sh -c timeout 3 bash -c '</dev/tcp/127.0.0.1/18080' || exit 1"
+    },
+    "container": {
+     "uid": "2671cfd279d5",
+     "name": "license-service",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "license-probe-1",
+   "at": "2026-11-02T23:03:20.578913Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "root",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 571341,
+     "file": {
+      "path": "/bin/sh"
+     },
+     "name": "sh",
+     "cmd_line": "/bin/sh -c timeout 3 bash -c '</dev/tcp/127.0.0.1/18080' || exit 1"
+    },
+    "container": {
+     "uid": "2671cfd279d5",
+     "name": "license-service",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "license-probe-2",
+   "at": "2026-11-02T23:23:08.950989Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "root",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 571342,
+     "file": {
+      "path": "/bin/sh"
+     },
+     "name": "sh",
+     "cmd_line": "/bin/sh -c timeout 3 bash -c '</dev/tcp/127.0.0.1/18080' || exit 1"
+    },
+    "container": {
+     "uid": "2671cfd279d5",
+     "name": "license-service",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
    "id": "range-b64-drop",
-   "at": "2026-11-02T23:02:04.011Z",
+   "at": "2026-11-02T23:02:04.01196Z",
    "asset": "uos-server",
    "class": 1007,
    "username": "ctf",
@@ -368,7 +504,7 @@
   },
   {
    "id": "range-nohup-spray",
-   "at": "2026-11-02T23:11:02.916Z",
+   "at": "2026-11-02T23:11:02.916601Z",
    "asset": "uos-server",
    "class": 1007,
    "username": "ctf",
@@ -397,19 +533,156 @@
    }
   },
   {
+   "id": "range-nohup-p5",
+   "at": "2026-11-02T23:25:10.827957Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 620011,
+     "file": {
+      "path": "/usr/bin/nohup"
+     },
+     "name": "nohup",
+     "cmd_line": "nohup python3 p5.py"
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "range-nohup-p9",
+   "at": "2026-11-02T23:32:16.763998Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 624480,
+     "file": {
+      "path": "/usr/bin/nohup"
+     },
+     "name": "nohup",
+     "cmd_line": "nohup python3 p9.py"
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "range-nohup-scan",
+   "at": "2026-11-02T23:47:30.185422Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 641902,
+     "file": {
+      "path": "/usr/bin/nohup"
+     },
+     "name": "nohup",
+     "cmd_line": "nohup python3 /tmp/wd/scan.py 10.1.1.165"
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "range-nohup-run",
+   "at": "2026-11-03T00:13:14.937525Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 671230,
+     "file": {
+      "path": "/usr/bin/nohup"
+     },
+     "name": "nohup",
+     "cmd_line": "nohup python3 -u i6549_run.py"
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "range-b64-exec",
+   "at": "2026-11-03T00:19:22.923066Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 677815,
+     "file": {
+      "path": "/usr/local/bin/python3"
+     },
+     "name": "python3",
+     "cmd_line": "python3 -c import base64;exec(base64.b64decode('aW1wb3J0IHNzbCwgdXJsbGliLnJlcXVlc3QK'))"
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
+   "id": "range-nohup-run-again",
+   "at": "2026-11-03T00:22:20.737247Z",
+   "asset": "uos-server",
+   "class": 1007,
+   "username": "ctf",
+   "raw": {
+    "activity_id": 1,
+    "process": {
+     "pid": 680391,
+     "file": {
+      "path": "/usr/bin/nohup"
+     },
+     "name": "nohup",
+     "cmd_line": "nohup python3 -u i6549_run.py"
+    },
+    "container": {
+     "uid": "4f173e0d45b0",
+     "name": "range_c11_comp1_t2",
+     "runtime": "docker"
+    }
+   }
+  },
+  {
    "id": "spray-node2",
-   "at": "2026-11-02T23:10:24.176Z",
+   "at": "2026-11-02T23:10:24.176533Z",
    "asset": "openxdr-node2",
    "class": 3002,
-   "repeat": 12,
-   "every": "1s",
+   "repeat": 55,
+   "every": "1.0417s",
    "users": [
     "postgres",
     "openxdr",
     "admin",
     "patroni",
-    "ctf",
-    "root"
+    "ctf"
    ],
    "raw": {
     "user": {
@@ -427,18 +700,17 @@
   },
   {
    "id": "spray-node1",
-   "at": "2026-11-02T23:11:23.134Z",
+   "at": "2026-11-02T23:11:23.134992Z",
    "asset": "openxdr-node1",
    "class": 3002,
-   "repeat": 12,
-   "every": "1s",
+   "repeat": 80,
+   "every": "373.2ms",
    "users": [
     "postgres",
     "openxdr",
     "admin",
     "patroni",
-    "ctf",
-    "root"
+    "ctf"
    ],
    "raw": {
     "user": {
@@ -456,19 +728,19 @@
   },
   {
    "id": "spray-lizhen",
-   "at": "2026-11-02T23:11:55.321Z",
+   "at": "2026-11-02T23:30:01.32116Z",
    "asset": "lizhen-dev",
    "class": 3002,
    "repeat": 3,
-   "every": "100ms",
+   "every": "128.2ms",
    "users": [
+    "ubuntu",
     "admin",
-    "lizhen",
-    "ubuntu"
+    "lizhen"
    ],
    "raw": {
     "user": {
-     "name": "admin"
+     "name": "ubuntu"
     },
     "service": {
      "name": "sshd"
@@ -482,20 +754,44 @@
   },
   {
    "id": "spray-test-linux",
-   "at": "2026-11-02T23:12:05.596Z",
+   "at": "2026-11-03T00:22:27.596347Z",
    "asset": "openxdr-test-linux",
    "class": 3002,
-   "repeat": 12,
-   "every": "1s",
+   "repeat": 180,
+   "every": "106.19ms",
    "users": [
-    "admin",
     "openxdr",
+    "admin",
     "test",
     "ubuntu"
    ],
    "raw": {
     "user": {
-     "name": "admin"
+     "name": "openxdr"
+    },
+    "service": {
+     "name": "sshd"
+    },
+    "status_id": 2,
+    "activity_id": 1,
+    "src_endpoint": {
+     "ip": "10.1.1.170"
+    }
+   }
+  },
+  {
+   "id": "spray-dynamicdefend",
+   "at": "2026-11-03T00:22:50.149363Z",
+   "asset": "dynamicdefend-v2",
+   "class": 3002,
+   "repeat": 11,
+   "every": "54.6ms",
+   "users": [
+    "openxdr"
+   ],
+   "raw": {
+    "user": {
+     "name": "openxdr"
     },
     "service": {
      "name": "sshd"

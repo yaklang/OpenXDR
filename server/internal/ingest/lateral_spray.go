@@ -16,15 +16,19 @@ import (
 	"openxdr/server/internal/sigma"
 )
 
-// 内部横向喷洒（xdr:internal-lateral-spray）：同一台纳管主机的地址 10 分钟内作为来源，在 ≥ 3 台其他纳管主机上
+// 内部横向喷洒（xdr:internal-lateral-spray）：同一台纳管主机的地址 60 分钟内作为来源，在 ≥ 3 台其他纳管主机上
 // 出现登录失败或被告警命中的入站——跳板在内网口令喷洒、横向探测。与爆破得手同一做法：确定性检测写一条合成告警，
 // 落在源主机上、级别 5，去重、抑制、关联升级、立即重研判与推送都走现有通路。
 //
 // 受害方事件逐条记进 lateral_evidence（事件、源主机、受害主机、时间），回看只扫这张小表的（源主机, 时间）索引，
 // 不碰按天分区的 events。同一源主机的记证据、计数与告警在事务锁下串行，集群多节点并发处理不同受害主机时互相看得见。
 // 回看以触发事件为终点：受害主机的事件跨 agent 乱序到达时，较早的那条凑不齐，喷洒持续时后续事件照样能凑齐。
+//
+// 窗口 60 分钟：2026-11-02 的跳板是一台一台换着打的（node2 23:10、node1 23:11、lizhen-dev 23:30），10 分钟凑不齐三台；
+// 生产近三天按 60 分钟回放只在这次攻击上触发一次（纳管主机之间的正常 SSH 是密钥登录成功，不计）。
+// 告警去重同样按 60 分钟（从首条起算，见 upsertAlert）：一轮喷洒在源主机上只留一条，后来的受害主机累加计数、刷新 detail。
 const (
-	sprayWindow  = 10 * time.Minute
+	sprayWindow  = 60 * time.Minute
 	sprayVictims = 3
 	// 证据保留远长于回看窗口，写入时顺手清掉同一源主机更早的
 	sprayRetention = 24 * time.Hour
@@ -106,7 +110,7 @@ WHERE l.src_asset=$1 AND l.ts>$2 AND l.ts<=$3 GROUP BY 1 ORDER BY 1`, src, first
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	detail := fmt.Sprintf("来自 %s 的登录失败或被告警的入站，%d 分钟内波及 %d 台纳管主机：%s",
+	detail := fmt.Sprintf("来自 %s 的登录失败或被告警的入站，首次达到阈值前 %d 分钟起共波及 %d 台纳管主机：%s",
 		ip, int(sprayWindow/time.Minute), len(victims), strings.Join(victims, "、"))
 	_, err = tx.ExecContext(ctx, `UPDATE alerts SET detail=$2 WHERE id=$1`, alertID, detail)
 	return err
