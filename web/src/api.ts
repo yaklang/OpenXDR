@@ -344,7 +344,7 @@ export interface Suppression {
   expiresAt: string | null
   matchedCount: number
   lastMatchedAt: string | null
-  // active 生效 / proposed AI 提议待组管理员批准 / rejected 已拒绝
+  // active 生效 / proposed AI 提议待 AI 审计员或组管理员批准 / rejected 已拒绝
   status: 'active' | 'proposed' | 'rejected'
   sessionId: string | null
   reviewedBy: string | null

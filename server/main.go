@@ -63,6 +63,7 @@ import (
 	"openxdr/server/internal/schedule"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
+	"openxdr/server/internal/suppressreview"
 	"openxdr/server/internal/suricata"
 	"openxdr/server/internal/syslog"
 	"openxdr/server/internal/telemetry"
@@ -102,7 +103,8 @@ func main() {
 			temporalRules.PruneLoop(ctx, db, 5*time.Minute)
 		})
 	}
-	startAnalytics(ctx, db, client, rules, suppressions)
+	suppressionReviewer := startSuppressionReview(ctx, db, client, suppressions, rules, conf)
+	startAnalytics(ctx, db, client, rules, suppressions, suppressionReviewer)
 
 	// 研判与资产标注共用一个端点与模型，每次调用按当时的配置，用量按用途分开记
 	llmFor := func(feature string) *triage.LLM { return newLLM(client, conf, feature) }
@@ -136,7 +138,7 @@ func main() {
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	slog.Info("HTTP 启动", "addr", httpAddr)
 	queryRoles := startQueryRoles(ctx, db, client, dsn)
-	chat := startChat(ctx, client, rules, hub, webhook, conf, queryRoles)
+	chat := startChat(ctx, client, rules, hub, webhook, conf, queryRoles, suppressionReviewer)
 	scheduler := startScheduler(ctx, db, client, chat, conf, webhook)
 	enrollSvc := loadEnroll(client, silentAfter)
 	routes := http.NewServeMux()
@@ -252,7 +254,7 @@ func startIntel(ctx context.Context, db *sql.DB, client *ent.Client, authKey fun
 }
 
 // startAnalytics 关联、UEBA、外联心跳、保留期清理与自动结案等单活后台任务。
-func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules sigma.Catalog, suppressions *suppress.Store) {
+func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules sigma.Catalog, suppressions *suppress.Store, reviewer *suppressreview.Reviewer) {
 	correlator := &correlate.Engine{
 		DB:            client,
 		Rules:         rules,
@@ -301,7 +303,7 @@ func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules s
 		autoClose := &janitor.AutoClose{DB: client, Days: days, Interval: time.Hour}
 		go cluster.RunLeader(ctx, db, "auto-close-benign", autoClose.Run)
 	}
-	// 同一规则在同一主机上被人反复判误报，生成待组管理员批准的抑制草案；0 关闭
+	// 同一规则在同一主机上被人反复判误报，生成抑制草案交 AI 审计员评审；0 关闭
 	if minCount := getenvInt("FP_SUPPRESS_MIN_COUNT", 5); minCount > 0 {
 		stats := &fpstats.Stats{
 			DB: client, MinCount: minCount, MinRatio: getenvInt("FP_SUPPRESS_MIN_RATIO", 90),
@@ -309,9 +311,21 @@ func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules s
 			Days:     min(max(getenvInt("FP_SUPPRESS_DAYS", 30), 1), 90),
 			Cooldown: time.Duration(getenvInt("FP_SUPPRESS_COOLDOWN_DAYS", 30)) * 24 * time.Hour,
 			Interval: time.Duration(max(getenvInt("FP_SUPPRESS_INTERVAL_HOURS", 6), 1)) * time.Hour,
+			Proposed: func(id uuid.UUID) { reviewer.Submit(ctx, id) },
 		}
 		go cluster.RunLeader(ctx, db, "fp-stats", stats.Run)
 	}
+}
+
+// startSuppressionReview 抑制草案由 AI 审计员评审：草案生成时当场评审，单活循环兜底积压与重启。
+// 有会话的用会话模型，没有的用 Pi 模型、再退到研判模型；都没配就留给组管理员
+func startSuppressionReview(ctx context.Context, db *sql.DB, client *ent.Client, store *suppress.Store, rules sigma.Catalog, conf func() aiconf.Config) *suppressreview.Reviewer {
+	reviewer := suppressreview.New(client, store, rules,
+		func() (string, string) { c := conf(); return c.BaseURL, c.APIKey },
+		func() string { c := conf(); return cmp.Or(c.PiModel, c.Model) },
+		aiconf.Recorder(client, "review"))
+	go cluster.RunLeader(ctx, db, "suppression-review", reviewer.Run)
+	return reviewer
 }
 
 // loadCredentialVault 主机凭据加密钥匙，未配置 HOST_CREDENTIAL_KEY 时为 nil。
@@ -621,7 +635,7 @@ func newPiRuntime() piruntime.Runtime {
 }
 
 // startChat Pi 会话服务，并恢复上次退出时未完成的会话。
-func startChat(ctx context.Context, client *ent.Client, rules sigma.Catalog, hub *response.Hub, webhook *notify.Webhook, conf func() aiconf.Config, queryRoles *queryrole.Provisioner) *agentchat.Service {
+func startChat(ctx context.Context, client *ent.Client, rules sigma.Catalog, hub *response.Hub, webhook *notify.Webhook, conf func() aiconf.Config, queryRoles *queryrole.Provisioner, suppressionReviewer *suppressreview.Reviewer) *agentchat.Service {
 	piRuntime := newPiRuntime()
 	chat := &agentchat.Service{Base: ctx, Rules: rules, Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 14400)) * time.Second, DB: client, Gate: &commandgate.Gate{DB: client, Hub: hub, ApprovalTimeout: time.Duration(getenvInt("PI_APPROVAL_TIMEOUT_SECONDS", 600)) * time.Second, Notify: feishuapproval.ApprovalNotifier(client, webhook.Send)},
 		Runtime: piRuntime, Sandboxed: piRuntime.Sandboxed(),
@@ -633,6 +647,8 @@ func startChat(ctx context.Context, client *ent.Client, rules sigma.Catalog, hub
 	reviewer := &commandreview.Reviewer{DB: client, OnUsage: aiconf.Recorder(client, "review"),
 		Endpoint: func() (string, string) { c := conf(); return c.BaseURL, c.APIKey }}
 	chat.Gate.Reviewer = reviewer.Review
+	// 抑制草案同样当场评审，审计员把结论和理由交回给提议的会话
+	chat.ReviewSuppression = suppressionReviewer.Review
 	go chat.Recover(ctx)
 	return chat
 }

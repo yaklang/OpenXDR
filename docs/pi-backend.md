@@ -22,7 +22,7 @@
 | `SANDBOX_KEY` | 空 | 与 sandboxd 的共享密钥，至少 32 个字符 |
 | `SANDBOX_CA_FILE` | 空 | 校验 sandboxd 证书的 CA；空用系统根证书 |
 
-Pi 不注册内置文件和 shell 工具，平台只暴露 exec/track/ignore/identify/egress/memories/remember/forget/suppress/propose_close/report，以及已配置组的 query。suppress 提交抑制草案，组管理员批准后才生效，见 [检测链路 · 抑制](detection.md#抑制serverinternalsuppress)。identify 把对某个监听服务的调查结论写回资产（来源 investigation，不覆盖人工标注），见 [资产图谱与攻击面](asset-map.md#服务说明与调查)；egress 同样写回对某个公网外联的调查结论（只收这台主机确实连过的公网地址）。
+Pi 不注册内置文件和 shell 工具，平台只暴露 exec/track/ignore/identify/egress/memories/remember/forget/suppress/propose_close/report，以及已配置组的 query。suppress 提交抑制草案，由 AI 审计员（`server/internal/suppressreview`）当场评审，批准才生效、拒绝附理由回给模型（审计员调不通时草案待评审、后台自动重试），见 [检测链路 · 抑制](detection.md#抑制serverinternalsuppress)。identify 把对某个监听服务的调查结论写回资产（来源 investigation，不覆盖人工标注），见 [资产图谱与攻击面](asset-map.md#服务说明与调查)；egress 同样写回对某个公网外联的调查结论（只收这台主机确实连过的公网地址）。
 没有新增对外工具执行端口，身份、组和来源均由 Go 绑定，模型不能修改；命令一律真执行，没有演练模式。
 每轮上下文包含本组最多 200 台资产的 UUID、主机名和 OS；超出会标注截断。
 每轮最多「组内主机数 × 20 + 遗留待办数 + 32」次模型调用（32–256），预算写进系统提示让模型留出提交报告的余量，每次输出最多 8192 token。exec 送入模型的 stdout/stderr 各最多 16 KiB，截断标记为 `truncated=true`，Command 记录仍保留原始回执。GLM 显式关闭模板 thinking。未实现费用预算或自动历史压缩。

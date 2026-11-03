@@ -31,7 +31,7 @@ func (Suppression) Fields() []ent.Field {
 		field.Time("expires_at").Optional().Nillable(),
 		field.Int("matched_count").Default(0),
 		field.Time("last_matched_at").Optional().Nillable(),
-		// active 生效 / proposed AI 提议、等组管理员批准 / rejected 被拒绝。只有 active 进抑制索引
+		// active 生效 / proposed AI 提议、待 AI 审计员或组管理员批准 / rejected 被拒绝。只有 active 进抑制索引
 		field.String("status").Default("active"),
 		// 字段条件（AND）：只压掉事件体里这些字段对得上的命中，比如只压某个域名、某条命令行。
 		// 为空表示整条规则都压——范围大，AI 的提议不允许为空

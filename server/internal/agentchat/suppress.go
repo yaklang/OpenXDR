@@ -19,13 +19,14 @@ import (
 	"openxdr/server/internal/suppress"
 )
 
-const suppressDescription = "提议在组内某台主机上抑制一类反复误报的命中，组管理员批准后才生效。" +
+const suppressDescription = "提议在组内某台主机上抑制一类反复误报的命中，由独立的 AI 审计员当场评审，批准才生效，拒绝会给理由。" +
 	"只用于查证过的良性、且会反复出现的命中（比如例行巡检脚本触发的侦察规则）；一次性的误报在结论里说明即可，不要提。" +
 	"host 为主机 UUID（只能针对单台主机，不能全局）；rule_id 必须是这台主机上近 30 天确实命中过的规则；" +
 	"conditions 必填（1–3 条，AND）：把抑制收窄到良性的那部分，field 为事件体 dot path（如 query.hostname、process.cmd_line、" +
 	"dst_endpoint.ip、file.path），op 为 equals / contains / endswith，至少要对得上这条规则在这台主机上真实触发过的一个事件——" +
 	"不能整条规则压掉（比如 DNS 服务器上的可疑后缀规则管着全网的查询，只能压具体域名）；" +
-	"reason 写清为什么是良性：哪个进程、什么命令、多久一次、属于什么正常业务；days 为有效期（1–90，默认 30），到期自动失效。"
+	"reason 写清为什么是良性：哪个进程、什么命令、多久一次、属于什么正常业务；days 为有效期（1–90，默认 30），到期自动失效。" +
+	"审计员对范围很严：条件要精确、对得上真实命中，高危规则与凭据、清痕迹、关防护类规则几乎不批；被拒后不要换写法重复提同一范围，按理由收窄或在结论里说明。"
 
 var suppressParameters = json.RawMessage(`{"type":"object","properties":{` +
 	`"host":{"type":"string"},` +
@@ -40,7 +41,7 @@ var suppressParameters = json.RawMessage(`{"type":"object","properties":{` +
 // rejectedCooldown 被拒绝的提议多久之内不再接受同一条（主机、规则）
 const rejectedCooldown = 30 * 24 * time.Hour
 
-// suppress 写一条待批准的抑制。不进抑制索引，组管理员在抑制页批准后才生效
+// suppress 写一条待批准的抑制并交 AI 审计员当场评审。批准前不进抑制索引；没配审计员时留给组管理员在抑制页审批
 func (s *Service) suppress(ctx context.Context, session *ent.AgentSession, args json.RawMessage) (string, error) {
 	var body struct {
 		Host       uuid.UUID            `json:"host"`
@@ -113,7 +114,7 @@ func (s *Service) suppress(ctx context.Context, session *ent.AgentSession, args 
 		case e.Status == "proposed" && same:
 			return marshal(map[string]any{"status": "pending", "note": "已有待批准的提议"})
 		case e.Status == "rejected" && same && e.ReviewedAt != nil && time.Since(*e.ReviewedAt) < rejectedCooldown:
-			return marshal(map[string]any{"status": "rejected", "note": "组管理员 30 天内拒绝过同样的提议，不要再提，在结论里说明即可"})
+			return marshal(map[string]any{"status": "rejected", "note": "30 天内拒绝过同样的提议，不要再提，在结论里说明即可"})
 		}
 	}
 	p, err := s.DB.Suppression.Create().SetRuleID(body.RuleID).SetAssetID(body.Host).SetReason(body.Reason).SetConditions(body.Conditions).
@@ -122,7 +123,20 @@ func (s *Service) suppress(ctx context.Context, session *ent.AgentSession, args 
 	if err != nil {
 		return "", err
 	}
-	return marshal(map[string]any{"status": "proposed", "id": p.ID, "note": "已提交，组管理员批准后生效"})
+	if s.ReviewSuppression == nil {
+		return marshal(map[string]any{"status": "proposed", "id": p.ID, "note": "已提交，待批准后生效"})
+	}
+	status, reason, err := s.ReviewSuppression(ctx, p.ID)
+	switch {
+	case err != nil:
+		// 审计员调不通时草案留在待批准，后台会自动重试
+		return marshal(map[string]any{"status": "proposed", "id": p.ID, "note": "已提交，AI 审计员暂时不可用，草案待评审：后台会自动重试，组管理员也可手动审批。不要重复提交"})
+	case status == "active":
+		return marshal(map[string]any{"status": "active", "id": p.ID, "note": "AI 审计员已批准，已生效：" + reason})
+	case status == "rejected":
+		return marshal(map[string]any{"status": "rejected", "id": p.ID, "note": "AI 审计员没有批准：" + reason + "。不要换写法重复提同一范围；能按理由收窄就重新提，否则在结论里说明"})
+	}
+	return marshal(map[string]any{"status": status, "id": p.ID, "note": "已提交，待批准后生效"})
 }
 
 // sameConditions 两组条件是否相同（不计顺序，值不区分大小写）

@@ -67,7 +67,7 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | GET | `/api/suppressions` | 抑制清单（含压掉次数）；非 admin 只见本组资产的抑制，全局抑制仅 admin 可见 |
 | POST | `/api/suppressions` | `{"ruleId","assetId"(空=全局),"reason","expiresInDays"(0=长期)}`；需该资产所在组的 analyst，全局抑制仅 admin，否则 403 |
 | DELETE | `/api/suppressions/{id}` | 撤销，权限同创建（按该抑制的资产判断） |
-| POST | `/api/suppressions/{id}/review` | 资产所在组 admin；`{"decision":"approve\|reject","note"}`，处理 AI 提议的抑制草案。仅 `proposed` 且绑定资产的可审批；批准时有效期从批准那一刻重算；已处理返回 409；落审计 `suppression_approved` / `suppression_rejected` |
+| POST | `/api/suppressions/{id}/review` | 资产所在组 admin；`{"decision":"approve\|reject","note"}`，处理 AI 提议的抑制草案。仅 `proposed` 且绑定资产的可审批；批准时有效期从批准那一刻重算；已处理返回 409；落审计 `suppression_approved` / `suppression_rejected`。草案平时由 AI 审计员评审（`reviewedBy = ai-reviewer`，审计 `suppression_ai_reviewed`），这里处理仍待批准的 |
 
 ## 已知自动化
 

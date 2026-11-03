@@ -413,7 +413,7 @@ server 全部通过环境变量配置，均有默认值：
 | `IPINFO_TTL_DAYS` | `7` | 公网地址信息的缓存期（天），到期重查 |
 | `ASSET_ANNOTATE_REFRESH_HOURS` | `24` | 资产 AI 标注的定时刷新周期（小时），0 表示只在事实变化或人工要求时标注；需配置 `AI_MODEL`，见 [资产图谱与攻击面](asset-map.md) |
 | `AUTO_CLOSE_BENIGN_DAYS` | `7` | 未结案事件 AI 判良性、最高级别低于 4（高危）且创建超过 N 天时，每小时由系统按 `false_positive` 自动结案并记审计；0 表示关闭 |
-| `FP_SUPPRESS_MIN_COUNT` | `5` | 误报统计：近窗口内同一规则在同一主机上被人判误报至少这么多次（采纳 AI 结案建议与系统自动结案不计入），且满足误报率、期间无属实时，生成待组管理员批准的抑制草案；0 关闭。口径见 [detection.md](detection.md#抑制serverinternalsuppress) |
+| `FP_SUPPRESS_MIN_COUNT` | `5` | 误报统计：近窗口内同一规则在同一主机上被人判误报至少这么多次（采纳 AI 结案建议与系统自动结案不计入），且满足误报率、期间无属实时，生成抑制草案交 AI 审计员评审；0 关闭。口径见 [detection.md](detection.md#抑制serverinternalsuppress) |
 | `FP_SUPPRESS_MIN_RATIO` | `90` | 误报率下限（%）：误报 /（误报 + 属实 + 未结案） |
 | `FP_SUPPRESS_WINDOW_DAYS` | `30` | 统计窗口（天） |
 | `FP_SUPPRESS_DAYS` | `30` | 草案建议的有效期（天，1–90），批准时从批准那一刻起算 |

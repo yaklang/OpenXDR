@@ -66,7 +66,7 @@ func (s *Store) Run(ctx context.Context) {
 
 // Reload 从库里重建索引。新建或撤销抑制规则后立即生效不必等下个周期。
 func (s *Store) Reload(ctx context.Context) {
-	// 只有生效的进索引：AI 提议的要等组管理员批准
+	// 只有生效的进索引：AI 提议的要经审计员或组管理员批准
 	rows, err := s.db.Suppression.Query().Where(suppression.StatusEQ("active")).All(ctx)
 	if err != nil {
 		slog.Error("加载抑制规则失败", "err", err)
