@@ -55,7 +55,7 @@ func (r *Reviewer) Review(ctx context.Context, req commandgate.Request) (bool, s
 	if err != nil {
 		return false, "", err
 	}
-	return verdict(reply.Content)
+	return Verdict(reply.Content)
 }
 
 // material 待审材料：命令、目标主机、会话标题、最初与本轮的用户请求，以及执行前模型最后的说明
@@ -97,7 +97,7 @@ func (r *Reviewer) material(ctx context.Context, session *ent.AgentSession, req 
 		current = "（同上）"
 	}
 	return fmt.Sprintf("会话类型：%s\n会话标题：%s\n会话最初的请求：\n%s\n本轮用户的请求（以它为准）：\n%s\n执行前模型最后的说明：\n%s\n目标主机：%s\n命令超时：%d 秒\n待审命令：\n%s",
-		session.Kind, clip(title, 200), clip(first, 2000), clip(current, 3000), clip(intent, 2000), host, req.Command.TimeoutMS/1000, *req.Command.Cmd), nil
+		session.Kind, Clip(title, 200), Clip(first, 2000), Clip(current, 3000), Clip(intent, 2000), host, req.Command.TimeoutMS/1000, *req.Command.Cmd), nil
 }
 
 // text 消息里的文字部分（工具调用与结果不算）
@@ -128,27 +128,28 @@ func text(raw json.RawMessage) string {
 	return strings.Join(out, "\n")
 }
 
-// verdict 解析回复里的 JSON；解析不了按出错处理，由闸门记为拒绝
-func verdict(reply string) (bool, string, error) {
+// Verdict 解析回复里的 JSON；解析不了按出错处理，由调用方记为拒绝。抑制草案的评审共用
+func Verdict(reply string) (bool, string, error) {
 	start, end := strings.Index(reply, "{"), strings.LastIndex(reply, "}")
 	if start < 0 || end < start {
-		return false, "", fmt.Errorf("审计员回复不是 JSON：%s", clip(reply, 200))
+		return false, "", fmt.Errorf("审计员回复不是 JSON：%s", Clip(reply, 200))
 	}
 	var v struct {
 		Approve *bool  `json:"approve"`
 		Reason  string `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(reply[start:end+1]), &v); err != nil || v.Approve == nil {
-		return false, "", fmt.Errorf("审计员回复格式不对：%s", clip(reply, 200))
+		return false, "", fmt.Errorf("审计员回复格式不对：%s", Clip(reply, 200))
 	}
 	reason := strings.TrimSpace(v.Reason)
 	if reason == "" {
 		reason = "（未给理由）"
 	}
-	return *v.Approve, clip(reason, 500), nil
+	return *v.Approve, Clip(reason, 500), nil
 }
 
-func clip(s string, n int) string {
+// Clip 按字符截断，超出加省略号
+func Clip(s string, n int) string {
 	if r := []rune(s); len(r) > n {
 		return string(r[:n]) + "…"
 	}

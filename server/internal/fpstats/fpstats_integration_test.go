@@ -61,7 +61,9 @@ func TestSweep(t *testing.T) {
 	group := db.Group.Create().SetName("g").SaveX(ctx)
 	host := db.Asset.Create().SetHostname("pve1").SetGroupID(group.ID).SaveX(ctx)
 	f := &fixture{ctx: ctx, db: db, host: host.ID, t: t}
-	s := &Stats{DB: db, Window: 30 * 24 * time.Hour, MinCount: 5, MinRatio: 90, Days: 30, Cooldown: 30 * 24 * time.Hour}
+	var submitted []uuid.UUID
+	s := &Stats{DB: db, Window: 30 * 24 * time.Hour, MinCount: 5, MinRatio: 90, Days: 30, Cooldown: 30 * 24 * time.Hour,
+		Proposed: func(id uuid.UUID) { submitted = append(submitted, id) }}
 
 	// 达到阈值：5 次人工误报（含一次采纳 AI 研判），按域名 + 进程映像收窄
 	f.times(4, "hit", "false_positive", "alice", "", dns)
@@ -102,7 +104,7 @@ func TestSweep(t *testing.T) {
 	db.Suppression.Create().SetRuleID("covered").SetAssetID(host.ID).SetStatus("active").
 		SetConditions([]suppress.Condition{{Field: "query.hostname", Op: "equals", Value: "updates.example.com"}}).SaveX(ctx)
 
-	if n, err := s.Sweep(ctx, time.Now()); err != nil || n != 3 {
+	if n, err := s.Sweep(ctx, time.Now()); err != nil || n != 3 || len(submitted) != 3 {
 		t.Fatalf("应生成 3 条草案，得到 %d %v", n, err)
 	}
 	for _, rule := range []string{"few", "real", "aiprop", "external", "ratio", "purged", "covered", "critical", "xdr:new-process"} {

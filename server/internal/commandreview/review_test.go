@@ -7,19 +7,19 @@ import (
 
 // 回复里认 JSON 结论；拿不到结论按出错处理，由闸门记为拒绝
 func TestVerdict(t *testing.T) {
-	ok, reason, err := verdict("好的。\n```json\n{\"approve\": true, \"reason\": \"只读核对 sudoers 语法\"}\n```")
+	ok, reason, err := Verdict("好的。\n```json\n{\"approve\": true, \"reason\": \"只读核对 sudoers 语法\"}\n```")
 	if err != nil || !ok || reason != "只读核对 sudoers 语法" {
 		t.Fatalf("应批准: %v %q %v", ok, reason, err)
 	}
-	if ok, _, err := verdict(`{"approve": false, "reason": "会改配置但没有备份"}`); err != nil || ok {
+	if ok, _, err := Verdict(`{"approve": false, "reason": "会改配置但没有备份"}`); err != nil || ok {
 		t.Fatalf("应拒绝: %v %v", ok, err)
 	}
 	for _, bad := range []string{"可以执行", `{"reason": "没有结论"}`, `{"approve": "yes"}`} {
-		if _, _, err := verdict(bad); err == nil {
+		if _, _, err := Verdict(bad); err == nil {
 			t.Errorf("拿不到结论应出错: %q", bad)
 		}
 	}
-	if _, reason, _ := verdict(`{"approve": true}`); reason == "" {
+	if _, reason, _ := Verdict(`{"approve": true}`); reason == "" {
 		t.Error("没给理由也要留一句说明")
 	}
 }

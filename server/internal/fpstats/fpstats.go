@@ -1,7 +1,7 @@
 // Package fpstats 误报统计 → 抑制草案：把人反复下的「误报」结论回喂到规则层。
 //
 // 同一条规则在同一台主机上被人判误报够多次、误报率够高、期间没有一次判属实，
-// 就生成一条待批准的抑制草案，挂进组管理员的审批流程。草案从不直接生效。
+// 就生成一条待批准的抑制草案，交 AI 审计员评审（没配时留给组管理员）。草案从不直接生效。
 //
 // 只算人的结论：系统自动结案只是复述 AI 的良性判断；原样采纳 AI 结案建议的，
 // 结论和理由都出自 AI，计进来就成了「AI 提议结案 → AI 统计 → AI 提议抑制」的自我强化。
@@ -90,6 +90,8 @@ type Stats struct {
 	// 被拒绝的同范围草案多久内不再生成
 	Cooldown time.Duration
 	Interval time.Duration
+	// Proposed 草案落库后通知评审（后台进行，不阻塞统计）；为空时草案留给人审
+	Proposed func(id uuid.UUID)
 }
 
 // Run 拿到租约先扫一次再按周期扫
@@ -384,6 +386,9 @@ func (s *Stats) propose(ctx context.Context, d draft, now time.Time) (bool, erro
 	}
 	audit.System(ctx, s.DB, "suppression_proposed", p.ID.String(),
 		fmt.Sprintf("误报统计 %s 主机 %s：%d 次人工误报，误报率 %d%%", d.key.rule, d.key.asset, ev.FalsePositives, ev.RatioPercent))
+	if s.Proposed != nil {
+		s.Proposed(p.ID)
+	}
 	return true, nil
 }
 

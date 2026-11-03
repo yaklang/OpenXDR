@@ -52,6 +52,8 @@ type Service struct {
 	Rules interface{ TitleOf(id string) string }
 	// GroupDailyTokens 每组近 24 小时 Pi 会话的输入加输出 token 上限，0 表示不限
 	GroupDailyTokens int
+	// ReviewSuppression 抑制草案生成后当场交 AI 审计员评审，返回评审后的状态与理由；为空时草案留给人审
+	ReviewSuppression func(ctx context.Context, id uuid.UUID) (status, reason string, err error)
 	// FoldAbove 历史超过这么多字节时折叠较早的工具结果与思考过程再发给模型，0 不折叠
 	FoldAbove int
 	// running 后台运行中的对话：停机时等它们把终态写完再退出

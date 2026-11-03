@@ -126,7 +126,7 @@ func mapSuppressions(api *http.ServeMux, db *ent.Client, store *suppress.Store, 
 		})
 	})
 
-	// AI 提议的抑制由组管理员批准或拒绝，与命令审批同一档权限。批准时有效期从批准那一刻重新算
+	// AI 提议的抑制由 AI 审计员评审；仍待批准的组管理员也可以手动批准或拒绝，与命令审批同一档权限。批准时有效期从批准那一刻重新算
 	api.HandleFunc("POST /api/suppressions/{id}/review", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Decision string `json:"decision"`
@@ -147,25 +147,17 @@ func mapSuppressions(api *http.ServeMux, db *ent.Client, store *suppress.Store, 
 		if !assetInScope(w, r, db, *s.AssetID, "admin") {
 			return
 		}
-		now := time.Now()
-		update := db.Suppression.Update().Where(entsuppression.IDEQ(s.ID), entsuppression.StatusEQ("proposed")).
-			SetReviewedBy(audit.Actor(r.Context())).SetReviewedAt(now)
+		approve := body.Decision == "approve"
 		action := "suppression_rejected"
-		if body.Decision == "approve" {
+		if approve {
 			action = "suppression_approved"
-			update.SetStatus("active")
-			if s.ExpiresAt != nil {
-				update.SetExpiresAt(now.Add(s.ExpiresAt.Sub(s.CreatedAt)))
-			}
-		} else {
-			update.SetStatus("rejected")
 		}
-		n, err := update.Save(r.Context())
+		done, err := suppress.Decide(r.Context(), db, s, approve, audit.Actor(r.Context()), time.Now())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if n != 1 {
+		if !done {
 			http.Error(w, "提议已被别人处理", http.StatusConflict)
 			return
 		}
