@@ -11,6 +11,7 @@ import { useTheme } from '../app/theme'
 import { Ago } from '../components/Ago'
 import { GettingStarted } from '../components/GettingStarted'
 import { LoadError } from '../components/LoadError'
+import { NotifyBanner } from '../components/NotifyBanner'
 import { GeminiSparkle } from '../components/Logo'
 import { Page, TableCard, WIDE_ONLY, useWideTable } from '../components/Page'
 import { saveQueue } from '../components/incidentQueue'
@@ -132,7 +133,7 @@ function AiOps() {
 export function OverviewPage() {
   const { t } = useI18n()
   const { token } = theme.useToken()
-  const { group } = useSession()
+  const { group, isAdmin } = useSession()
   const series = useSeriesColor()
   const [trendView, setTrendView] = useState<'chart' | 'table'>('chart')
   const stats = useQuery({ queryKey: ['stats'], queryFn: fetchStats, refetchInterval: 30_000, placeholderData: keepPreviousData })
@@ -161,6 +162,8 @@ export function OverviewPage() {
   return (
     <Page title={t('navOverview')} subtitle={t('overviewSubtitle')}>
       <GettingStarted />
+      {/* admin 的全局布局里已经有这条 */}
+      {!isAdmin && <NotifyBanner />}
       <Row gutter={[20, 20]}>
         <Col xs={24} xl={16}>
           <Funnel events={s?.events24h ?? 0} alerts={s?.alerts24h ?? 0} incidents={s?.reviewIncidents ?? 0}
