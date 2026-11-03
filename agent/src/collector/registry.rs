@@ -19,6 +19,8 @@ pub struct Container {
     /// 容器 ID（docker 系取前 12 位）或 Proxmox 的 VMID
     pub uid: String,
     pub name: Option<String>,
+    /// 进程是这个容器配置的健康检查（docker HEALTHCHECK）或它拉起的后代，见 mod.rs 的 healthcheck_of
+    pub healthcheck: bool,
 }
 
 impl Container {
@@ -26,6 +28,9 @@ impl Container {
         let mut v = serde_json::json!({ "runtime": self.runtime, "uid": self.uid });
         if let Some(name) = &self.name {
             v["name"] = name.as_str().into();
+        }
+        if self.healthcheck {
+            v["healthcheck"] = true.into();
         }
         v
     }

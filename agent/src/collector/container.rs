@@ -24,7 +24,12 @@ pub fn of(pid: u32) -> Option<Arc<Container>> {
     }
     let found = identify(path).map(|(runtime, uid)| {
         let name = name_of(runtime, &uid);
-        Arc::new(Container { runtime, uid, name })
+        Arc::new(Container {
+            runtime,
+            uid,
+            name,
+            healthcheck: false,
+        })
     });
     let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
     if cache.len() >= MAX_CACHED {
@@ -40,6 +45,7 @@ pub fn lxc(vmid: &str) -> Arc<Container> {
         runtime: "lxc",
         uid: vmid.to_string(),
         name: name_of("lxc", vmid),
+        healthcheck: false,
     })
 }
 
@@ -179,6 +185,13 @@ fn name_of(runtime: &str, uid: &str) -> Option<String> {
 }
 
 fn docker_name(short_id: &str) -> Option<String> {
+    let v = docker_config(short_id)?;
+    let name = v["Name"].as_str()?.trim_start_matches('/');
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// docker 容器配置（默认数据目录下的 config.v2.json）。dockerd 换了数据目录、agent 自己跑在容器里就读不到
+fn docker_config(short_id: &str) -> Option<serde_json::Value> {
     let dir = std::fs::read_dir("/var/lib/docker/containers").ok()?;
     let full = dir
         .flatten()
@@ -186,9 +199,79 @@ fn docker_name(short_id: &str) -> Option<String> {
         .find(|n| n.starts_with(short_id))?;
     let text = std::fs::read_to_string(format!("/var/lib/docker/containers/{full}/config.v2.json"))
         .ok()?;
-    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let name = v["Name"].as_str()?.trim_start_matches('/');
-    (!name.is_empty()).then(|| name.to_string())
+    serde_json::from_str(&text).ok()
+}
+
+/// 健康检查结果的缓存时长：容器的健康检查创建后就不变，但同一个短 ID 读不到（刚创建、dockerd 还没写盘）
+/// 要能再试，到期一律重读，一分钟一个容器一次目录扫描
+const HEALTHCHECK_TTL: Duration = Duration::from_secs(60);
+
+/// docker 容器配置的健康检查命令，写成事件里命令行的样子（参数以空格相连）。
+/// 没配、配成 NONE、配置读不到都返回 None——认不出就不标，告警照常
+pub fn healthcheck(short_id: &str) -> Option<Arc<str>> {
+    let cache = healthchecks();
+    if let Some((hit, at)) = cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(short_id)
+        && at.elapsed() < HEALTHCHECK_TTL
+    {
+        return hit.clone();
+    }
+    let found = docker_config(short_id)
+        .and_then(|v| healthcheck_cmd(&v))
+        .map(Arc::from);
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if cache.len() >= MAX_CACHED {
+        cache.clear();
+    }
+    cache.insert(
+        short_id.to_string(),
+        (found.clone(), std::time::Instant::now()),
+    );
+    found
+}
+
+type HealthcheckCache = HashMap<String, (Option<Arc<str>>, std::time::Instant)>;
+
+fn healthchecks() -> &'static Mutex<HealthcheckCache> {
+    static CACHE: OnceLock<Mutex<HealthcheckCache>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// 测试用：不读 docker 数据目录，直接给容器配上健康检查
+#[cfg(test)]
+pub fn set_healthcheck(short_id: &str, cmd: &str) {
+    healthchecks().lock().unwrap().insert(
+        short_id.to_string(),
+        (Some(Arc::from(cmd)), std::time::Instant::now()),
+    );
+}
+
+/// 按 dockerd 的执行方式还原健康检查的命令行：Test 是 ["CMD", 参数...] 时直接执行这些参数，
+/// ["CMD-SHELL", 命令] 时在容器的 Shell（没配是 /bin/sh -c）里执行；["NONE"] 是关掉了。
+/// 空参数在事件命令行里不占位，这里同样跳过
+fn healthcheck_cmd(config: &serde_json::Value) -> Option<String> {
+    let config = &config["Config"];
+    let test = config["Healthcheck"]["Test"].as_array()?;
+    let test: Vec<&str> = test.iter().map(|v| v.as_str()).collect::<Option<_>>()?;
+    let argv: Vec<&str> = match test.split_first()? {
+        (&"CMD", args) => args.to_vec(),
+        (&"CMD-SHELL", args) => {
+            let shell: Vec<&str> = match config["Shell"].as_array() {
+                Some(s) if !s.is_empty() => s.iter().map(|v| v.as_str()).collect::<Option<_>>()?,
+                _ => vec!["/bin/sh", "-c"],
+            };
+            shell.into_iter().chain(args.iter().copied()).collect()
+        }
+        _ => return None,
+    };
+    let line = argv
+        .into_iter()
+        .filter(|a| !a.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!line.is_empty()).then_some(line)
 }
 
 /// Proxmox 配置是 `键: 值` 行；快照段（[snapshot]）之后的同名键属于快照，不算
@@ -313,6 +396,44 @@ mod tests {
             .map(|ip| ip.to_string())
             .collect();
         assert_eq!(got, ["10.1.1.100", "fd00::5"]);
+    }
+
+    #[test]
+    fn healthcheck_forms() {
+        let cmd = |v: serde_json::Value| healthcheck_cmd(&v);
+        let hc = |test: serde_json::Value| serde_json::json!({ "Config": { "Healthcheck": { "Test": test } } });
+        assert_eq!(
+            cmd(hc(serde_json::json!([
+                "CMD-SHELL",
+                "nc -z 127.0.0.1 4822 || exit 1"
+            ])))
+            .as_deref(),
+            Some("/bin/sh -c nc -z 127.0.0.1 4822 || exit 1")
+        );
+        assert_eq!(
+            cmd(hc(serde_json::json!([
+                "CMD",
+                "pg_isready",
+                "-U",
+                "yuesheng"
+            ])))
+            .as_deref(),
+            Some("pg_isready -U yuesheng")
+        );
+        // 镜像用 SHELL 指令换了 shell，dockerd 用它执行 CMD-SHELL
+        let mut bash = hc(serde_json::json!(["CMD-SHELL", "curl -f localhost"]));
+        bash["Config"]["Shell"] = serde_json::json!(["/bin/bash", "-o", "pipefail", "-c"]);
+        assert_eq!(
+            cmd(bash).as_deref(),
+            Some("/bin/bash -o pipefail -c curl -f localhost")
+        );
+        assert_eq!(cmd(hc(serde_json::json!(["NONE"]))), None);
+        assert_eq!(cmd(hc(serde_json::json!([]))), None);
+        assert_eq!(cmd(hc(serde_json::json!(["CMD"]))), None);
+        assert_eq!(cmd(hc(serde_json::json!(["CMD", 1]))), None);
+        assert_eq!(cmd(serde_json::json!({ "Config": {} })), None);
+        // 读不到配置（数据目录不在默认位置、容器已删）就认不出
+        assert_eq!(healthcheck("0123456789ab"), None);
     }
 
     #[test]

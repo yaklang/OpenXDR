@@ -118,6 +118,10 @@ func init() {
 	alertDescAutomationWatch := alertFields[11].Descriptor()
 	// alert.DefaultAutomationWatch holds the default value on creation for the automation_watch field.
 	alert.DefaultAutomationWatch = alertDescAutomationWatch.Default.(bool)
+	// alertDescHealthcheck is the schema descriptor for healthcheck field.
+	alertDescHealthcheck := alertFields[12].Descriptor()
+	// alert.DefaultHealthcheck holds the default value on creation for the healthcheck field.
+	alert.DefaultHealthcheck = alertDescHealthcheck.Default.(bool)
 	// alertDescID is the schema descriptor for id field.
 	alertDescID := alertFields[0].Descriptor()
 	// alert.DefaultID holds the default value on creation for the id field.

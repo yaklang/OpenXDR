@@ -29,6 +29,24 @@ func TestSession(t *testing.T) {
 	}
 }
 
+func TestHealthcheck(t *testing.T) {
+	mk := func(c any) map[string]any { return map[string]any{"container": c} }
+	if !Healthcheck(mk(map[string]any{"runtime": "docker", "uid": "4f1c2a3b5d6e", "healthcheck": true})) {
+		t.Fatal("docker 健康检查应认出")
+	}
+	for _, raw := range []map[string]any{
+		{},
+		mk("x"),
+		mk(map[string]any{"runtime": "docker", "uid": "4f1c2a3b5d6e"}),
+		mk(map[string]any{"runtime": "docker", "healthcheck": "true"}),
+		mk(map[string]any{"runtime": "lxc", "healthcheck": true}),
+	} {
+		if Healthcheck(raw) {
+			t.Fatalf("不该认出: %v", raw)
+		}
+	}
+}
+
 func TestWatch(t *testing.T) {
 	rules := []*sigma.Rule{
 		{ID: "recon", Tactics: []string{"discovery"}, Techniques: []string{"T1082"}},

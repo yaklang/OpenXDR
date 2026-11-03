@@ -90,6 +90,8 @@ export interface AlertRow {
   detail?: string
   // 来自运维自动化（进得了 incident 的只有高危例外）
   automation?: AutomationRef
+  // 来自容器健康检查（同上，只有高危例外）
+  healthcheck?: boolean
 }
 
 // 告警或事件标注的运维自动化；watch 为高危例外（仍进研判）

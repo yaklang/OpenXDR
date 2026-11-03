@@ -112,6 +112,7 @@ var (
 		{Name: "command_id", Type: field.TypeUUID, Nullable: true},
 		{Name: "automation_id", Type: field.TypeUUID, Nullable: true},
 		{Name: "automation_watch", Type: field.TypeBool, Default: false},
+		{Name: "healthcheck", Type: field.TypeBool, Default: false},
 		{Name: "detail", Type: field.TypeString, Nullable: true, Size: 2147483647},
 		{Name: "asset_id", Type: field.TypeUUID, Nullable: true},
 		{Name: "event_id", Type: field.TypeUUID, Nullable: true},
@@ -125,19 +126,19 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "alerts_assets_alerts",
-				Columns:    []*schema.Column{AlertsColumns[10]},
+				Columns:    []*schema.Column{AlertsColumns[11]},
 				RefColumns: []*schema.Column{AssetsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "alerts_events_alerts",
-				Columns:    []*schema.Column{AlertsColumns[11]},
+				Columns:    []*schema.Column{AlertsColumns[12]},
 				RefColumns: []*schema.Column{EventsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "alerts_incidents_alerts",
-				Columns:    []*schema.Column{AlertsColumns[12]},
+				Columns:    []*schema.Column{AlertsColumns[13]},
 				RefColumns: []*schema.Column{IncidentsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -146,12 +147,12 @@ var (
 			{
 				Name:    "alert_incident_id",
 				Unique:  false,
-				Columns: []*schema.Column{AlertsColumns[12]},
+				Columns: []*schema.Column{AlertsColumns[13]},
 			},
 			{
 				Name:    "alert_asset_id_ts",
 				Unique:  false,
-				Columns: []*schema.Column{AlertsColumns[10], AlertsColumns[1]},
+				Columns: []*schema.Column{AlertsColumns[11], AlertsColumns[1]},
 			},
 			{
 				Name:    "alert_command_id",

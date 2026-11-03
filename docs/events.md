@@ -47,7 +47,8 @@ agent 侧组装（`agent/src/collector/mod.rs:233` `process_event`）。
 
 - 顶层 protobuf 另带 `process_guid` / `parent_process_guid` / `username`
 - 进程在容器或 Proxmox 虚拟机里时（Linux 按 cgroup 识别），顶层加
-  `"container": { "runtime": "docker|podman|containerd|cri-o|lxc|qemu|nspawn", "uid": "<容器 ID 前 12 位或 VMID>", "name": "<名字，读不到省略>" }`
+  `"container": { "runtime": "docker|podman|containerd|cri-o|lxc|qemu|nspawn", "uid": "<容器 ID 前 12 位或 VMID>", "name": "<名字，读不到省略>" }`；
+  docker 容器配置的健康检查进程及其后代另带 `"healthcheck": true`（见 [采集端 · 容器健康检查](collection.md)）
 - 平台下发的指令拉起的进程（及其后代）顶层带 `"platform_command": { "uid": "<指令 ID>" }`，网络与 DNS 事件同样带，
   见 [检测链路 · 平台指令触发的告警](detection.md#平台指令触发的告警serverinternalcmdorigin)
 - Linux 上属于某次 SSH 登录会话的进程（按内核审计会话号认）顶层带

@@ -8,7 +8,7 @@ import { HttpError, dismissClosureProposal, downloadReport, fetchIncident, setIn
 import { useCanActIn, useSession } from '../app/session'
 import { useRemember } from '../app/recent'
 import { useKeys } from '../app/shortcuts'
-import { AutomationTag } from '../components/AutomationTag'
+import { AutomationTag, HealthcheckTag } from '../components/AutomationTag'
 import { useCanChat, useHandoff } from '../components/Handoff'
 import { HostLink } from '../components/HostLink'
 import { IncidentGraph } from '../components/IncidentGraph'
@@ -50,6 +50,7 @@ function AlertTimeline({ alerts }: { alerts: AlertRow[] }) {
               {a.count > 1 && <Typography.Text type="secondary">×{a.count}</Typography.Text>}
               {a.ruleAuthor && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t('ruleBy', { author: a.ruleAuthor })}</Typography.Text>}
               <AutomationTag value={a.automation} />
+              <HealthcheckTag value={a.healthcheck} />
             </Space>
             {a.detail && <Typography.Paragraph type="secondary" style={{ margin: '4px 0 0', fontSize: 13 }}>{a.detail}</Typography.Paragraph>}
             {evidence(a.event) && <div className="mono timeline-evidence">{evidence(a.event)}</div>}
@@ -227,7 +228,7 @@ export function IncidentDetailPage() {
                 columns={[
                   { title: t('thFirst'), dataIndex: 'ts', render: fmtTime, width: 170 },
                   { title: t('thLast'), dataIndex: 'lastTs', render: fmtTime, width: 170 },
-                  { title: t('thRule'), dataIndex: 'ruleTitle', render: (v, a) => <Space size={4}><Tooltip title={a.ruleAuthor && t('ruleBy', { author: a.ruleAuthor })}><Link to={`/rules?q=${encodeURIComponent(a.ruleId)}`}>{v ?? a.ruleId}</Link></Tooltip><AutomationTag value={a.automation} /></Space>, ellipsis: true },
+                  { title: t('thRule'), dataIndex: 'ruleTitle', render: (v, a) => <Space size={4}><Tooltip title={a.ruleAuthor && t('ruleBy', { author: a.ruleAuthor })}><Link to={`/rules?q=${encodeURIComponent(a.ruleId)}`}>{v ?? a.ruleId}</Link></Tooltip><AutomationTag value={a.automation} /><HealthcheckTag value={a.healthcheck} /></Space>, ellipsis: true },
                   { title: t('thSeverity'), dataIndex: 'severity', render: v => <SeverityTag value={v} />, width: 90 },
                   { title: t('thCount'), dataIndex: 'count', align: 'right', width: 70 },
                   {

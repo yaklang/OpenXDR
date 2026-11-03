@@ -644,10 +644,10 @@ const queryDescription = "通过当前组专属只读数据库身份查询授权
 	"managed_addresses(ip, in_group)：全平台已纳管主机的地址（含其他组，不给主机名与组名）。说某个地址「未纳管」之前必须先查这里：" +
 	"in_group=false 是已在其他组纳管，写成「已在其他组纳管」，不要报成未纳管或建议接入；查不到才是未纳管；" +
 	"ip_infos(ip, ptr, as_owner, asn, country, malicious, suspicious, domains：VirusTotal 结果；ipdb_asn, ipdb_org, ipdb_country：离线库的 AS 与国家；本组外联与告警里出现的公网地址)；reports(id, created_at, title, level, markdown, summary：一句话结论)；" +
-	"alerts(id, ts, last_ts, count, rule_id, severity, asset_id, incident_id, command_id, detail：合成检测如外联心跳 xdr:beacon 的间隔统计依据, automation_id, automation_watch)；" +
+	"alerts(id, ts, last_ts, count, rule_id, severity, asset_id, incident_id, command_id, detail：合成检测如外联心跳 xdr:beacon 的间隔统计依据, automation_id, automation_watch, healthcheck)；" +
 	"incidents(id, created_at, status, title, ai_verdict)；" +
 	"events(id, ts, class_uid, source, asset_id, username, conn_tuple, raw)；" +
-	"alert_events(alert_id, ts, last_ts, count, rule_id, severity, asset_id, incident_id, command_id, event_id, event_ts, class_uid, username, conn_tuple, raw, automation_id, automation_watch)：告警连同触发它的事件，" +
+	"alert_events(alert_id, ts, last_ts, count, rule_id, severity, asset_id, incident_id, command_id, event_id, event_ts, class_uid, username, conn_tuple, raw, automation_id, automation_watch, healthcheck)：告警连同触发它的事件，" +
 	"要告警对应的事件就查它，不要自己 JOIN events（会超时）；events 与 alert_events 只覆盖仍保留在热表的事件，已归档冷数据不在任何 SQL 可查范围内（组视图同样），查不到不等于没发生；" +
 	"commands(id, created_at, asset_id, cmd, status, exit_code, stdout)；" +
 	"trusted_sources(id, name, reason, created_by, expires_at, key_fingerprint, source_cidr, login_user, matched_count, last_matched_at, revoked_at)：组管理员登记的可信自动化来源；" +
@@ -660,10 +660,11 @@ const queryDescription = "通过当前组专属只读数据库身份查询授权
 	"rule_id 的规则名见系统提示数据里的 rule_titles，不要去 JSON 字段里找；incidents.title 只是首条告警的标题，不等于规则名。" +
 	"alerts.command_id 不为空的是平台下发的指令（包括你自己执行的命令）触发的，来源已知，统计威胁时排除（AND a.command_id IS NULL）。" +
 	"alerts.automation_id 不为空的是登记的可信自动化来源（运维脚本、运维插件的 SSH 会话，按 sshd 登录的公钥指纹与来源认出）触发的，不进 incident；" +
-	"automation_watch 为 true 的是其中的高危例外（凭据窃取、清日志、关防护、破坏、情报命中），照常进 incident，要按可能的凭据盗用研判。" +
-	"统计威胁时排除非例外的（AND (a.automation_id IS NULL OR a.automation_watch)）；你不能登记或撤销可信来源，觉得某个来源该登记就向用户说明依据，由组管理员在控制台操作。" +
+	"alerts.healthcheck 为 true 的是 docker 容器配置的健康检查命令（agent 按容器配置逐字认出）及其后代触发的，同样不进 incident。" +
+	"automation_watch 为 true 的是这两类里的高危例外（凭据窃取、清日志、关防护、破坏、情报命中），照常进 incident，要按可能的凭据盗用或容器配置被篡改研判。" +
+	"统计威胁时排除非例外的（AND ((a.automation_id IS NULL AND NOT a.healthcheck) OR a.automation_watch)）；你不能登记或撤销可信来源，觉得某个来源该登记就向用户说明依据，由组管理员在控制台操作。" +
 	"按主机拆告警可直接用：SELECT h.hostname, a.rule_id, a.severity, sum(a.count) AS hits FROM alerts a " +
-	"JOIN assets h ON h.id = a.asset_id WHERE a.last_ts > now() - interval '24 hours' AND a.command_id IS NULL AND (a.automation_id IS NULL OR a.automation_watch) GROUP BY 1, 2, 3 ORDER BY 1, 4 DESC；" +
+	"JOIN assets h ON h.id = a.asset_id WHERE a.last_ts > now() - interval '24 hours' AND a.command_id IS NULL AND ((a.automation_id IS NULL AND NOT a.healthcheck) OR a.automation_watch) GROUP BY 1, 2, 3 ORDER BY 1, 4 DESC；" +
 	"status 为 triaged 表示 AI 已研判、尚未人工结案。不确定列名时先查 information_schema.columns，不猜测；" +
 	"优先聚合与字段投影，避免 SELECT *、graph、raw 等大字段；events 查询务必带 ts 范围。"
 

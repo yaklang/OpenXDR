@@ -108,6 +108,16 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
   systemd-nspawn，事件里写成 `container: {runtime, uid, name}`。名字读 docker 容器配置与
   `/etc/pve/lxc|qemu-server/<VMID>.conf`，读不到只给 ID。agent 必须跑在宿主机的 cgroup 命名空间里
   （systemd 服务即是；放进容器跑要 `--cgroupns=host`），否则看到的是相对路径
+- **容器健康检查**（`mod.rs` 的 `healthcheck_of`，仅 Linux）：dockerd 每隔几秒在容器里执行一次 HEALTHCHECK，
+  `nc -z`、`/dev/tcp` 探测这类命令天天误中规则。agent 读容器配置 `/var/lib/docker/containers/<ID>/config.v2.json` 的
+  `Config.Healthcheck.Test`，按 dockerd 的执行方式还原命令行（`["CMD", 参数…]` 直接执行；`["CMD-SHELL", 命令]` 在
+  `Config.Shell`、没配时 `/bin/sh -c` 里执行；`["NONE"]` 是关掉），容器里新进程的命令行与它**逐字相同**、
+  且父进程不在这个容器里（containerd-shim / runc 从宿主机拉起；容器里的进程自己跑一遍不算）时认作健康检查；
+  它拉起的后代、原地 exec 成的程序（`sh -c` 只有一条命令时直接 exec）同容器内继承。认出的进程事件 `container` 带
+  `healthcheck: true`，它的退出、网络与 DNS 事件按 pid 取到同一份容器信息也带上。容器配置按容器缓存一分钟。
+  **认不出就不标**：父进程说不清（没登记、已退场）、dockerd 换了数据目录、agent 跑在容器里读不到配置、
+  命令行被截断或经 shebang 脚本改写了 argv（`CMD` 写法直接执行脚本时）、fork 不 exec 的子 shell 再拉起的进程，都照常告警。
+  server 怎么用这个标记见 [检测链路 · 容器健康检查](detection.md#容器健康检查)
 - **username**：eBPF/netlink 路径从 `/proc/<pid>/status` 读 real uid，
   再查 `/etc/passwd` 解析成用户名（结果带缓存）；passwd 查不到退化为
   uid 数字串，与轮询路径一致（`mod.rs:185` `username_of`）

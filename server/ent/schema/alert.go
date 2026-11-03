@@ -28,8 +28,11 @@ func (Alert) Fields() []ent.Field {
 		field.UUID("command_id", uuid.UUID{}).Optional().Nillable(),
 		// 登记的可信自动化来源（见 TrustedSource）的登录会话触发的告警：照常留痕、挂在来源上，不进事件关联与研判
 		field.UUID("automation_id", uuid.UUID{}).Optional().Nillable(),
-		// 来自可信来源、但规则属于高危例外（见 internal/automation.Watch）：仍进关联与研判
+		// 来自可信来源或容器健康检查、但规则属于高危例外（见 internal/automation.Watch）：仍进关联与研判
 		field.Bool("automation_watch").Default(false),
+		// 事件是 agent 认出的 docker 容器健康检查（HEALTHCHECK）进程或其后代：照常留痕，不进事件关联与研判；
+		// 高危例外记在 automation_watch 上，仍进关联与研判
+		field.Bool("healthcheck").Default(false),
 		// 合成检测的依据（如心跳的间隔统计），一行人读的话；研判上下文与事件页一并展示。规则命中为空
 		field.Text("detail").Optional().Nillable(),
 	}

@@ -154,6 +154,20 @@ func (_c *AlertCreate) SetNillableAutomationWatch(v *bool) *AlertCreate {
 	return _c
 }
 
+// SetHealthcheck sets the "healthcheck" field.
+func (_c *AlertCreate) SetHealthcheck(v bool) *AlertCreate {
+	_c.mutation.SetHealthcheck(v)
+	return _c
+}
+
+// SetNillableHealthcheck sets the "healthcheck" field if the given value is not nil.
+func (_c *AlertCreate) SetNillableHealthcheck(v *bool) *AlertCreate {
+	if v != nil {
+		_c.SetHealthcheck(*v)
+	}
+	return _c
+}
+
 // SetDetail sets the "detail" field.
 func (_c *AlertCreate) SetDetail(v string) *AlertCreate {
 	_c.mutation.SetDetail(v)
@@ -240,6 +254,10 @@ func (_c *AlertCreate) defaults() {
 		v := alert.DefaultAutomationWatch
 		_c.mutation.SetAutomationWatch(v)
 	}
+	if _, ok := _c.mutation.Healthcheck(); !ok {
+		v := alert.DefaultHealthcheck
+		_c.mutation.SetHealthcheck(v)
+	}
 	if _, ok := _c.mutation.ID(); !ok {
 		v := alert.DefaultID()
 		_c.mutation.SetID(v)
@@ -262,6 +280,9 @@ func (_c *AlertCreate) check() error {
 	}
 	if _, ok := _c.mutation.AutomationWatch(); !ok {
 		return &ValidationError{Name: "automation_watch", err: errors.New(`ent: missing required field "Alert.automation_watch"`)}
+	}
+	if _, ok := _c.mutation.Healthcheck(); !ok {
+		return &ValidationError{Name: "healthcheck", err: errors.New(`ent: missing required field "Alert.healthcheck"`)}
 	}
 	return nil
 }
@@ -329,6 +350,10 @@ func (_c *AlertCreate) createSpec() (*Alert, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.AutomationWatch(); ok {
 		_spec.SetField(alert.FieldAutomationWatch, field.TypeBool, value)
 		_node.AutomationWatch = value
+	}
+	if value, ok := _c.mutation.Healthcheck(); ok {
+		_spec.SetField(alert.FieldHealthcheck, field.TypeBool, value)
+		_node.Healthcheck = value
 	}
 	if value, ok := _c.mutation.Detail(); ok {
 		_spec.SetField(alert.FieldDetail, field.TypeString, value)

@@ -168,7 +168,7 @@ func (e *Engine) batch(ctx context.Context) (int, error) {
 		if e.Suppress.Suppressed(sigma.RuleNewProcess, &k.asset, raw, ev.Ts) {
 			continue
 		}
-		// 可信自动化来源的会话里跑出的新程序照常学进基线，告警挂到来源上、不进关联
+		// 可信自动化来源的会话、容器健康检查里跑出的新程序照常学进基线，告警挂到来源上、不进关联
 		var source *uuid.UUID
 		if e.SQL != nil && ev.Source == "agent" {
 			var err error
@@ -178,6 +178,7 @@ func (e *Engine) batch(ctx context.Context) (int, error) {
 		}
 		alerts = append(alerts, e.DB.Alert.Create().
 			SetNillableAutomationID(source).
+			SetHealthcheck(ev.Source == "agent" && automation.Healthcheck(raw)).
 			SetTs(ev.Ts).
 			SetRuleID(sigma.RuleNewProcess).
 			SetSeverity(2).

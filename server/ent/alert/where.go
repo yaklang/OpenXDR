@@ -111,6 +111,11 @@ func AutomationWatch(v bool) predicate.Alert {
 	return predicate.Alert(sql.FieldEQ(FieldAutomationWatch, v))
 }
 
+// Healthcheck applies equality check predicate on the "healthcheck" field. It's identical to HealthcheckEQ.
+func Healthcheck(v bool) predicate.Alert {
+	return predicate.Alert(sql.FieldEQ(FieldHealthcheck, v))
+}
+
 // Detail applies equality check predicate on the "detail" field. It's identical to DetailEQ.
 func Detail(v string) predicate.Alert {
 	return predicate.Alert(sql.FieldEQ(FieldDetail, v))
@@ -549,6 +554,16 @@ func AutomationWatchEQ(v bool) predicate.Alert {
 // AutomationWatchNEQ applies the NEQ predicate on the "automation_watch" field.
 func AutomationWatchNEQ(v bool) predicate.Alert {
 	return predicate.Alert(sql.FieldNEQ(FieldAutomationWatch, v))
+}
+
+// HealthcheckEQ applies the EQ predicate on the "healthcheck" field.
+func HealthcheckEQ(v bool) predicate.Alert {
+	return predicate.Alert(sql.FieldEQ(FieldHealthcheck, v))
+}
+
+// HealthcheckNEQ applies the NEQ predicate on the "healthcheck" field.
+func HealthcheckNEQ(v bool) predicate.Alert {
+	return predicate.Alert(sql.FieldNEQ(FieldHealthcheck, v))
 }
 
 // DetailEQ applies the EQ predicate on the "detail" field.

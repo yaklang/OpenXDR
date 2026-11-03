@@ -7,6 +7,9 @@
 //
 // 识别只认登录事实，不认命令行与进程名：命令行每次不同、攻击者也能随意构造。
 // 可信来源被盗用（密钥失窃）时不能全盲，所以高危例外（Watch）即使来自可信来源也照常进研判。
+//
+// docker 容器的健康检查（HEALTHCHECK）是另一类已知自动化：dockerd 每隔几秒在容器里跑一遍配置好的命令，
+// agent 按容器配置逐字认出它和它的后代并打标（Healthcheck），告警同样不进关联与研判，高危例外照常。
 package automation
 
 import (
@@ -159,9 +162,18 @@ func Critical(r *sigma.Rule) bool {
 	return false
 }
 
-// Counted 进事件关联与态势统计的告警：不是来自可信来源，或是高危例外
+// Counted 进事件关联与态势统计的告警：既不来自可信来源、也不是容器健康检查，或是高危例外
 func Counted() predicate.Alert {
-	return alert.Or(alert.AutomationIDIsNil(), alert.AutomationWatch(true))
+	return alert.Or(alert.And(alert.AutomationIDIsNil(), alert.Healthcheck(false)), alert.AutomationWatch(true))
+}
+
+// Healthcheck 事件是不是 agent 认出的 docker 容器健康检查（HEALTHCHECK 配置的命令或其后代，见 agent 的 healthcheck_of）。
+// 与可信来源同一口径：告警照常入库，不进关联、研判与推送，高危例外（Watch）照常。
+// 标记是事件体里的字段，只该对 agent 上报的事件调用——syslog、探针的事件体由外部内容拼成，谁都能写
+func Healthcheck(raw map[string]any) bool {
+	c, _ := raw["container"].(map[string]any)
+	hc, _ := c["healthcheck"].(bool)
+	return hc && c["runtime"] == "docker"
 }
 
 var fingerprintRe = regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{43}$`)
