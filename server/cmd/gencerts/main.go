@@ -11,6 +11,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -108,9 +109,14 @@ func run(dir, host string, agentHosts []string) error {
 		}
 	}
 
+	if err := commandSigningKey(dir); err != nil {
+		return err
+	}
+
 	fmt.Printf("证书已生成于 %s:\n", dir)
 	fmt.Println("  server: TLS_CA_FILE=ca.crt TLS_CERT_FILE=server.crt TLS_KEY_FILE=server.key")
 	fmt.Println("          在线接入签发主机证书再加 TLS_CA_KEY_FILE=ca.key")
+	fmt.Println("          响应指令签名 COMMAND_SIGNING_KEY_FILE=command-signing.key（多节点用同一把）")
 	fmt.Println("  采集端: OPENXDR_CA=ca.crt OPENXDR_CERT=client.crt OPENXDR_KEY=client.key")
 	for _, agentHost := range agentHosts {
 		fmt.Printf("  %s: OPENXDR_CERT=agent-%s.crt OPENXDR_KEY=agent-%s.key（身份已绑定，只能以该主机注册上报）\n",
@@ -184,6 +190,27 @@ func issue(dir, name string, tmpl, ca *x509.Certificate, caKey *rsa.PrivateKey) 
 		return err
 	}
 	return writePair(dir, name, der, key)
+}
+
+// commandSigningKey 响应指令签名私钥：已有就沿用。agent 固定第一次见到的公钥，
+// 换地址重签证书时若连它一起换，全网 agent 都会拒绝新指令
+func commandSigningKey(dir string) error {
+	path := filepath.Join(dir, "command-signing.key")
+	if _, err := os.Stat(path); err == nil {
+		fmt.Println("沿用已有指令签名私钥：", path)
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600)
 }
 
 func writePair(dir, name string, der []byte, key *rsa.PrivateKey) error {

@@ -271,11 +271,19 @@ curl -X POST http://localhost:8080/api/intel/import \
 | 闸门 | 行为 |
 |---|---|
 | 全局开关 | `RESPONSE_ENABLED` 默认 false，不开则一律拒绝下发 |
+| 指令签名 | 每条指令用 `COMMAND_SIGNING_KEY_FILE` 的 Ed25519 私钥签进绑定目标 agent、一小时有效的信封；agent 只执行验签通过的指令 |
 | 隔离自保 | 未配置 `ISOLATION_ALLOW` 时 agent 拒绝隔离——隔离后收不到解除指令只能人工上机 |
 
 ```bash
-RESPONSE_ENABLED=true ISOLATION_ALLOW=<server>:8081 docker compose up -d
+RESPONSE_ENABLED=true COMMAND_SIGNING_KEY_FILE=/certs/command-signing.key \
+  ISOLATION_ALLOW=<server>:8081 docker compose up -d
 ```
+
+签名私钥由 `gencerts` 生成（`command-signing.key`，已有则沿用），多节点必须用同一把。
+agent 注册时第一次拿到公钥就固定在本地缓存目录（`command-signer`），之后 server 给出别的公钥也不换，
+没固定公钥的 agent 拒绝一切指令。所以数据库、跨节点 NATS 或单条投递链路被人摸到，
+都伪造不出 agent 肯执行的指令。私钥丢了或要换，只能在每台主机上删掉 `command-signer` 后重启 agent，
+因此要和 CA 一起备份。server 节点本身被拿下不在这道防线之内：节点上有私钥，也有分发安装包的能力。
 
 每条指令连同下发者、执行结果一并落库，可在事件详情页查看。
 隔离在 Linux 用 nftables 独立表实现（不触碰主机原有规则），Windows 使用独立 WFP 子层：管理端点许可优先于本子层的默认阻断，规则以事务原子更新并持久化。
@@ -409,6 +417,7 @@ server 全部通过环境变量配置，均有默认值：
 | `INTEL_FEED_INTERVAL_HOURS` | `6` | 情报订阅同步周期（小时），订阅条目有效期为它的 8 倍 |
 | `RESPONSE_ENABLED` | `false` | 是否允许下发响应指令；开启后人工处置、Pi 命令、定时任务与自动响应下发的指令都会真执行 |
 | `ISOLATION_ALLOW` | 空 | 隔离主机时放行的地址，必须包含 server 的 gRPC 端点 |
+| `COMMAND_SIGNING_KEY_FILE` | 空 | 响应指令签名私钥（PKCS#8 PEM Ed25519，`gencerts` 生成）。开启 `RESPONSE_ENABLED` 时必须配置，否则启动失败；未开启时配了也会下发公钥，让 agent 提前固定 |
 | `AUTO_RESPONSE_ENABLED` | `false` | AI 研判高置信度 malicious 时真实隔离涉事主机（依赖 `RESPONSE_ENABLED`，每次决策落审计） |
 | `AUTO_RESPONSE_MIN_CONFIDENCE` | `90` | 触发自动响应的置信度门槛 |
 | `AUTO_RESPONSE_EXEMPT` | 空 | 逗号分隔的主机名，绝不自动隔离 |

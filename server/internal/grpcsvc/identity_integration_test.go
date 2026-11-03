@@ -3,6 +3,7 @@
 package grpcsvc
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"openxdr/server/internal/intel"
+	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
@@ -88,6 +90,14 @@ func TestRegisterReturnsConfig(t *testing.T) {
 	}
 	if resp.ConfigJson != "" {
 		t.Errorf("未配置时应下发空串，实际 %q", resp.ConfigJson)
+	}
+	if resp.CommandSigner != nil {
+		t.Error("没有 Hub（未配置签名）时不应下发签名公钥，否则 agent 会固定一把不存在的钥匙")
+	}
+	srv.Hub = response.NewHub(client, true)
+	if resp, err = srv.Register(ctx, &pb.RegisterRequest{Hostname: "web01", Os: "linux"}); err != nil ||
+		!bytes.Equal(resp.CommandSigner, srv.Hub.SignerPublic()) || len(resp.CommandSigner) != 32 {
+		t.Fatalf("注册应下发指令签名公钥: %v %x", err, resp.GetCommandSigner())
 	}
 
 	// 配置后重连：注册应带回配置

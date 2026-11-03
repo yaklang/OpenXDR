@@ -3,7 +3,7 @@
 //! 这是 agent 里唯一会改变主机状态的部分，收到的指令一律真执行（不再有演练）。
 //! 铁律：隔离主机必须放行 server 通道，否则解除隔离的指令再也送不进来。
 //!
-//! exec 无条件执行平台下发的命令，放行控制在平台侧。
+//! exec 无条件执行平台下发的命令，放行控制在平台侧；但只认 server 指令签名私钥签过的指令（见 signed）。
 
 use crate::pb::{Command, CommandKind, CommandResult, command_result::Status};
 
@@ -12,6 +12,7 @@ mod exec;
 mod netblock;
 mod process;
 mod quarantine;
+pub mod signed;
 
 #[cfg(target_os = "linux")]
 #[path = "isolate_linux.rs"]

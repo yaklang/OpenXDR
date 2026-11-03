@@ -3,10 +3,13 @@
 // 这是系统里唯一能对被监控主机造成实际影响的部分，闸门都在这里：
 //   - 全局开关 RESPONSE_ENABLED，默认关闭；指令一律真执行，没有演练
 //   - 每条指令连同下发者与执行结果落库，可追溯
+//   - 每条指令都用指令签名私钥签进绑定 agent 的信封；数据库、NATS 或单条投递链路被人摸到，
+//     也伪造不出 agent 肯执行的指令
 package response
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -39,6 +42,9 @@ type Hub struct {
 	DB      *ent.Client
 	Enabled bool
 	Router  Router
+	// Signer 指令签名私钥。NewHub 启用时先放一把进程内临时密钥，只够单进程测试；
+	// main 一律换成 COMMAND_SIGNING_KEY_FILE 里的持久密钥，多节点必须是同一把
+	Signer ed25519.PrivateKey
 
 	mu          sync.RWMutex
 	conns       map[uuid.UUID]chan *pb.Command // agent_id -> 指令通道
@@ -49,7 +55,11 @@ func NewHub(db *ent.Client, enabled bool) *Hub {
 	if !enabled {
 		slog.Warn("响应能力未启用：RESPONSE_ENABLED 为 false，指令一律拒绝下发")
 	}
-	return &Hub{DB: db, Enabled: enabled, conns: map[uuid.UUID]chan *pb.Command{}, routeDetach: map[uuid.UUID]func(){}}
+	h := &Hub{DB: db, Enabled: enabled, conns: map[uuid.UUID]chan *pb.Command{}, routeDetach: map[uuid.UUID]func(){}}
+	if enabled {
+		h.Signer = newEphemeralSigner()
+	}
+	return h
 }
 
 // Online 报告某个 agent 当前是否挂着指令通道。
@@ -183,7 +193,11 @@ func (h *Hub) issue(ctx context.Context, req Request) (*ent.Command, error) {
 		return nil, err
 	}
 
-	online, err := h.enqueue(*a.AgentID, nil, req.toProto(cmd.ID))
+	sealed, err := h.seal(*a.AgentID, req.toProto(cmd.ID))
+	if err != nil {
+		return h.finish(ctx, cmd.ID, "failed", "指令签名失败: "+err.Error())
+	}
+	online, err := h.enqueue(*a.AgentID, nil, sealed)
 	if online {
 		if err != nil {
 			return h.finish(ctx, cmd.ID, "failed", err.Error())
@@ -193,7 +207,7 @@ func (h *Hub) issue(ctx context.Context, req Request) (*ent.Command, error) {
 	if h.Router == nil {
 		return h.finish(ctx, cmd.ID, "failed", "agent 未连接指令通道")
 	}
-	if err := h.Router.Deliver(ctx, *a.AgentID, req.toProto(cmd.ID)); err != nil {
+	if err := h.Router.Deliver(ctx, *a.AgentID, sealed); err != nil {
 		// 能证明没下发的瞬断 Router 内部已经重试过；走到这里的要么可能已下发（响应丢失不能证明
 		// 远端没有执行），要么重试超限，一律记 unknown，所有动作都不能据此自动重试。
 		status := "unknown"
