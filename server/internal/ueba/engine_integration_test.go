@@ -169,22 +169,29 @@ func TestFirstSeenFromTrustedSource(t *testing.T) {
 		SetRaw(json.RawMessage(`{"process":{"pid":2,"name":"probe","file":{"path":"/tmp/probe"}},
 "login_session":{"uid":"9","user":"root","src_ip":"10.1.1.35","key_fp":"` + fp + `","auth_method":"publickey"}}`)).SaveX(ctx)
 	procEvent(t, ctx, client, asset.ID, "/tmp/other", now)
+	// 容器健康检查里跑出的新程序同理：标注健康检查，不进关联
+	client.Event.Create().SetTs(now).SetClassUID(classProcess).SetSource("agent").SetAssetID(asset.ID).
+		SetRaw(json.RawMessage(`{"process":{"pid":3,"name":"nc","file":{"path":"/usr/bin/nc"}},
+"container":{"runtime":"docker","uid":"4f1c2a3b5d6e","healthcheck":true}}`)).SaveX(ctx)
 	if _, err := e.batch(ctx); err != nil {
 		t.Fatal(err)
 	}
 	alerts := client.Alert.Query().AllX(ctx)
-	var trusted, plain int
+	var trusted, plain, healthcheck int
 	for _, a := range alerts {
-		if a.AutomationID != nil && *a.AutomationID == src.ID {
+		switch {
+		case a.AutomationID != nil && *a.AutomationID == src.ID:
 			trusted++
-		} else if a.AutomationID == nil {
+		case a.Healthcheck:
+			healthcheck++
+		case a.AutomationID == nil:
 			plain++
 		}
 	}
-	if len(alerts) != 2 || trusted != 1 || plain != 1 {
-		t.Fatalf("可信会话的一条挂到来源上，另一条照常: %+v", alerts)
+	if len(alerts) != 3 || trusted != 1 || plain != 1 || healthcheck != 1 {
+		t.Fatalf("可信会话的一条挂到来源上，健康检查的一条标注，另一条照常: %+v", alerts)
 	}
-	if n := client.ProcessBaseline.Query().CountX(ctx); n != 3 {
+	if n := client.ProcessBaseline.Query().CountX(ctx); n != 4 {
 		t.Fatalf("可信会话的新程序也要学进基线，实际 %d 条", n)
 	}
 }

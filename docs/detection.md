@@ -348,6 +348,23 @@ go -C server test -tags integration -p 1 ./internal/intel ./internal/api -run 'T
   [部署手册](deployment.md#配置)
 - 控制台「已知自动化」页的「近期 SSH 登录」用同一套判断解释每个登录身份为什么（没）被认出来，可从那里手动添加
 
+### 容器健康检查
+
+docker 的 HEALTHCHECK 是另一类已知自动化：dockerd 每隔几秒在容器里跑一遍配置好的命令（`nc -z 127.0.0.1 4822`、
+`timeout 3 bash -c '</dev/tcp/127.0.0.1/8001'`），命中端口扫描工具、`/dev/tcp` 探测等规则，每台主机、每个新容器都要单独抑制，
+每条新告警还会让所在 incident 重研判一次。agent 按容器配置逐字认出健康检查进程及其后代，事件 `container.healthcheck` 为 true
+（认定规则见 [采集端 · 容器归属](collection.md)），server 与可信来源同一口径处理：
+
+- 告警带 `healthcheck`、单独去重（不和同规则的真实命中合并），照常入库可查；不进关联与研判、不给已有 incident 添证据、不计入态势统计。
+  UEBA 首次出现同样标注
+- **高危例外**与可信来源完全相同（凭据窃取、指标清除、削弱防御、破坏、情报命中，见上），标成 `automation_watch`，照常进关联、研判与推送；
+  研判上下文注明来源是容器健康检查，incident 告警列表标「容器健康检查 · 高危行为」。能改健康检查配置的人已有 docker / root 权限，
+  但镜像或容器配置被篡改时健康检查做这类事仍值得人看一眼
+- **只信 agent 上报的事件**：标记是事件体里的字段，syslog、探针等由外部内容拼成的事件带了也不认；平台指令优先
+- 查询视图 `alerts` / `alert_events` 带 `healthcheck`；统计威胁时排除非例外的
+  （`(automation_id IS NULL AND NOT healthcheck) OR automation_watch`）
+- **要新版 agent**：旧 agent 不打标记，server 照常告警；时序规则、爆破得手、外联心跳等合成告警不走这条路径
+
 ## 关联（`server/internal/correlate`）
 
 周期批处理：`CORRELATE_INTERVAL_SECONDS` 默认 10s，每批最多 500 条未归属

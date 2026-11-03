@@ -49,6 +49,16 @@
   **回退到旧版 agent 时，新格式的未补传批次会被当成损坏移入隔离区**，回退前先等缓存补传完。
 - sensor 上行 gRPC 可选 gzip（`SENSOR_GRPC_COMPRESSION=gzip`，默认关闭）。
 
+### 容器健康检查
+
+- docker 容器的健康检查（HEALTHCHECK）按已知自动化处理：agent 读容器配置 `config.v2.json` 的 `Healthcheck.Test`，
+  容器里命令行与它逐字相同、由容器外拉起的进程及其后代，事件 `container` 带 `healthcheck: true`；server 只认 agent 上报的事件上的标记，
+  告警照常入库、单独去重，不进关联与研判、不计入态势统计，凭据窃取、清日志、关防护、破坏、情报命中这些高危例外照常研判。
+  生产上 10-30 起每天约 3500 条告警来自 `nc -z`、`/dev/tcp` 这类健康检查，一个 incident 因此重研判 87 次。
+- 数据库：`alerts` 新增 `healthcheck` 列（启动时自动建）；组查询视图 `alerts`、`alert_events` 带上这一列，
+  手工开通 Pi 查询身份的需重跑 `deploy/pi-query/group-views.sql`。
+- **要升级 agent 才生效**：旧 agent 不打标记，server 照常告警。
+
 ### 存储
 
 - 关键词检索索引收窄：新索引 `events_search_trgm` 只索引事件里的字段值，去掉 UUID 与 32 位以上的十六进制串（进程 uid、文件哈希），

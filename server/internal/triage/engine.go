@@ -490,6 +490,10 @@ func (e *Engine) writeAlert(ctx context.Context, sb *strings.Builder, a *ent.Ale
 		}
 		fmt.Fprintf(sb, "  来源：登记的可信自动化「%s」的 SSH 会话（高危例外仍需研判：确认是否符合该自动化的正常用途，警惕其凭据被盗用）\n", name)
 	}
+	// 容器健康检查的告警同理只有高危例外会进 incident
+	if a.Healthcheck {
+		sb.WriteString("  来源：docker 容器配置的健康检查命令或其后代（高危例外仍需研判：健康检查不该做这类事，警惕镜像或容器配置被篡改）\n")
+	}
 }
 
 func (e *Engine) ruleName(id string) string {

@@ -17,3 +17,14 @@ export function AutomationTag({ value }: { value?: AutomationRef }) {
     </Tooltip>
   )
 }
+
+// 告警来自 docker 容器健康检查：能进 incident 的只有高危例外
+export function HealthcheckTag({ value }: { value?: boolean }) {
+  const { t } = useI18n()
+  if (!value) return null
+  return (
+    <Tooltip title={t('healthcheckWatchHint')}>
+      <Tag color="orange" style={{ marginInlineEnd: 0 }}>{t('healthcheckWatchTag')}</Tag>
+    </Tooltip>
+  )
+}

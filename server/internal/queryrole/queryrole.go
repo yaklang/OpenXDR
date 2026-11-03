@@ -223,14 +223,14 @@ func ddl(group uuid.UUID, password string, fresh bool) []string {
   FROM public.events WHERE ` + inGroup,
 		`CREATE OR REPLACE VIEW ` + schema + `.alerts WITH (security_barrier) AS
   SELECT id, ts, last_ts, count, rule_id, severity, event_id, asset_id, incident_id, command_id, detail,
-         automation_id, automation_watch
+         automation_id, automation_watch, healthcheck
   FROM public.alerts WHERE ` + inGroup,
 		// 告警连同它的原始事件：在视图里按主键回查，跨视图 JOIN events 会全表扫描、必然超时。
 		// 告警 ts 就是事件 ts，带上它每条告警只探一个日分区，只按 id 要把几十个分区挨个探一遍
 		`CREATE OR REPLACE VIEW ` + schema + `.alert_events WITH (security_barrier) AS
   SELECT a.id AS alert_id, a.ts, a.last_ts, a.count, a.rule_id, a.severity, a.asset_id, a.incident_id, a.command_id,
          e.id AS event_id, e.ts AS event_ts, e.class_uid, e.username, e.conn_tuple, e.raw,
-         a.automation_id, a.automation_watch
+         a.automation_id, a.automation_watch, a.healthcheck
   FROM public.alerts a JOIN public.events e ON e.id = a.event_id AND e.ts = a.ts AND e.asset_id = a.asset_id
   WHERE a.` + inGroup,
 		`CREATE OR REPLACE VIEW ` + schema + `.incidents WITH (security_barrier) AS

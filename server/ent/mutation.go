@@ -2624,6 +2624,7 @@ type AlertMutation struct {
 	command_id       *uuid.UUID
 	automation_id    *uuid.UUID
 	automation_watch *bool
+	healthcheck      *bool
 	detail           *string
 	clearedFields    map[string]struct{}
 	event            *uuid.UUID
@@ -3255,6 +3256,42 @@ func (m *AlertMutation) ResetAutomationWatch() {
 	m.automation_watch = nil
 }
 
+// SetHealthcheck sets the "healthcheck" field.
+func (m *AlertMutation) SetHealthcheck(b bool) {
+	m.healthcheck = &b
+}
+
+// Healthcheck returns the value of the "healthcheck" field in the mutation.
+func (m *AlertMutation) Healthcheck() (r bool, exists bool) {
+	v := m.healthcheck
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHealthcheck returns the old "healthcheck" field's value of the Alert entity.
+// If the Alert object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AlertMutation) OldHealthcheck(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHealthcheck is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHealthcheck requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHealthcheck: %w", err)
+	}
+	return oldValue.Healthcheck, nil
+}
+
+// ResetHealthcheck resets all changes to the "healthcheck" field.
+func (m *AlertMutation) ResetHealthcheck() {
+	m.healthcheck = nil
+}
+
 // SetDetail sets the "detail" field.
 func (m *AlertMutation) SetDetail(s string) {
 	m.detail = &s
@@ -3419,7 +3456,7 @@ func (m *AlertMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AlertMutation) Fields() []string {
-	fields := make([]string, 0, 12)
+	fields := make([]string, 0, 13)
 	if m.ts != nil {
 		fields = append(fields, alert.FieldTs)
 	}
@@ -3452,6 +3489,9 @@ func (m *AlertMutation) Fields() []string {
 	}
 	if m.automation_watch != nil {
 		fields = append(fields, alert.FieldAutomationWatch)
+	}
+	if m.healthcheck != nil {
+		fields = append(fields, alert.FieldHealthcheck)
 	}
 	if m.detail != nil {
 		fields = append(fields, alert.FieldDetail)
@@ -3486,6 +3526,8 @@ func (m *AlertMutation) Field(name string) (ent.Value, bool) {
 		return m.AutomationID()
 	case alert.FieldAutomationWatch:
 		return m.AutomationWatch()
+	case alert.FieldHealthcheck:
+		return m.Healthcheck()
 	case alert.FieldDetail:
 		return m.Detail()
 	}
@@ -3519,6 +3561,8 @@ func (m *AlertMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldAutomationID(ctx)
 	case alert.FieldAutomationWatch:
 		return m.OldAutomationWatch(ctx)
+	case alert.FieldHealthcheck:
+		return m.OldHealthcheck(ctx)
 	case alert.FieldDetail:
 		return m.OldDetail(ctx)
 	}
@@ -3606,6 +3650,13 @@ func (m *AlertMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetAutomationWatch(v)
+		return nil
+	case alert.FieldHealthcheck:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHealthcheck(v)
 		return nil
 	case alert.FieldDetail:
 		v, ok := value.(string)
@@ -3767,6 +3818,9 @@ func (m *AlertMutation) ResetField(name string) error {
 		return nil
 	case alert.FieldAutomationWatch:
 		m.ResetAutomationWatch()
+		return nil
+	case alert.FieldHealthcheck:
+		m.ResetHealthcheck()
 		return nil
 	case alert.FieldDetail:
 		m.ResetDetail()

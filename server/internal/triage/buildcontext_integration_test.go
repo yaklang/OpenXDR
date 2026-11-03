@@ -43,6 +43,7 @@ func TestBuildContext(t *testing.T) {
 	}
 	if _, err := client.Alert.Create().
 		SetTs(now).SetRuleID("r-loud").SetSeverity(4).SetCount(3).
+		SetHealthcheck(true).SetAutomationWatch(true).
 		SetEventID(evt1.ID).SetIncidentID(inc.ID).Save(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +70,7 @@ func TestBuildContext(t *testing.T) {
 		"r-loud", "r-quiet", "severity=4", "count=3",
 		"parent.exe", // 未截断事件原文
 		"…",          // 超长事件截断标记
+		"来源：docker 容器配置的健康检查", // 健康检查的高危例外注明来源
 		"- r-quiet：2 条告警（去重前累计命中 2 次）\n- r-loud：1 条告警（去重前累计命中 3 次）", // 按规则汇总，多的在前
 	} {
 		if !strings.Contains(out, want) {

@@ -394,6 +394,7 @@ func (st *agentStream) detect(ev *pb.AgentEvent, eventID uuid.UUID, rawMap map[s
 	rules := st.s.Rules.Evaluate(int(ev.ClassUid), st.assetOS, rawMap)
 	hits := intel.Detections(rules, st.s.Intel.Match(rawMap, ts))
 	var command, source *uuid.UUID
+	var healthcheck bool
 	if len(hits) > 0 {
 		var err error
 		if command, err = cmdorigin.Of(st.ctx, st.s.SQL, rawMap, st.assetID, ts); err != nil {
@@ -404,6 +405,7 @@ func (st *agentStream) detect(ev *pb.AgentEvent, eventID uuid.UUID, rawMap map[s
 			if source, err = automation.Of(st.ctx, st.s.SQL, rawMap, st.assetID, ts); err != nil {
 				return status.Errorf(codes.Unavailable, "核对可信来源失败: %v", err)
 			}
+			healthcheck = automation.Healthcheck(rawMap)
 		}
 	}
 	for _, h := range hits {
@@ -418,6 +420,9 @@ func (st *agentStream) detect(ev *pb.AgentEvent, eventID uuid.UUID, rawMap map[s
 		if source != nil {
 			fingerprint += "|auto:" + source.String()
 		}
+		if healthcheck {
+			fingerprint += "|healthcheck"
+		}
 		if st.deduper.Hit(fingerprint, ts) {
 			continue
 		}
@@ -431,7 +436,8 @@ func (st *agentStream) detect(ev *pb.AgentEvent, eventID uuid.UUID, rawMap map[s
 			SetNillableAssetID(st.assetID).
 			SetNillableCommandID(command).
 			SetNillableAutomationID(source).
-			SetAutomationWatch(source != nil && automation.Watch(h.RuleID, rules)).
+			SetHealthcheck(healthcheck).
+			SetAutomationWatch((source != nil || healthcheck) && automation.Watch(h.RuleID, rules)).
 			SetLastTs(ts))
 		st.deduper.Track(fingerprint, alertID, ts)
 	}

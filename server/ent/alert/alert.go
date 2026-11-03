@@ -35,6 +35,8 @@ const (
 	FieldAutomationID = "automation_id"
 	// FieldAutomationWatch holds the string denoting the automation_watch field in the database.
 	FieldAutomationWatch = "automation_watch"
+	// FieldHealthcheck holds the string denoting the healthcheck field in the database.
+	FieldHealthcheck = "healthcheck"
 	// FieldDetail holds the string denoting the detail field in the database.
 	FieldDetail = "detail"
 	// EdgeEvent holds the string denoting the event edge name in mutations.
@@ -82,6 +84,7 @@ var Columns = []string{
 	FieldCommandID,
 	FieldAutomationID,
 	FieldAutomationWatch,
+	FieldHealthcheck,
 	FieldDetail,
 }
 
@@ -100,6 +103,8 @@ var (
 	DefaultCount int
 	// DefaultAutomationWatch holds the default value on creation for the "automation_watch" field.
 	DefaultAutomationWatch bool
+	// DefaultHealthcheck holds the default value on creation for the "healthcheck" field.
+	DefaultHealthcheck bool
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
@@ -165,6 +170,11 @@ func ByAutomationID(opts ...sql.OrderTermOption) OrderOption {
 // ByAutomationWatch orders the results by the automation_watch field.
 func ByAutomationWatch(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAutomationWatch, opts...).ToFunc()
+}
+
+// ByHealthcheck orders the results by the healthcheck field.
+func ByHealthcheck(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldHealthcheck, opts...).ToFunc()
 }
 
 // ByDetail orders the results by the detail field.

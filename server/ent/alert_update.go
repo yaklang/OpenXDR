@@ -236,6 +236,20 @@ func (_u *AlertUpdate) SetNillableAutomationWatch(v *bool) *AlertUpdate {
 	return _u
 }
 
+// SetHealthcheck sets the "healthcheck" field.
+func (_u *AlertUpdate) SetHealthcheck(v bool) *AlertUpdate {
+	_u.mutation.SetHealthcheck(v)
+	return _u
+}
+
+// SetNillableHealthcheck sets the "healthcheck" field if the given value is not nil.
+func (_u *AlertUpdate) SetNillableHealthcheck(v *bool) *AlertUpdate {
+	if v != nil {
+		_u.SetHealthcheck(*v)
+	}
+	return _u
+}
+
 // SetDetail sets the "detail" field.
 func (_u *AlertUpdate) SetDetail(v string) *AlertUpdate {
 	_u.mutation.SetDetail(v)
@@ -368,6 +382,9 @@ func (_u *AlertUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AutomationWatch(); ok {
 		_spec.SetField(alert.FieldAutomationWatch, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.Healthcheck(); ok {
+		_spec.SetField(alert.FieldHealthcheck, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Detail(); ok {
 		_spec.SetField(alert.FieldDetail, field.TypeString, value)
@@ -686,6 +703,20 @@ func (_u *AlertUpdateOne) SetNillableAutomationWatch(v *bool) *AlertUpdateOne {
 	return _u
 }
 
+// SetHealthcheck sets the "healthcheck" field.
+func (_u *AlertUpdateOne) SetHealthcheck(v bool) *AlertUpdateOne {
+	_u.mutation.SetHealthcheck(v)
+	return _u
+}
+
+// SetNillableHealthcheck sets the "healthcheck" field if the given value is not nil.
+func (_u *AlertUpdateOne) SetNillableHealthcheck(v *bool) *AlertUpdateOne {
+	if v != nil {
+		_u.SetHealthcheck(*v)
+	}
+	return _u
+}
+
 // SetDetail sets the "detail" field.
 func (_u *AlertUpdateOne) SetDetail(v string) *AlertUpdateOne {
 	_u.mutation.SetDetail(v)
@@ -848,6 +879,9 @@ func (_u *AlertUpdateOne) sqlSave(ctx context.Context) (_node *Alert, err error)
 	}
 	if value, ok := _u.mutation.AutomationWatch(); ok {
 		_spec.SetField(alert.FieldAutomationWatch, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.Healthcheck(); ok {
+		_spec.SetField(alert.FieldHealthcheck, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Detail(); ok {
 		_spec.SetField(alert.FieldDetail, field.TypeString, value)

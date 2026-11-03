@@ -108,6 +108,8 @@ type alertRow struct {
 	Detail *string `json:"detail,omitempty"`
 	// 来自登记的可信自动化来源（能出现在 incident 里的只有高危例外）
 	Automation *automationRef `json:"automation,omitempty"`
+	// 来自容器健康检查（能出现在 incident 里的只有高危例外）
+	Healthcheck bool `json:"healthcheck,omitempty"`
 }
 
 type incidentDetail struct {
@@ -318,7 +320,7 @@ func getIncident(db *ent.Client, rules sigma.Catalog) http.HandlerFunc {
 			}
 			row := alertRow{
 				ID: a.ID, Ts: a.Ts, LastTs: a.LastTs, Count: a.Count,
-				Severity: a.Severity, RuleID: a.RuleID, Detail: a.Detail, Automation: refOf(a, names),
+				Severity: a.Severity, RuleID: a.RuleID, Detail: a.Detail, Automation: refOf(a, names), Healthcheck: a.Healthcheck,
 			}
 			if title := rules.TitleOf(a.RuleID); title != "" {
 				row.RuleTitle = &title

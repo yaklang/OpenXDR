@@ -251,6 +251,7 @@ ON CONFLICT DO NOTHING`, e.ID, e.Timestamp, e.ClassUID, e.Source,
 			if from.automation, err = automation.Of(ctx, tx, raw, e.AssetID, e.Timestamp); err != nil {
 				return false, 0, nil, err
 			}
+			from.healthcheck = automation.Healthcheck(raw)
 		}
 	}
 	for _, hit := range hits {
@@ -258,7 +259,7 @@ ON CONFLICT DO NOTHING`, e.ID, e.Timestamp, e.ClassUID, e.Source,
 			continue
 		}
 		hitFrom := from
-		hitFrom.watch = from.automation != nil && automation.Watch(hit.RuleID, baseHits)
+		hitFrom.watch = (from.automation != nil || from.healthcheck) && automation.Watch(hit.RuleID, baseHits)
 		created, err := p.upsertAlert(ctx, tx, e, hit, hitFrom)
 		if err != nil {
 			return false, 0, nil, err
@@ -284,11 +285,12 @@ ON CONFLICT DO NOTHING`, e.ID, e.Timestamp, e.ClassUID, e.Source,
 	return true, alerts, temporalSkipped, nil
 }
 
-// origin 告警的已知来源：平台指令，或登记的可信自动化（watch 为高危例外，仍进关联与研判）
+// origin 告警的已知来源：平台指令、登记的可信自动化或容器健康检查（watch 为高危例外，仍进关联与研判）
 type origin struct {
-	command    *uuid.UUID
-	automation *uuid.UUID
-	watch      bool
+	command     *uuid.UUID
+	automation  *uuid.UUID
+	healthcheck bool
+	watch       bool
 }
 
 // lockReferenceDays 在整批事务开头一次取齐本事务要写的全部事件引用（alerts / temporal_evidence /
@@ -350,9 +352,9 @@ func (p *Processor) upsertAlert(ctx context.Context, tx *sql.Tx, e Envelope, hit
 
 	alertID = uuid.Must(uuid.NewV7())
 	if _, err := tx.ExecContext(ctx, `INSERT INTO alerts
-  (id, ts, rule_id, severity, event_id, asset_id, count, last_ts, command_id, automation_id, automation_watch, detail)
-VALUES ($1,$2,$3,$4,$5,$6,1,$2,$7,$8,$9,$10)`, alertID, e.Timestamp, hit.RuleID, hit.Severity, e.ID, nullUUID(e.AssetID),
-		nullUUID(from.command), nullUUID(from.automation), from.watch, nullString(hit.Detail)); err != nil {
+  (id, ts, rule_id, severity, event_id, asset_id, count, last_ts, command_id, automation_id, automation_watch, healthcheck, detail)
+VALUES ($1,$2,$3,$4,$5,$6,1,$2,$7,$8,$9,$10,$11)`, alertID, e.Timestamp, hit.RuleID, hit.Severity, e.ID, nullUUID(e.AssetID),
+		nullUUID(from.command), nullUUID(from.automation), from.watch, from.healthcheck, nullString(hit.Detail)); err != nil {
 		return false, err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO alert_dedup_state(fingerprint,alert_id,first_ts,last_ts)
@@ -392,6 +394,9 @@ func alertFingerprint(e Envelope, hit intel.Hit, from origin) string {
 	// 可信来源同理：并进去的真实命中会跟着不进关联
 	if from.automation != nil {
 		fingerprint += "|auto:" + from.automation.String()
+	}
+	if from.healthcheck {
+		fingerprint += "|healthcheck"
 	}
 	return fingerprint
 }
