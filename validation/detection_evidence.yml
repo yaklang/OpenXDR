@@ -1,17 +1,6 @@
 name: 检测证据补充
 # 规则与边界见 docs/detection-evidence.md；按规则 ID 的正反例对拍在 exact-rule-cases.json。
 cases:
-  - name: "lnx_signal_group_db/T1098"
-    technique: T1098
-    source: 本地构造的归一化事件
-    class: 1001
-    os: linux
-    expect: signal
-    event:
-      activity_id: 3
-      file:
-        path: /etc/gshadow
-
   - name: "用户 crontab 变更（SigmaHQ New Cron File Created）"
     technique: T1053.003
     source: 本地构造的归一化事件
@@ -22,45 +11,45 @@ cases:
       file:
         path: /var/spool/cron/crontabs/root
 
-  - name: "lnx_signal_init_scripts/T1037.004"
+  - name: "rc.local 启动脚本变更（已知缺口，无告警规则）"
     technique: T1037.004
     source: 本地构造的归一化事件
     class: 1001
     os: linux
-    expect: signal
+    expect: undetected
     event:
       activity_id: 3
       file:
         path: /etc/rc.local
 
-  - name: "lnx_signal_systemd_timer/T1053.006"
+  - name: "systemd 定时器变更（已知缺口，无告警规则）"
     technique: T1053.006
     source: 本地构造的归一化事件
     class: 1001
     os: linux
-    expect: signal
+    expect: undetected
     event:
       activity_id: 3
       file:
         path: /etc/systemd/system/update.timer
 
-  - name: "lnx_signal_systemd_override/T1543.002"
+  - name: "systemd drop-in 覆盖配置变更（已知缺口，无告警规则）"
     technique: T1543.002
     source: 本地构造的归一化事件
     class: 1001
     os: linux
-    expect: signal
+    expect: undetected
     event:
       activity_id: 3
       file:
         path: /etc/systemd/system/sshd.service.d/override.conf
 
-  - name: "lnx_signal_audit_config/T1562.012"
+  - name: "auditd 配置变更（已知缺口，无告警规则）"
     technique: T1562.012
     source: 本地构造的归一化事件
     class: 1001
     os: linux
-    expect: signal
+    expect: undetected
     event:
       activity_id: 3
       file:
@@ -323,51 +312,17 @@ cases:
       message: 192.0.2.10 - - "GET /../../etc/passwd HTTP/1.1" 400 0
       activity_id: 1
 
-  - name: "lnx_signal_systemd_unit_deleted/0"
-    technique: T1070
-    source: 本地构造的归一化事件
-    class: 1001
-    os: linux
-    expect: signal
-    event:
-      activity_id: 4
-      file:
-        path: /etc/systemd/system/demo.service
-
-  - name: "lnx_signal_systemd_unit_deleted/1"
-    technique: T1070
-    source: 本地构造的归一化事件
-    class: 1001
-    os: linux
-    expect: signal
-    event:
-      activity_id: 4
-      file:
-        path: /usr/lib/systemd/system/demo.service
-
-  - name: "lnx_signal_account_create/0"
+  - name: "useradd 创建本地账号（已知缺口，无告警规则）"
     technique: T1136.001
     source: 本地构造的归一化事件
     class: 1007
     os: linux
-    expect: signal
+    expect: undetected
     event:
       process:
         file:
           path: /usr/sbin/useradd
         cmd_line: useradd -m lab-user
-
-  - name: "lnx_signal_account_create/1"
-    technique: T1136.001
-    source: 本地构造的归一化事件
-    class: 1007
-    os: linux
-    expect: signal
-    event:
-      process:
-        file:
-          path: /usr/sbin/adduser
-        cmd_line: adduser --disabled-password lab-user
 
   - name: "win_powershell_screen_capture/0"
     technique: T1113
@@ -464,26 +419,6 @@ cases:
         provider: Microsoft-Windows-Sysmon
         image: C:\Windows\System32\svchost.exe
         tamper_type: Image is replaced
-
-  - name: "win_signal_ntlm_network_logon/0"
-    technique: T1078
-    source: 本地构造的归一化事件
-    class: 3002
-    os: windows
-    expect: signal
-    event:
-      event_id: 4624
-      log_name: Security
-      status_id: 1
-      service:
-        name: logon-type-3
-      user:
-        name: alice
-      src_endpoint:
-        ip: 10.0.0.7
-      authentication_package: NTLM
-      logon_process: NtLmSsp
-      workstation_name: WS01
 
   - name: "auditd CONFIG_CHANGE remove_rule（已知缺口）"
     technique: T1562.012

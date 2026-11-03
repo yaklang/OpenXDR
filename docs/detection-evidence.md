@@ -26,14 +26,6 @@
 | `win_winrm_exec` | medium | PowerShell Remoting 远程执行（T1021.006） |
 | `app_web_path_traversal` | medium | Web 日志里的路径穿越取敏感文件（T1190） |
 | `win_ad_discovery` | low | Get-ADUser / Get-NetUser（T1087.002） |
-| `signals/lnx_signal_group_db` | 信号 | /etc/group、gshadow 变更（T1098） |
-| `signals/lnx_signal_init_scripts` | 信号 | rc.local、init.d、rc*.d 变更（T1037.004） |
-| `signals/lnx_signal_systemd_timer` | 信号 | systemd .timer 变更（T1053.006） |
-| `signals/lnx_signal_systemd_override` | 信号 | systemd drop-in 覆盖配置变更（T1543.002） |
-| `signals/lnx_signal_systemd_unit_deleted` | 信号 | systemd .service 单元删除（T1070） |
-| `signals/lnx_signal_audit_config` | 信号 | auditd 配置变更（T1562.012） |
-| `signals/lnx_signal_account_create` | 信号 | useradd / adduser（T1136.001） |
-| `signals/win_signal_ntlm_network_logon` | 信号 | NTLM 网络登录（T1078） |
 | `signals/win_signal_login_success` | 信号 | Windows 登录成功，RDP 除外（T1078） |
 | `signals/win_signal_rdp_success` | 信号 | Windows RDP 登录成功（T1021.001） |
 | `signals/app_signal_mysql_auth_failure` | 信号 | MySQL 认证失败（T1110.001） |
@@ -45,20 +37,19 @@ Windows 失败后成功 / RDP 成功），清单与重叠说明见 [temporal-rul
 
 取舍：
 
-- **Linux 文件类改成信号**。agent 的 fanotify 递归监控整个 `/etc`，apt、systemctl、useradd 会持续改 group、init.d、
-  systemd 与 audit 配置，单发告警全是运维噪声，所以只作时序输入；这些信号目前还没有时序规则引用，引用前不产生任何效果。
-  `lnx_signal_systemd_unit_deleted` 排除 `.wants/` / `.requires/` 下的符号链接；agent 把「移出」记作删除，编辑器改名备份时原路径也会报一次删除。
-  agent 默认只监控 `/etc/systemd/system`，`/usr/lib/systemd/system`、`/lib/systemd/system` 需在采集配置 `fileWatchDirs` 里显式加上才看得到。
-  `lnx_signal_account_create` 的帮助 / 版本排除按独立参数匹配；引擎正则不区分大小写，`-D` 与 `-d` 分不开，所以不排除 `useradd -D`。
+- **没有时序规则引用的信号不收**。信号只作时序规则的输入，没人引用就不产生任何效果。PR 原有的 /etc 文件类规则
+  （group / gshadow、rc.local 与 init.d、systemd timer / drop-in / 单元删除、auditd 配置）、useradd 账号创建、
+  NTLM 网络登录，以及 sudo 成功、WinRM 端口连接、auditd 普通身份 root 执行都因此没有收入：agent 的 fanotify 递归监控整个 `/etc`，
+  apt、systemctl、useradd 会持续改这些文件，单发告警全是运维噪声；NTLM 登录在域内访问共享、打印时同样出现，认不出 Pass-the-Hash。
+  需要时连同消费它们的时序规则一起加回。其中启动脚本、systemd 定时器 / drop-in、auditd 配置与账号创建在
+  `validation/detection_evidence.yml` 里记为已知缺口。
 - **与 SigmaHQ 重复的不再收**：用户 crontab 变更由 SigmaHQ `file_event_lnx_susp_cron_file_created` 覆盖（只认
   `/var/spool/cron/crontabs/` 与 `/var/spool/cron/root`，RHEL 上非 root 用户的 `/var/spool/cron/<用户>` 不覆盖）；
   清空审计规则由 SigmaHQ `proc_creation_lnx_auditctl_clear_rules`（`auditctl -D`）覆盖。auditd `CONFIG_CHANGE remove_rule`
   每次 auditd 重载都按规则条数各报一次，不再单独告警，在 `validation/detection_evidence.yml` 里记为已知缺口。
-- **NTLM 网络登录降为信号**，不标 T1550.002：域内访问共享、打印同样走 NTLM，单凭它认不出 Pass-the-Hash。
 - **Sysmon LSASS 访问与远程线程降为 medium**，按固定完整路径排除 Defender（MsMpEng）、MDE（MsSense / SenseIR）、
   WmiPrvSE，LSASS 另排除任务管理器与系统 svchost，远程线程另排除 csrss / wininit / winlogon / services。
   按完整路径而非文件名排除，放在别处的同名程序照常命中；第三方 EDR、备份、监控与调试器不在排除里，上线前按回测结果按主机窄抑制。
-- 没有时序规则引用的信号（sudo 成功、WinRM 端口连接、auditd 普通身份 root 执行）不收。
 
 正常维护、安全软件、软件安装及经授权的自动化都可能触发这些 experimental 规则。部署前应在自己的历史事件上回测。
 
@@ -87,7 +78,7 @@ Windows 失败后成功 / RDP 成功），清单与重叠说明见 [temporal-rul
 
 证据位于 `raw.sysmon`，使用独立活动编号，不伪装为新进程启动，不编造进程 GUID 归属。订阅成功只说明日志订阅建立，仍需通过原始事件验证实际送达；未安装或无读取权限会报告 unavailable。
 
-已有的 Windows 登录采集补充认证包、登录进程、工作站、NTLM 包及密钥长度字段。NTLM 网络登录只作时序信号，正常认证也会命中，不能单凭它确认 Pass-the-Hash 或域账号被盗。
+已有的 Windows 登录采集补充认证包、登录进程、工作站、NTLM 包及密钥长度字段。这些字段供研判查看；正常认证同样走 NTLM，不能单凭 NTLM 登录确认 Pass-the-Hash 或域账号被盗，所以没有对应规则。
 
 ## Linux auditd：单记录归一化
 

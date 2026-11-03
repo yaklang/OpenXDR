@@ -73,8 +73,9 @@
   `sshd-fail-burst` 数的是 syslog 接入的 sshd 日志，`linux-auth-burst` 数的是 agent 的登录事件（btmp / journald），
   两者不是同一批事件；主机同时装 agent 又转发 sshd syslog 时，同一次爆破两条都会命中。
   Windows 失败后成功的两条按登录类型分开（成功信号排除 RDP 类型 10），同一次登录只命中其中一条；
-  但同主机同账号「5 次失败后成功」还会命中内置的 `xdr:bruteforce-success`（critical），两者并存，
-  时序规则多出的是同组跨主机（在 A 失败、在 B 成功）的情形。
+  同主机同账号「5 次失败后成功」还会命中内置的 `xdr:bruteforce-success`（critical），两者并存：
+  `windows-fail-success` 按账号维度跨同组主机累计，多覆盖了「在 A 失败、在 B 成功」的情形；
+  同主机上与内置检测重叠的那次登录，两条告警绑定同一终点事件、同一资产，会关联进同一个 incident，不额外增加处置量。
 
 ### 下载执行后建立持久化
 
