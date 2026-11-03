@@ -36,7 +36,8 @@ within: 5s
 rules: [download-tool-signal-id, shell-stdin-signal-id]
 ```
 
-可选 `group_by` 决定关联实体：`asset`（默认，同组同资产）或 `account`（同组同账号，跨同组多台主机累计）：
+可选 `group_by` 决定关联实体：`asset`（默认，同组同资产）、`account`（同组同账号，跨同组多台主机累计）
+或 `asset_source_ip`（同组同资产同来源 IP，不同来源各自计数，不凑同一个阈值）：
 
 ```yaml
 id: account-auth-failure-burst
@@ -49,7 +50,7 @@ threshold: 5
 ```
 
 `event_count` 可选 `min_assets`（1–100，默认 1）：窗口内参与计数的事件须来自至少 N 台不同资产。
-它只对 `group_by: account` 有意义；`group_by: asset` 时写大于 1 的值、用于 `sequence`、超出范围或大于 `threshold` 都拒绝加载。
+它只对 `group_by: account` 有意义；`group_by: asset` / `asset_source_ip` 时写大于 1 的值、用于 `sequence`、超出范围或大于 `threshold` 都拒绝加载。
 账号规则设 `min_assets: 2` 可避免单机多次失败同时触发主机规则与账号规则的重复告警。
 
 加载拒绝未知字段、未知 `group_by` 取值、非法 `min_assets`、多 YAML 文档、不存在的基础规则、与基础规则冲突的 ID 和不支持的类型。
@@ -82,6 +83,10 @@ threshold: 5
   `group_by: asset` 的实体是资产 ID；`group_by: account` 的实体是 `account:<规范化用户名>`，
   用户名只取事件 `username` 列（入库信封字段），规范化为去首尾空白、转小写，不做 `DOMAIN\user`、UPN 等格式互认，
   也不从原文或模型输出推断账号。`username` 为空的事件不参与账号规则，计入 `no_account` 缺口；资产维度规则照常。
+  `group_by: asset_source_ip` 的实体是 `asset-source-ip:<资产 ID>|<规范化 IP>`，来源只取原文 `src_endpoint.ip`，
+  缺这个字段时只对 sshd 失败日志按严格格式解析 `from <IP> port <端口>`；IPv4 映射的 IPv6 归成 IPv4，
+  主机名、带端口、未指定和组播地址都不算来源。syslog 报文的传输对端（可能是日志中转）不当作来源。
+  取不到来源的事件不参与这一维度，计入 `no_source_ip` 缺口；其他维度照常。
 - 窗口包含两端，按 `[终点时间−within, 终点时间]` 取候选。
 - 计数是不同事件的数量。同时间戳的不同 ID 仍可计数；按时间、UUID 排序确定终点。
   只在条件越过的那一刻产生命中：条件是窗口内计数达到 `threshold` 且不同资产数达到 `min_assets`，
@@ -176,6 +181,10 @@ threshold: 5
 处理时先取资产锁、再取 `(版本, 组, 账号)` 锁：不同资产落在不同队列分片也会在同一账号上串行，
 后提交的事务一定看到先提交的候选；每个事务至多持有一个资产锁和一个账号锁，顺序固定，不会成环。
 账号维度命中的告警绑定终点事件及其资产，去重指纹使用账号实体，同组同账号在去重窗口内合并为一条告警。
+候选另存来源实体（`source_entity` 列，取不到来源为 NULL），来源维度按 `(版本, 组, 来源实体)` 回查窗口。
+来源维度只管计数口径：命中照常按来源实体各自记入 `temporal_detections`，但告警去重指纹用资产 ID，
+同一主机被多个来源各自打满阈值时在去重窗口内合并为一条告警、计数累加，告警说明记首个来源 IP；
+否则 50 个来源同时爆破一台主机会出 50 条同级告警。
 没有资产或没有组时在 `Observation.Skipped` 显式记 `unscoped`，调用方需要记录该覆盖缺口。
 
 此入口要求调用方只处理本事务首次成功插入的事件，并与告警写入共用事务；重投已入库事件不能在换组后重新解释归属。
@@ -222,8 +231,8 @@ DATABASE_URL=<只读副本> TEMPORAL_RULES_PATH=../temporal-rules \
 整批严格加载，任一错误直接退出；`-from`/`-to` 为 RFC3339，缺省为最近 `-days` 天到现在。只读取时序规则引用的基础规则
 关心的事件类别，按小时分段、每段一个 `READ ONLY` 事务按 `(ts, id)` 排序读取（连到主库也写不进去），副本冲突取消的段整段重试，
 整段提交成功后才喂入回放状态（副本冲突也可能在提交时才报，先喂再提交会让重试的段重复喂入、报「未按 (时间, ID) 递增」），不会重复计数。输出版本哈希、每条时序规则的命中次数、维度、按资产（主机名）/ 账号的分布（前 10）、
-样例证据事件 ID，以及 `unscoped` / `no_account` / `candidate_limit` 覆盖缺口计数。
-另报告每条被引用的基础规则（信号规则单独标出）贡献的候选数与每天均值，以及资产 / 账号维度单个实体窗口里的候选峰值：
+样例证据事件 ID，以及 `unscoped` / `no_account` / `no_source_ip` / `candidate_limit` 覆盖缺口计数。
+另报告每条被引用的基础规则（信号规则单独标出）贡献的候选数与每天均值，以及资产 / 账号 / 主机+来源 IP 维度单个实体窗口里的候选峰值：
 线上 Observe 回查 `[t − 最大窗口, t + 最大窗口]`，最坏约为峰值的两倍，用它对照 10000 的上限判断新信号会不会撑出 `candidate_limit`。
 不设 `TEMPORAL_RULES_PATH` 的单事件回测也统计信号规则的命中（标「信号，不告警」），用来估它被引用后的候选量。
 
@@ -240,6 +249,7 @@ DATABASE_URL=<只读副本> TEMPORAL_RULES_PATH=../temporal-rules \
 |---|---|---|
 | `unscoped` | 事件没有资产，或资产未分组；所有维度都不求值 | 无（没有组就没有可授权展示的归属） |
 | `no_account` | 事件命中了账号维度规则引用的基础规则，但 `username` 为空；资产维度照常 | 无（规则适用性问题，不是窗口残缺） |
+| `no_source_ip` | 事件命中了来源维度规则引用的基础规则，但取不到可信来源 IP；其他维度照常 | 无（同上） |
 | `candidate_limit` | 某个维度完整查询窗口超过 10000 条候选，见下节 | `temporal_evaluation_gaps`，两个维度都超限只记一条 |
 | `late` | 事件时间早于数据库 `now() - LateGrace`（2 小时），窗口内候选可能已被清理 | `temporal_evaluation_gaps`，候选数量下限为 0，不写候选 |
 

@@ -1,0 +1,21 @@
+title: Event Log Cleared via wevtutil
+id: bcfe0541-6df0-5f3a-b678-901dff27886d
+status: experimental
+description: |
+  检测 wevtutil cl 清除 Security / System / Application / PowerShell Operational 日志。
+  Security 日志被清另有 1102 事件规则，本条补上命令行视角与其他日志。
+references:
+  - https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0580-win-security_rules.xml
+author: OpenXDR
+tags:
+  - attack.defense_evasion
+  - attack.t1070.001
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith: '\wevtutil.exe'
+    CommandLine|re: '\b(cl|clear-log)\s+["\x27]?(security|system|application|microsoft-windows-powershell/operational)(["\x27\s]|$)'
+  condition: selection
+level: high

@@ -21,6 +21,7 @@
 | [events.md](events.md) | 事件模型参考：class_uid 总表、每类事件的字段 schema、实体标识约定、gRPC 契约 | 写/改检测规则；改事件格式；写查询 |
 | [suricata.md](suricata.md) | Suricata EVE alert 接入：来源密钥、资产归属、重传、导入与验证 | 接入外部网络检测告警 |
 | [detection.md](detection.md) | 检测与降噪链路：Sigma 引擎、情报、去重、抑制、爆破升级、关联、UEBA、AI 研判、响应处置、通知、清理 | 改 `server/internal/` 任何检测相关包 |
+| [detection-evidence.md](detection-evidence.md) | 补充规则、同源 IP 关联、Sysmon/NTLM 与 auditd 证据采集前提和验证边界 | 启用新增检测或核对事件输入 |
 | [api.md](api.md) | REST API 参考：端点、参数、权限约定、对接示例 | 对接外部系统；改 `server/internal/api` |
 | [open-integrations-design.md](open-integrations-design.md) | 资产导出与系统联动详细设计（待实施）：集成身份、API、事件订阅、工单回写及验收 | 实施导出、CMDB 对接或工单联动前 |
 | [roadmap.md](roadmap.md) | 路线图：2026-10-30 运行修复与各方向实现/部署/验收状态、当前 P0/P1/P2 与完成条件、历史记录 | 决定"接下来做什么"之前 |

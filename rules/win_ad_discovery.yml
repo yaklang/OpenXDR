@@ -1,0 +1,22 @@
+title: PowerShell Domain Account Enumeration
+id: 41fd15ad-65a5-5897-bdbf-64f3db4ce010
+status: experimental
+description: |
+  检测 PowerShell 调用 Get-ADUser / Get-NetUser 枚举域账号。域管日常也用，定 low。
+references:
+  - https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0915-win-powershell_rules.xml
+author: OpenXDR
+tags:
+  - attack.discovery
+  - attack.t1087.002
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+    CommandLine|re: '\b(get-aduser|get-netuser)\b'
+  condition: selection
+level: low

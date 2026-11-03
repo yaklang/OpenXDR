@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"openxdr/server/internal/authfields"
 
 	"openxdr/server/internal/cmdorigin"
 	"openxdr/server/internal/sigma"
@@ -31,6 +32,7 @@ type candidate struct {
 	asset    uuid.NullUUID
 	host     string
 	username string
+	sourceIP string
 }
 
 type temporalStat struct {
@@ -98,12 +100,17 @@ func (b *temporalBacktest) apply(c candidate) error {
 	for _, d := range []struct{ groupBy, entity, label string }{
 		{temporal.GroupByAsset, c.asset.UUID.String(), cmp.Or(c.host, c.asset.UUID.String())},
 		{temporal.GroupByAccount, temporal.AccountEntity(c.username), temporal.AccountEntity(c.username)},
+		{temporal.GroupByAssetSourceIP, temporal.AssetSourceIPEntity(c.asset.UUID, c.sourceIP), c.asset.UUID.String() + "/" + c.sourceIP},
 	} {
 		if !b.snapshot.Relevant(d.groupBy, c.rules) {
 			continue
 		}
 		if d.entity == "" {
-			b.skipped["no_account"]++
+			reason := "no_account"
+			if d.groupBy == temporal.GroupByAssetSourceIP {
+				reason = "no_source_ip"
+			}
+			b.skipped[reason]++
 			continue
 		}
 		key := windowKey{d.groupBy, temporal.Scope{Group: c.group.UUID, Entity: d.entity}}
@@ -179,6 +186,7 @@ WHERE e.ts >= $1 AND e.ts < $2`+filter+` ORDER BY e.ts, e.id`, from, to)
 			continue
 		}
 		if c.rules = b.candidateOf(class, osName, doc, c.username); len(c.rules) > 0 {
+			c.sourceIP = authfields.SourceIP(raw)
 			found = append(found, c)
 		}
 	}
@@ -316,7 +324,7 @@ func (b *temporalBacktest) report(rules []*sigma.Rule, from, to time.Time, event
 			}
 			samples = append(samples, strings.Join(ids, " "))
 		}
-		dimension := map[string]string{temporal.GroupByAsset: "资产", temporal.GroupByAccount: "账号"}[s.groupBy]
+		dimension := map[string]string{temporal.GroupByAsset: "资产", temporal.GroupByAccount: "账号", temporal.GroupByAssetSourceIP: "主机+来源IP"}[s.groupBy]
 		fmt.Printf("| %d | %d | %s `%s` | %s | %s | %s |\n", s.hits, r.Severity, strings.ReplaceAll(r.Title, "|", "\\|"), r.ID, cmp.Or(dimension, "—"),
 			strings.ReplaceAll(strings.Join(shown, " "), "|", "\\|"), strings.Join(samples, "<br>"))
 	}
@@ -357,9 +365,9 @@ func (b *temporalBacktest) reportCandidates(rules []*sigma.Rule, span time.Durat
 		}
 		fmt.Printf("| %d | %.1f | %s | %s |\n", b.byRule[id], float64(b.byRule[id])/days, kind, strings.ReplaceAll(title, "|", "\\|"))
 	}
-	for _, groupBy := range []string{temporal.GroupByAsset, temporal.GroupByAccount} {
+	for _, groupBy := range []string{temporal.GroupByAsset, temporal.GroupByAccount, temporal.GroupByAssetSourceIP} {
 		if p, ok := b.peak[groupBy]; ok {
-			fmt.Printf("\n%s维度单实体窗口（最大窗口 %s）候选峰值 %d 条：%s，%s\n", map[string]string{temporal.GroupByAsset: "资产", temporal.GroupByAccount: "账号"}[groupBy],
+			fmt.Printf("\n%s维度单实体窗口（最大窗口 %s）候选峰值 %d 条：%s，%s\n", map[string]string{temporal.GroupByAsset: "资产", temporal.GroupByAccount: "账号", temporal.GroupByAssetSourceIP: "主机+来源IP"}[groupBy],
 				b.snapshot.MaxWindow(), p.size, p.label, p.at.Format(time.RFC3339))
 		}
 	}

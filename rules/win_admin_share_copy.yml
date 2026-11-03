@@ -1,0 +1,29 @@
+title: Copy to Remote Admin Share
+id: 5aac7f39-69e3-524a-8b90-80defe987530
+status: experimental
+description: |
+  检测 copy / Copy-Item / xcopy / robocopy 往 \\host\ADMIN$ 或 \\host\C$ 等管理共享写文件——横向移动投递载荷的常见一步。
+  软件分发也会这样做，需结合账号与后续远程执行看。
+references:
+  - https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0800-sysmon_id_1.xml
+author: OpenXDR
+tags:
+  - attack.lateral_movement
+  - attack.t1570
+  - attack.t1021.002
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+      - '\xcopy.exe'
+      - '\robocopy.exe'
+    CommandLine|re: '\b(copy|copy-item|xcopy|robocopy)\b'
+  share:
+    CommandLine|re: '\\\\[^\\\s]+\\(admin\$|[a-z]\$)\\'
+  condition: selection and share
+level: medium

@@ -17,6 +17,8 @@ mod liveness;
 mod periodic;
 mod poll;
 mod registry;
+#[cfg(any(target_os = "windows", test))]
+mod windows_evidence;
 
 #[cfg(target_os = "linux")]
 mod authwatch;
@@ -196,6 +198,12 @@ pub fn spawn(
     #[cfg(target_os = "windows")]
     if cfg.collect_auth {
         authwatch_win::spawn(agent_id.clone(), sink.clone());
+    }
+
+    // Sysmon 为可选数据源：管理员确认已安装并配置后再打开，避免未安装端点产生健康噪声。
+    #[cfg(target_os = "windows")]
+    if cfg.collect_sysmon {
+        authwatch_win::spawn_sysmon(agent_id.clone(), sink.clone());
     }
 
     // 敏感文件监控：ReadDirectoryChangesW 盯关键配置目录，与 Linux 侧对称

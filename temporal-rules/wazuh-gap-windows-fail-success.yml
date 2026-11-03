@@ -1,0 +1,14 @@
+id: temporal:wazuh-gap-windows-fail-success
+title: Windows 同账号连续失败后登录成功
+author: OpenXDR
+kind: sequence
+group_by: account
+within: 10m
+rules:
+  - d2b870a5-1c34-4738-9f35-0b49bac2cb76
+  - d2b870a5-1c34-4738-9f35-0b49bac2cb76
+  - d2b870a5-1c34-4738-9f35-0b49bac2cb76
+  - d2b870a5-1c34-4738-9f35-0b49bac2cb76
+  - d2b870a5-1c34-4738-9f35-0b49bac2cb76
+  - a2ebc770-fe00-5d87-b5b4-cb97cd9ab2cf
+level: high

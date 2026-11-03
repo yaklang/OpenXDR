@@ -1,0 +1,23 @@
+title: PostgreSQL Authentication Failure (时序信号)
+id: 2291148d-3b73-5896-911d-9e37bcbf1fb5
+status: experimental
+description: |
+  时序信号，不单独告警：PostgreSQL 密码认证失败（需把被监控数据库的日志经 syslog 接入，不是平台自用库）。
+  供 temporal:wazuh-gap-postgres-fail-burst 按主机计数。
+references:
+  - https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0300-postgresql_rules.xml
+author: OpenXDR
+openxdr_signal: true
+tags:
+  - attack.credential_access
+  - attack.t1110.001
+logsource:
+  category: application
+detection:
+  selection:
+    metadata.product.name:
+      - 'postgres'
+      - 'postgresql'
+    message|contains: 'password authentication failed for user'
+  condition: selection
+level: informational

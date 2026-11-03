@@ -1,0 +1,23 @@
+title: Windows RDP Logon Success (时序信号)
+id: 76ea3896-f180-5bdf-a8e3-e6d7f4e040d0
+status: experimental
+description: |
+  时序信号，不单独告警：Windows 远程交互式（类型 10）登录成功。
+  供 temporal:wazuh-gap-windows-fail-rdp 关联「同账号失败集中之后的 RDP 登录」。
+references:
+  - https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0840-win_event_channel.xml
+author: OpenXDR
+openxdr_signal: true
+tags:
+  - attack.lateral_movement
+  - attack.t1021.001
+logsource:
+  category: authentication
+  product: windows
+detection:
+  selection:
+    activity_id: 1
+    status_id: 1
+    service.name: 'logon-type-10'
+  condition: selection
+level: informational

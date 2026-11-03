@@ -1,0 +1,8 @@
+id: temporal:wazuh-gap-mysql-fail-burst
+title: MySQL 同主机两分钟十次认证失败
+author: OpenXDR
+kind: event_count
+within: 2m
+rules: [f60746a0-0eff-5cee-b0f1-446474d747fa]
+threshold: 10
+level: high

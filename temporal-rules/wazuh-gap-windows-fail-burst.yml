@@ -1,0 +1,9 @@
+id: temporal:wazuh-gap-windows-fail-burst
+title: Windows 同主机同源 IP 两分钟十次登录失败
+author: OpenXDR
+kind: event_count
+group_by: asset_source_ip
+within: 2m
+rules: [d2b870a5-1c34-4738-9f35-0b49bac2cb76]
+threshold: 10
+level: high

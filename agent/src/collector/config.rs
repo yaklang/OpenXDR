@@ -14,6 +14,8 @@ pub struct Config {
     pub file_watch_dirs: Vec<String>,
     pub collect_files: bool,
     pub collect_auth: bool,
+    /// Sysmon 8/10/25，需预装 Sysmon 并明确开启；缺省关闭。
+    pub collect_sysmon: bool,
     pub collect_persist: bool,
     pub collect_network: bool,
     /// 资产清单：监听端口与属主进程、云环境
@@ -30,6 +32,7 @@ impl Default for Config {
             file_watch_dirs: Vec::new(),
             collect_files: true,
             collect_auth: true,
+            collect_sysmon: false,
             collect_persist: true,
             collect_network: true,
             collect_inventory: true,
@@ -106,5 +109,15 @@ mod tests {
     fn broken_json_falls_back_to_default() {
         let c = Config::parse("{not json");
         assert!(c.collect_files, "坏配置不能让 agent 变瞎");
+    }
+}
+
+#[cfg(test)]
+mod sysmon_tests {
+    use super::*;
+    #[test]
+    fn sysmon_requires_explicit_opt_in() {
+        assert!(!Config::parse("").collect_sysmon);
+        assert!(Config::parse(r#"{"collectSysmon":true}"#).collect_sysmon);
     }
 }

@@ -1,0 +1,36 @@
+title: Sysmon Remote Thread Into System Process
+id: 3d295b21-3a29-5546-8076-48d8d8ea6ebd
+status: experimental
+description: |
+  检测 Sysmon Event 8 里向 svchost / lsass / explorer 创建远程线程，只标 T1055，不据此推断线程劫持或镂空。
+  排除 csrss、wininit、winlogon、services 与 Defender、MDE、WMI 的固定路径；调试器、辅助功能与部分安全软件仍会命中，所以定 medium。
+  需预装 Sysmon 并开启 collectSysmon（默认关闭）。
+author: OpenXDR
+tags:
+  - attack.defense_evasion
+  - attack.t1055
+logsource:
+  category: create_remote_thread
+  product: windows
+detection:
+  selection:
+    sysmon.provider: 'Microsoft-Windows-Sysmon'
+    sysmon.event_id: 8
+    sysmon.target_image|endswith:
+      - '\svchost.exe'
+      - '\lsass.exe'
+      - '\explorer.exe'
+    sysmon.source_image|re: '^.+\.exe$'
+  filter_known:
+    sysmon.source_image:
+      - 'C:\Windows\System32\csrss.exe'
+      - 'C:\Windows\System32\wininit.exe'
+      - 'C:\Windows\System32\winlogon.exe'
+      - 'C:\Windows\System32\services.exe'
+      - 'C:\Program Files\Windows Defender\MsMpEng.exe'
+      - 'C:\ProgramData\Microsoft\Windows Defender\Platform\*\MsMpEng.exe'
+      - 'C:\Program Files\Windows Defender Advanced Threat Protection\MsSense.exe'
+      - 'C:\Program Files\Windows Defender Advanced Threat Protection\SenseIR.exe'
+      - 'C:\Windows\System32\wbem\WmiPrvSE.exe'
+  condition: selection and not filter_known
+level: medium

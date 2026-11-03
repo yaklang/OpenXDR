@@ -14,6 +14,10 @@ go test -tags integration -p 1 ./internal/ingest -run TestRepositoryTemporalRule
 
 两个测试分别由现有 CI 的单测、集成测试步骤自动包含，不需要新增后台服务。
 
+`auth-burst-cases.json` 是 `temporal-rules/wazuh-gap-*.yml` 六条认证规则的语料（阈值、窗口、乱序、重投、跨主机 / 跨组，
+来源维度的分来源、缺来源、非法来源、IPv6 规范化），由同一个单元测试一并回放，另由
+`go test -tags integration -p 1 ./internal/ingest -run TestAuthBurstPersistentReplay` 走数据库持久回放。
+
 81 个确定性回放用例。最早的 30 个覆盖计数阈值/窗口边界、乱序、重投、成功认证负例，以及下载执行后敏感文件变更的
 先后关系、同时间/反转/窗口外、跨组/跨主机、普通下载/普通文件负例和 OS 适用范围。
 账号维度（`linux-account-auth-burst`，`min_assets: 2`）有 10 个专项：跨主机累计（含大小写/空白不同的同一账号）、乱序迟到、

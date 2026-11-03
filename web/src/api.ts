@@ -446,7 +446,7 @@ export interface ArchivedTemporalRule {
   title: string
   author?: string
   kind: 'event_count' | 'sequence' | 'temporal'
-  groupBy: 'asset' | 'account'
+  groupBy: 'asset' | 'account' | 'asset_source_ip'
   severity: number
   windowSeconds: number
   threshold?: number
@@ -1326,6 +1326,7 @@ export interface AgentConfig {
   fileWatchDirs?: string[]
   collectFiles?: boolean
   collectAuth?: boolean
+  collectSysmon?: boolean
   collectPersist?: boolean
   collectNetwork?: boolean
   collectInventory?: boolean

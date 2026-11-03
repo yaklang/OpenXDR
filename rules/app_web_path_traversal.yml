@@ -1,0 +1,30 @@
+title: Web Path Traversal to Sensitive File
+id: aa7b9029-6e1a-5312-b502-022e0171870d
+status: experimental
+description: |
+  检测 nginx / Apache 访问日志里带 ../（含编码形式）且指向 passwd、win.ini、boot.ini 的请求。
+  只说明有人在试，不表示利用成功；需把 Web 日志带应用标签经 syslog 接入。
+references:
+  - https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0245-web_rules.xml
+author: OpenXDR
+tags:
+  - attack.initial_access
+  - attack.t1190
+logsource:
+  category: application
+detection:
+  selection:
+    metadata.product.name:
+      - 'nginx'
+      - 'apache'
+      - 'apache2'
+      - 'httpd'
+    message|re: '(\.\./|%2e%2e(?:%2f|/)|\.%2e/|%2e\./)'
+  target:
+    message|contains:
+      - 'etc/passwd'
+      - 'etc%2fpasswd'
+      - 'win.ini'
+      - 'boot.ini'
+  condition: selection and target
+level: medium

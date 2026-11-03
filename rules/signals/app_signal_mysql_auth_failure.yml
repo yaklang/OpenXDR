@@ -1,0 +1,26 @@
+title: MySQL Authentication Failure (时序信号)
+id: f60746a0-0eff-5cee-b0f1-446474d747fa
+status: experimental
+description: |
+  时序信号，不单独告警：MySQL / MariaDB 密码认证失败（需把数据库日志经 syslog 接入）。
+  供 temporal:wazuh-gap-mysql-fail-burst 按主机计数；同资产计数不保证来自同一来源地址。
+references:
+  - https://github.com/wazuh/wazuh/blob/v4.14.9/ruleset/rules/0295-mysql_rules.xml
+author: OpenXDR
+openxdr_signal: true
+tags:
+  - attack.credential_access
+  - attack.t1110.001
+logsource:
+  category: application
+detection:
+  selection:
+    metadata.product.name:
+      - 'mysql'
+      - 'mysqld'
+      - 'mariadbd'
+    message|contains|all:
+      - 'Access denied for user'
+      - 'using password:'
+  condition: selection
+level: informational

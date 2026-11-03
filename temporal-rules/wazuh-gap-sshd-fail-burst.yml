@@ -1,0 +1,9 @@
+id: temporal:wazuh-gap-sshd-fail-burst
+title: SSH 同主机同源 IP 两分钟十次认证失败
+author: OpenXDR
+kind: event_count
+group_by: asset_source_ip
+within: 2m
+rules: [b1e7a4f0-2c93-4d58-9a16-5f0d3e8c7b24]
+threshold: 10
+level: high

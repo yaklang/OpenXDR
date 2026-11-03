@@ -180,6 +180,7 @@ func (s *Server) enqueue(ctx context.Context, in incoming) error {
 		"actor":    map[string]any{"process": map[string]any{"pid": msg.ProcID}},
 		"device":   map[string]any{"hostname": msg.Hostname}, "facility": msg.Facility,
 	})
+	raw = withAuditFields(withAuthSource(raw, msg), msg)
 	origin := msg.Hostname
 	if origin == "" && in.from != nil {
 		origin = in.from.String()
@@ -213,6 +214,7 @@ func (s *Server) build(ctx context.Context, in incoming, deduper *dedup.Deduper)
 		"device":   map[string]any{"hostname": msg.Hostname},
 		"facility": msg.Facility,
 	})
+	raw = withAuditFields(withAuthSource(raw, msg), msg)
 
 	eventID := uuid.Must(uuid.NewV7())
 	ec := s.DB.Event.Create().
