@@ -150,7 +150,7 @@ func main() {
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	slog.Info("HTTP 启动", "addr", httpAddr)
 	queryRoles := startQueryRoles(ctx, db, client, dsn)
-	chat := startChat(ctx, client, rules, hub, webhook, conf, queryRoles, suppressionReviewer)
+	chat := startChat(ctx, db, client, rules, hub, webhook, conf, queryRoles, suppressionReviewer)
 	scheduler := startScheduler(ctx, db, client, chat, conf, webhook)
 	enrollSvc := loadEnroll(client, silentAfter)
 	routes := http.NewServeMux()
@@ -447,6 +447,9 @@ func startAuditChain(ctx context.Context, db *sql.DB, client *ent.Client, hub *r
 // startContainment 自主响应：确定性信号命中后按角色与处置等级直接遏制，显式开启才运行，仍受 RESPONSE_ENABLED 约束
 func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *response.Hub, allowlist []string, llm *triage.LLM) *containment.Engine {
 	if os.Getenv("CONTAINMENT_ENABLED") != "true" {
+		go cluster.RunLeader(ctx, db, "command-verification", func(ctx context.Context) {
+			response.RunAutoVerification(ctx, db, 30*time.Second)
+		})
 		return nil
 	}
 	if !hub.Enabled {
@@ -696,9 +699,9 @@ func newPiRuntime() piruntime.Runtime {
 }
 
 // startChat Pi 会话服务，并恢复上次退出时未完成的会话。
-func startChat(ctx context.Context, client *ent.Client, rules sigma.Catalog, hub *response.Hub, webhook *notify.Webhook, conf func() aiconf.Config, queryRoles *queryrole.Provisioner, suppressionReviewer *suppressreview.Reviewer) *agentchat.Service {
+func startChat(ctx context.Context, db *sql.DB, client *ent.Client, rules sigma.Catalog, hub *response.Hub, webhook *notify.Webhook, conf func() aiconf.Config, queryRoles *queryrole.Provisioner, suppressionReviewer *suppressreview.Reviewer) *agentchat.Service {
 	piRuntime := newPiRuntime()
-	chat := &agentchat.Service{Base: ctx, Rules: rules, Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 14400)) * time.Second, DB: client, Gate: &commandgate.Gate{DB: client, Hub: hub, ApprovalTimeout: time.Duration(getenvInt("PI_APPROVAL_TIMEOUT_SECONDS", 600)) * time.Second, Notify: feishuapproval.ApprovalNotifier(client, webhook.Send)},
+	chat := &agentchat.Service{Base: ctx, Rules: rules, Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 14400)) * time.Second, DB: client, SQL: db, Gate: &commandgate.Gate{DB: client, Hub: hub, ApprovalTimeout: time.Duration(getenvInt("PI_APPROVAL_TIMEOUT_SECONDS", 600)) * time.Second, Notify: feishuapproval.ApprovalNotifier(client, webhook.Send)},
 		Runtime: piRuntime, Sandboxed: piRuntime.Sandboxed(),
 		AI: func() (string, string, string) { c := conf(); return c.BaseURL, c.APIKey, c.PiModel }, Query: queryRoles,
 		GroupDailyTokens: getenvInt("PI_GROUP_DAILY_TOKENS", 0), MaxTurns: getenvInt("PI_MAX_TURNS", 500),

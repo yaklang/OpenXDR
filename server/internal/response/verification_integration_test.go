@@ -128,3 +128,178 @@ func TestVerificationEvidenceAuditAndScope(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMachineVerificationFailClosedAndAutoVerify(t *testing.T) {
+	ctx, c := testdb.New(t)
+	db, err := sql.Open("pgx", os.Getenv("INTEGRATION_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := EnsureVerificationSchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+
+	g := c.Group.Create().SetName("verify-machine").SaveX(ctx)
+	otherGroup := c.Group.Create().SetName("verify-other").SaveX(ctx)
+	host := c.Asset.Create().SetHostname("verify-endpoint").SetGroupID(g.ID).SaveX(ctx)
+	admin := c.User.Create().SetUsername("machine-admin").SetPasswordHash("unused").SetRole("admin").SaveX(ctx)
+
+	issued := time.Now().UTC().Add(-10 * time.Minute)
+	targetGUID := uuid.New()
+	otherGUID := uuid.New()
+
+	killCmd := c.Command.Create().
+		SetAssetID(host.ID).SetKind("kill_process").SetStatus("succeeded").
+		SetPid(42).SetProcessGUID(targetGUID).SetCreatedAt(issued).SetCompletedAt(issued.Add(time.Second)).SaveX(ctx)
+	blockCmd := c.Command.Create().
+		SetAssetID(host.ID).SetKind("block_network").SetTarget("198.51.100.9").SetStatus("succeeded").
+		SetCreatedAt(issued).SetCompletedAt(issued.Add(time.Second)).SaveX(ctx)
+	isoCmd := c.Command.Create().
+		SetAssetID(host.ID).SetKind("isolate_host").SetStatus("succeeded").
+		SetCreatedAt(issued).SetCompletedAt(issued.Add(time.Second)).SaveX(ctx)
+
+	session := c.AgentSession.Create().
+		SetKind("chat").SetGroupID(g.ID).SetInitiator("analyst").SetModel("test").
+		SetStatus("running").SetRunExpiresAt(time.Now().UTC().Add(time.Hour)).SaveX(ctx)
+
+	// 1. 来源冒充拒绝：不能用 RecordMachineVerification 写 human 或 manual_review
+	if _, err := RecordMachineVerification(ctx, db, MachineVerificationInput{
+		CommandID: killCmd.ID, GroupID: g.ID, Source: "human", Method: "manual_review",
+		Outcome: "inconclusive", Expected: "e", Observed: "o",
+	}); !errors.Is(err, ErrVerificationInput) {
+		t.Fatalf("应拒绝伪造 human 来源: %v", err)
+	}
+
+	// 2. 五类负例：子串 PID/父 PID、备注里的 GUID、任意网络/文件事件提及目标、isolate_host 任意 raw 均拒绝记 effective
+	evParentPID := c.Event.Create().SetAssetID(host.ID).SetTs(issued.Add(time.Minute)).SetSource("agent").SetClassUID(1007).
+		SetProcessGUID(targetGUID).SetRaw(json.RawMessage(`{"activity_id":2,"process":{"pid":142,"parent_process":{"pid":42}}}`)).SaveX(ctx).ID
+	evGUIDInComment := c.Event.Create().SetAssetID(host.ID).SetTs(issued.Add(time.Minute)).SetSource("agent").SetClassUID(1007).
+		SetProcessGUID(otherGUID).SetRaw(json.RawMessage(`{"activity_id":2,"process":{"pid":42},"note":"` + targetGUID.String() + `"}`)).SaveX(ctx).ID
+	evNetMention := c.Event.Create().SetAssetID(host.ID).SetTs(issued.Add(time.Minute)).SetSource("agent").SetClassUID(4001).
+		SetRaw(json.RawMessage(`{"dst_endpoint":{"ip":"198.51.100.9"}}`)).SaveX(ctx).ID
+	evIsoRaw := c.Event.Create().SetAssetID(host.ID).SetTs(issued.Add(time.Minute)).SetSource("agent").SetClassUID(5001).
+		SetRaw(json.RawMessage(`{"inventory":"ok"}`)).SaveX(ctx).ID
+
+	for _, tc := range []struct {
+		name string
+		cmd  uuid.UUID
+		ev   uuid.UUID
+	}{
+		{"wrong_pid_contains_42", killCmd.ID, evParentPID},
+		{"guid_only_in_raw_note", killCmd.ID, evGUIDInComment},
+		{"network_mentions_ip", blockCmd.ID, evNetMention},
+		{"isolate_arbitrary_raw", isoCmd.ID, evIsoRaw},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := RecordMachineVerification(ctx, db, MachineVerificationInput{
+				CommandID: tc.cmd, GroupID: g.ID, Source: "ai", SessionID: &session.ID,
+				Method: "telemetry_post_action", Outcome: "effective",
+				Expected: "处置生效", Observed: "伪正向证据", EventIDs: []uuid.UUID{tc.ev},
+			}); !errors.Is(err, ErrVerificationInput) {
+				t.Fatalf("%s 应被拒绝为非确定性证据: %v", tc.name, err)
+			}
+		})
+	}
+
+	// 3. 下发前退出事件：不能塞入 EventIDs，只能进 ContextEventIDs 且结论必须为 inconclusive
+	preExit := c.Event.Create().SetAssetID(host.ID).SetTs(issued.Add(-time.Minute)).SetSource("agent").SetClassUID(1007).
+		SetProcessGUID(targetGUID).SetRaw(json.RawMessage(`{"activity_id":2,"process":{"pid":42}}`)).SaveX(ctx).ID
+	if _, err := RecordMachineVerification(ctx, db, MachineVerificationInput{
+		CommandID: killCmd.ID, GroupID: g.ID, Source: "ai", SessionID: &session.ID,
+		Method: "context_only", Outcome: "effective",
+		Expected: "e", Observed: "o", ContextEventIDs: []uuid.UUID{preExit},
+	}); !errors.Is(err, ErrVerificationInput) {
+		t.Fatalf("下发前退出不能记为 effective: %v", err)
+	}
+	vCtx, err := RecordMachineVerification(ctx, db, MachineVerificationInput{
+		CommandID: killCmd.ID, GroupID: g.ID, Source: "ai", SessionID: &session.ID,
+		Method: "context_only", Outcome: "inconclusive",
+		Expected: "核对进程状态", Observed: "进程在下发前已退出", ContextEventIDs: []uuid.UUID{preExit},
+	})
+	if err != nil || vCtx.Source != "ai" || vCtx.Reviewer != "ai:session:"+session.ID.String() || len(vCtx.Context) != 1 {
+		t.Fatalf("上下文归档验证异常: %+v %v", vCtx, err)
+	}
+
+	// 4. 跨组会话与已失效会话拒绝写入
+	foreignSession := c.AgentSession.Create().SetKind("chat").SetGroupID(otherGroup.ID).SetInitiator("analyst").SetModel("test").SetStatus("running").SaveX(ctx)
+	if _, err := RecordMachineVerification(ctx, db, MachineVerificationInput{
+		CommandID: killCmd.ID, GroupID: g.ID, Source: "ai", SessionID: &foreignSession.ID,
+		Method: "ai_investigation", Outcome: "inconclusive", Expected: "e", Observed: "o",
+	}); !errors.Is(err, ErrVerificationScope) {
+		t.Fatalf("跨组会话应被拒绝: %v", err)
+	}
+
+	// 5. 自动核验闭环：先无下发后退出事件 -> 记 1 条 system inconclusive（含下发前退出上下文），重复调用不膨胀；
+	//    随后到达真实结构化退出事件（source=agent, class_uid=1007, process_guid=targetGUID, pid=42, activity_id=2）-> 自动升级补记 1 条 effective，后续不再重复。
+	if err := AutoVerifyCommands(ctx, db, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := AutoVerifyCommands(ctx, db, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	items, err := ListVerifications(ctx, db, admin.ID, killCmd.ID)
+	if err != nil || len(items) != 2 { // 1 条 AI + 1 条 system inconclusive
+		t.Fatalf("自动核验幂等数量异常: len=%d err=%v", len(items), err)
+	}
+
+	realExit := c.Event.Create().SetAssetID(host.ID).SetTs(issued.Add(2 * time.Minute)).SetSource("agent").SetClassUID(1007).
+		SetProcessGUID(targetGUID).SetRaw(json.RawMessage(`{"activity_id":2,"process":{"pid":42}}`)).SaveX(ctx).ID
+	if err := AutoVerifyCommands(ctx, db, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := AutoVerifyCommands(ctx, db, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	items, err = ListVerifications(ctx, db, admin.ID, killCmd.ID)
+	if err != nil || len(items) != 3 {
+		t.Fatalf("退出事件到达后应升级 1 条 effective 且不再重复: len=%d err=%v", len(items), err)
+	}
+	if items[0].Source != "system" || items[0].Outcome != "effective" || len(items[0].Evidence) != 1 || items[0].Evidence[0].ID != realExit {
+		t.Fatalf("最新自动核验记录应为 effective 并绑定真实退出事件: %+v", items[0])
+	}
+
+	// 6. unknown 指令拒绝一切非 inconclusive 结论（包括 ineffective）
+	unknownCmd := c.Command.Create().SetAssetID(host.ID).SetKind("kill_process").SetStatus("unknown").
+		SetPid(42).SetProcessGUID(targetGUID).SetCreatedAt(issued).SaveX(ctx)
+	if _, err := RecordMachineVerification(ctx, db, MachineVerificationInput{
+		CommandID: unknownCmd.ID, GroupID: g.ID, Source: "ai", SessionID: &session.ID,
+		Method: "telemetry_post_action", Outcome: "ineffective",
+		Expected: "e", Observed: "o", EventIDs: []uuid.UUID{realExit},
+	}); !errors.Is(err, ErrVerificationInput) {
+		t.Fatalf("unknown 指令不得记录 ineffective: %v", err)
+	}
+
+	// 7. 24h 内 >100 条指令全覆盖且重复调用不增行
+	var batchIDs []uuid.UUID
+	for i := 0; i < 105; i++ {
+		ts := issued.Add(time.Duration(i) * time.Second)
+		bc := c.Command.Create().SetAssetID(host.ID).SetKind("block_network").SetStatus("succeeded").
+			SetTarget("198.51.100.1").SetCreatedAt(ts).SetCompletedAt(ts.Add(time.Second)).SaveX(ctx)
+		batchIDs = append(batchIDs, bc.ID)
+	}
+	if err := AutoVerifyCommands(ctx, db, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	var beforeTotal int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM command_verifications WHERE source = 'system'`).Scan(&beforeTotal); err != nil {
+		t.Fatal(err)
+	}
+	if err := AutoVerifyCommands(ctx, db, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	var afterTotal int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM command_verifications WHERE source = 'system'`).Scan(&afterTotal); err != nil {
+		t.Fatal(err)
+	}
+	if beforeTotal != afterTotal {
+		t.Fatalf("重复调用 AutoVerifyCommands 不得新增记录: before=%d after=%d", beforeTotal, afterTotal)
+	}
+	// 最早与最晚的指令均已被覆盖
+	for _, checkID := range []uuid.UUID{batchIDs[0], batchIDs[len(batchIDs)-1]} {
+		list, err := ListVerifications(ctx, db, admin.ID, checkID)
+		if err != nil || len(list) != 1 || list[0].Source != "system" {
+			t.Fatalf(">100 条指令应全部被覆盖且无饥饿: id=%s len=%d err=%v", checkID, len(list), err)
+		}
+	}
+}

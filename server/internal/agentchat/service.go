@@ -4,6 +4,7 @@ package agentchat
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,6 +38,7 @@ type Service struct {
 	// 后台对话运行挂在它上面：进程停机时取消，与任何 HTTP 请求无关
 	Base    context.Context
 	DB      *ent.Client
+	SQL     *sql.DB
 	Gate    *commandgate.Gate
 	Runtime Runner
 	// Sandboxed Pi 在远端沙箱里用默认工具加 xdr 命令行：系统提示与组内数据的交付方式不同
@@ -677,6 +679,7 @@ var reportTool = piruntime.Tool{Name: "report", Description: "保存当前会话
 func (s *Service) tools(ctx context.Context, group uuid.UUID) []piruntime.Tool {
 	tools := []piruntime.Tool{
 		commandStatusTool,
+		verifyCommandTool,
 		{Name: "exec", Description: "对组内资产执行命令，命中高风险名单的由 AI 审计员当场评审，拒绝时附理由。host 为资产 UUID。", Parameters: json.RawMessage(`{"type":"object","properties":{"host":{"type":"string"},"cmd":{"type":"string","minLength":1,"maxLength":32768},"timeout":{"type":"integer","minimum":1,"maximum":300}},"required":["host","cmd"],"additionalProperties":false}`)},
 		{Name: "track", Description: trackDescription, Parameters: trackParameters},
 		{Name: "identify", Description: identifyDescription, Parameters: identifyParameters},
@@ -706,6 +709,8 @@ func (s *Service) tool(ctx context.Context, session *ent.AgentSession, who comma
 	switch name {
 	case "command_status":
 		return s.commandStatus(ctx, session, args)
+	case "verify_command":
+		return s.verifyCommand(ctx, session, args)
 	case "exec":
 		var body struct {
 			Host    uuid.UUID `json:"host"`

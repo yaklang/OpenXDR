@@ -100,7 +100,10 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if err := e.react(ctx); err != nil {
 		return err
 	}
-	return e.expire(ctx)
+	if err := e.expire(ctx); err != nil {
+		return err
+	}
+	return response.AutoVerifyCommands(ctx, e.SQL, e.now())
 }
 
 func (e *Engine) reconcile(ctx context.Context) error {
@@ -394,7 +397,7 @@ func classifyFailure(kind, status string, detailPtr *string) string {
 	}
 	if kind == "kill_process" {
 		lower := strings.ToLower(detail)
-		if strings.Contains(lower, "no such process") || strings.Contains(detail, "进程不存在") || strings.Contains(lower, "pidfd") {
+		if isProcessGoneDetail(detail, lower) {
 			return "目标已消失（进程已退出）：" + detail
 		}
 		if strings.Contains(detail, "身份不匹配") || strings.Contains(detail, "已过期") || strings.Contains(detail, "身份不符") {
@@ -405,6 +408,15 @@ func classifyFailure(kind, status string, detailPtr *string) string {
 		return "执行失败：" + detail
 	}
 	return "执行失败"
+}
+
+func isProcessGoneDetail(detail, lower string) bool {
+	if strings.Contains(lower, "no such process") || strings.Contains(lower, "esrch") || strings.Contains(lower, "os error 3)") {
+		return true
+	}
+	// agent/src/process_identity.rs 错误前缀为「进程不存在或无法打开 pidfd: <errno>」，
+	// EPERM/ENOSYS 也会带该中文前缀，含 pidfd 时必须有明确 ESRCH/No such process 才能判目标已消失。
+	return strings.Contains(detail, "进程不存在") && !strings.Contains(lower, "pidfd")
 }
 
 func unknownReason(detailPtr *string) string {

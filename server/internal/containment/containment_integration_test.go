@@ -835,3 +835,20 @@ func TestContainmentCommandIdempotencyAndConcurrency(t *testing.T) {
 		t.Fatalf("并发人工解除应只投递 1 次解除指令，实得 %d", len(f.inbox["endpoint"]))
 	}
 }
+
+func TestClassifyFailurePidfdDoesNotFalsePositiveOnEpermOrEnosys(t *testing.T) {
+	for _, detail := range []string{
+		"进程不存在或无法打开 pidfd: Operation not permitted (os error 1)",
+		"进程不存在或无法打开 pidfd: Function not implemented (os error 38)",
+	} {
+		d := detail
+		if cause := classifyFailure("kill_process", "failed", &d); strings.Contains(cause, "目标已消失") {
+			t.Fatalf("pidfd EPERM/ENOSYS 不应被误判为目标已退出: %s -> %s", detail, cause)
+		}
+	}
+
+	gone := "进程不存在或无法打开 pidfd: No such process (os error 3)"
+	if cause := classifyFailure("kill_process", "failed", &gone); !strings.Contains(cause, "目标已消失") {
+		t.Fatalf("pidfd ESRCH (No such process) 应被判定为目标已退出: %s", cause)
+	}
+}
