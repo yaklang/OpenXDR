@@ -581,7 +581,7 @@ func TestKillFollowsInPlaceExec(t *testing.T) {
 	sh := f.client.Event.GetX(f.ctx, *al.EventID)
 	sleep := f.client.Event.Create().SetTs(sh.Ts.Add(time.Millisecond)).SetClassUID(1007).SetSource("agent").SetAssetID(host.ID).
 		SetProcessGUID(uuid.New()).SetRaw(json.RawMessage(raw("sleep", 13300))).SaveX(f.ctx)
-	f.client.Event.Create().SetTs(sh.Ts.Add(2*time.Millisecond)).SetClassUID(1007).SetSource("agent").SetAssetID(host.ID).
+	f.client.Event.Create().SetTs(sh.Ts.Add(2 * time.Millisecond)).SetClassUID(1007).SetSource("agent").SetAssetID(host.ID).
 		SetProcessGUID(uuid.New()).SetRaw(json.RawMessage(raw("other", 1))).SaveX(f.ctx)
 	if err := f.engine(ScopeLab).Tick(f.ctx); err != nil {
 		t.Fatal(err)
