@@ -7,11 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"openxdr/server/internal/containment"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/testdb"
+	"openxdr/server/pb"
 )
 
 // 决策记录按组可见，别组的来源主机不给名字；解除要组 analyst，撤不回的返回 409，成功的下发恢复动作
@@ -73,12 +76,23 @@ func TestContainmentsListAndLift(t *testing.T) {
 	if code := send(t, an, "POST", lift, `{"reason":"确认是演练"}`); code != http.StatusOK {
 		t.Fatalf("analyst 解除: %d", code)
 	}
-	if c := <-inbox; c.Target != "10.1.1.170" {
+	c := <-inbox
+	if c.Target != "10.1.1.170" {
 		t.Fatalf("应下发 unblock: %v", c)
 	}
 	got := client.Containment.GetX(ctx, block.ID)
+	if got.State != "active" || got.LiftedBy == nil || *got.LiftedBy != "ana" || got.LiftCommandID == nil || got.EndedAt != nil {
+		t.Fatalf("解除回执到达前应保持 active 且不写 EndedAt: %+v", got)
+	}
+	if err := hub.Complete(ctx, agent, &pb.CommandResult{CommandId: c.Id, Status: pb.CommandResult_SUCCEEDED}); err != nil {
+		t.Fatal(err)
+	}
+	if err := containment.Reconcile(ctx, client, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got = client.Containment.GetX(ctx, block.ID)
 	if got.State != "lifted" || got.LiftedBy == nil || *got.LiftedBy != "ana" || got.LiftCommandID == nil || got.EndedAt == nil {
-		t.Fatalf("应记人工解除: %+v", got)
+		t.Fatalf("成功回执对账后应记人工解除: %+v", got)
 	}
 
 	resp, body = get(t, vi, "/api/containments/status")

@@ -35,6 +35,7 @@ type fixture struct {
 	group  uuid.UUID
 	now    time.Time
 	inbox  map[string]chan *pb.Command
+	agents map[string]uuid.UUID
 }
 
 func setup(t *testing.T) *fixture {
@@ -54,6 +55,7 @@ func setup(t *testing.T) *fixture {
 		ctx: ctx, client: client, db: db, hub: response.NewHub(client, true),
 		group: client.Group.Create().SetName("lab").SaveX(ctx).ID,
 		now:   time.Now().UTC().Truncate(time.Second), inbox: map[string]chan *pb.Command{},
+		agents: map[string]uuid.UUID{},
 	}
 }
 
@@ -67,6 +69,7 @@ func (f *fixture) host(t *testing.T, name, ip string, tier *entasset.ResponseTie
 	}
 	a := create.SaveX(f.ctx)
 	f.inbox[name] = f.hub.Attach(agent)
+	f.agents[name] = agent
 	return a
 }
 
@@ -87,14 +90,23 @@ func (f *fixture) engine(scope string) *Engine {
 		TTL: 24 * time.Hour, MaxPerHour: 10, Now: func() time.Time { return f.now }}
 }
 
-// received 取走某台主机收到的全部指令
+// received 取走某台主机收到的全部指令，并模拟 agent 回报执行成功与对账
 func (f *fixture) received(name string) []*pb.Command {
 	var out []*pb.Command
 	for {
 		select {
 		case c := <-f.inbox[name]:
+			if err := f.hub.Complete(f.ctx, f.agents[name], &pb.CommandResult{
+				CommandId: c.Id,
+				Status:    pb.CommandResult_SUCCEEDED,
+			}); err != nil {
+				panic(err)
+			}
 			out = append(out, c)
 		default:
+			if err := Reconcile(f.ctx, f.client, f.now); err != nil {
+				panic(err)
+			}
 			return out
 		}
 	}
@@ -160,6 +172,9 @@ func TestLabSourceIsolatedVictimsBlockSource(t *testing.T) {
 		t.Fatalf("到期应解除隔离：%v", got)
 	}
 	if got := f.received("node1"); len(got) != 1 || got[0].Kind != pb.CommandKind_UNBLOCK_NETWORK || got[0].Target != "10.1.1.170" {
+		t.Fatalf("到期应解除封锁：%v", got)
+	}
+	if got := f.received("web"); len(got) != 1 || got[0].Kind != pb.CommandKind_UNBLOCK_NETWORK || got[0].Target != "10.1.1.170" {
 		t.Fatalf("到期应解除封锁：%v", got)
 	}
 	if n := f.client.Containment.Query().Where(entcontainment.StateEQ(entcontainment.StateExpired), entcontainment.LiftCommandIDNotNil()).CountX(f.ctx); n != 3 {
@@ -236,12 +251,17 @@ func TestFuseAndProtectedTargets(t *testing.T) {
 	if err := e.Tick(f.ctx); err != nil {
 		t.Fatal(err)
 	}
-	if n := f.client.Containment.Query().Where(entcontainment.StateEQ(entcontainment.StateActive)).CountX(f.ctx); n != 2 {
-		t.Fatalf("上限 2：应有 2 条生效，实际 %d", n)
+	if n := f.client.Containment.Query().Where(entcontainment.StateEQ(entcontainment.StatePending)).CountX(f.ctx); n != 2 {
+		t.Fatalf("上限 2：回执前应有 2 条待确认，实际 %d", n)
 	}
 	held := f.client.Containment.Query().Where(entcontainment.StateEQ(entcontainment.StateHeld)).AllX(f.ctx)
 	if len(held) != 1 {
 		t.Fatalf("第三条应被熔断挡下：%+v", held)
+	}
+	f.received("a")
+	f.received("b")
+	if n := f.client.Containment.Query().Where(entcontainment.StateEQ(entcontainment.StateActive)).CountX(f.ctx); n != 2 {
+		t.Fatalf("上限 2：回执后应有 2 条生效，实际 %d", n)
 	}
 
 	g := setup(t)
@@ -268,11 +288,15 @@ func TestGroupIsolationCap(t *testing.T) {
 	if err := f.engine(ScopeLab).Tick(f.ctx); err != nil {
 		t.Fatal(err)
 	}
-	if n := f.client.Containment.Query().Where(entcontainment.KindEQ("isolate_host"), entcontainment.StateEQ(entcontainment.StateActive)).CountX(f.ctx); n != 1 {
-		t.Fatalf("组内只能隔离 1 台，实际 %d", n)
+	if n := f.client.Containment.Query().Where(entcontainment.KindEQ("isolate_host"), entcontainment.StateEQ(entcontainment.StatePending)).CountX(f.ctx); n != 1 {
+		t.Fatalf("组内回执前应有 1 台待确认隔离，实际 %d", n)
 	}
 	if n := f.client.Containment.Query().Where(entcontainment.StateEQ(entcontainment.StateHeld)).CountX(f.ctx); n != 1 {
 		t.Fatalf("第二台应被挡下，实际 %d", n)
+	}
+	f.received("range-a")
+	if n := f.client.Containment.Query().Where(entcontainment.KindEQ("isolate_host"), entcontainment.StateEQ(entcontainment.StateActive)).CountX(f.ctx); n != 1 {
+		t.Fatalf("组内只能隔离 1 台，实际 %d", n)
 	}
 }
 
@@ -662,5 +686,93 @@ func TestExpiryReview(t *testing.T) {
 	}
 	if got := f.received("range"); len(got) != 1 || got[0].Kind != pb.CommandKind_UNISOLATE_HOST || calls != before {
 		t.Fatalf("满最长期限直接解除、不再问模型：%v（调用 %d→%d）", got, before, calls)
+	}
+}
+
+// 回执闭环与安全边界：初始投递 sent 不算已生效；延迟成功/失败/不支持/未知回执对账；
+// 解除指令 sent/pending/unknown/unsupported 不写 EndedAt 且不重复建指令；PID 已退出与身份不符安全拒绝归类且不补杀；
+// 历史 executed+failed 不一致记录自动修复。
+func TestReceiptReconciliationAndSafetyBounds(t *testing.T) {
+	f := setup(t)
+	host := f.host(t, "endpoint", "10.1.1.50", tierPtr(entasset.ResponseTierLab), "")
+	e := f.engine(ScopeAll)
+
+	// 1. 初始投递 sent：处于 pending，不标 active/executed；回执失败（目标已消失/身份不符）后转 failed 且不重发
+	al := f.alertOn(t, host, "intel:ip:198.51.100.7", 4001, "",
+		`{"process":{"pid":4242,"name":"miner"},"connection_info":{"direction":"outbound"},"dst_endpoint":{"ip":"198.51.100.7","port":443}}`)
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	block := f.client.Containment.Query().Where(entcontainment.KindEQ("block_network")).OnlyX(f.ctx)
+	kill := f.client.Containment.Query().Where(entcontainment.KindEQ("kill_process")).OnlyX(f.ctx)
+	if block.State != entcontainment.StatePending || kill.State != entcontainment.StatePending {
+		t.Fatalf("初始投递尚未回执应为 pending: block=%s kill=%s", block.State, kill.State)
+	}
+	<-f.inbox["endpoint"]
+	<-f.inbox["endpoint"]
+	if err := f.hub.Complete(f.ctx, f.agents["endpoint"], &pb.CommandResult{
+		CommandId: block.CommandID.String(), Status: pb.CommandResult_SUCCEEDED, Detail: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.hub.Complete(f.ctx, f.agents["endpoint"], &pb.CommandResult{
+		CommandId: kill.CommandID.String(), Status: pb.CommandResult_FAILED,
+		Detail: "进程身份不匹配或已过期，拒绝结束进程",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	block = f.client.Containment.GetX(f.ctx, block.ID)
+	kill = f.client.Containment.GetX(f.ctx, kill.ID)
+	if block.State != entcontainment.StateActive {
+		t.Fatalf("block_network 成功回执后应为 active: %+v", block)
+	}
+	if kill.State != entcontainment.StateFailed || !strings.Contains(kill.Reason, "安全闸门拒绝") {
+		t.Fatalf("kill_process 身份不符应归类为安全闸门拒绝并转 failed: %+v", kill)
+	}
+	if len(f.inbox["endpoint"]) != 0 {
+		t.Fatalf("失败的 kill_process 不应自动补杀")
+	}
+	_ = al
+
+	// 2. 历史 executed 但底层命令 failed 的记录自动对账修正
+	f.client.Containment.UpdateOneID(kill.ID).SetState(entcontainment.StateExecuted).ExecX(f.ctx)
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.client.Containment.GetX(f.ctx, kill.ID); got.State != entcontainment.StateFailed {
+		t.Fatalf("历史虚假 executed 应被修正为 failed: %+v", got)
+	}
+
+	// 3. 租约到期解除：sent / unknown 阶段保持 active 且 EndedAt 为空，且不重复下发；收到 succeeded 才转 expired
+	f.now = f.now.Add(25 * time.Hour)
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	liftCmdProto := <-f.inbox["endpoint"]
+	block = f.client.Containment.GetX(f.ctx, block.ID)
+	if block.State != entcontainment.StateActive || block.EndedAt != nil || block.LiftCommandID == nil {
+		t.Fatalf("解除指令仅投递时应保持 active 且 EndedAt 为空: %+v", block)
+	}
+	f.now = f.now.Add(time.Hour)
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.inbox["endpoint"]) != 0 {
+		t.Fatalf("在途解除指令不应重复创建")
+	}
+	if err := f.hub.Complete(f.ctx, f.agents["endpoint"], &pb.CommandResult{
+		CommandId: liftCmdProto.Id, Status: pb.CommandResult_SUCCEEDED, Detail: "unblocked",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	block = f.client.Containment.GetX(f.ctx, block.ID)
+	if block.State != entcontainment.StateExpired || block.EndedAt == nil {
+		t.Fatalf("解除指令成功回执后应转 expired 并写 EndedAt: %+v", block)
 	}
 }

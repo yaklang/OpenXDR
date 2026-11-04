@@ -26,7 +26,9 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/alert"
 	entasset "openxdr/server/ent/asset"
+	entcommand "openxdr/server/ent/command"
 	entcontainment "openxdr/server/ent/containment"
+	"openxdr/server/ent/predicate"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/triage"
@@ -92,10 +94,214 @@ func (e *Engine) Run(ctx context.Context) {
 }
 
 func (e *Engine) Tick(ctx context.Context) error {
+	if err := e.reconcile(ctx); err != nil {
+		return err
+	}
 	if err := e.react(ctx); err != nil {
 		return err
 	}
 	return e.expire(ctx)
+}
+
+func (e *Engine) reconcile(ctx context.Context) error {
+	return Reconcile(ctx, e.DB, e.now())
+}
+
+// Reconcile 对账初次处置指令（CommandID）与解除指令（LiftCommandID）的执行回执：
+//   - sent / pending / unknown / unsupported 均不视为成功；unknown 绝不自动重发；
+//   - 收到 succeeded 回执才推进到 active / executed 或 expired / lifted（并写 EndedAt）；
+//   - 历史已标为 active / executed 但实际指令未 succeeded 的记录同步修正。
+func Reconcile(ctx context.Context, db *ent.Client, now time.Time) error {
+	initialRows, err := db.Containment.Query().
+		Where(entcontainment.CommandIDNotNil(),
+			entcontainment.StateIn(entcontainment.StatePending, entcontainment.StateActive, entcontainment.StateExecuted)).
+		All(ctx)
+	if err != nil {
+		return err
+	}
+	if len(initialRows) > 0 {
+		ids := make([]uuid.UUID, 0, len(initialRows))
+		for _, c := range initialRows {
+			ids = append(ids, *c.CommandID)
+		}
+		cmds, err := db.Command.Query().Where(entcommand.IDIn(ids...)).All(ctx)
+		if err != nil {
+			return err
+		}
+		byID := make(map[uuid.UUID]*ent.Command, len(cmds))
+		for _, cmd := range cmds {
+			byID[cmd.ID] = cmd
+		}
+		for _, c := range initialRows {
+			cmd := byID[*c.CommandID]
+			if cmd == nil {
+				continue
+			}
+			switch cmd.Status {
+			case "succeeded":
+				if c.State == entcontainment.StatePending {
+					if _, lease := leases[c.Kind]; lease {
+						upd := c.Update().SetState(entcontainment.StateActive)
+						if c.ExpiresAt == nil {
+							upd.SetExpiresAt(now.Add(24 * time.Hour))
+						}
+						if err := upd.Exec(ctx); err != nil {
+							return err
+						}
+					} else if err := c.Update().SetState(entcontainment.StateExecuted).Exec(ctx); err != nil {
+						return err
+					}
+				}
+			case "failed", "unsupported":
+				if c.State != entcontainment.StateFailed {
+					suffix := classifyFailure(c.Kind, cmd.Status, cmd.Detail)
+					reason := appendReasonOnce(c.Reason, suffix)
+					audit.System(ctx, db, "containment_failed", c.AlertID.String(), c.Kind+" "+c.Target+"："+suffix)
+					if err := c.Update().SetState(entcontainment.StateFailed).ClearExpiresAt().SetReason(reason).Exec(ctx); err != nil {
+						return err
+					}
+				}
+			case "sent", "pending", "unknown":
+				reason := c.Reason
+				if cmd.Status == "unknown" {
+					reason = appendReasonOnce(reason, unknownReason(cmd.Detail))
+				}
+				if c.State != entcontainment.StatePending || reason != c.Reason {
+					if err := c.Update().SetState(entcontainment.StatePending).SetReason(reason).Exec(ctx); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+
+	liftRows, err := db.Containment.Query().
+		Where(entcontainment.LiftCommandIDNotNil(),
+			entcontainment.StateIn(entcontainment.StateActive, entcontainment.StateExecuted, entcontainment.StateExpired, entcontainment.StateLifted)).
+		All(ctx)
+	if err != nil {
+		return err
+	}
+	if len(liftRows) > 0 {
+		ids := make([]uuid.UUID, 0, len(liftRows))
+		for _, c := range liftRows {
+			ids = append(ids, *c.LiftCommandID)
+		}
+		cmds, err := db.Command.Query().Where(entcommand.IDIn(ids...)).All(ctx)
+		if err != nil {
+			return err
+		}
+		byID := make(map[uuid.UUID]*ent.Command, len(cmds))
+		for _, cmd := range cmds {
+			byID[cmd.ID] = cmd
+		}
+		for _, c := range liftRows {
+			cmd := byID[*c.LiftCommandID]
+			if cmd == nil {
+				continue
+			}
+			switch cmd.Status {
+			case "succeeded":
+				if c.State == entcontainment.StateActive || c.State == entcontainment.StateExecuted || c.EndedAt == nil {
+					target := entcontainment.StateExpired
+					if c.LiftedBy != nil && *c.LiftedBy != "" {
+						target = entcontainment.StateLifted
+					} else {
+						audit.System(ctx, db, "containment_expired", cmd.ID.String(), leases[c.Kind]+" "+c.Target+"（租约到期）")
+					}
+					if err := c.Update().SetState(target).SetEndedAt(now).Exec(ctx); err != nil {
+						return err
+					}
+				}
+			case "failed":
+				restored := restoreInEffectState(c)
+				reason := appendReasonOnce(c.Reason, "解除失败，保持生效")
+				needExpiryBump := restored == entcontainment.StateActive && c.ExpiresAt != nil && !c.ExpiresAt.After(now)
+				if restored != c.State || c.EndedAt != nil || c.LiftedBy != nil || reason != c.Reason || needExpiryBump {
+					upd := c.Update().SetState(restored).ClearEndedAt().ClearLiftedBy().SetReason(reason)
+					if needExpiryBump {
+						upd.SetExpiresAt(now.Add(liftRetry))
+					}
+					if err := upd.Exec(ctx); err != nil {
+						return err
+					}
+				}
+			case "unsupported":
+				restored := restoreInEffectState(c)
+				reason := appendReasonOnce(c.Reason, "解除指令不被 agent 支持，保持生效")
+				if restored != c.State || c.EndedAt != nil || reason != c.Reason {
+					if err := c.Update().SetState(restored).ClearEndedAt().SetReason(reason).Exec(ctx); err != nil {
+						return err
+					}
+				}
+			case "sent", "pending", "unknown":
+				restored := restoreInEffectState(c)
+				reason := c.Reason
+				if cmd.Status == "unknown" {
+					reason = appendReasonOnce(reason, "解除执行结果未知（禁止自动重发）")
+				}
+				if restored != c.State || c.EndedAt != nil || reason != c.Reason {
+					if err := c.Update().SetState(restored).ClearEndedAt().SetReason(reason).Exec(ctx); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func restoreInEffectState(c *ent.Containment) entcontainment.State {
+	if c.State == entcontainment.StateExpired || c.State == entcontainment.StateLifted {
+		if _, lease := leases[c.Kind]; lease {
+			return entcontainment.StateActive
+		}
+		return entcontainment.StateExecuted
+	}
+	return c.State
+}
+
+func classifyFailure(kind, status string, detailPtr *string) string {
+	detail := ""
+	if detailPtr != nil {
+		detail = strings.TrimSpace(*detailPtr)
+	}
+	if status == "unsupported" {
+		if detail != "" {
+			return "agent 不支持该动作：" + detail
+		}
+		return "agent 不支持该动作"
+	}
+	if kind == "kill_process" {
+		lower := strings.ToLower(detail)
+		if strings.Contains(lower, "no such process") || strings.Contains(detail, "进程不存在") || strings.Contains(lower, "pidfd") {
+			return "目标已消失（进程已退出）：" + detail
+		}
+		if strings.Contains(detail, "身份不匹配") || strings.Contains(detail, "已过期") || strings.Contains(detail, "身份不符") {
+			return "安全闸门拒绝（进程身份不匹配或已过期）：" + detail
+		}
+	}
+	if detail != "" {
+		return "执行失败：" + detail
+	}
+	return "执行失败"
+}
+
+func unknownReason(detailPtr *string) string {
+	if detailPtr != nil && strings.TrimSpace(*detailPtr) != "" {
+		return "执行结果未知（禁止自动重发）：" + strings.TrimSpace(*detailPtr)
+	}
+	return "执行结果未知（禁止自动重发）"
+}
+
+func appendReasonOnce(base, suffix string) string {
+	if suffix == "" || strings.Contains(base, suffix) {
+		return base
+	}
+	if base == "" {
+		return suffix
+	}
+	return base + "；" + suffix
 }
 
 // action 一条计划中的处置：在 asset 上做 kind。target 是封锁的地址、隔离的文件、锁定的账号或结束的进程 GUID
@@ -167,26 +373,31 @@ func (e *Engine) scoped(ctx context.Context, involved ...*ent.Asset) (string, er
 	return "自动处置范围只含实验等级主机涉及的攻击，" + strings.Join(names, "，"), nil
 }
 
-// decide 一条计划处置落表：已有生效租约就续期；人工在最后一条证据之后解除过、或这条告警已经为它做过决定，
+// decide 一条计划处置落表：已有生效或待确认租约就续期；人工在最后一条证据之后解除过、或这条告警已经为它做过决定，
 // 就不再动；否则新决定，能执行就下发。last 是告警最后一条证据的时间
 func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a action, last time.Time) error {
 	key, expires := a.key(), last.Add(e.TTL)
 	active, err := e.DB.Containment.Query().
-		Where(entcontainment.KeyEQ(key), entcontainment.StateEQ(entcontainment.StateActive)).
+		Where(entcontainment.KeyEQ(key), entcontainment.StateIn(entcontainment.StatePending, entcontainment.StateActive)).
 		Only(ctx)
 	switch {
 	case err == nil:
-		if active.ExpiresAt == nil || expires.After(*active.ExpiresAt) {
+		if _, lease := leases[a.kind]; lease && active.LiftCommandID == nil && (active.ExpiresAt == nil || expires.After(*active.ExpiresAt)) {
 			return active.Update().SetExpiresAt(expires).Exec(ctx)
 		}
 		return nil
 	case !ent.IsNotFound(err):
 		return err
 	}
+	preds := []predicate.Containment{
+		entcontainment.AlertIDEQ(al.ID),
+		entcontainment.And(entcontainment.StateEQ(entcontainment.StateLifted), entcontainment.EndedAtGTE(last)),
+	}
+	if a.kind == "kill_process" {
+		preds = append(preds, entcontainment.StateIn(entcontainment.StateExecuted, entcontainment.StateFailed))
+	}
 	decided, err := e.DB.Containment.Query().
-		Where(entcontainment.KeyEQ(key), entcontainment.Or(
-			entcontainment.AlertIDEQ(al.ID),
-			entcontainment.And(entcontainment.StateEQ(entcontainment.StateLifted), entcontainment.EndedAtGTE(last)))).
+		Where(entcontainment.KeyEQ(key), entcontainment.Or(preds...)).
 		Exist(ctx)
 	if err != nil || decided {
 		return err
@@ -230,26 +441,41 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a
 	}
 
 	cmd, err := e.Hub.Issue(ctx, req)
-	if err != nil || cmd.Status == "failed" {
+	if err != nil || cmd == nil || cmd.Status == "failed" || cmd.Status == "unsupported" {
 		detail := ""
 		if err != nil {
 			detail = err.Error()
-		} else if cmd.Detail != nil {
-			detail = *cmd.Detail
+		} else if cmd != nil {
+			detail = classifyFailure(a.kind, cmd.Status, cmd.Detail)
 		}
 		audit.System(ctx, e.DB, "containment_failed", al.ID.String(), a.asset.Hostname+" "+a.kind+" "+a.target+"："+detail)
-		create.SetState(entcontainment.StateFailed).SetReason(a.why + "；下发失败：" + detail)
+		reason := a.why + "；下发失败：" + detail
+		if err == nil && cmd != nil {
+			reason = appendReasonOnce(a.why, detail)
+		}
+		create.SetState(entcontainment.StateFailed).SetReason(reason)
 		if cmd != nil {
 			create.SetCommandID(cmd.ID)
 		}
 		return create.Exec(ctx)
 	}
 	audit.System(ctx, e.DB, "containment", cmd.ID.String(), a.asset.Hostname+" "+a.kind+" "+a.target+"："+a.why)
-	create.SetReason(a.why).SetCommandID(cmd.ID)
-	if _, lease := leases[a.kind]; lease {
-		return create.SetState(entcontainment.StateActive).SetExpiresAt(expires).Exec(ctx)
+	reason := a.why
+	if cmd.Status == "unknown" {
+		reason = appendReasonOnce(reason, unknownReason(cmd.Detail))
 	}
-	return create.SetState(entcontainment.StateExecuted).Exec(ctx)
+	create.SetReason(reason).SetCommandID(cmd.ID)
+	if _, lease := leases[a.kind]; lease {
+		create.SetExpiresAt(expires)
+		if cmd.Status == "succeeded" {
+			return create.SetState(entcontainment.StateActive).Exec(ctx)
+		}
+		return create.SetState(entcontainment.StatePending).Exec(ctx)
+	}
+	if cmd.Status == "succeeded" {
+		return create.SetState(entcontainment.StateExecuted).Exec(ctx)
+	}
+	return create.SetState(entcontainment.StatePending).Exec(ctx)
 }
 
 // execHead 进程原地 exec 之后的当前 GUID：sh -c 只有一条命令时直接 exec 成那个程序（COPY TO PROGRAM 'sleep 90'
@@ -271,12 +497,12 @@ ORDER BY e.ts DESC LIMIT 1`, asset, guid, since.Add(-time.Minute), e.now(), strc
 	return head, err
 }
 
-// fuse 熔断：返回非空表示挡下。只数真正生效过的处置；没送到的不算，
+// fuse 熔断：返回非空表示挡下。计入真正生效过与待确认（pending）的处置；确定没送到的（failed）不算，
 // 否则几台没装 agent 的受害主机就能把熔断顶满
 func (e *Engine) fuse(ctx context.Context, a action) (string, error) {
 	executed, err := e.DB.Containment.Query().
 		Where(entcontainment.CreatedAtGTE(e.now().Add(-time.Hour)),
-			entcontainment.StateIn(entcontainment.StateActive, entcontainment.StateExpired, entcontainment.StateExecuted, entcontainment.StateLifted)).
+			entcontainment.StateIn(entcontainment.StatePending, entcontainment.StateActive, entcontainment.StateExpired, entcontainment.StateExecuted, entcontainment.StateLifted)).
 		Count(ctx)
 	if err != nil {
 		return "", err
@@ -293,7 +519,7 @@ func (e *Engine) fuse(ctx context.Context, a action) (string, error) {
 	}
 	isolated, err := e.DB.Containment.Query().
 		Where(entcontainment.GroupIDEQ(*a.asset.GroupID), entcontainment.KindEQ("isolate_host"),
-			entcontainment.StateEQ(entcontainment.StateActive)).
+			entcontainment.StateIn(entcontainment.StatePending, entcontainment.StateActive)).
 		Count(ctx)
 	if err != nil {
 		return "", err
@@ -305,7 +531,7 @@ func (e *Engine) fuse(ctx context.Context, a action) (string, error) {
 }
 
 // expire 处理到期的租约：配了模型就先请 AI 复核，续期则推迟、解除才下发恢复动作；没配模型或租约已满最长期限就直接解除。
-// 解除下发失败（agent 离线）就推迟重试，租约保持生效，不能当成已解除
+// 解除下发失败（agent 离线）就推迟重试，租约保持生效，不能当成已解除；sent/pending/unknown/unsupported 不重复建指令、待回执对账
 func (e *Engine) expire(ctx context.Context) error {
 	now := e.now()
 	due, err := e.DB.Containment.Query().
@@ -315,39 +541,87 @@ func (e *Engine) expire(ctx context.Context) error {
 		return err
 	}
 	for _, c := range due {
-		reason := c.Reason
-		switch {
-		case now.Sub(c.CreatedAt) >= maxLease:
-			reason += "；已到最长期限 7 天，不再复核，解除"
-		case e.LLM != nil && e.LLM.Enabled():
-			v := e.review(ctx, c)
-			if !v.lift {
-				// 正常续一个租约；没拿到有效结论只续一小时，尽快再问
-				next := now.Add(e.TTL)
-				if v.retry {
-					next = now.Add(reviewRetry)
-				}
-				audit.System(ctx, e.DB, "containment_extended", c.ID.String(), c.Kind+" "+c.Target+"：AI 复核续期："+v.why)
-				if err := c.Update().SetExpiresAt(next).AddReviews(1).SetReason(c.Reason + "；AI 复核续期：" + v.why).Exec(ctx); err != nil {
-					return err
-				}
-				continue
+		reviewed := false
+		if c.LiftCommandID != nil {
+			prev, err := e.DB.Command.Get(ctx, *c.LiftCommandID)
+			if err != nil && !ent.IsNotFound(err) {
+				return err
 			}
-			reason += "；AI 复核解除：" + v.why
+			if prev != nil {
+				switch prev.Status {
+				case "succeeded":
+					target := entcontainment.StateExpired
+					if c.LiftedBy != nil && *c.LiftedBy != "" {
+						target = entcontainment.StateLifted
+					} else {
+						audit.System(ctx, e.DB, "containment_expired", prev.ID.String(), leases[c.Kind]+" "+c.Target+"（租约到期）")
+					}
+					if err := c.Update().SetState(target).SetEndedAt(now).Exec(ctx); err != nil {
+						return err
+					}
+					continue
+				case "sent", "pending", "unknown", "unsupported":
+					continue
+				case "failed":
+					reviewed = true
+				}
+			}
+		}
+		reason := c.Reason
+		if !reviewed {
+			switch {
+			case now.Sub(c.CreatedAt) >= maxLease:
+				reason = appendReasonOnce(reason, "已到最长期限 7 天，不再复核，解除")
+			case e.LLM != nil && e.LLM.Enabled():
+				v := e.review(ctx, c)
+				if !v.lift {
+					// 正常续一个租约；没拿到有效结论只续一小时，尽快再问
+					next := now.Add(e.TTL)
+					if v.retry {
+						next = now.Add(reviewRetry)
+					}
+					audit.System(ctx, e.DB, "containment_extended", c.ID.String(), c.Kind+" "+c.Target+"：AI 复核续期："+v.why)
+					if err := c.Update().SetExpiresAt(next).AddReviews(1).SetReason(c.Reason + "；AI 复核续期：" + v.why).Exec(ctx); err != nil {
+						return err
+					}
+					continue
+				}
+				reason = appendReasonOnce(reason, "AI 复核解除："+v.why)
+			}
 		}
 		kind := leases[c.Kind]
 		cmd, err := e.Hub.Issue(ctx, response.Request{
 			AssetID: c.AssetID, Kind: kind, Target: c.Target, IncidentID: c.IncidentID, IssuedBy: "auto",
 		})
-		if err != nil || cmd.Status == "failed" {
+		if err != nil || cmd == nil || cmd.Status == "failed" {
 			slog.Warn("自主响应解除下发失败，稍后重试", "containment", c.ID, "err", err)
-			if err := c.Update().SetExpiresAt(now.Add(liftRetry)).Exec(ctx); err != nil {
+			upd := c.Update().SetExpiresAt(now.Add(liftRetry)).SetReason(reason)
+			if cmd != nil {
+				upd.SetLiftCommandID(cmd.ID)
+			}
+			if err := upd.Exec(ctx); err != nil {
 				return err
 			}
 			continue
 		}
-		audit.System(ctx, e.DB, "containment_expired", cmd.ID.String(), kind+" "+c.Target+"（租约到期）")
-		if err := c.Update().SetState(entcontainment.StateExpired).SetLiftCommandID(cmd.ID).SetEndedAt(now).SetReason(reason).Exec(ctx); err != nil {
+		if cmd.Status == "unsupported" {
+			reason = appendReasonOnce(reason, "解除指令不被 agent 支持，保持生效")
+			if err := c.Update().SetLiftCommandID(cmd.ID).SetReason(reason).Exec(ctx); err != nil {
+				return err
+			}
+			continue
+		}
+		if cmd.Status == "succeeded" {
+			audit.System(ctx, e.DB, "containment_expired", cmd.ID.String(), kind+" "+c.Target+"（租约到期）")
+			if err := c.Update().SetState(entcontainment.StateExpired).SetLiftCommandID(cmd.ID).SetEndedAt(now).SetReason(reason).Exec(ctx); err != nil {
+				return err
+			}
+			continue
+		}
+		if cmd.Status == "unknown" {
+			reason = appendReasonOnce(reason, "解除执行结果未知（禁止自动重发）")
+		}
+		if err := c.Update().SetLiftCommandID(cmd.ID).SetReason(reason).Exec(ctx); err != nil {
 			return err
 		}
 	}

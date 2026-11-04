@@ -13,6 +13,7 @@ import { CommandStatusTag, commandKind, errText, fmtTime } from '../components/f
 import { useI18n, type MsgKey } from '../i18n'
 
 const STATE: Record<ContainmentState, { key: MsgKey; color: string }> = {
+  pending: { key: 'cmtPending', color: 'processing' },
   active: { key: 'cmtActive', color: 'red' },
   executed: { key: 'cmtExecuted', color: 'volcano' },
   expired: { key: 'cmtExpired', color: 'default' },

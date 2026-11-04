@@ -1683,7 +1683,7 @@ export interface TriageRun {
 export const fetchTriageRuns = (id: string, page: number) => get<{ items: TriageRun[]; more: boolean }>(`/api/incidents/${id}/triage-runs?page=${page}`)
 
 // 自主响应：处置决定（执行了的封锁、隔离是租约），见 docs/autonomous-response-design.md
-export type ContainmentState = 'active' | 'expired' | 'executed' | 'lifted' | 'held' | 'skipped' | 'failed'
+export type ContainmentState = 'pending' | 'active' | 'expired' | 'executed' | 'lifted' | 'held' | 'skipped' | 'failed'
 export interface Containment {
   id: string
   createdAt: string
@@ -1715,6 +1715,7 @@ export interface ContainmentStatus {
   ttlHours?: number
   maxPerHour?: number
   executedLastHour: number
+  pending?: number
   heldLastHour: number
   active: number
   tripped: boolean
