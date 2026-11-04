@@ -30,7 +30,7 @@
 | 信号 | 依据 | 现状 |
 |---|---|---|
 | 内网横向喷洒 | `xdr:internal-lateral-spray`（P0 已上线） | 有 |
-| 数据库进程拉起 shell | postgres / mysqld / redis-server / sqlservr 的子进程是 sh / bash / python 等（`COPY FROM PROGRAM`、UDF） | **缺规则**，要补 |
+| 数据库进程拉起 shell | postgres / mysqld / redis-server / sqlservr 的子进程是 sh / bash / python 等（`COPY FROM PROGRAM`、UDF） | 有（`lnx_database_spawns_shell.yml`，2026-11-04） |
 | 容器内试探逃逸 | 容器里访问 docker.sock、挂载宿主机设备、nsenter、写 cgroup release_agent | 部分 SigmaHQ 规则覆盖，需梳理 |
 | 爆破得手 | `xdr:bruteforce-success` | 有 |
 | 高置信情报命中 | 情报库 C2 / 恶意 IP 的出站连接 | 有 |
@@ -155,6 +155,7 @@ P1 上线时 `CONTAINMENT_ENABLED` 默认关闭，生产先用 `CONTAINMENT_SCOP
 | 信号 | 处置 |
 |---|---|
 | `xdr:internal-lateral-spray` | 来源是实验等级就隔离来源主机；受害方封锁实际看到的来源地址（`lateral_evidence.src_ip`，不用资产登记的地址，里面有 docker 网桥这类不能封的）。来源与受害方都是核心时不封 |
+| 数据库进程拉起 shell（`rules/lnx_database_spawns_shell.yml`） | 结束该进程；从 PostgreSQL 后端的进程标题取出发起命令的客户端地址，在数据库主机上封锁（核心资产也封）；客户端是纳管主机时按喷洒同样的办法遏制来源 |
 | `xdr:bruteforce-success` | 受害方封锁登录来源、锁定被攻破的账号（内置账号由目标校验挡下，核心主机不锁）；来源地址唯一属于某台实验等级的纳管主机就隔离它 |
 | 情报命中 IP（级别 ≥ 4） | 封锁该地址；本机主动外连这个地址时结束发起连接的进程。入站命中只封锁：被命中的是本机的服务进程，结束它就是自己制造故障 |
 | 情报命中域名（级别 ≥ 4） | 只封锁；DNS 归属可能落在本机的解析服务上，不结束进程 |
@@ -213,3 +214,17 @@ node2、node1、lizhen-dev 封锁 10.1.1.170；回放结束时后来的 openxdr-
   - 实验等级认不出容器才隔离整机，生产等级认不出就不动来源，核心不动来源。
 - **已知局限**：2026-11-02 那次，uos-server 的 agent 没有报出跳板容器连向受害主机的外连（受害方的探针看到了），
   回放语料里也没有这类事件，所以回放验收仍是隔离整机。其他 docker 主机的容器外连现在都带容器归属。
+
+## 数据库拉起 shell（2026-11-04）
+
+11-03 入侵时，`COPY FROM PROGRAM` 拉起的 sh 在事件里父进程只剩 PID。PostgreSQL 后端是 postmaster fork 出来、不 exec 的，
+agent 的进程注册表里没有它。按父进程判断的规则对这类攻击全部落空。
+
+- **agent**：启动事件的父进程不在注册表里时，现场读 `/proc/<ppid>` 补名字、路径与命令行（`live_parent`，原来只用于折叠）。
+  PostgreSQL 后端的进程标题带着客户端地址，例如 `postgres: postgres openxdr 10.1.1.170(41866) COPY`。
+- **规则**：`rules/lnx_database_spawns_shell.yml` 判定数据库服务进程（postgres / mysqld / mariadbd / redis-server / mongod / sqlservr）
+  拉起 shell、解释器或下载工具，排除 PostgreSQL 启动时的 `locale -a`。
+  - 语料用 11-03 生产原文，加 MySQL UDF 变体与 `locale -a` 良性对照。
+  - 生产近 3 天，数据库父进程的子进程只有 2 条 `locale -a`。
+- **快路径**：结束该进程、在数据库主机上封锁客户端地址，客户端是纳管主机就遏制来源。
+  按 11-03 原样，客户端 uos-server 是实验等级，范围 `lab` 下也会处置。

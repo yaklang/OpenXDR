@@ -28,6 +28,7 @@ const ROLE: Record<Containment['role'], MsgKey> = { source: 'cmtRoleSource', vic
 const POLICY: { signal: MsgKey; action: MsgKey }[] = [
   { signal: 'cmtSigSpray', action: 'cmtActSpray' },
   { signal: 'cmtSigBrute', action: 'cmtActBrute' },
+  { signal: 'cmtSigDBShell', action: 'cmtActDBShell' },
   { signal: 'cmtSigIntelIP', action: 'cmtActIntelIP' },
   { signal: 'cmtSigIntelDomain', action: 'cmtActIntelDomain' },
   { signal: 'cmtSigIntelHash', action: 'cmtActIntelHash' },

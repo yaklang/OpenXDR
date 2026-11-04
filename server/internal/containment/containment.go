@@ -14,8 +14,10 @@ package containment
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -205,6 +207,9 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a
 		if err != nil || a.pid == 0 {
 			return create.SetState(entcontainment.StateSkipped).SetReason("事件没有可核对的进程 GUID 与 PID").Exec(ctx)
 		}
+		if guid, err = e.execHead(ctx, a.asset.ID, guid, a.pid, al.Ts); err != nil {
+			return err
+		}
 		req.ProcessGUID, req.PID = &guid, a.pid
 	case "block_network", "quarantine_file", "disable_account", "isolate_container":
 		target, err := response.NormalizeTarget(a.kind, a.target, response.ProtectedAddrs(e.AllowEndpoints))
@@ -242,6 +247,25 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a
 		return create.SetState(entcontainment.StateActive).SetExpiresAt(expires).Exec(ctx)
 	}
 	return create.SetState(entcontainment.StateExecuted).Exec(ctx)
+}
+
+// execHead 进程原地 exec 之后的当前 GUID：sh -c 只有一条命令时直接 exec 成那个程序（COPY TO PROGRAM 'sleep 90'
+// 就是 sh 变成 sleep），PID 与父进程不变，agent 给新程序登记新 GUID，拿告警事件的旧 GUID 去结束会被 agent 按身份不符拒绝。
+// 找同一主机、同一 PID、同一父进程、不早于它的最近一条启动事件；找不到就是它自己
+func (e *Engine) execHead(ctx context.Context, asset, guid uuid.UUID, pid uint32, since time.Time) (uuid.UUID, error) {
+	var head uuid.UUID
+	err := e.SQL.QueryRowContext(ctx, `WITH origin AS (
+  SELECT ts, raw->'process'->'parent_process'->>'pid' AS ppid FROM events
+  WHERE asset_id=$1 AND class_uid=1007 AND ts>=$3 AND ts<=$4 AND process_guid=$2 LIMIT 1)
+SELECT e.process_guid FROM events e, origin o
+WHERE e.asset_id=$1 AND e.class_uid=1007 AND e.ts>=o.ts AND e.ts<=$4 AND e.process_guid IS NOT NULL
+  AND e.raw->'process'->>'pid'=$5 AND e.raw->>'activity_id'='1'
+  AND e.raw->'process'->'parent_process'->>'pid' IS NOT DISTINCT FROM o.ppid
+ORDER BY e.ts DESC LIMIT 1`, asset, guid, since.Add(-time.Minute), e.now(), strconv.FormatUint(uint64(pid), 10)).Scan(&head)
+	if errors.Is(err, sql.ErrNoRows) {
+		return guid, nil
+	}
+	return head, err
 }
 
 // fuse 熔断：返回非空表示挡下。只数真正生效过的处置；没送到的不算，

@@ -798,7 +798,9 @@ fn sample_of(registry: &ProcessRegistry, info: &ProcessInfo<'_>) -> Option<perio
 
 /// 注册表里没有的父进程现场读 /proc：bash 为命令替换、管道 fork 出的子 shell 不 exec，采集端看不到，
 /// 但它和 fork 它的脚本是同一个程序、同一条命令行，折叠键因此稳定——生产上监控脚本的 free / awk 就卡在这里，
-/// 一直逐条上报。只用于折叠，不写进事件；父进程已退场或不是 Linux 就照旧不折叠。
+/// 一直逐条上报。启动事件也用它补父进程：PostgreSQL、sshd 这类 fork 不 exec 的后端进程注册表里没有，
+/// 2026-11-03 COPY FROM PROGRAM 拉起的 sh 父进程只剩 PID，按父进程判断的规则全部落空。
+/// 父进程已退场或不是 Linux 就照旧缺省。
 #[cfg(target_os = "linux")]
 fn live_parent(pid: u32) -> Option<(String, Option<String>, Option<String>)> {
     let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
@@ -898,15 +900,20 @@ fn process_event(
             },
         },
     });
-    if let Some(p) = parent {
+    let parent = match parent {
+        Some(p) => Some((p.name, p.exe, p.cmd_line)),
+        None if activity != ACTIVITY_TERMINATE => ppid.and_then(live_parent),
+        None => None,
+    };
+    if let Some((name, exe, cmd_line)) = parent {
         let pp = &mut raw["process"]["parent_process"];
-        if !p.name.is_empty() {
-            pp["name"] = p.name.into();
+        if !name.is_empty() {
+            pp["name"] = name.into();
         }
-        if let Some(exe) = p.exe {
+        if let Some(exe) = exe {
             pp["file"] = serde_json::json!({ "path": exe });
         }
-        if let Some(cmd) = p.cmd_line {
+        if let Some(cmd) = cmd_line {
             pp["cmd_line"] = cmd.into();
         }
     }
@@ -1026,6 +1033,34 @@ mod tests {
             v["process"]["parent_process"]["uid"].is_null(),
             "父未知时 uid 应为 null"
         );
+    }
+
+    /// 父进程不在注册表里但还活着（PostgreSQL 后端这类 fork 不 exec 的进程）：现场读 /proc 补名字与路径，
+    /// 按父进程判断的规则才认得出 COPY FROM PROGRAM。GUID 仍为空，血缘不编造
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn process_event_fills_live_unregistered_parent() {
+        let mut reg = ProcessRegistry::default();
+        let me = std::process::id();
+        let evt = process_event(
+            "agent-1",
+            &mut reg,
+            ACTIVITY_LAUNCH,
+            ProcessInfo {
+                pid: 1,
+                name: "sh",
+                cmd_line: Some("sh -c id"),
+                ppid: Some(me),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&evt.raw_json).unwrap();
+        let comm = std::fs::read_to_string(format!("/proc/{me}/comm")).unwrap();
+        let pp = &v["process"]["parent_process"];
+        assert_eq!(pp["name"], comm.trim_end());
+        assert!(pp["file"]["path"].as_str().is_some_and(|p| !p.is_empty()));
+        assert!(pp["uid"].is_null() && evt.parent_process_guid.is_empty());
     }
 
     #[test]

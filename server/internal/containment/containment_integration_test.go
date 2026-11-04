@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -525,5 +526,68 @@ func TestSprayIsolatesSourceContainer(t *testing.T) {
 	}
 	if got := f.received("uos-server"); len(got) != 1 || got[0].Kind != pb.CommandKind_UNISOLATE_CONTAINER || got[0].Target != "4f173e0d45b0" {
 		t.Fatalf("到期解除容器隔离：%v", got)
+	}
+}
+
+// 数据库拉起 shell（2026-11-03 原样）：核心的数据库主机上结束 shell、封锁 COPY 的客户端地址；客户端是实验等级的纳管主机就隔离它。
+// 本机 socket 连入（[local]）没有客户端地址，只结束 shell；范围 lab 下核心主机自己的事不处置
+func TestDatabaseShellKillsBlocksAndContainsClient(t *testing.T) {
+	f := setup(t)
+	server := `[{"process":"openxdr-server","port":8081}]`
+	node1 := f.host(t, "openxdr-node1", "10.1.1.198", nil, server)
+	f.host(t, "uos-server", "10.1.1.170", tierPtr(entasset.ResponseTierLab), "")
+	raw := `{"process":{"pid":2268957,"name":"sh","file":{"path":"/bin/sh"},"cmd_line":"sh -c id",` +
+		`"parent_process":{"pid":2268947,"name":"postgres","cmd_line":"postgres: postgres openxdr 10.1.1.170(41866) COPY"}}}`
+	f.alertOn(t, node1, RuleDatabaseShell, 1007, "70", raw)
+	if err := f.engine(ScopeLab).Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := f.received("openxdr-node1")
+	if len(got) != 2 || got[0].Kind != pb.CommandKind_KILL_PROCESS || got[0].Pid != 2268957 ||
+		got[1].Kind != pb.CommandKind_BLOCK_NETWORK || got[1].Target != "10.1.1.170" {
+		t.Fatalf("数据库主机应结束 shell 并封锁客户端：%v", got)
+	}
+	if got := f.received("uos-server"); len(got) != 1 || got[0].Kind != pb.CommandKind_ISOLATE_HOST {
+		t.Fatalf("实验等级的客户端主机应隔离：%v", got)
+	}
+
+	g := setup(t)
+	node1 = g.host(t, "openxdr-node1", "10.1.1.198", nil, server)
+	g.alertOn(t, node1, RuleDatabaseShell, 1007, "70", `{"process":{"pid":7,"name":"sh","parent_process":{"name":"postgres","cmd_line":"postgres: postgres openxdr [local] COPY"}}}`)
+	if err := g.engine(ScopeLab).Tick(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := g.received("openxdr-node1"); len(got) != 0 {
+		t.Fatalf("范围 lab 下核心主机自己的事不处置：%v", got)
+	}
+	if err := g.engine(ScopeAll).Tick(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := g.received("openxdr-node1"); len(got) != 0 {
+		t.Fatalf("同一条告警已经决定过（skipped），放开范围后不追溯：%v", got)
+	}
+}
+
+// 原地 exec：sh -c 'sleep 90' 的 sh 变成 sleep，PID 与父进程不变、GUID 换了；结束进程要用现在的 GUID。
+// 父进程不同的同 PID 进程（PID 复用）不算
+func TestKillFollowsInPlaceExec(t *testing.T) {
+	f := setup(t)
+	host := f.host(t, "openxdr-test-linux", "10.1.1.137", tierPtr(entasset.ResponseTierLab), "")
+	raw := func(name string, ppid int) string {
+		return `{"activity_id":1,"process":{"pid":13311,"name":"` + name + `","parent_process":{"pid":` + strconv.Itoa(ppid) +
+			`,"name":"postgres","cmd_line":"postgres: postgres postgres [local] COPY"}}}`
+	}
+	al := f.alertOn(t, host, RuleDatabaseShell, 1007, "70", raw("sh", 13300))
+	sh := f.client.Event.GetX(f.ctx, *al.EventID)
+	sleep := f.client.Event.Create().SetTs(sh.Ts.Add(time.Millisecond)).SetClassUID(1007).SetSource("agent").SetAssetID(host.ID).
+		SetProcessGUID(uuid.New()).SetRaw(json.RawMessage(raw("sleep", 13300))).SaveX(f.ctx)
+	f.client.Event.Create().SetTs(sh.Ts.Add(2 * time.Millisecond)).SetClassUID(1007).SetSource("agent").SetAssetID(host.ID).
+		SetProcessGUID(uuid.New()).SetRaw(json.RawMessage(raw("other", 1))).SaveX(f.ctx)
+	if err := f.engine(ScopeLab).Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := f.received("openxdr-test-linux")
+	if len(got) != 1 || got[0].Kind != pb.CommandKind_KILL_PROCESS || got[0].ProcessGuid != sleep.ProcessGUID.String() {
+		t.Fatalf("应按 exec 后的 GUID 结束进程 %s：%v", sleep.ProcessGUID, got)
 	}
 }
