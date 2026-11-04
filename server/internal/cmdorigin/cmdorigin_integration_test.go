@@ -70,34 +70,4 @@ func TestOfVerifiesAgainstCommands(t *testing.T) {
 			}
 		})
 	}
-
-	// docker exec 进容器执行的平台指令：容器内进程无 platform_command 标记，按正在执行的命令文本与容器标识归属
-	dockerCmd := db.Command.Create().SetKind("exec").SetAssetID(host.ID).
-		SetCmd("docker exec openxdr-ha-patroni-1 sh -c 'tail -20 /var/lib/postgresql/.psql_history'").
-		SetCreatedAt(start).SetCompletedAt(start.Add(3 * time.Second)).SetStatus("succeeded").SaveX(ctx)
-	inContainer := map[string]any{
-		"container": map[string]any{"name": "openxdr-ha-patroni-1", "uid": "67ed3549d9589297"},
-		"process":   map[string]any{"cmd_line": "tail -20 /var/lib/postgresql/.psql_history"},
-	}
-	if got, err := Of(ctx, sqlDB, inContainer, &host.ID, start.Add(2*time.Second)); err != nil || got == nil || *got != dockerCmd.ID {
-		t.Fatalf("docker exec 容器内命令应归属到平台指令 %s，实际 %v %v", dockerCmd.ID, got, err)
-	}
-	if got, err := Of(ctx, sqlDB, inContainer, &host.ID, start.Add(20*time.Second)); err != nil || got != nil {
-		t.Fatalf("超出执行窗口不应归属，实际 %v %v", got, err)
-	}
-
-	// 管道 / $(...) 未登记子 shell 拉起的命令（parent_process 仅有 pid 无 uid/name）：按正在执行的指令文本归属
-	pipeCmd := db.Command.Create().SetKind("exec").SetAssetID(host.ID).
-		SetCmd(`for p in /proc/[0-9]*; do w=$(awk '/^write_bytes/{print int($2/1048576)}' "$p/io"); done | sort -rn`).
-		SetCreatedAt(start).SetCompletedAt(start.Add(3 * time.Second)).SetStatus("succeeded").SaveX(ctx)
-	inSubshell := map[string]any{
-		"process": map[string]any{
-			"name":           "awk",
-			"cmd_line":       "awk /^write_bytes/{print int($2/1048576)} /proc/2/io",
-			"parent_process": map[string]any{"pid": 2999351, "uid": nil},
-		},
-	}
-	if got, err := Of(ctx, sqlDB, inSubshell, &host.ID, start.Add(time.Second)); err != nil || got == nil || *got != pipeCmd.ID {
-		t.Fatalf("未登记子 shell 命令应归属到平台指令 %s，实际 %v %v", pipeCmd.ID, got, err)
-	}
 }

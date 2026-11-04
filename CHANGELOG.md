@@ -5,6 +5,18 @@
 
 ## [未发布]
 
+### 自主响应与指令签名（见 `docs/autonomous-response-design.md`）
+
+- 响应指令端到端签名（`cmdsign`）：server 用 `HOST_CREDENTIAL_KEY` 派生的 Ed25519 私钥对每条下发指令签名，载荷覆盖
+  `command_id`、`agent_id`、`issued_at` 与动作参数；agent 首次收到有效签名时钉住公钥（TOFU），拒收未签名、过期、跨主机重绑或被篡改的指令。
+- 自主响应引擎（`containment`）：快慢双路径协同处置——
+  - 快路径（确定性规则秒级响应）：内网横向喷洒（`xdr:internal-lateral-spray`）自动隔离源端、高置信情报命中自动封禁对端 IP（`BLOCK_IP`）并结束进程、暴力破解自动封禁来源 IP、反弹 shell 与挖矿自动结束进程、恶意落盘自动隔离文件（`QUARANTINE_FILE`）。
+  - 容器级精准隔离（`ISOLATE_CONTAINER` / `UNISOLATE_CONTAINER`）：横向喷洒来自容器（事件带 `container.uid`）时，agent 只进入该容器的网络命名空间挂载 `inet openxdr_isolation` 断网，不切断宿主机与同机其他容器；宿主机自身喷洒照旧隔离主机。
+  - 数据库服务拉起 shell 检测与遏制：新增规则 `lnx_database_spawns_shell.yml`（`postgres` / `mysqld` / `mariadbd` / `redis-server` / `mongod` 拉起 shell，级别 critical），快路径立即结束该 shell 进程并封禁触发它的入站对端 IP，不杀数据库主进程；agent 在父进程未登记时现场读取 `/proc/<ppid>` 补齐父进程名、路径与命令行，覆盖 `COPY ... FROM PROGRAM` 等由 fork 后端拉起子进程的情形。
+  - 慢路径（AI 研判分级处置）：研判结论新增 `response_tier`（`observe` / `contain` / `isolate`），高置信恶意事件自动执行对应级别的遏制或隔离。
+  - 租约、自动解封与熔断：所有自动遏制动作均带 TTL 租约，到期自动下发解除指令（`UNBLOCK_IP` / `RESTORE_FILE` / `UNISOLATE` / `UNISOLATE_CONTAINER`）；联动平台指令、已知自动化、容器健康检查与关键资产保护豁免，设全局熔断器防级联误封；控制台新增「自主响应」页面，支持查看当前生效遏制、熔断状态与人工一键解除。
+- 指令归属与健康检查判定收口：server `cmdorigin` 严格按事件携带的 `platform_command.uid` 核对平台指令，不再按命令子串模糊归属无标事件；agent 只对自身直接子进程读取环境区的 `OPENXDR_COMMAND_ID`（子 shell 仅沿 `/proc/<ppid>/status` 父进程链继承已登记指令），容器健康检查严格要求命令行与容器配置的 `HEALTHCHECK` 逐字一致，拿不准的一律照常告警。
+
 ### 安全：HA 部署模板加固
 
 生产遭遇内网横向（无认证的 Patroni REST 被改写 pg_hba，再借超级用户 `COPY ... FROM PROGRAM`

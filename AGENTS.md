@@ -119,7 +119,9 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
 - `commandgate`：人工与 AI exec 的组权限、命令名单、审批（人工发起的阻塞等组管理员，AI 发起的交 AI 审计员）、硬拒绝清单与审计
 - `commandreview`：AI 审计员——AI 发起、命中名单的命令用会话自己的模型当场评审，结果记审批与审计
 - `schedule` / `report`：`tasks/*.yml` 预设任务按组定时拉起 Pi 会话（系统身份），报告 HTML/PDF 渲染
-- `response`：响应处置（结束进程 / 主机隔离），含自动响应钩子
+- `response`：响应处置（结束进程 / 隔离与解封主机或容器 / 封禁与解封 IP / 隔离与恢复文件），含自动响应钩子
+- `cmdsign`：响应指令端到端 Ed25519 签名（由 `HOST_CREDENTIAL_KEY` 派生，绑定指令 ID、目标 agent、签发时间与动作参数，agent 侧 TOFU 钉住公钥验签）
+- `containment`：自主响应引擎（见 `docs/autonomous-response-design.md`）——快路径对确定性高危告警（横向喷洒、数据库进程拉起 shell、反弹 shell、高置信情报外联、爆破等）秒级下发容器/主机隔离、结束进程、封禁 IP 或文件隔离；慢路径按 AI 研判 `response_tier`（`observe` / `contain` / `isolate`）分级处置；所有自动处置带 TTL 租约到期自动解除、支持人工提前解除与全局熔断保护
 - `natsretry`：NATS 选主瞬断的有界重试，只用于调用方能证明对端没收下的错误（事件发布、跨节点指令投递）
 - `notify`：Webhook 通知（generic / dingtalk / feishu / wecom）
 - `syslog`：syslog 接入（UDP+TCP，RFC3164/RFC5424）
@@ -181,9 +183,9 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
 - 采集端与 server 默认明文 gRPC，仅限本机调试；生产必须 mTLS（`cmd/gencerts` 生成，
   agent 可签发 CN 前缀 `host:` 的主机绑定证书）。
 - RBAC 三档角色：admin / analyst / viewer；REST 走 cookie 会话，敏感操作有审计。
-- 响应处置（结束进程、隔离主机）是系统中唯一能影响被监控主机的功能：
-  改 `response/`、`grpcsvc/commands.go` 或 agent `respond/` 时，必须保持
-  闸门（全局开关 `RESPONSE_ENABLED`、隔离放行清单 `ISOLATION_ALLOW`、exec 的组权限 /
+- 响应处置（结束进程、隔离主机或容器、封禁 IP、隔离文件）是系统中唯一能影响被监控主机的功能：
+  改 `response/`、`containment/`、`cmdsign/`、`grpcsvc/commands.go` 或 agent `respond/` 时，必须保持
+  闸门（全局开关 `RESPONSE_ENABLED`、端到端指令签名 `cmdsign`、隔离放行清单 `ISOLATION_ALLOW`、自主响应保护与熔断、exec 的组权限 /
   命令名单 / 审批（AI 审计员或人工）/ 硬拒绝清单、审计落库）不被绕过。指令一律真执行，不要重新引入演练模式。
 - 不要把密钥、证书提交进仓库；`certs/` 等产物只应存在于本地。
 - 推理服务在内网时注意 `NO_PROXY`：Go 默认读 `HTTP_PROXY`，内网 LLM 端点可能被错误代理。
