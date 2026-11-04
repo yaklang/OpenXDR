@@ -15,7 +15,6 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/auditlog"
-	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 )
