@@ -29,7 +29,11 @@ type AuditLog struct {
 	// Detail holds the value of the "detail" field.
 	Detail *string `json:"detail,omitempty"`
 	// RemoteAddr holds the value of the "remote_addr" field.
-	RemoteAddr   string `json:"remote_addr,omitempty"`
+	RemoteAddr string `json:"remote_addr,omitempty"`
+	// Seq holds the value of the "seq" field.
+	Seq *int64 `json:"seq,omitempty"`
+	// Seal holds the value of the "seal" field.
+	Seal         *string `json:"seal,omitempty"`
 	selectValues sql.SelectValues
 }
 
@@ -38,7 +42,9 @@ func (*AuditLog) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case auditlog.FieldUsername, auditlog.FieldAction, auditlog.FieldTarget, auditlog.FieldDetail, auditlog.FieldRemoteAddr:
+		case auditlog.FieldSeq:
+			values[i] = new(sql.NullInt64)
+		case auditlog.FieldUsername, auditlog.FieldAction, auditlog.FieldTarget, auditlog.FieldDetail, auditlog.FieldRemoteAddr, auditlog.FieldSeal:
 			values[i] = new(sql.NullString)
 		case auditlog.FieldTs:
 			values[i] = new(sql.NullTime)
@@ -103,6 +109,20 @@ func (_m *AuditLog) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.RemoteAddr = value.String
 			}
+		case auditlog.FieldSeq:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field seq", values[i])
+			} else if value.Valid {
+				_m.Seq = new(int64)
+				*_m.Seq = value.Int64
+			}
+		case auditlog.FieldSeal:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field seal", values[i])
+			} else if value.Valid {
+				_m.Seal = new(string)
+				*_m.Seal = value.String
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -160,6 +180,16 @@ func (_m *AuditLog) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("remote_addr=")
 	builder.WriteString(_m.RemoteAddr)
+	builder.WriteString(", ")
+	if v := _m.Seq; v != nil {
+		builder.WriteString("seq=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.Seal; v != nil {
+		builder.WriteString("seal=")
+		builder.WriteString(*v)
+	}
 	builder.WriteByte(')')
 	return builder.String()
 }

@@ -656,7 +656,11 @@ const RuleControlPlaneChange = "xdr:control-plane-change"
 // RuleCoreAgentSilent 跑着 OpenXDR server 的核心节点上 agent 不再上报：拿下节点后先停 agent 是常见动作。逻辑在 internal/selfwatch
 const RuleCoreAgentSilent = "xdr:core-agent-silent"
 
+// RuleAuditTamper 审计链断开：已封存的审计被改或被删。逻辑在 internal/auditchain
+const RuleAuditTamper = "xdr:audit-tamper"
+
 var syntheticTitles = map[string]string{
+	RuleAuditTamper:        "Audit Log Tampered (审计记录被改或被删)",
 	RuleControlPlaneChange: "OpenXDR Control Plane Config Changed (平台控制面配置被改)",
 	RuleCoreAgentSilent:    "Core Node Agent Silent (平台节点 agent 停止上报)",
 	RuleBruteforceSuccess:  "Brute Force Success (多次失败后登录成功)",

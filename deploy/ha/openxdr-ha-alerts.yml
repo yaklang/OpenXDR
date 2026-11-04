@@ -19,3 +19,12 @@ groups:
         labels: {severity: critical}
         annotations:
           summary: "OpenXDR PostgreSQL 集群没有 primary"
+      # 审计链（internal/auditchain）：已封存的最大编号只增不减，变小说明最新的审计被删了。
+      # 历史存在本 Prometheus 里，拿下数据库的人改不了；查库出错时指标是 -1，过滤掉
+      - alert: OpenXDRAuditChainShrunk
+        expr: max(openxdr_audit_sealed_seq >= 0) < max(max_over_time((openxdr_audit_sealed_seq >= 0)[1d:5m]))
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "OpenXDR 审计链编号倒退：最新的审计记录被删了"
+

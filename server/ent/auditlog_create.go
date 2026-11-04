@@ -81,6 +81,34 @@ func (_c *AuditLogCreate) SetRemoteAddr(v string) *AuditLogCreate {
 	return _c
 }
 
+// SetSeq sets the "seq" field.
+func (_c *AuditLogCreate) SetSeq(v int64) *AuditLogCreate {
+	_c.mutation.SetSeq(v)
+	return _c
+}
+
+// SetNillableSeq sets the "seq" field if the given value is not nil.
+func (_c *AuditLogCreate) SetNillableSeq(v *int64) *AuditLogCreate {
+	if v != nil {
+		_c.SetSeq(*v)
+	}
+	return _c
+}
+
+// SetSeal sets the "seal" field.
+func (_c *AuditLogCreate) SetSeal(v string) *AuditLogCreate {
+	_c.mutation.SetSeal(v)
+	return _c
+}
+
+// SetNillableSeal sets the "seal" field if the given value is not nil.
+func (_c *AuditLogCreate) SetNillableSeal(v *string) *AuditLogCreate {
+	if v != nil {
+		_c.SetSeal(*v)
+	}
+	return _c
+}
+
 // SetID sets the "id" field.
 func (_c *AuditLogCreate) SetID(v uuid.UUID) *AuditLogCreate {
 	_c.mutation.SetID(v)
@@ -212,6 +240,14 @@ func (_c *AuditLogCreate) createSpec() (*AuditLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.RemoteAddr(); ok {
 		_spec.SetField(auditlog.FieldRemoteAddr, field.TypeString, value)
 		_node.RemoteAddr = value
+	}
+	if value, ok := _c.mutation.Seq(); ok {
+		_spec.SetField(auditlog.FieldSeq, field.TypeInt64, value)
+		_node.Seq = &value
+	}
+	if value, ok := _c.mutation.Seal(); ok {
+		_spec.SetField(auditlog.FieldSeal, field.TypeString, value)
+		_node.Seal = &value
 	}
 	return _node, _spec
 }

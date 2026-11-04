@@ -87,6 +87,7 @@ func (s *Server) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.Reg
 	if platform := s.Dist.Platform(req.Os, req.Arch); s.AutoUpgrade && req.BinarySha256 != "" && platform != "" {
 		if want := s.Dist.SHA256(platform); want != "" && want != req.BinarySha256 {
 			resp.UpgradeSha256, resp.UpgradePlatform = want, platform
+			resp.UpgradeSignature = s.Dist.Signature(platform)
 			slog.Info("下发 agent 升级", "host", req.Hostname, "from", req.AgentVersion, "platform", platform)
 		}
 	}

@@ -114,7 +114,7 @@ async fn agent() {
                 if !session.upgrade_sha256.is_empty() {
                     let result = tokio::select! {
                         result = tokio::time::timeout(Duration::from_secs(120), upgrade::apply(
-                            &mut client, &session.upgrade_platform, &session.upgrade_sha256,
+                            &mut client, &session.upgrade_platform, &session.upgrade_sha256, &session.upgrade_signature,
                         )) => Some(result),
                         _ = &mut stopping => None,
                     };

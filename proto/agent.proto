@@ -126,6 +126,9 @@ message RegisterResponse {
   // 指令签名公钥（Ed25519，32 字节）。agent 首次见到即固定在本地，之后只认这把；
   // 与固定值不同时拒绝一切指令，不随注册响应更换
   bytes command_signer = 5;
+  // 升级安装包的发布签名（Ed25519，64 字节）：对 "openxdr-agent-release-v1\0" + 平台 + "\0" + 安装包 SHA-256（小写十六进制）签名，
+  // 私钥不在 server 上。编译时嵌了发布公钥的 agent 只接受签名有效的安装包；分发目录没放 .sig 时为空
+  bytes upgrade_signature = 6;
 }
 
 message AgentEvent {

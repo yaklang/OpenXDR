@@ -85,6 +85,16 @@ func RemoteAddr(v string) predicate.AuditLog {
 	return predicate.AuditLog(sql.FieldEQ(FieldRemoteAddr, v))
 }
 
+// Seq applies equality check predicate on the "seq" field. It's identical to SeqEQ.
+func Seq(v int64) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldEQ(FieldSeq, v))
+}
+
+// Seal applies equality check predicate on the "seal" field. It's identical to SealEQ.
+func Seal(v string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldEQ(FieldSeal, v))
+}
+
 // TsEQ applies the EQ predicate on the "ts" field.
 func TsEQ(v time.Time) predicate.AuditLog {
 	return predicate.AuditLog(sql.FieldEQ(FieldTs, v))
@@ -468,6 +478,131 @@ func RemoteAddrEqualFold(v string) predicate.AuditLog {
 // RemoteAddrContainsFold applies the ContainsFold predicate on the "remote_addr" field.
 func RemoteAddrContainsFold(v string) predicate.AuditLog {
 	return predicate.AuditLog(sql.FieldContainsFold(FieldRemoteAddr, v))
+}
+
+// SeqEQ applies the EQ predicate on the "seq" field.
+func SeqEQ(v int64) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldEQ(FieldSeq, v))
+}
+
+// SeqNEQ applies the NEQ predicate on the "seq" field.
+func SeqNEQ(v int64) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldNEQ(FieldSeq, v))
+}
+
+// SeqIn applies the In predicate on the "seq" field.
+func SeqIn(vs ...int64) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldIn(FieldSeq, vs...))
+}
+
+// SeqNotIn applies the NotIn predicate on the "seq" field.
+func SeqNotIn(vs ...int64) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldNotIn(FieldSeq, vs...))
+}
+
+// SeqGT applies the GT predicate on the "seq" field.
+func SeqGT(v int64) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldGT(FieldSeq, v))
+}
+
+// SeqGTE applies the GTE predicate on the "seq" field.
+func SeqGTE(v int64) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldGTE(FieldSeq, v))
+}
+
+// SeqLT applies the LT predicate on the "seq" field.
+func SeqLT(v int64) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldLT(FieldSeq, v))
+}
+
+// SeqLTE applies the LTE predicate on the "seq" field.
+func SeqLTE(v int64) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldLTE(FieldSeq, v))
+}
+
+// SeqIsNil applies the IsNil predicate on the "seq" field.
+func SeqIsNil() predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldIsNull(FieldSeq))
+}
+
+// SeqNotNil applies the NotNil predicate on the "seq" field.
+func SeqNotNil() predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldNotNull(FieldSeq))
+}
+
+// SealEQ applies the EQ predicate on the "seal" field.
+func SealEQ(v string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldEQ(FieldSeal, v))
+}
+
+// SealNEQ applies the NEQ predicate on the "seal" field.
+func SealNEQ(v string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldNEQ(FieldSeal, v))
+}
+
+// SealIn applies the In predicate on the "seal" field.
+func SealIn(vs ...string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldIn(FieldSeal, vs...))
+}
+
+// SealNotIn applies the NotIn predicate on the "seal" field.
+func SealNotIn(vs ...string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldNotIn(FieldSeal, vs...))
+}
+
+// SealGT applies the GT predicate on the "seal" field.
+func SealGT(v string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldGT(FieldSeal, v))
+}
+
+// SealGTE applies the GTE predicate on the "seal" field.
+func SealGTE(v string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldGTE(FieldSeal, v))
+}
+
+// SealLT applies the LT predicate on the "seal" field.
+func SealLT(v string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldLT(FieldSeal, v))
+}
+
+// SealLTE applies the LTE predicate on the "seal" field.
+func SealLTE(v string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldLTE(FieldSeal, v))
+}
+
+// SealContains applies the Contains predicate on the "seal" field.
+func SealContains(v string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldContains(FieldSeal, v))
+}
+
+// SealHasPrefix applies the HasPrefix predicate on the "seal" field.
+func SealHasPrefix(v string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldHasPrefix(FieldSeal, v))
+}
+
+// SealHasSuffix applies the HasSuffix predicate on the "seal" field.
+func SealHasSuffix(v string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldHasSuffix(FieldSeal, v))
+}
+
+// SealIsNil applies the IsNil predicate on the "seal" field.
+func SealIsNil() predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldIsNull(FieldSeal))
+}
+
+// SealNotNil applies the NotNil predicate on the "seal" field.
+func SealNotNil() predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldNotNull(FieldSeal))
+}
+
+// SealEqualFold applies the EqualFold predicate on the "seal" field.
+func SealEqualFold(v string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldEqualFold(FieldSeal, v))
+}
+
+// SealContainsFold applies the ContainsFold predicate on the "seal" field.
+func SealContainsFold(v string) predicate.AuditLog {
+	return predicate.AuditLog(sql.FieldContainsFold(FieldSeal, v))
 }
 
 // And groups predicates with the AND operator between them.

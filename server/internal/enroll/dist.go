@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -120,6 +121,24 @@ func (d *Dist) SHA256(platform string) string {
 	}
 	d.cache[platform] = distEntry{st.Size(), st.ModTime(), sum}
 	return sum
+}
+
+// Signature 平台安装包的发布签名：安装包旁边的 <文件名>.sig，十六进制的 64 字节 Ed25519 签名（cmd/signrelease 生成）。
+// 没有或格式不对返回 nil；server 不持有发布私钥，也不校验，校验在 agent 上
+func (d *Dist) Signature(platform string) []byte {
+	path, ok := d.path(platform)
+	if !ok {
+		return nil
+	}
+	raw, err := os.ReadFile(path + ".sig")
+	if err != nil {
+		return nil
+	}
+	sig, err := hex.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil || len(sig) != 64 {
+		return nil
+	}
+	return sig
 }
 
 // Open 打开平台安装包。
