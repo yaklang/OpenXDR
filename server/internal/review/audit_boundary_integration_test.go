@@ -39,3 +39,31 @@ func TestAuditHumanEscalationBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestAuditBenignManualEscalation(t *testing.T) {
+	ctx, db := testdb.New(t)
+	old := time.Now().Add(-48 * time.Hour)
+	for _, tc := range []struct {
+		name, verdict, action string
+		needReview, autoClose bool
+	}{
+		{"benign_requires_original_records", "benign", "collect_original_records", true, false},
+		{"benign_routine_monitor", "benign", "monitor", false, true},
+		{"suspicious_routine_monitor", "suspicious", "monitor", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(map[string]any{"verdict": tc.verdict, "action_codes": []string{tc.action}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			inc := db.Incident.Create().SetStatus("triaged").SetCreatedAt(old).SetTriagedAt(old).SetGraph(json.RawMessage(`{}`)).SetAiVerdict(raw).SaveX(ctx)
+			db.Alert.Create().SetTs(old).SetRuleID("audit-benign-manual").SetSeverity(3).SetIncidentID(inc.ID).ExecX(ctx)
+			if got := db.Incident.Query().Where(Needed(), incident.IDEQ(inc.ID)).ExistX(ctx); got != tc.needReview {
+				t.Errorf("review needed=%v want %v", got, tc.needReview)
+			}
+			if got := db.Incident.Query().Where(StaleBenign(time.Now().Add(-24*time.Hour)), incident.IDEQ(inc.ID)).ExistX(ctx); got != tc.autoClose {
+				t.Errorf("autoclose=%v want %v", got, tc.autoClose)
+			}
+		})
+	}
+}

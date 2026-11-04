@@ -140,10 +140,13 @@ func (n *Notifier) decide(inc *ent.Incident, severity int16) (bool, string) {
 	}
 	var v verdict
 	_ = json.Unmarshal(inc.AiVerdict, &v)
+	if needsHumanEscalation(v) {
+		return true, ""
+	}
 	if v.Verdict == "benign" {
 		return false, "AI 判定良性"
 	}
-	if v.Verdict == "suspicious" && !needsHumanEscalation(v) && severity < review.Severity {
+	if v.Verdict == "suspicious" && severity < review.Severity {
 		return false, "可疑事件无需人工即时介入"
 	}
 	return true, ""

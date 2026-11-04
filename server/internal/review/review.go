@@ -60,9 +60,10 @@ func DecoyOnly() predicate.Incident {
 	return incident.And(decoyReview(), incident.Not(incident.HasAlertsWith(alert.Not(decoyAlert()))))
 }
 
-// quiet 已由 AI 研判（status=triaged 且无升级类待重研判证据）、不含人工提交的诱饵观察，且满足以下任一静默自治条件：
+// quiet 已由 AI 研判（status=triaged 且无升级类待重研判证据）、不含人工提交的诱饵观察、无需隔离/阻断响应或不可避免的原始记录人工补取，
+// 且满足以下任一静默自治条件：
 //  1. AI 判良性（benign，不论原规则级别）；
-//  2. AI 判可疑（suspicious）、级别低于高危（< Severity），且无需隔离/阻断响应或不可避免的原始记录人工补取。
+//  2. AI 判可疑（suspicious）且级别低于高危（< Severity）。
 //
 // 未经人工采纳的 AI 结案建议（closure_proposal）不能降低高危可疑事件的复核要求。
 func quiet() predicate.Incident {
@@ -70,11 +71,11 @@ func quiet() predicate.Incident {
 		incident.StatusEQ("triaged"),
 		incident.Not(Urgent()),
 		incident.Not(decoyReview()),
+		incident.Not(humanEscalation()),
 		incident.Or(
 			benign(),
 			incident.And(
 				suspicious(),
-				incident.Not(humanEscalation()),
 				incident.Not(severe()),
 			),
 		),
@@ -86,7 +87,7 @@ func Needed() predicate.Incident {
 	return incident.And(unresolved(), incident.Not(quiet()))
 }
 
-// StaleBenign AI 判良性、不含人工提交的诱饵观察、之后没有待重研判的新证据且创建早于 before：到期由系统自动按误报结案。
+// StaleBenign AI 判良性、无需人工响应或原始记录补取、不含人工提交的诱饵观察、之后没有待重研判的新证据且创建早于 before：到期由系统自动按误报结案。
 // 静默不通知的可疑事件（suspicious）不在此列：无需即时打扰人不等于已证明误报，不能自动按 false_positive 结案。
 // 结论之后又并入了新证据（待重研判）或分析师重开（open）的不算：旧结论没看过新证据，不能拿它结案
 func StaleBenign(before time.Time) predicate.Incident {
@@ -95,6 +96,7 @@ func StaleBenign(before time.Time) predicate.Incident {
 		incident.Not(Urgent()),
 		incident.Not(newer(incident.FieldEvidenceAt)),
 		benign(),
+		incident.Not(humanEscalation()),
 		incident.Not(decoyReview()),
 		incident.CreatedAtLT(before),
 	)
