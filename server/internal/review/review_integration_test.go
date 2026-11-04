@@ -88,9 +88,9 @@ func TestPredicates(t *testing.T) {
 
 	expect("Needed", query(Needed()),
 		"未研判", "判恶意", "重开良性低危旧", "判可疑高危", "判可疑低危需响应", "判良性含诱饵与真实告警", "判良性仅诱饵", "未研判仅诱饵", "结论缺 verdict 字段", "结论大小写不符")
-	expect("StaleBenign", query(StaleBenign(cutoff)), "判良性低危旧", "判良性高危旧", "判可疑低危旧")
-	// 截止时间放到未来，新创建的良性低危事件也算过期
-	expect("StaleBenign(未来)", query(StaleBenign(now.Add(time.Hour))), "判良性低危旧", "判良性高危旧", "判可疑低危旧", "判良性低危新")
+	expect("StaleBenign", query(StaleBenign(cutoff)), "判良性低危旧", "判良性高危旧")
+	// 截止时间放到未来，新创建的良性低危事件也算过期；未核实的可疑事件（判可疑低危旧）虽静默不通知，但绝不自动按误报结案
+	expect("StaleBenign(未来)", query(StaleBenign(now.Add(time.Hour))), "判良性低危旧", "判良性高危旧", "判良性低危新")
 	expect("DecoyOnly", query(DecoyOnly()), "判良性仅诱饵", "未研判仅诱饵", "已结案含诱饵")
 
 	// 自动结案与人工复核互斥：任何事件都不能同时属于两边

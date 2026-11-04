@@ -14,7 +14,7 @@ import (
 	"openxdr/server/internal/testdb"
 )
 
-// 只关静默自治范围（AI 判良性，或无需响应的中低危可疑）且放够天数的事件；高危可疑、恶意、新事件、结论后又有新证据待重研判的都不碰，N=0 关闭。
+// 只关 AI 判良性且放够天数的事件；未核实的可疑事件（不论级别）、恶意、新事件、结论后又有新证据待重研判的都不按误报自动关掉，N=0 关闭。
 func TestAutoCloseBenign(t *testing.T) {
 	ctx, client := testdb.New(t)
 	old := time.Now().AddDate(0, 0, -8)
@@ -37,8 +37,8 @@ func TestAutoCloseBenign(t *testing.T) {
 		t.Fatalf("N=0 应关闭自动结案，得到 %d %v", n, err)
 	}
 	a := &AutoClose{DB: client, Days: 7}
-	if n, err := a.sweep(ctx); err != nil || n != 3 {
-		t.Fatalf("应关 3 个（良性低危、良性高危、可疑低危），得到 %d %v", n, err)
+	if n, err := a.sweep(ctx); err != nil || n != 2 {
+		t.Fatalf("应关 2 个（良性低危、良性高危），得到 %d %v", n, err)
 	}
 	// 重复执行（如两个节点先后跑）不再动已结案的
 	if n, err := a.sweep(ctx); err != nil || n != 0 {
@@ -46,18 +46,19 @@ func TestAutoCloseBenign(t *testing.T) {
 	}
 	for _, inc := range client.Incident.Query().AllX(ctx) {
 		switch inc.ID.String() {
-		case lowOld, highBenignOld, suspiciousLowOld:
+		case lowOld, highBenignOld:
 			if inc.Status != "false_positive" || inc.ResolvedBy == nil || *inc.ResolvedBy != "system" || inc.ResolvedAt == nil ||
-				inc.Resolution == nil || !strings.Contains(*inc.Resolution, "7 天无人处理") {
-				t.Errorf("静默自治旧事件应自动结案：%+v", inc)
+				inc.Resolution == nil || *inc.Resolution != "AI 判良性、7 天无人处理，系统自动结案" {
+				t.Errorf("良性旧事件应自动结案且说明准确：%+v", inc)
 			}
-		case suspiciousHighOld, maliciousOld, lowNew, pending:
+		case suspiciousLowOld, suspiciousHighOld, maliciousOld, lowNew, pending:
 			if inc.Status != "triaged" || inc.ResolvedBy != nil {
 				t.Errorf("%s 不该被结案：%+v", inc.ID, inc)
 			}
 		}
 	}
-	if n := client.AuditLog.Query().Where(auditlog.ActionEQ("incident_auto_closed")).CountX(ctx); n != 1 {
-		t.Errorf("只有关了事件的那一轮才落审计，得到 %d 条", n)
+	row := client.AuditLog.Query().Where(auditlog.ActionEQ("incident_auto_closed")).OnlyX(ctx)
+	if row.Detail == nil || !strings.Contains(*row.Detail, "AI 判良性事件") || strings.Contains(*row.Detail, "低危良性") {
+		t.Errorf("审计明细应如实描述 AI 判良性事件，得到 %v", row.Detail)
 	}
 }

@@ -14,8 +14,8 @@ import (
 	"openxdr/server/internal/review"
 )
 
-// AutoClose 把 AI 判良性、级别低于高危、放了 Days 天没人处理的事件按误报结案，
-// 免得待处理清单被噪声撑满。需人工复核的事件（review.Needed）永远不会被关掉。
+// AutoClose 把 AI 判良性、放了 Days 天没人处理的事件按误报结案，
+// 免得待处理清单被噪声撑满。需人工复核的事件（review.Needed）以及未证实为良性的可疑事件永远不会被自动按误报关掉。
 type AutoClose struct {
 	DB       *ent.Client
 	Days     int
@@ -46,7 +46,7 @@ func (a *AutoClose) sweep(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	now := time.Now()
-	note := fmt.Sprintf("AI 判良性、级别低于高危、%d 天无人处理，系统自动结案", a.Days)
+	note := fmt.Sprintf("AI 判良性、%d 天无人处理，系统自动结案", a.Days)
 	tx, err := a.DB.Tx(ctx)
 	if err != nil {
 		return 0, err
@@ -67,7 +67,7 @@ func (a *AutoClose) sweep(ctx context.Context) (int, error) {
 		}
 	}
 	if len(rows) > 0 {
-		if err := audit.Checked(ctx, tx.AuditLog.Create(), "system", "server", "incident_auto_closed", "", fmt.Sprintf("自动结案 %d 个事件（%d 天无人处理的低危良性事件）", len(rows), a.Days)); err != nil {
+		if err := audit.Checked(ctx, tx.AuditLog.Create(), "system", "server", "incident_auto_closed", "", fmt.Sprintf("自动结案 %d 个事件（%d 天无人处理的 AI 判良性事件）", len(rows), a.Days)); err != nil {
 			return 0, err
 		}
 	}

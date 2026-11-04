@@ -51,9 +51,10 @@ func TestDecide(t *testing.T) {
 		{"良性静默", incidentAt(fresh, "triaged", `{"verdict":"benign"}`), 3, false, "AI 判定良性"},
 		{"高危良性同样静默", incidentAt(fresh, "triaged", `{"verdict":"benign"}`), 5, false, "AI 判定良性"},
 		{"恶意推送", incidentAt(fresh, "triaged", `{"verdict":"malicious","confidence":90}`), 3, true, ""},
-		{"中低危可疑静默", incidentAt(fresh, "triaged", `{"verdict":"suspicious"}`), 3, false, "可疑事件无需人工即时介入"},
+		{"中低危可疑静默", incidentAt(fresh, "triaged", `{"verdict":"suspicious","action_codes":["monitor"]}`), 3, false, "可疑事件无需人工即时介入"},
 		{"高危可疑推送", incidentAt(fresh, "triaged", `{"verdict":"suspicious"}`), 4, true, ""},
 		{"中低危可疑需响应推送", incidentAt(fresh, "triaged", `{"verdict":"suspicious","action_codes":["review_response"]}`), 3, true, ""},
+		{"中低危可疑需补取原始记录推送", incidentAt(fresh, "triaged", `{"verdict":"suspicious","action_codes":["collect_original_records"]}`), 3, true, ""},
 		{"研判无法解析也推送", incidentAt(fresh, "triaged", `{"error":"unparseable"}`), 3, true, ""},
 		// 普通新证据冷却中：旧结论仍可用，照它决定，不卡在冷却上
 		{"冷却中恶意照推", retriage(`{"verdict":"malicious"}`, false, 0), 3, true, ""},

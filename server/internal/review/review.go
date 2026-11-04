@@ -37,21 +37,14 @@ func suspicious() predicate.Incident {
 	}
 }
 
-// responseAction AI 研判要求隔离/阻断响应（response_tier 为 contain/isolate，或 action_codes 含 review_response）
-func responseAction() predicate.Incident {
+// humanEscalation AI 研判要求隔离/阻断响应，或存在平台无法替代的原始日志人工补证（response_tier 为 contain/isolate，或 action_codes 含 review_response / collect_original_records）
+func humanEscalation() predicate.Incident {
 	return func(s *sql.Selector) {
 		col := s.C(incident.FieldAiVerdict)
 		s.Where(sql.ExprP(fmt.Sprintf(
-			"(COALESCE(%[1]s->>'response_tier', '') IN ('contain', 'isolate') OR COALESCE(%[1]s, 'null'::jsonb) @> '{\"action_codes\":[\"review_response\"]}'::jsonb)",
+			"(COALESCE(%[1]s->>'response_tier', '') IN ('contain', 'isolate') OR COALESCE(%[1]s, 'null'::jsonb) @> '{\"action_codes\":[\"review_response\"]}'::jsonb OR COALESCE(%[1]s, 'null'::jsonb) @> '{\"action_codes\":[\"collect_original_records\"]}'::jsonb)",
 			col,
 		)))
-	}
-}
-
-// proposedFalsePositive AI 会话已深入查证并提交了误报/良性结案建议（closure_proposal.status = false_positive）
-func proposedFalsePositive() predicate.Incident {
-	return func(s *sql.Selector) {
-		s.Where(sql.ExprP(fmt.Sprintf("COALESCE(%s->>'status', '') = 'false_positive'", s.C(incident.FieldClosureProposal))))
 	}
 }
 
@@ -69,7 +62,9 @@ func DecoyOnly() predicate.Incident {
 
 // quiet 已由 AI 研判（status=triaged 且无升级类待重研判证据）、不含人工提交的诱饵观察，且满足以下任一静默自治条件：
 //  1. AI 判良性（benign，不论原规则级别）；
-//  2. AI 判可疑（suspicious）且无需隔离/阻断响应，同时级别低于高危（< Severity）或 AI 会话已查证提议 false_positive 结案。
+//  2. AI 判可疑（suspicious）、级别低于高危（< Severity），且无需隔离/阻断响应或不可避免的原始记录人工补取。
+//
+// 未经人工采纳的 AI 结案建议（closure_proposal）不能降低高危可疑事件的复核要求。
 func quiet() predicate.Incident {
 	return incident.And(
 		incident.StatusEQ("triaged"),
@@ -79,20 +74,28 @@ func quiet() predicate.Incident {
 			benign(),
 			incident.And(
 				suspicious(),
-				incident.Not(responseAction()),
-				incident.Or(incident.Not(severe()), proposedFalsePositive()),
+				incident.Not(humanEscalation()),
+				incident.Not(severe()),
 			),
 		),
 	)
 }
 
-// Needed 未结案，且超出静默自治范围（未研判、升级待重研判、AI 判恶意、高危可疑/需响应处置、或含人工提交的诱饵观察）。
+// Needed 未结案，且超出静默自治范围（未研判、升级待重研判、AI 判恶意、高危可疑、需人工响应/原始日志补证、或含人工提交的诱饵观察）。
 func Needed() predicate.Incident {
 	return incident.And(unresolved(), incident.Not(quiet()))
 }
 
-// StaleBenign 属于静默自治范围、之后没有待重研判的新证据且创建早于 before：到期由系统自动结案，不打扰人。
+// StaleBenign AI 判良性、不含人工提交的诱饵观察、之后没有待重研判的新证据且创建早于 before：到期由系统自动按误报结案。
+// 静默不通知的可疑事件（suspicious）不在此列：无需即时打扰人不等于已证明误报，不能自动按 false_positive 结案。
 // 结论之后又并入了新证据（待重研判）或分析师重开（open）的不算：旧结论没看过新证据，不能拿它结案
 func StaleBenign(before time.Time) predicate.Incident {
-	return incident.And(quiet(), incident.Not(newer(incident.FieldEvidenceAt)), incident.CreatedAtLT(before))
+	return incident.And(
+		incident.StatusEQ("triaged"),
+		incident.Not(Urgent()),
+		incident.Not(newer(incident.FieldEvidenceAt)),
+		benign(),
+		incident.Not(decoyReview()),
+		incident.CreatedAtLT(before),
+	)
 }
