@@ -43,11 +43,13 @@ func TestTrackFindings(t *testing.T) {
 	if out, err := track(host.ID.String(), "open"); err != nil || !strings.Contains(out, `"reopened":false`) || db.Finding.Query().CountX(ctx) != 1 {
 		t.Fatalf("同一问题应去重更新：%s %v", out, err)
 	}
-	if _, err := track(host.ID.String(), "resolved"); err != nil || get() != "resolved" {
+	if _, err := s.tool(ctx, session, commandgate.Request{System: true}, "track", []byte(
+		`{"host":"`+host.ID.String()+`","key":"backup-failed","title":"备份服务已恢复","detail":"复查：termix-backup-pull active","severity":"medium","status":"resolved"}`)); err != nil || get() != "resolved" {
 		t.Fatalf("复查修复应关闭：%v %s", err, get())
 	}
-	if f := db.Finding.Query().OnlyX(ctx); f.ResolvedBy == nil || *f.ResolvedBy != commandgate.SystemActor {
-		t.Errorf("AI 关闭应记 system：%+v", f)
+	if f := db.Finding.Query().OnlyX(ctx); f.ResolvedBy == nil || *f.ResolvedBy != commandgate.SystemActor ||
+		f.Title != "备份服务已恢复" || f.Detail != "复查：termix-backup-pull active" {
+		t.Errorf("AI 关闭应记 system 并更新复查后的标题与详情：%+v", f)
 	}
 	if out, err := track(host.ID.String(), "open"); err != nil || !strings.Contains(out, `"reopened":true`) || get() != "open" {
 		t.Fatalf("复发应重开：%s %v", out, err)
@@ -103,14 +105,18 @@ func TestTrackFindings(t *testing.T) {
 	}
 	db.Finding.Delete().Where(finding.SessionIDEQ(fresh.ID)).ExecX(ctx)
 
-	// 遗留与忽略的待办随系统提示交给模型
+	// 遗留、忽略与近期人工标为已处理（带说明）的待办随系统提示交给模型
 	db.Finding.Create().SetGroupID(group.ID).SetAssetID(host.ID).SetKey("disk-full").SetTitle("磁盘将满").SaveX(ctx)
+	db.Finding.Create().SetGroupID(group.ID).SetAssetID(host.ID).SetKey("token-verified").SetTitle("API Token 待核实").
+		SetStatus("resolved").SetResolvedBy("admin").SetResolvedAt(time.Now()).SetNote("已确认 Secrux 验证授权").SaveX(ctx)
 	r, err := s.request(context.Background(), session, "巡检", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(r.SystemPrompt, `"open_findings":[{"host":"`+host.ID.String()+`","hostname":"pve2","key":"disk-full"`) ||
-		!strings.Contains(r.SystemPrompt, `"ignored_findings":[{`) || !strings.Contains(r.SystemPrompt, "计划下线") {
+		!strings.Contains(r.SystemPrompt, `"ignored_findings":[{`) || !strings.Contains(r.SystemPrompt, "计划下线") ||
+		!strings.Contains(r.SystemPrompt, `"resolved_findings":[{"host":"`+host.ID.String()+`","hostname":"pve2","key":"token-verified"`) ||
+		!strings.Contains(r.SystemPrompt, "已确认 Secrux 验证授权") {
 		t.Errorf("待办数据缺失：%s", r.SystemPrompt)
 	}
 	// 交给 AI 的会话：绑定对象的当前状态随系统提示交给模型

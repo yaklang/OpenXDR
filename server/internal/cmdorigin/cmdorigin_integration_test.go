@@ -70,4 +70,19 @@ func TestOfVerifiesAgainstCommands(t *testing.T) {
 			}
 		})
 	}
+
+	// docker exec 进容器执行的平台指令：容器内进程无 platform_command 标记，按正在执行的命令文本与容器标识归属
+	dockerCmd := db.Command.Create().SetKind("exec").SetAssetID(host.ID).
+		SetCmd("docker exec openxdr-ha-patroni-1 sh -c 'tail -20 /var/lib/postgresql/.psql_history'").
+		SetCreatedAt(start).SetCompletedAt(start.Add(3 * time.Second)).SetStatus("succeeded").SaveX(ctx)
+	inContainer := map[string]any{
+		"container": map[string]any{"name": "openxdr-ha-patroni-1", "uid": "67ed3549d9589297"},
+		"process":   map[string]any{"cmd_line": "tail -20 /var/lib/postgresql/.psql_history"},
+	}
+	if got, err := Of(ctx, sqlDB, inContainer, &host.ID, start.Add(2*time.Second)); err != nil || got == nil || *got != dockerCmd.ID {
+		t.Fatalf("docker exec 容器内命令应归属到平台指令 %s，实际 %v %v", dockerCmd.ID, got, err)
+	}
+	if got, err := Of(ctx, sqlDB, inContainer, &host.ID, start.Add(20*time.Second)); err != nil || got != nil {
+		t.Fatalf("超出执行窗口不应归属，实际 %v %v", got, err)
+	}
 }

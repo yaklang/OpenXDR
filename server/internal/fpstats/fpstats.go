@@ -34,20 +34,22 @@ import (
 // CreatedBy 误报统计草案的 created_by，控制台据此标来源
 const CreatedBy = "fp-stats"
 
-// entityFields 按实体收窄时依次尝试的字段：先看规则作用的对象（域名、对端、文件、注册表、模块），
-// 最后才是发起的进程映像——同一个进程往往干很多事，按进程压比按对象压宽
+// entityFields 按实体收窄时依次尝试的字段：先看规则作用的对象（域名、对端、文件、注册表、模块、具体命令行），
+// 最后才是发起的进程映像——同一个进程往往干很多事，按进程压比按对象或具体命令行压宽
 var entityFields = []string{
 	"query.hostname",
 	"dst_endpoint.ip",
 	"file.path",
 	"reg_key.path",
 	"module.file.path",
+	"process.cmd_line",
 	"process.file.path",
 	"src_endpoint.ip",
 }
 
 // imageField 按对象收窄后，如果这些命中都出自同一个进程映像，再加一条进程条件
 const imageField = "process.file.path"
+const cmdLineField = "process.cmd_line"
 
 // genericImages shell、脚本解释器与常被滥用的系统程序：攻击同样经由它们执行，
 // 按它们的映像「收窄」压掉的其实是这条规则在这台主机上的全部命中，不算实体
@@ -58,9 +60,13 @@ var genericImages = map[string]bool{
 	"mshta.exe": true, "rundll32.exe": true, "regsvr32.exe": true,
 }
 
-// generic 取值是否是不能当实体的通用映像
+// generic 取值是否是不能当实体的通用映像或裸解释器命令行
 func generic(field, value string) bool {
-	if field != imageField {
+	if field != imageField && field != cmdLineField {
+		return false
+	}
+	value = strings.TrimSpace(value)
+	if field == cmdLineField && strings.ContainsAny(value, " \t") {
 		return false
 	}
 	base := strings.ToLower(value[strings.LastIndexAny(value, `/\`)+1:])

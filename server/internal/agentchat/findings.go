@@ -107,7 +107,8 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 		return marshal(map[string]any{"id": f.ID, "status": "open", "new": true})
 	case body.Status == "resolved":
 		if f.Status == "open" {
-			err = f.Update().SetStatus("resolved").SetResolvedAt(now).SetResolvedBy(commandgate.SystemActor).
+			err = f.Update().SetStatus("resolved").SetTitle(body.Title).SetDetail(body.Detail).
+				SetResolvedAt(now).SetResolvedBy(commandgate.SystemActor).
 				SetLastSeen(now).SetSessionID(session.ID).Exec(ctx)
 		}
 		if err != nil {
@@ -118,7 +119,7 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 		// 仍存在；之前被标成已修复的重新打开
 		reopened := f.Status == "resolved"
 		err = f.Update().SetStatus("open").SetTitle(body.Title).SetDetail(body.Detail).SetSeverity(body.Severity).
-			SetLastSeen(now).SetSessionID(session.ID).ClearResolvedAt().ClearResolvedBy().Exec(ctx)
+			SetLastSeen(now).SetSessionID(session.ID).ClearResolvedAt().ClearResolvedBy().ClearNote().Exec(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -137,14 +138,18 @@ type findingBrief struct {
 	Note      *string   `json:"note,omitempty"`
 }
 
-// findingsFor 本组遗留待办与人工忽略的待办，各最多 100 条。
-func (s *Service) findingsFor(ctx context.Context, group uuid.UUID, hostnames map[uuid.UUID]string) (open, ignored []findingBrief, err error) {
-	open, ignored = []findingBrief{}, []findingBrief{}
+// recentResolvedWindow 人工标为已处理并附说明的待办保留在上下文里的时长：
+// 让巡检 AI 知道哪些「待确认授权 / 暴露端口」已被管理员确认或加固，不再换 key 重复追问
+const recentResolvedWindow = 30 * 24 * time.Hour
+
+// findingsFor 本组遗留待办、人工忽略的待办，以及近期人工结案并附说明的待办。
+func (s *Service) findingsFor(ctx context.Context, group uuid.UUID, hostnames map[uuid.UUID]string) (open, ignored, resolved []findingBrief, err error) {
+	open, ignored, resolved = []findingBrief{}, []findingBrief{}, []findingBrief{}
 	for _, status := range []string{"open", "ignored"} {
 		rows, err := s.DB.Finding.Query().Where(finding.GroupIDEQ(group), finding.StatusEQ(status)).
 			Order(ent.Desc(finding.FieldLastSeen)).Limit(100).All(ctx)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		for _, f := range rows {
 			b := findingBrief{Host: f.AssetID, Hostname: hostnames[f.AssetID], Key: f.Key, Title: f.Title}
@@ -157,7 +162,24 @@ func (s *Service) findingsFor(ctx context.Context, group uuid.UUID, hostnames ma
 			}
 		}
 	}
-	return open, ignored, nil
+	rows, err := s.DB.Finding.Query().Where(
+		finding.GroupIDEQ(group),
+		finding.StatusEQ("resolved"),
+		finding.ResolvedByNotNil(),
+		finding.ResolvedByNEQ(commandgate.SystemActor),
+		finding.NoteNotNil(),
+		finding.NoteNEQ(""),
+		finding.ResolvedAtGTE(time.Now().Add(-recentResolvedWindow)),
+	).Order(ent.Desc(finding.FieldResolvedAt)).Limit(50).All(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for _, f := range rows {
+		resolved = append(resolved, findingBrief{
+			Host: f.AssetID, Hostname: hostnames[f.AssetID], Key: f.Key, Title: f.Title, Note: f.Note,
+		})
+	}
+	return open, ignored, resolved, nil
 }
 
 const ignoreDescription = "按用户在对话里的明确要求忽略一条运维待办，效果同待办页的人工忽略：记在发起对话的人名下，" +

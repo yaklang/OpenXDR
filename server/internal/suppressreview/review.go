@@ -91,6 +91,10 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (string, string, er
 	if s.Status != "proposed" || s.AssetID == nil {
 		return s.Status, "", nil
 	}
+	// 无条件草案会压掉整条规则，中危及以上按审计规程不能由 AI 批准，留给组管理员裁决，免得 AI 秒拒触发 30 天冷却
+	if len(s.Conditions) == 0 && r.ruleSeverity(s.RuleID) >= 3 {
+		return s.Status, "", nil
+	}
 	model := r.model(ctx, s)
 	if model == "" {
 		return s.Status, "", nil
@@ -270,6 +274,18 @@ func (r *Reviewer) material(ctx context.Context, s *ent.Suppression) (string, er
 	}
 	b.WriteString(samples)
 	return b.String(), nil
+}
+
+func (r *Reviewer) ruleSeverity(id string) int16 {
+	if r.Rules == nil {
+		return 0
+	}
+	for _, rule := range r.Rules.Rules() {
+		if rule.ID == id {
+			return rule.Severity
+		}
+	}
+	return 0
 }
 
 func (r *Reviewer) ruleInfo(id string) string {
