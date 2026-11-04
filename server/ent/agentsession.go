@@ -39,6 +39,12 @@ type AgentSession struct {
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	// RunExpiresAt holds the value of the "run_expires_at" field.
 	RunExpiresAt *time.Time `json:"run_expires_at,omitempty"`
+	// RunOwner holds the value of the "run_owner" field.
+	RunOwner *uuid.UUID `json:"run_owner,omitempty"`
+	// RunDeadlineAt holds the value of the "run_deadline_at" field.
+	RunDeadlineAt *time.Time `json:"run_deadline_at,omitempty"`
+	// RunReplaySafe holds the value of the "run_replay_safe" field.
+	RunReplaySafe bool `json:"run_replay_safe,omitempty"`
 	// Subjects holds the value of the "subjects" field.
 	Subjects []string `json:"subjects,omitempty"`
 	// CancelRequestedAt holds the value of the "cancel_requested_at" field.
@@ -51,11 +57,15 @@ func (*AgentSession) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case agentsession.FieldRunOwner:
+			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
 		case agentsession.FieldSubjects:
 			values[i] = new([]byte)
+		case agentsession.FieldRunReplaySafe:
+			values[i] = new(sql.NullBool)
 		case agentsession.FieldKind, agentsession.FieldInitiator, agentsession.FieldModel, agentsession.FieldTitle, agentsession.FieldStatus, agentsession.FieldError:
 			values[i] = new(sql.NullString)
-		case agentsession.FieldCreatedAt, agentsession.FieldFinishedAt, agentsession.FieldRunExpiresAt, agentsession.FieldCancelRequestedAt:
+		case agentsession.FieldCreatedAt, agentsession.FieldFinishedAt, agentsession.FieldRunExpiresAt, agentsession.FieldRunDeadlineAt, agentsession.FieldCancelRequestedAt:
 			values[i] = new(sql.NullTime)
 		case agentsession.FieldID, agentsession.FieldGroupID:
 			values[i] = new(uuid.UUID)
@@ -143,6 +153,26 @@ func (_m *AgentSession) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.RunExpiresAt = new(time.Time)
 				*_m.RunExpiresAt = value.Time
+			}
+		case agentsession.FieldRunOwner:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field run_owner", values[i])
+			} else if value.Valid {
+				_m.RunOwner = new(uuid.UUID)
+				*_m.RunOwner = *value.S.(*uuid.UUID)
+			}
+		case agentsession.FieldRunDeadlineAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field run_deadline_at", values[i])
+			} else if value.Valid {
+				_m.RunDeadlineAt = new(time.Time)
+				*_m.RunDeadlineAt = value.Time
+			}
+		case agentsession.FieldRunReplaySafe:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field run_replay_safe", values[i])
+			} else if value.Valid {
+				_m.RunReplaySafe = value.Bool
 			}
 		case agentsession.FieldSubjects:
 			if value, ok := values[i].(*[]byte); !ok {
@@ -232,6 +262,19 @@ func (_m *AgentSession) String() string {
 		builder.WriteString("run_expires_at=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
+	builder.WriteString(", ")
+	if v := _m.RunOwner; v != nil {
+		builder.WriteString("run_owner=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.RunDeadlineAt; v != nil {
+		builder.WriteString("run_deadline_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("run_replay_safe=")
+	builder.WriteString(fmt.Sprintf("%v", _m.RunReplaySafe))
 	builder.WriteString(", ")
 	builder.WriteString("subjects=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Subjects))

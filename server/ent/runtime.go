@@ -105,6 +105,10 @@ func init() {
 	agentsessionDescStatus := agentsessionFields[7].Descriptor()
 	// agentsession.DefaultStatus holds the default value on creation for the status field.
 	agentsession.DefaultStatus = agentsessionDescStatus.Default.(string)
+	// agentsessionDescRunReplaySafe is the schema descriptor for run_replay_safe field.
+	agentsessionDescRunReplaySafe := agentsessionFields[13].Descriptor()
+	// agentsession.DefaultRunReplaySafe holds the default value on creation for the run_replay_safe field.
+	agentsession.DefaultRunReplaySafe = agentsessionDescRunReplaySafe.Default.(bool)
 	// agentsessionDescID is the schema descriptor for id field.
 	agentsessionDescID := agentsessionFields[0].Descriptor()
 	// agentsession.DefaultID holds the default value on creation for the id field.

@@ -83,6 +83,12 @@ func (g *Gate) authorize(ctx context.Context, req Request) (string, error) {
 		if err != nil || s.GroupID != req.GroupID || s.Initiator != actor || req.System != (s.Kind == "task") {
 			return "", errors.New("会话身份不匹配")
 		}
+		now := time.Now()
+		if s.Status != "running" || s.CancelRequestedAt != nil ||
+			(s.RunExpiresAt != nil && !s.RunExpiresAt.After(now)) ||
+			(s.RunDeadlineAt != nil && !s.RunDeadlineAt.After(now)) {
+			return "", errors.New("会话已结束、取消或执行租约已失效")
+		}
 	}
 	return actor, nil
 }

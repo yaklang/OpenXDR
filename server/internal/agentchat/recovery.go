@@ -5,11 +5,16 @@ import (
 	"log/slog"
 	"time"
 
+	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
-
+	"openxdr/server/ent"
 	"openxdr/server/ent/agentsession"
 	"openxdr/server/ent/taskrun"
+	"openxdr/server/internal/commandgate"
 )
+
+const recoveredReadOnlyTask = "任务短租约已过期，仅完成只读调查，可由调度器按窗口安全重跑"
+const expiredSessionReason = "会话执行期限已过，结果未知；未重放命令"
 
 func (s *Service) timeout() time.Duration {
 	if s.Timeout > 0 {
@@ -18,13 +23,8 @@ func (s *Service) timeout() time.Duration {
 	return 4 * time.Hour
 }
 
-func expiry(ctx context.Context) time.Time {
-	deadline, _ := ctx.Deadline()
-	return deadline.Add(time.Minute)
-}
-
-// Recover 清理执行期限已过的会话，不重放命令。各节点可同时运行，状态更新在事务内完成。
-// 旧版本无期限的记录先等待一个完整运行上限，避免升级时误伤仍在退出的会话。
+// Recover 清理过期会话；只有新协议证明无副作用且未到硬期限的任务可交回调度器。
+// 旧版本无期限的记录先等待一个完整运行上限。
 func (s *Service) Recover(ctx context.Context) {
 	started := time.Now()
 	ticker := time.NewTicker(time.Minute)
@@ -46,6 +46,11 @@ func (s *Service) Recover(ctx context.Context) {
 	}
 }
 
+func replayableTask(session *ent.AgentSession, now time.Time) bool {
+	return session.Kind == "task" && session.Initiator == commandgate.SystemActor &&
+		session.RunReplaySafe && session.CancelRequestedAt == nil && session.RunDeadlineAt != nil && now.Before(*session.RunDeadlineAt)
+}
+
 func (s *Service) recoverExpired(ctx context.Context, now, legacy time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -58,29 +63,48 @@ func (s *Service) recoverExpired(ctx context.Context, now, legacy time.Time) err
 	if !legacy.IsZero() {
 		expired = agentsession.Or(expired, agentsession.And(agentsession.RunExpiresAtIsNil(), agentsession.CreatedAtLT(legacy)))
 	}
-	// 先更新会话，持有行锁直到关联 TaskRun 完成；并发完成或清理会重新检查状态。
-	const reason = "会话执行期限已过，结果未知；未重放命令"
-	if err := tx.AgentSession.Update().Where(agentsession.StatusEQ("running"), expired).
-		SetStatus("failed").SetError(reason).SetFinishedAt(now).Exec(ctx); err != nil {
-		return err
-	}
-	// 也覆盖会话已收尾、但进程在 TaskRun 回写前退出的窗口。
-	runs, err := tx.TaskRun.Query().Where(taskrun.StatusEQ("running"), taskrun.SessionIDNotNil()).All(ctx)
+	// 锁定后复查过期条件，不能抢走另一节点刚续期的任务。
+	sessions, err := tx.AgentSession.Query().Where(agentsession.StatusEQ("running"), expired).
+		Where(func(sel *sql.Selector) { sel.ForUpdate(sql.WithLockAction(sql.SkipLocked)) }).Limit(100).All(ctx)
 	if err != nil {
 		return err
 	}
-	sessionIDs := make([]uuid.UUID, 0, len(runs))
+	recovered := map[uuid.UUID]bool{}
+	for _, session := range sessions {
+		safe := replayableTask(session, now)
+		reason := expiredSessionReason
+		if safe {
+			reason = recoveredReadOnlyTask
+		}
+		if err := tx.AgentSession.UpdateOneID(session.ID).SetStatus("failed").SetError(reason).SetFinishedAt(now).ClearRunExpiresAt().Exec(ctx); err != nil {
+			return err
+		}
+		recovered[session.ID] = true
+	}
+	// 覆盖会话终态已落库、进程却没来得及回写 TaskRun 的窗口。
+	runs, err := tx.TaskRun.Query().Where(taskrun.StatusEQ("running"), taskrun.SessionIDNotNil()).Limit(1000).All(ctx)
+	if err != nil {
+		return err
+	}
 	for _, run := range runs {
-		sessionIDs = append(sessionIDs, *run.SessionID)
-	}
-	ids, err := tx.AgentSession.Query().Where(agentsession.IDIn(sessionIDs...), agentsession.StatusNEQ("running"),
-		agentsession.Or(agentsession.And(agentsession.ErrorEQ(reason), agentsession.FinishedAtEQ(now)), agentsession.FinishedAtLT(now.Add(-time.Minute)))).IDs(ctx)
-	if err != nil {
-		return err
-	}
-	if err := tx.TaskRun.Update().Where(taskrun.StatusEQ("running"), taskrun.SessionIDIn(ids...)).
-		SetStatus("failed").SetError("会话已结束但任务运行未收尾，结果未知；未重放命令").SetFinishedAt(now).Exec(ctx); err != nil {
-		return err
+		session, err := tx.AgentSession.Get(ctx, *run.SessionID)
+		if err != nil {
+			return err
+		}
+		if session.Status == "running" {
+			continue
+		}
+		if !recovered[session.ID] && (session.FinishedAt == nil || !session.FinishedAt.Before(now.Add(-time.Minute))) {
+			continue
+		}
+		status, reason := "failed", "会话已结束但任务运行未收尾，结果未知；未重放命令"
+		if session.Error != nil && *session.Error == recoveredReadOnlyTask && replayableTask(session, now) && session.GroupID == run.GroupID {
+			status, reason = "interrupted", recoveredReadOnlyTask
+		}
+		if err := tx.TaskRun.UpdateOneID(run.ID).Where(taskrun.StatusEQ("running"), taskrun.SessionIDEQ(session.ID)).
+			SetStatus(status).SetError(reason).SetFinishedAt(now).Exec(ctx); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

@@ -31,8 +31,13 @@ func (AgentSession) Fields() []ent.Field {
 		field.String("status").Default("running"),
 		field.Text("error").Optional().Nillable(),
 		field.Time("finished_at").Optional().Nillable(),
-		// 固定执行期限加清理宽限；过期后只标失败，不重放命令。
+		// 对话执行期限；定时任务为短租约，过期后按可信副作用标记决定能否安全重跑。
 		field.Time("run_expires_at").Optional().Nillable(),
+		// 定时任务的执行所有者与硬期限；短租约只在所有者仍有效时续期。
+		field.UUID("run_owner", uuid.UUID{}).Optional().Nillable(),
+		field.Time("run_deadline_at").Optional().Nillable(),
+		// 只由执行入口置真，任何可能产生副作用的工具调用前置假；旧记录默认不允许重跑。
+		field.Bool("run_replay_safe").Default(false),
 		// 从事件或待办「交给 AI」时绑定的对象：incident:<id> / finding:<id>，同组、最多 10 个
 		field.Strings("subjects").Optional(),
 		// 人在界面上点了停止：后台运行在哪个节点都靠轮询这个字段收手，前端断开不再影响运行

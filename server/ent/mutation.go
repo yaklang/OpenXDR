@@ -1566,6 +1566,9 @@ type AgentSessionMutation struct {
 	error               *string
 	finished_at         *time.Time
 	run_expires_at      *time.Time
+	run_owner           *uuid.UUID
+	run_deadline_at     *time.Time
+	run_replay_safe     *bool
 	subjects            *[]string
 	appendsubjects      []string
 	cancel_requested_at *time.Time
@@ -2091,6 +2094,140 @@ func (m *AgentSessionMutation) ResetRunExpiresAt() {
 	delete(m.clearedFields, agentsession.FieldRunExpiresAt)
 }
 
+// SetRunOwner sets the "run_owner" field.
+func (m *AgentSessionMutation) SetRunOwner(u uuid.UUID) {
+	m.run_owner = &u
+}
+
+// RunOwner returns the value of the "run_owner" field in the mutation.
+func (m *AgentSessionMutation) RunOwner() (r uuid.UUID, exists bool) {
+	v := m.run_owner
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRunOwner returns the old "run_owner" field's value of the AgentSession entity.
+// If the AgentSession object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AgentSessionMutation) OldRunOwner(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRunOwner is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRunOwner requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRunOwner: %w", err)
+	}
+	return oldValue.RunOwner, nil
+}
+
+// ClearRunOwner clears the value of the "run_owner" field.
+func (m *AgentSessionMutation) ClearRunOwner() {
+	m.run_owner = nil
+	m.clearedFields[agentsession.FieldRunOwner] = struct{}{}
+}
+
+// RunOwnerCleared returns if the "run_owner" field was cleared in this mutation.
+func (m *AgentSessionMutation) RunOwnerCleared() bool {
+	_, ok := m.clearedFields[agentsession.FieldRunOwner]
+	return ok
+}
+
+// ResetRunOwner resets all changes to the "run_owner" field.
+func (m *AgentSessionMutation) ResetRunOwner() {
+	m.run_owner = nil
+	delete(m.clearedFields, agentsession.FieldRunOwner)
+}
+
+// SetRunDeadlineAt sets the "run_deadline_at" field.
+func (m *AgentSessionMutation) SetRunDeadlineAt(t time.Time) {
+	m.run_deadline_at = &t
+}
+
+// RunDeadlineAt returns the value of the "run_deadline_at" field in the mutation.
+func (m *AgentSessionMutation) RunDeadlineAt() (r time.Time, exists bool) {
+	v := m.run_deadline_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRunDeadlineAt returns the old "run_deadline_at" field's value of the AgentSession entity.
+// If the AgentSession object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AgentSessionMutation) OldRunDeadlineAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRunDeadlineAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRunDeadlineAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRunDeadlineAt: %w", err)
+	}
+	return oldValue.RunDeadlineAt, nil
+}
+
+// ClearRunDeadlineAt clears the value of the "run_deadline_at" field.
+func (m *AgentSessionMutation) ClearRunDeadlineAt() {
+	m.run_deadline_at = nil
+	m.clearedFields[agentsession.FieldRunDeadlineAt] = struct{}{}
+}
+
+// RunDeadlineAtCleared returns if the "run_deadline_at" field was cleared in this mutation.
+func (m *AgentSessionMutation) RunDeadlineAtCleared() bool {
+	_, ok := m.clearedFields[agentsession.FieldRunDeadlineAt]
+	return ok
+}
+
+// ResetRunDeadlineAt resets all changes to the "run_deadline_at" field.
+func (m *AgentSessionMutation) ResetRunDeadlineAt() {
+	m.run_deadline_at = nil
+	delete(m.clearedFields, agentsession.FieldRunDeadlineAt)
+}
+
+// SetRunReplaySafe sets the "run_replay_safe" field.
+func (m *AgentSessionMutation) SetRunReplaySafe(b bool) {
+	m.run_replay_safe = &b
+}
+
+// RunReplaySafe returns the value of the "run_replay_safe" field in the mutation.
+func (m *AgentSessionMutation) RunReplaySafe() (r bool, exists bool) {
+	v := m.run_replay_safe
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRunReplaySafe returns the old "run_replay_safe" field's value of the AgentSession entity.
+// If the AgentSession object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AgentSessionMutation) OldRunReplaySafe(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRunReplaySafe is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRunReplaySafe requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRunReplaySafe: %w", err)
+	}
+	return oldValue.RunReplaySafe, nil
+}
+
+// ResetRunReplaySafe resets all changes to the "run_replay_safe" field.
+func (m *AgentSessionMutation) ResetRunReplaySafe() {
+	m.run_replay_safe = nil
+}
+
 // SetSubjects sets the "subjects" field.
 func (m *AgentSessionMutation) SetSubjects(s []string) {
 	m.subjects = &s
@@ -2239,7 +2376,7 @@ func (m *AgentSessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AgentSessionMutation) Fields() []string {
-	fields := make([]string, 0, 12)
+	fields := make([]string, 0, 15)
 	if m.created_at != nil {
 		fields = append(fields, agentsession.FieldCreatedAt)
 	}
@@ -2269,6 +2406,15 @@ func (m *AgentSessionMutation) Fields() []string {
 	}
 	if m.run_expires_at != nil {
 		fields = append(fields, agentsession.FieldRunExpiresAt)
+	}
+	if m.run_owner != nil {
+		fields = append(fields, agentsession.FieldRunOwner)
+	}
+	if m.run_deadline_at != nil {
+		fields = append(fields, agentsession.FieldRunDeadlineAt)
+	}
+	if m.run_replay_safe != nil {
+		fields = append(fields, agentsession.FieldRunReplaySafe)
 	}
 	if m.subjects != nil {
 		fields = append(fields, agentsession.FieldSubjects)
@@ -2304,6 +2450,12 @@ func (m *AgentSessionMutation) Field(name string) (ent.Value, bool) {
 		return m.FinishedAt()
 	case agentsession.FieldRunExpiresAt:
 		return m.RunExpiresAt()
+	case agentsession.FieldRunOwner:
+		return m.RunOwner()
+	case agentsession.FieldRunDeadlineAt:
+		return m.RunDeadlineAt()
+	case agentsession.FieldRunReplaySafe:
+		return m.RunReplaySafe()
 	case agentsession.FieldSubjects:
 		return m.Subjects()
 	case agentsession.FieldCancelRequestedAt:
@@ -2337,6 +2489,12 @@ func (m *AgentSessionMutation) OldField(ctx context.Context, name string) (ent.V
 		return m.OldFinishedAt(ctx)
 	case agentsession.FieldRunExpiresAt:
 		return m.OldRunExpiresAt(ctx)
+	case agentsession.FieldRunOwner:
+		return m.OldRunOwner(ctx)
+	case agentsession.FieldRunDeadlineAt:
+		return m.OldRunDeadlineAt(ctx)
+	case agentsession.FieldRunReplaySafe:
+		return m.OldRunReplaySafe(ctx)
 	case agentsession.FieldSubjects:
 		return m.OldSubjects(ctx)
 	case agentsession.FieldCancelRequestedAt:
@@ -2420,6 +2578,27 @@ func (m *AgentSessionMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetRunExpiresAt(v)
 		return nil
+	case agentsession.FieldRunOwner:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRunOwner(v)
+		return nil
+	case agentsession.FieldRunDeadlineAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRunDeadlineAt(v)
+		return nil
+	case agentsession.FieldRunReplaySafe:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRunReplaySafe(v)
+		return nil
 	case agentsession.FieldSubjects:
 		v, ok := value.([]string)
 		if !ok {
@@ -2476,6 +2655,12 @@ func (m *AgentSessionMutation) ClearedFields() []string {
 	if m.FieldCleared(agentsession.FieldRunExpiresAt) {
 		fields = append(fields, agentsession.FieldRunExpiresAt)
 	}
+	if m.FieldCleared(agentsession.FieldRunOwner) {
+		fields = append(fields, agentsession.FieldRunOwner)
+	}
+	if m.FieldCleared(agentsession.FieldRunDeadlineAt) {
+		fields = append(fields, agentsession.FieldRunDeadlineAt)
+	}
 	if m.FieldCleared(agentsession.FieldSubjects) {
 		fields = append(fields, agentsession.FieldSubjects)
 	}
@@ -2507,6 +2692,12 @@ func (m *AgentSessionMutation) ClearField(name string) error {
 		return nil
 	case agentsession.FieldRunExpiresAt:
 		m.ClearRunExpiresAt()
+		return nil
+	case agentsession.FieldRunOwner:
+		m.ClearRunOwner()
+		return nil
+	case agentsession.FieldRunDeadlineAt:
+		m.ClearRunDeadlineAt()
 		return nil
 	case agentsession.FieldSubjects:
 		m.ClearSubjects()
@@ -2551,6 +2742,15 @@ func (m *AgentSessionMutation) ResetField(name string) error {
 		return nil
 	case agentsession.FieldRunExpiresAt:
 		m.ResetRunExpiresAt()
+		return nil
+	case agentsession.FieldRunOwner:
+		m.ResetRunOwner()
+		return nil
+	case agentsession.FieldRunDeadlineAt:
+		m.ResetRunDeadlineAt()
+		return nil
+	case agentsession.FieldRunReplaySafe:
+		m.ResetRunReplaySafe()
 		return nil
 	case agentsession.FieldSubjects:
 		m.ResetSubjects()

@@ -75,6 +75,9 @@ var (
 		{Name: "error", Type: field.TypeString, Nullable: true, Size: 2147483647},
 		{Name: "finished_at", Type: field.TypeTime, Nullable: true},
 		{Name: "run_expires_at", Type: field.TypeTime, Nullable: true},
+		{Name: "run_owner", Type: field.TypeUUID, Nullable: true},
+		{Name: "run_deadline_at", Type: field.TypeTime, Nullable: true},
+		{Name: "run_replay_safe", Type: field.TypeBool, Default: false},
 		{Name: "subjects", Type: field.TypeJSON, Nullable: true},
 		{Name: "cancel_requested_at", Type: field.TypeTime, Nullable: true},
 	}

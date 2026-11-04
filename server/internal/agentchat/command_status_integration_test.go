@@ -17,7 +17,7 @@ func TestCommandStatusIsScopedAndDoesNotRetry(t *testing.T) {
 	group := db.Group.Create().SetName("status").SaveX(ctx)
 	other := db.Group.Create().SetName("other").SaveX(ctx)
 	host := db.Asset.Create().SetHostname("status-host").SetGroupID(group.ID).SaveX(ctx)
-	session := &ent.AgentSession{ID: uuid.New(), GroupID: group.ID}
+	session := db.AgentSession.Create().SetKind("chat").SetGroupID(group.ID).SetInitiator("analyst").SetModel("test").SaveX(ctx)
 	s := &Service{DB: db}
 	for _, status := range []string{"pending", "sent", "unknown", "succeeded", "failed", "unsupported"} {
 		cmd := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetStatus(status).SetStdout(strings.Repeat("x", 20000)).SaveX(ctx)

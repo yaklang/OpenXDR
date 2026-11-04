@@ -34,6 +34,12 @@ const (
 	FieldFinishedAt = "finished_at"
 	// FieldRunExpiresAt holds the string denoting the run_expires_at field in the database.
 	FieldRunExpiresAt = "run_expires_at"
+	// FieldRunOwner holds the string denoting the run_owner field in the database.
+	FieldRunOwner = "run_owner"
+	// FieldRunDeadlineAt holds the string denoting the run_deadline_at field in the database.
+	FieldRunDeadlineAt = "run_deadline_at"
+	// FieldRunReplaySafe holds the string denoting the run_replay_safe field in the database.
+	FieldRunReplaySafe = "run_replay_safe"
 	// FieldSubjects holds the string denoting the subjects field in the database.
 	FieldSubjects = "subjects"
 	// FieldCancelRequestedAt holds the string denoting the cancel_requested_at field in the database.
@@ -55,6 +61,9 @@ var Columns = []string{
 	FieldError,
 	FieldFinishedAt,
 	FieldRunExpiresAt,
+	FieldRunOwner,
+	FieldRunDeadlineAt,
+	FieldRunReplaySafe,
 	FieldSubjects,
 	FieldCancelRequestedAt,
 }
@@ -74,6 +83,8 @@ var (
 	DefaultCreatedAt func() time.Time
 	// DefaultStatus holds the default value on creation for the "status" field.
 	DefaultStatus string
+	// DefaultRunReplaySafe holds the default value on creation for the "run_replay_safe" field.
+	DefaultRunReplaySafe bool
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
@@ -134,6 +145,21 @@ func ByFinishedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByRunExpiresAt orders the results by the run_expires_at field.
 func ByRunExpiresAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRunExpiresAt, opts...).ToFunc()
+}
+
+// ByRunOwner orders the results by the run_owner field.
+func ByRunOwner(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRunOwner, opts...).ToFunc()
+}
+
+// ByRunDeadlineAt orders the results by the run_deadline_at field.
+func ByRunDeadlineAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRunDeadlineAt, opts...).ToFunc()
+}
+
+// ByRunReplaySafe orders the results by the run_replay_safe field.
+func ByRunReplaySafe(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRunReplaySafe, opts...).ToFunc()
 }
 
 // ByCancelRequestedAt orders the results by the cancel_requested_at field.

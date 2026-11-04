@@ -129,6 +129,48 @@ func (_c *AgentSessionCreate) SetNillableRunExpiresAt(v *time.Time) *AgentSessio
 	return _c
 }
 
+// SetRunOwner sets the "run_owner" field.
+func (_c *AgentSessionCreate) SetRunOwner(v uuid.UUID) *AgentSessionCreate {
+	_c.mutation.SetRunOwner(v)
+	return _c
+}
+
+// SetNillableRunOwner sets the "run_owner" field if the given value is not nil.
+func (_c *AgentSessionCreate) SetNillableRunOwner(v *uuid.UUID) *AgentSessionCreate {
+	if v != nil {
+		_c.SetRunOwner(*v)
+	}
+	return _c
+}
+
+// SetRunDeadlineAt sets the "run_deadline_at" field.
+func (_c *AgentSessionCreate) SetRunDeadlineAt(v time.Time) *AgentSessionCreate {
+	_c.mutation.SetRunDeadlineAt(v)
+	return _c
+}
+
+// SetNillableRunDeadlineAt sets the "run_deadline_at" field if the given value is not nil.
+func (_c *AgentSessionCreate) SetNillableRunDeadlineAt(v *time.Time) *AgentSessionCreate {
+	if v != nil {
+		_c.SetRunDeadlineAt(*v)
+	}
+	return _c
+}
+
+// SetRunReplaySafe sets the "run_replay_safe" field.
+func (_c *AgentSessionCreate) SetRunReplaySafe(v bool) *AgentSessionCreate {
+	_c.mutation.SetRunReplaySafe(v)
+	return _c
+}
+
+// SetNillableRunReplaySafe sets the "run_replay_safe" field if the given value is not nil.
+func (_c *AgentSessionCreate) SetNillableRunReplaySafe(v *bool) *AgentSessionCreate {
+	if v != nil {
+		_c.SetRunReplaySafe(*v)
+	}
+	return _c
+}
+
 // SetSubjects sets the "subjects" field.
 func (_c *AgentSessionCreate) SetSubjects(v []string) *AgentSessionCreate {
 	_c.mutation.SetSubjects(v)
@@ -206,6 +248,10 @@ func (_c *AgentSessionCreate) defaults() {
 		v := agentsession.DefaultStatus
 		_c.mutation.SetStatus(v)
 	}
+	if _, ok := _c.mutation.RunReplaySafe(); !ok {
+		v := agentsession.DefaultRunReplaySafe
+		_c.mutation.SetRunReplaySafe(v)
+	}
 	if _, ok := _c.mutation.ID(); !ok {
 		v := agentsession.DefaultID()
 		_c.mutation.SetID(v)
@@ -231,6 +277,9 @@ func (_c *AgentSessionCreate) check() error {
 	}
 	if _, ok := _c.mutation.Status(); !ok {
 		return &ValidationError{Name: "status", err: errors.New(`ent: missing required field "AgentSession.status"`)}
+	}
+	if _, ok := _c.mutation.RunReplaySafe(); !ok {
+		return &ValidationError{Name: "run_replay_safe", err: errors.New(`ent: missing required field "AgentSession.run_replay_safe"`)}
 	}
 	return nil
 }
@@ -306,6 +355,18 @@ func (_c *AgentSessionCreate) createSpec() (*AgentSession, *sqlgraph.CreateSpec)
 	if value, ok := _c.mutation.RunExpiresAt(); ok {
 		_spec.SetField(agentsession.FieldRunExpiresAt, field.TypeTime, value)
 		_node.RunExpiresAt = &value
+	}
+	if value, ok := _c.mutation.RunOwner(); ok {
+		_spec.SetField(agentsession.FieldRunOwner, field.TypeUUID, value)
+		_node.RunOwner = &value
+	}
+	if value, ok := _c.mutation.RunDeadlineAt(); ok {
+		_spec.SetField(agentsession.FieldRunDeadlineAt, field.TypeTime, value)
+		_node.RunDeadlineAt = &value
+	}
+	if value, ok := _c.mutation.RunReplaySafe(); ok {
+		_spec.SetField(agentsession.FieldRunReplaySafe, field.TypeBool, value)
+		_node.RunReplaySafe = value
 	}
 	if value, ok := _c.mutation.Subjects(); ok {
 		_spec.SetField(agentsession.FieldSubjects, field.TypeJSON, value)

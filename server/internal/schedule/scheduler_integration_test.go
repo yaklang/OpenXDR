@@ -27,9 +27,16 @@ type fakeRunner struct {
 	tried bool
 }
 
-func (f *fakeRunner) RunTask(_ context.Context, job Job) error {
+func (f *fakeRunner) RunTask(_ context.Context, job Job) (retErr error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	defer func() {
+		status := "succeeded"
+		if retErr != nil {
+			status = "failed"
+		}
+		f.db.AgentSession.UpdateOneID(job.Session.ID).SetStatus(status).SetFinishedAt(time.Now()).ExecX(context.Background())
+	}()
 	f.jobs = append(f.jobs, job)
 	if job.Session.GroupID.String() == f.fail {
 		return errors.New("输出被截断")
@@ -38,6 +45,7 @@ func (f *fakeRunner) RunTask(_ context.Context, job Job) error {
 		f.tried = true
 		return errors.New("会话结束但没有提交报告")
 	}
+	f.db.AgentSession.UpdateOneID(job.Session.ID).SetRunReplaySafe(false).ExecX(context.Background())
 	return f.db.Report.Create().SetSessionID(job.Session.ID).SetGroupID(job.Session.GroupID).
 		SetTitle("日报").SetMarkdown("# 发现紧急风险").SetLevel("urgent").Exec(context.Background())
 }
@@ -215,6 +223,20 @@ type blockedRunner struct {
 	release chan struct{}
 }
 
+// 与真实任务入口一样，取消后先保存会话终态，再返回调度器。
+type recoverableBlockedRunner struct {
+	*blockedRunner
+	db *ent.Client
+}
+
+func (r *recoverableBlockedRunner) RunTask(ctx context.Context, job Job) error {
+	err := r.blockedRunner.RunTask(ctx, job)
+	if err != nil {
+		r.db.AgentSession.UpdateOneID(job.Session.ID).SetStatus("failed").SetFinishedAt(time.Now()).ExecX(context.Background())
+	}
+	return err
+}
+
 func (r *blockedRunner) RunTask(ctx context.Context, _ Job) error {
 	r.started <- struct{}{}
 	select {
@@ -266,7 +288,7 @@ func TestSchedulerRerunsInterrupted(t *testing.T) {
 	var notes []string
 	notify := func(_ context.Context, title, _, _ string) error { notes = append(notes, title); return nil }
 
-	blocked := &blockedRunner{started: make(chan struct{}, 1), release: make(chan struct{})}
+	blocked := &recoverableBlockedRunner{blockedRunner: &blockedRunner{started: make(chan struct{}, 1), release: make(chan struct{})}, db: client}
 	old := &Scheduler{DB: client, Runner: blocked, Dir: dir, DefaultModel: func() string { return "m" }, Timeout: time.Minute, MaxRunning: 10, Notify: notify}
 	stop, cancel := context.WithCancel(ctx)
 	if err := old.tick(stop, time.Now()); err != nil {

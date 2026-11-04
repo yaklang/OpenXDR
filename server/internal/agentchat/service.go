@@ -698,6 +698,11 @@ func (s *Service) tools(ctx context.Context, group uuid.UUID) []piruntime.Tool {
 
 // tool 执行一次工具调用。who 只携带发起身份（用户或系统）与审批超时，其余字段由会话决定。
 func (s *Service) tool(ctx context.Context, session *ent.AgentSession, who commandgate.Request, name string, args json.RawMessage) (string, error) {
+	current, err := s.guardTool(ctx, session, name)
+	if err != nil {
+		return "", err
+	}
+	session = current
 	switch name {
 	case "command_status":
 		return s.commandStatus(ctx, session, args)

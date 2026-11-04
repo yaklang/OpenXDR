@@ -105,6 +105,21 @@ func RunExpiresAt(v time.Time) predicate.AgentSession {
 	return predicate.AgentSession(sql.FieldEQ(FieldRunExpiresAt, v))
 }
 
+// RunOwner applies equality check predicate on the "run_owner" field. It's identical to RunOwnerEQ.
+func RunOwner(v uuid.UUID) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldEQ(FieldRunOwner, v))
+}
+
+// RunDeadlineAt applies equality check predicate on the "run_deadline_at" field. It's identical to RunDeadlineAtEQ.
+func RunDeadlineAt(v time.Time) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldEQ(FieldRunDeadlineAt, v))
+}
+
+// RunReplaySafe applies equality check predicate on the "run_replay_safe" field. It's identical to RunReplaySafeEQ.
+func RunReplaySafe(v bool) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldEQ(FieldRunReplaySafe, v))
+}
+
 // CancelRequestedAt applies equality check predicate on the "cancel_requested_at" field. It's identical to CancelRequestedAtEQ.
 func CancelRequestedAt(v time.Time) predicate.AgentSession {
 	return predicate.AgentSession(sql.FieldEQ(FieldCancelRequestedAt, v))
@@ -698,6 +713,116 @@ func RunExpiresAtIsNil() predicate.AgentSession {
 // RunExpiresAtNotNil applies the NotNil predicate on the "run_expires_at" field.
 func RunExpiresAtNotNil() predicate.AgentSession {
 	return predicate.AgentSession(sql.FieldNotNull(FieldRunExpiresAt))
+}
+
+// RunOwnerEQ applies the EQ predicate on the "run_owner" field.
+func RunOwnerEQ(v uuid.UUID) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldEQ(FieldRunOwner, v))
+}
+
+// RunOwnerNEQ applies the NEQ predicate on the "run_owner" field.
+func RunOwnerNEQ(v uuid.UUID) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldNEQ(FieldRunOwner, v))
+}
+
+// RunOwnerIn applies the In predicate on the "run_owner" field.
+func RunOwnerIn(vs ...uuid.UUID) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldIn(FieldRunOwner, vs...))
+}
+
+// RunOwnerNotIn applies the NotIn predicate on the "run_owner" field.
+func RunOwnerNotIn(vs ...uuid.UUID) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldNotIn(FieldRunOwner, vs...))
+}
+
+// RunOwnerGT applies the GT predicate on the "run_owner" field.
+func RunOwnerGT(v uuid.UUID) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldGT(FieldRunOwner, v))
+}
+
+// RunOwnerGTE applies the GTE predicate on the "run_owner" field.
+func RunOwnerGTE(v uuid.UUID) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldGTE(FieldRunOwner, v))
+}
+
+// RunOwnerLT applies the LT predicate on the "run_owner" field.
+func RunOwnerLT(v uuid.UUID) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldLT(FieldRunOwner, v))
+}
+
+// RunOwnerLTE applies the LTE predicate on the "run_owner" field.
+func RunOwnerLTE(v uuid.UUID) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldLTE(FieldRunOwner, v))
+}
+
+// RunOwnerIsNil applies the IsNil predicate on the "run_owner" field.
+func RunOwnerIsNil() predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldIsNull(FieldRunOwner))
+}
+
+// RunOwnerNotNil applies the NotNil predicate on the "run_owner" field.
+func RunOwnerNotNil() predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldNotNull(FieldRunOwner))
+}
+
+// RunDeadlineAtEQ applies the EQ predicate on the "run_deadline_at" field.
+func RunDeadlineAtEQ(v time.Time) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldEQ(FieldRunDeadlineAt, v))
+}
+
+// RunDeadlineAtNEQ applies the NEQ predicate on the "run_deadline_at" field.
+func RunDeadlineAtNEQ(v time.Time) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldNEQ(FieldRunDeadlineAt, v))
+}
+
+// RunDeadlineAtIn applies the In predicate on the "run_deadline_at" field.
+func RunDeadlineAtIn(vs ...time.Time) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldIn(FieldRunDeadlineAt, vs...))
+}
+
+// RunDeadlineAtNotIn applies the NotIn predicate on the "run_deadline_at" field.
+func RunDeadlineAtNotIn(vs ...time.Time) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldNotIn(FieldRunDeadlineAt, vs...))
+}
+
+// RunDeadlineAtGT applies the GT predicate on the "run_deadline_at" field.
+func RunDeadlineAtGT(v time.Time) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldGT(FieldRunDeadlineAt, v))
+}
+
+// RunDeadlineAtGTE applies the GTE predicate on the "run_deadline_at" field.
+func RunDeadlineAtGTE(v time.Time) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldGTE(FieldRunDeadlineAt, v))
+}
+
+// RunDeadlineAtLT applies the LT predicate on the "run_deadline_at" field.
+func RunDeadlineAtLT(v time.Time) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldLT(FieldRunDeadlineAt, v))
+}
+
+// RunDeadlineAtLTE applies the LTE predicate on the "run_deadline_at" field.
+func RunDeadlineAtLTE(v time.Time) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldLTE(FieldRunDeadlineAt, v))
+}
+
+// RunDeadlineAtIsNil applies the IsNil predicate on the "run_deadline_at" field.
+func RunDeadlineAtIsNil() predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldIsNull(FieldRunDeadlineAt))
+}
+
+// RunDeadlineAtNotNil applies the NotNil predicate on the "run_deadline_at" field.
+func RunDeadlineAtNotNil() predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldNotNull(FieldRunDeadlineAt))
+}
+
+// RunReplaySafeEQ applies the EQ predicate on the "run_replay_safe" field.
+func RunReplaySafeEQ(v bool) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldEQ(FieldRunReplaySafe, v))
+}
+
+// RunReplaySafeNEQ applies the NEQ predicate on the "run_replay_safe" field.
+func RunReplaySafeNEQ(v bool) predicate.AgentSession {
+	return predicate.AgentSession(sql.FieldNEQ(FieldRunReplaySafe, v))
 }
 
 // SubjectsIsNil applies the IsNil predicate on the "subjects" field.

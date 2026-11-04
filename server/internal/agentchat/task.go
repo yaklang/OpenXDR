@@ -28,23 +28,28 @@ func (s *Service) RunTask(ctx context.Context, job schedule.Job) (retErr error) 
 	if session.Kind != "task" || session.Initiator != commandgate.SystemActor || session.Status != "running" {
 		return errors.New("不是待运行的任务会话")
 	}
+	ctx, owner, stopLease, err := s.startTaskLease(ctx, session)
+	if err != nil {
+		return err
+	}
 	defer func() {
+		stopLease()
 		finish, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
-		update := s.DB.AgentSession.UpdateOneID(session.ID).Where(agentsession.StatusEQ("running")).ClearRunExpiresAt().SetStatus("succeeded").SetFinishedAt(time.Now())
+		update := s.DB.AgentSession.Update().Where(agentsession.IDEQ(session.ID), agentsession.StatusEQ("running"), agentsession.RunOwnerEQ(owner)).ClearRunExpiresAt().SetStatus("succeeded").SetFinishedAt(time.Now())
 		if partial {
 			update.SetError(PartialNote)
 		}
 		if retErr != nil {
 			update.SetStatus("failed").SetError(retErr.Error())
 		}
-		if err := update.Exec(finish); err != nil && retErr == nil {
+		n, err := update.Save(finish)
+		if err != nil && retErr == nil {
 			retErr = fmt.Errorf("保存会话终态失败: %w", err)
+		} else if n != 1 && retErr == nil {
+			retErr = errTaskLeaseLost
 		}
 	}()
-	if err := s.DB.AgentSession.UpdateOneID(session.ID).Where(agentsession.StatusEQ("running")).SetRunExpiresAt(expiry(ctx)).Exec(ctx); err != nil {
-		return err
-	}
 	if err := s.checkBudget(ctx, session.GroupID); err != nil {
 		return err
 	}
@@ -80,6 +85,9 @@ func (s *Service) RunTask(ctx context.Context, job schedule.Job) (retErr error) 
 	if expired {
 		if n > 0 {
 			return nil
+		}
+		if _, err := s.guardTool(post, session, "report"); err != nil {
+			return err
 		}
 		if err := s.fallbackReport(post, session, job.Prompt); err != nil {
 			return fmt.Errorf("%w；保底报告生成失败: %v", runErr, err)

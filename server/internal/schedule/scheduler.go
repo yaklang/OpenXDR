@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 
 	"openxdr/server/ent"
@@ -31,6 +32,9 @@ const StatusSkipped = "skipped"
 
 // Initiator 定时任务会话的发起人，即审批闸门的系统身份。
 const Initiator = commandgate.SystemActor
+
+// TaskLeaseWindow 调度成功后等待执行者领取、以及运行心跳续租的最长间隔。
+const TaskLeaseWindow = 3 * time.Minute
 
 // Job 一次任务运行：会话已建好（kind=task、initiator=system、绑定组与模型）。
 type Job struct {
@@ -360,6 +364,20 @@ func (s *Scheduler) skip(ctx context.Context, c candidate, since, now time.Time)
 // interruptedWithin 多久以内被打断的运行才重跑：再早的那一轮已经过时，等下一个周期
 const interruptedWithin = 12 * time.Hour
 
+var errRunSuperseded = errors.New("任务运行已被其他执行者接管")
+var errUnsafeReplay = errors.New("任务存在副作用或缺少可信只读证明，未自动重跑")
+
+func replaySafeSession(session *ent.AgentSession, now time.Time) bool {
+	return session.Kind == "task" && session.Initiator == Initiator && session.Status != "running" &&
+		session.RunReplaySafe && session.CancelRequestedAt == nil &&
+		session.RunDeadlineAt != nil && now.Before(*session.RunDeadlineAt)
+}
+
+func (s *Scheduler) canReplay(ctx context.Context, id uuid.UUID, now time.Time) bool {
+	session, err := s.DB.AgentSession.Get(ctx, id)
+	return err == nil && replaySafeSession(session, now)
+}
+
 // interrupted 这个组上一轮是否被停机打断、还值得重跑。只看最近一轮：之后已经跑过就不补
 func (s *Scheduler) interrupted(ctx context.Context, t *ent.Task, groupID uuid.UUID, now time.Time) (*ent.TaskRun, error) {
 	last, err := s.DB.TaskRun.Query().Where(taskrun.TaskIDEQ(t.ID), taskrun.GroupIDEQ(groupID)).
@@ -371,6 +389,9 @@ func (s *Scheduler) interrupted(ctx context.Context, t *ent.Task, groupID uuid.U
 		return nil, err
 	}
 	if last.Status != StatusInterrupted || last.StartedAt.Before(now.Add(-interruptedWithin)) {
+		return nil, nil
+	}
+	if last.SessionID == nil || !s.canReplay(ctx, *last.SessionID, now) {
 		return nil, nil
 	}
 	return last, nil
@@ -399,14 +420,30 @@ func (s *Scheduler) begin(ctx context.Context, t *ent.Task, g *ent.Group, model 
 // rerun 同一轮运行换一个新会话重跑：一个计划时间只占一行运行记录（唯一索引），
 // 失败那次的会话与错误仍留在 agent_sessions 里可查。
 func (s *Scheduler) rerun(ctx context.Context, t *ent.Task, g *ent.Group, run *ent.TaskRun, model string) (*ent.AgentSession, error) {
+	if run.SessionID == nil {
+		return nil, errUnsafeReplay
+	}
 	tx, err := s.DB.Tx(ctx)
 	if err != nil {
 		return nil, err
 	}
+	prior, err := tx.AgentSession.Query().Where(agentsession.IDEQ(*run.SessionID)).
+		Where(func(q *sql.Selector) { q.ForUpdate() }).Only(ctx)
+	if err != nil || !replaySafeSession(prior, time.Now()) {
+		_ = tx.Rollback()
+		if err != nil {
+			return nil, err
+		}
+		return nil, errUnsafeReplay
+	}
 	session, err := s.newSession(ctx, tx, t, g, model)
 	if err == nil {
-		err = tx.TaskRun.UpdateOneID(run.ID).SetSessionID(session.ID).SetStatus("running").
-			ClearFinishedAt().ClearError().Exec(ctx)
+		var changed int
+		changed, err = tx.TaskRun.Update().Where(taskrun.IDEQ(run.ID), taskrun.SessionIDEQ(*run.SessionID), taskrun.StatusIn("failed", StatusInterrupted)).
+			SetSessionID(session.ID).SetStatus("running").ClearFinishedAt().ClearError().Save(ctx)
+		if err == nil && changed != 1 {
+			err = errRunSuperseded
+		}
 	}
 	if err != nil {
 		_ = tx.Rollback()
@@ -416,27 +453,38 @@ func (s *Scheduler) rerun(ctx context.Context, t *ent.Task, g *ent.Group, run *e
 }
 
 func (s *Scheduler) newSession(ctx context.Context, tx *ent.Tx, t *ent.Task, g *ent.Group, model string) (*ent.AgentSession, error) {
+	now := time.Now()
 	return tx.AgentSession.Create().
 		SetKind("task").SetGroupID(g.ID).SetInitiator(Initiator).SetModel(model).
-		SetTitle(t.Name).SetRunExpiresAt(time.Now().Add(s.runTimeout() + time.Minute)).
+		SetTitle(t.Name).SetRunExpiresAt(now.Add(TaskLeaseWindow)).
+		SetRunDeadlineAt(now.Add(s.runTimeout() + time.Minute)).SetRunReplaySafe(true).
 		Save(ctx)
 }
 
 func (s *Scheduler) execute(ctx context.Context, t *ent.Task, g *ent.Group, run *ent.TaskRun, session *ent.AgentSession) {
 	err := s.attempt(ctx, t, g, run, session)
+	if errors.Is(err, errRunSuperseded) {
+		return
+	}
 	// 停机或失去租约打断的：已记为 interrupted，由接手的 leader 重跑，不算失败也不通知
 	if err != nil && ctx.Err() != nil {
 		return
 	}
 	// 模型偶尔乱写、漏交报告，换个新会话重跑一次通常就好；超时与失去租约不重跑
 	if err != nil && ctx.Err() == nil && !errors.Is(err, context.DeadlineExceeded) {
-		slog.Warn("任务失败，新开会话重试一次", "task", t.ID, "group", g.Name, "err", err)
-		if next, rerr := s.rerun(ctx, t, g, run, session.Model); rerr != nil {
+		if next, rerr := s.rerun(ctx, t, g, run, session.Model); errors.Is(rerr, errRunSuperseded) {
+			return
+		} else if rerr != nil {
 			slog.Error("创建重试会话失败", "task", t.ID, "group", g.Name, "err", rerr)
+			err = fmt.Errorf("%w；%v", err, rerr)
 		} else {
+			slog.Warn("纯只读任务失败，新开会话重试一次", "task", t.ID, "group", g.Name, "err", err)
 			session = next
 			err = s.attempt(ctx, t, g, run, session)
 		}
+	}
+	if errors.Is(err, errRunSuperseded) {
+		return
 	}
 
 	done, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -447,7 +495,7 @@ func (s *Scheduler) execute(ctx context.Context, t *ent.Task, g *ent.Group, run 
 	}
 	// 巡检失败不能悄无声息：没人看控制台时，Webhook 是唯一的信号
 	if s.Notify != nil {
-		text := fmt.Sprintf("❌ 资产组：「%s」\n⚠️ 任务重试后仍失败：%v", g.Name, err)
+		text := fmt.Sprintf("❌ 资产组：「%s」\n⚠️ 任务未完成：%v", g.Name, err)
 		if nerr := s.Notify(done, "任务失败："+t.Name, text, "/?session="+session.ID.String()); nerr != nil {
 			slog.Error("任务失败通知发送失败", "run", run.ID, "err", nerr)
 		}
@@ -468,16 +516,21 @@ func (s *Scheduler) attempt(ctx context.Context, t *ent.Task, g *ent.Group, run 
 	// 节点失去租约时 ctx 已取消，终态仍要落库
 	done, cancelDone := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancelDone()
-	update := s.DB.TaskRun.UpdateOneID(run.ID).Where(taskrun.StatusEQ("running")).SetFinishedAt(time.Now()).SetStatus("succeeded")
+	update := s.DB.TaskRun.Update().Where(taskrun.IDEQ(run.ID), taskrun.StatusEQ("running"), taskrun.SessionIDEQ(session.ID)).SetFinishedAt(time.Now()).SetStatus("succeeded")
 	if err != nil {
 		status := "failed"
-		if ctx.Err() != nil {
+		if ctx.Err() != nil && s.canReplay(done, session.ID, time.Now()) {
 			status = StatusInterrupted
 		}
 		update.SetStatus(status).SetError(err.Error())
 	}
-	if uerr := update.Exec(done); uerr != nil {
+	n, uerr := update.Save(done)
+	if uerr != nil {
 		slog.Error("保存任务运行终态失败", "run", run.ID, "err", uerr)
+		return uerr
+	}
+	if n != 1 {
+		return errRunSuperseded
 	}
 	if err != nil {
 		slog.Error("任务失败", "task", t.ID, "group", g.Name, "err", err)

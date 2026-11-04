@@ -194,6 +194,60 @@ func (_u *AgentSessionUpdate) ClearRunExpiresAt() *AgentSessionUpdate {
 	return _u
 }
 
+// SetRunOwner sets the "run_owner" field.
+func (_u *AgentSessionUpdate) SetRunOwner(v uuid.UUID) *AgentSessionUpdate {
+	_u.mutation.SetRunOwner(v)
+	return _u
+}
+
+// SetNillableRunOwner sets the "run_owner" field if the given value is not nil.
+func (_u *AgentSessionUpdate) SetNillableRunOwner(v *uuid.UUID) *AgentSessionUpdate {
+	if v != nil {
+		_u.SetRunOwner(*v)
+	}
+	return _u
+}
+
+// ClearRunOwner clears the value of the "run_owner" field.
+func (_u *AgentSessionUpdate) ClearRunOwner() *AgentSessionUpdate {
+	_u.mutation.ClearRunOwner()
+	return _u
+}
+
+// SetRunDeadlineAt sets the "run_deadline_at" field.
+func (_u *AgentSessionUpdate) SetRunDeadlineAt(v time.Time) *AgentSessionUpdate {
+	_u.mutation.SetRunDeadlineAt(v)
+	return _u
+}
+
+// SetNillableRunDeadlineAt sets the "run_deadline_at" field if the given value is not nil.
+func (_u *AgentSessionUpdate) SetNillableRunDeadlineAt(v *time.Time) *AgentSessionUpdate {
+	if v != nil {
+		_u.SetRunDeadlineAt(*v)
+	}
+	return _u
+}
+
+// ClearRunDeadlineAt clears the value of the "run_deadline_at" field.
+func (_u *AgentSessionUpdate) ClearRunDeadlineAt() *AgentSessionUpdate {
+	_u.mutation.ClearRunDeadlineAt()
+	return _u
+}
+
+// SetRunReplaySafe sets the "run_replay_safe" field.
+func (_u *AgentSessionUpdate) SetRunReplaySafe(v bool) *AgentSessionUpdate {
+	_u.mutation.SetRunReplaySafe(v)
+	return _u
+}
+
+// SetNillableRunReplaySafe sets the "run_replay_safe" field if the given value is not nil.
+func (_u *AgentSessionUpdate) SetNillableRunReplaySafe(v *bool) *AgentSessionUpdate {
+	if v != nil {
+		_u.SetRunReplaySafe(*v)
+	}
+	return _u
+}
+
 // SetSubjects sets the "subjects" field.
 func (_u *AgentSessionUpdate) SetSubjects(v []string) *AgentSessionUpdate {
 	_u.mutation.SetSubjects(v)
@@ -314,6 +368,21 @@ func (_u *AgentSessionUpdate) sqlSave(ctx context.Context) (_node int, err error
 	}
 	if _u.mutation.RunExpiresAtCleared() {
 		_spec.ClearField(agentsession.FieldRunExpiresAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.RunOwner(); ok {
+		_spec.SetField(agentsession.FieldRunOwner, field.TypeUUID, value)
+	}
+	if _u.mutation.RunOwnerCleared() {
+		_spec.ClearField(agentsession.FieldRunOwner, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.RunDeadlineAt(); ok {
+		_spec.SetField(agentsession.FieldRunDeadlineAt, field.TypeTime, value)
+	}
+	if _u.mutation.RunDeadlineAtCleared() {
+		_spec.ClearField(agentsession.FieldRunDeadlineAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.RunReplaySafe(); ok {
+		_spec.SetField(agentsession.FieldRunReplaySafe, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Subjects(); ok {
 		_spec.SetField(agentsession.FieldSubjects, field.TypeJSON, value)
@@ -516,6 +585,60 @@ func (_u *AgentSessionUpdateOne) ClearRunExpiresAt() *AgentSessionUpdateOne {
 	return _u
 }
 
+// SetRunOwner sets the "run_owner" field.
+func (_u *AgentSessionUpdateOne) SetRunOwner(v uuid.UUID) *AgentSessionUpdateOne {
+	_u.mutation.SetRunOwner(v)
+	return _u
+}
+
+// SetNillableRunOwner sets the "run_owner" field if the given value is not nil.
+func (_u *AgentSessionUpdateOne) SetNillableRunOwner(v *uuid.UUID) *AgentSessionUpdateOne {
+	if v != nil {
+		_u.SetRunOwner(*v)
+	}
+	return _u
+}
+
+// ClearRunOwner clears the value of the "run_owner" field.
+func (_u *AgentSessionUpdateOne) ClearRunOwner() *AgentSessionUpdateOne {
+	_u.mutation.ClearRunOwner()
+	return _u
+}
+
+// SetRunDeadlineAt sets the "run_deadline_at" field.
+func (_u *AgentSessionUpdateOne) SetRunDeadlineAt(v time.Time) *AgentSessionUpdateOne {
+	_u.mutation.SetRunDeadlineAt(v)
+	return _u
+}
+
+// SetNillableRunDeadlineAt sets the "run_deadline_at" field if the given value is not nil.
+func (_u *AgentSessionUpdateOne) SetNillableRunDeadlineAt(v *time.Time) *AgentSessionUpdateOne {
+	if v != nil {
+		_u.SetRunDeadlineAt(*v)
+	}
+	return _u
+}
+
+// ClearRunDeadlineAt clears the value of the "run_deadline_at" field.
+func (_u *AgentSessionUpdateOne) ClearRunDeadlineAt() *AgentSessionUpdateOne {
+	_u.mutation.ClearRunDeadlineAt()
+	return _u
+}
+
+// SetRunReplaySafe sets the "run_replay_safe" field.
+func (_u *AgentSessionUpdateOne) SetRunReplaySafe(v bool) *AgentSessionUpdateOne {
+	_u.mutation.SetRunReplaySafe(v)
+	return _u
+}
+
+// SetNillableRunReplaySafe sets the "run_replay_safe" field if the given value is not nil.
+func (_u *AgentSessionUpdateOne) SetNillableRunReplaySafe(v *bool) *AgentSessionUpdateOne {
+	if v != nil {
+		_u.SetRunReplaySafe(*v)
+	}
+	return _u
+}
+
 // SetSubjects sets the "subjects" field.
 func (_u *AgentSessionUpdateOne) SetSubjects(v []string) *AgentSessionUpdateOne {
 	_u.mutation.SetSubjects(v)
@@ -666,6 +789,21 @@ func (_u *AgentSessionUpdateOne) sqlSave(ctx context.Context) (_node *AgentSessi
 	}
 	if _u.mutation.RunExpiresAtCleared() {
 		_spec.ClearField(agentsession.FieldRunExpiresAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.RunOwner(); ok {
+		_spec.SetField(agentsession.FieldRunOwner, field.TypeUUID, value)
+	}
+	if _u.mutation.RunOwnerCleared() {
+		_spec.ClearField(agentsession.FieldRunOwner, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.RunDeadlineAt(); ok {
+		_spec.SetField(agentsession.FieldRunDeadlineAt, field.TypeTime, value)
+	}
+	if _u.mutation.RunDeadlineAtCleared() {
+		_spec.ClearField(agentsession.FieldRunDeadlineAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.RunReplaySafe(); ok {
+		_spec.SetField(agentsession.FieldRunReplaySafe, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Subjects(); ok {
 		_spec.SetField(agentsession.FieldSubjects, field.TypeJSON, value)
