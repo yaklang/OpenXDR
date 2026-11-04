@@ -678,22 +678,8 @@ fn to_agent_event(
     let name = cstr(&ev.comm);
     let exe = cstr(&ev.filename);
     // exec 瞬间从 /proc 补充命令行和父进程；短命进程可能已退场，拿不到就算了
-    let cmd_line = std::fs::read(format!("/proc/{}/cmdline", ev.pid))
-        .ok()
-        .map(|b| {
-            b.split(|c| *c == 0)
-                .filter(|s| !s.is_empty())
-                .map(String::from_utf8_lossy)
-                .collect::<Vec<_>>()
-                .join(" ")
-        });
-    let ppid = std::fs::read_to_string(format!("/proc/{}/status", ev.pid))
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("PPid:"))
-                .and_then(|l| l.split_whitespace().nth(1)?.parse().ok())
-        });
+    let cmd_line = super::container::cmd_line(ev.pid);
+    let ppid = super::container::ppid(ev.pid);
 
     emit_process(
         agent_id,

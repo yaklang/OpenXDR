@@ -39,3 +39,17 @@ func TestGeneric(t *testing.T) {
 		t.Error("具体程序、带参数的具体命令行与非映像字段不算通用")
 	}
 }
+
+func TestTempDirPrefix(t *testing.T) {
+	if got, ok := tempDirPrefix("/tmp/go-build3516107513/b001/feishu.test"); !ok || got != "/tmp/go-build" {
+		t.Fatalf("got (%q, %v), want (/tmp/go-build, true)", got, ok)
+	}
+	if got, ok := tempDirPrefix("/var/tmp/go-build987654/b012/sigma.test"); !ok || got != "/var/tmp/go-build" {
+		t.Fatalf("got (%q, %v), want (/var/tmp/go-build, true)", got, ok)
+	}
+	for _, p := range []string{"/tmp/evil12345", "/tmp/a12345/x", "/usr/bin/bash"} {
+		if _, ok := tempDirPrefix(p); ok {
+			t.Errorf("%s 不应提取为临时构建目录前缀", p)
+		}
+	}
+}

@@ -222,13 +222,7 @@ fn describe(event: &ProcEvent) -> Option<Described> {
     let exe = std::fs::read_link(format!("/proc/{pid}/exe"))
         .ok()
         .map(|p| p.to_string_lossy().into_owned());
-    let cmd_line = std::fs::read(format!("/proc/{pid}/cmdline")).ok().map(|b| {
-        b.split(|c| *c == 0)
-            .filter(|s| !s.is_empty())
-            .map(String::from_utf8_lossy)
-            .collect::<Vec<_>>()
-            .join(" ")
-    });
+    let cmd_line = super::container::cmd_line(pid);
     let (name, ppid) = read_status(pid);
 
     Some(Described {

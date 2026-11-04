@@ -302,6 +302,64 @@ pub fn cmd_line(pid: u32) -> Option<String> {
     (!line.is_empty()).then_some(line)
 }
 
+/// 从 /proc/<pid>/status 读取当前父进程 PID（PPid > 0）。
+/// 刚被 runc 拉起的容器进程在中间 fork 退出后会被内核收养到 containerd-shim，重读即可拿到真父进程
+pub fn ppid(pid: u32) -> Option<u32> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix("PPid:"))?
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|&p| p > 0)
+}
+
+/// 短命容器进程在读 /proc/<pid>/cgroup 前已退场，但父进程是宿主机上的 containerd-shim 或 runc exec 时，
+/// 从其命令行参数中的 64 位容器 ID 还原所属容器
+pub fn from_runtime_cmd_line(cmd_line: &str) -> Option<Arc<Container>> {
+    let mut args = cmd_line.split_whitespace();
+    let bin = args.next()?.rsplit('/').next()?;
+    let (runtime, id) = if bin.starts_with("containerd-shim") {
+        let mut namespace = None;
+        let mut id = None;
+        while let Some(arg) = args.next() {
+            match arg {
+                "-namespace" => namespace = args.next(),
+                "-id" => id = args.next(),
+                _ => {}
+            }
+        }
+        let runtime = match namespace {
+            Some("k8s.io") => "containerd",
+            _ => "docker",
+        };
+        (runtime, id.filter(|s| is_hex_id(s))?)
+    } else if bin == "runc" {
+        let rest: Vec<&str> = args.collect();
+        if !rest.contains(&"exec") {
+            return None;
+        }
+        let id = rest.last().copied().filter(|s| is_hex_id(s))?;
+        let runtime = if cmd_line.contains("docker") || cmd_line.contains("moby") {
+            "docker"
+        } else {
+            "containerd"
+        };
+        (runtime, id)
+    } else {
+        return None;
+    };
+    let uid = short(id);
+    let name = name_of(runtime, &uid);
+    Some(Arc::new(Container {
+        runtime,
+        uid,
+        name,
+        healthcheck: false,
+    }))
+}
+
 /// 进程启动时间：/proc/<pid>/stat 第 22 列（开机后的时钟滴答）加开机时间。
 /// 快照里早于 agent 启动的进程靠它算运行时长
 pub fn started(pid: u32) -> Option<SystemTime> {
@@ -446,5 +504,32 @@ mod tests {
         );
         assert_eq!(conf_value("[snap]\nhostname: x\n", "hostname"), None);
         assert_eq!(conf_value("hostname:\n", "hostname"), None);
+    }
+
+    #[test]
+    fn runtime_cmd_line_parsing() {
+        let docker_shim = format!(
+            "/usr/bin/containerd-shim-runc-v2 -namespace moby -id {ID} -address /run/containerd/containerd.sock"
+        );
+        let c = from_runtime_cmd_line(&docker_shim).unwrap();
+        assert_eq!(c.runtime, "docker");
+        assert_eq!(c.uid, "4f1c2a3b5d6e");
+
+        let k8s_shim = format!(
+            "containerd-shim-runc-v2 -namespace k8s.io -id {ID} -address /run/containerd/containerd.sock"
+        );
+        let c = from_runtime_cmd_line(&k8s_shim).unwrap();
+        assert_eq!(c.runtime, "containerd");
+        assert_eq!(c.uid, "4f1c2a3b5d6e");
+
+        let runc_exec = format!(
+            "runc --root /var/run/docker/runtime-runc/moby --systemd-cgroup exec --process /tmp/runc-process123 --detach {ID}"
+        );
+        let c = from_runtime_cmd_line(&runc_exec).unwrap();
+        assert_eq!(c.runtime, "docker");
+        assert_eq!(c.uid, "4f1c2a3b5d6e");
+
+        assert!(from_runtime_cmd_line("/usr/bin/sshd -D").is_none());
+        assert!(from_runtime_cmd_line("containerd-shim-runc-v2 -id short").is_none());
     }
 }

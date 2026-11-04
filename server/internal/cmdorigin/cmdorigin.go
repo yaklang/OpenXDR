@@ -43,12 +43,9 @@ WHERE id=$1 AND asset_id=$2 AND kind='exec' AND created_at <= $3::timestamptz + 
 		}
 		return &id, nil
 	}
-	cname, cuid, inner, ok := containerExec(raw)
-	if !ok {
-		return nil, nil
-	}
-	var id uuid.UUID
-	err := q.QueryRowContext(ctx, `SELECT id FROM commands
+	if cname, cuid, inner, ok := containerExec(raw); ok {
+		var id uuid.UUID
+		err := q.QueryRowContext(ctx, `SELECT id FROM commands
 WHERE asset_id=$1 AND kind='exec'
   AND created_at <= $2::timestamptz + interval '5 seconds'
   AND (completed_at IS NULL OR completed_at + interval '5 seconds' >= $2::timestamptz)
@@ -56,14 +53,60 @@ WHERE asset_id=$1 AND kind='exec'
   AND (($3 <> '' AND position($3 in cmd) > 0) OR ($4 <> '' AND position($4 in cmd) > 0))
   AND position($5 in cmd) > 0
 ORDER BY created_at DESC LIMIT 1`,
-		*asset, ts, cname, cuid, inner).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+			*asset, ts, cname, cuid, inner).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &id, nil
 	}
-	if err != nil {
-		return nil, err
+	if prog, token, ok := subshellExec(raw); ok {
+		var id uuid.UUID
+		err := q.QueryRowContext(ctx, `SELECT id FROM commands
+WHERE asset_id=$1 AND kind='exec'
+  AND created_at <= $2::timestamptz + interval '5 seconds'
+  AND (completed_at IS NULL OR completed_at + interval '5 seconds' >= $2::timestamptz)
+  AND position($3 in cmd) > 0
+  AND position($4 in cmd) > 0
+ORDER BY created_at DESC LIMIT 1`,
+			*asset, ts, prog, token).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &id, nil
 	}
-	return &id, nil
+	return nil, nil
+}
+
+// subshellExec 识别由 sh/bash 管道或 $(...) 命令替换 fork 出的未登记子 shell 拉起的子进程：
+// 特征是 parent_process 有 pid 但无 uid/name（父进程只 fork 未 exec），提取进程名与首个特征参数（≥6 字符）核对正在执行的指令文本
+func subshellExec(raw map[string]any) (prog, token string, ok bool) {
+	if raw["container"] != nil {
+		return "", "", false
+	}
+	p, _ := raw["process"].(map[string]any)
+	pp, _ := p["parent_process"].(map[string]any)
+	if pp == nil || pp["pid"] == nil || pp["uid"] != nil || pp["name"] != nil {
+		return "", "", false
+	}
+	prog, _ = p["name"].(string)
+	cmd, _ := p["cmd_line"].(string)
+	fields := strings.Fields(cmd)
+	if prog == "" || len(fields) < 2 {
+		return "", "", false
+	}
+	for _, f := range fields[1:] {
+		f = strings.Trim(f, `'"`)
+		if len(f) >= 6 {
+			return prog, f, true
+		}
+	}
+	return "", "", false
 }
 
 // containerExec 提取容器内进程的容器名、短 ID 与剥去外层 sh -c 后的命令行（至少 8 字符才算具体命令）

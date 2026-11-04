@@ -85,4 +85,19 @@ func TestOfVerifiesAgainstCommands(t *testing.T) {
 	if got, err := Of(ctx, sqlDB, inContainer, &host.ID, start.Add(20*time.Second)); err != nil || got != nil {
 		t.Fatalf("超出执行窗口不应归属，实际 %v %v", got, err)
 	}
+
+	// 管道 / $(...) 未登记子 shell 拉起的命令（parent_process 仅有 pid 无 uid/name）：按正在执行的指令文本归属
+	pipeCmd := db.Command.Create().SetKind("exec").SetAssetID(host.ID).
+		SetCmd(`for p in /proc/[0-9]*; do w=$(awk '/^write_bytes/{print int($2/1048576)}' "$p/io"); done | sort -rn`).
+		SetCreatedAt(start).SetCompletedAt(start.Add(3 * time.Second)).SetStatus("succeeded").SaveX(ctx)
+	inSubshell := map[string]any{
+		"process": map[string]any{
+			"name":           "awk",
+			"cmd_line":       "awk /^write_bytes/{print int($2/1048576)} /proc/2/io",
+			"parent_process": map[string]any{"pid": 2999351, "uid": nil},
+		},
+	}
+	if got, err := Of(ctx, sqlDB, inSubshell, &host.ID, start.Add(time.Second)); err != nil || got == nil || *got != pipeCmd.ID {
+		t.Fatalf("未登记子 shell 命令应归属到平台指令 %s，实际 %v %v", pipeCmd.ID, got, err)
+	}
 }

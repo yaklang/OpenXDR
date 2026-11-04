@@ -301,6 +301,21 @@ func (s *Stats) drafts(k key, whole *tally, alerts []*ent.Alert) []draft {
 			return out[:min(len(out), maxDraftsPerKey)]
 		}
 	}
+	for _, field := range []string{"file.path", imageField} {
+		var out []draft
+		for _, v := range entityTalliesBy(hits, field, tempDirPrefix) {
+			if v.t.counts[fp] >= s.MinCount {
+				concentrated = true
+			}
+			if s.qualifies(v.t) && utf8.RuneCountInString(v.value) <= 500 {
+				conds := []suppress.Condition{{Field: field, Op: "contains", Value: v.value}}
+				out = append(out, draft{key: k, conds: conds, t: v.t})
+			}
+		}
+		if len(out) > 0 {
+			return out[:min(len(out), maxDraftsPerKey)]
+		}
+	}
 	// 平台合成规则（xdr:new-process 这类 UEBA 首次出现检测）每条命中本来就是不同实体，
 	// 整条规则抑制等于关掉这台主机上的这项检测，不出草案
 	if concentrated || strings.HasPrefix(k.rule, "xdr:") || !s.qualifies(whole) {
@@ -317,6 +332,10 @@ type valueTally struct {
 // entityTallies 某字段每个取值的结论计数，按误报数从多到少。
 // 事件体读不到的命中不知道是哪个值：属实与未结案的从严算进每个值，误报的不算
 func entityTallies(hits []hit, field string) []valueTally {
+	return entityTalliesBy(hits, field, func(v string) (string, bool) { return v, true })
+}
+
+func entityTalliesBy(hits []hit, field string, extract func(string) (string, bool)) []valueTally {
 	byValue := map[string]*valueTally{}
 	var unknown []*ent.Incident
 	for _, h := range hits {
@@ -324,7 +343,11 @@ func entityTallies(hits []hit, field string) []valueTally {
 			unknown = append(unknown, h.inc)
 			continue
 		}
-		v, ok := suppress.Lookup(h.raw, field)
+		rawVal, ok := suppress.Lookup(h.raw, field)
+		if !ok || strings.TrimSpace(rawVal) == "" {
+			continue
+		}
+		v, ok := extract(rawVal)
 		if !ok || strings.TrimSpace(v) == "" {
 			continue
 		}
@@ -348,6 +371,26 @@ func entityTallies(hits []hit, field string) []valueTally {
 		return a > b || a == b && out[i].value < out[j].value
 	})
 	return out
+}
+
+// tempDirPrefix 提取临时构建目录的固定前缀（如 /tmp/go-build3516107513/b001/pkg.test → /tmp/go-build），
+// 供每次生成随机后缀的临时构建产物（go test 等）按 contains 收窄，避免退化成整条规则抑制
+func tempDirPrefix(path string) (string, bool) {
+	for _, root := range []string{"/tmp/", "/var/tmp/"} {
+		rest, ok := strings.CutPrefix(path, root)
+		if !ok {
+			continue
+		}
+		seg, _, hasSub := strings.Cut(rest, "/")
+		if !hasSub {
+			return "", false
+		}
+		trimmed := strings.TrimRight(seg, "0123456789")
+		if len(seg)-len(trimmed) >= 4 && len(trimmed) >= 4 {
+			return root + trimmed, true
+		}
+	}
+	return "", false
 }
 
 // sameImage 取值为 value 的命中是否都出自同一个进程映像
@@ -469,7 +512,11 @@ func reason(d draft, ev *schema.SuppressEvidence, days int) string {
 	if len(d.conds) > 0 {
 		parts := make([]string, len(d.conds))
 		for i, c := range d.conds {
-			parts[i] = c.Field + " = " + c.Value
+			op := " = "
+			if c.Op != "" && c.Op != "equals" {
+				op = " " + c.Op + " "
+			}
+			parts[i] = c.Field + op + c.Value
 		}
 		scope = "这台主机上 " + strings.Join(parts, " 且 ") + " 的命中"
 	}

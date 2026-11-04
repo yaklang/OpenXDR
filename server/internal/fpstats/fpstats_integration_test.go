@@ -104,8 +104,14 @@ func TestSweep(t *testing.T) {
 	db.Suppression.Create().SetRuleID("covered").SetAssetID(host.ID).SetStatus("active").
 		SetConditions([]suppress.Condition{{Field: "query.hostname", Op: "equals", Value: "updates.example.com"}}).SaveX(ctx)
 
-	if n, err := s.Sweep(ctx, time.Now()); err != nil || n != 3 || len(submitted) != 3 {
-		t.Fatalf("应生成 3 条草案，得到 %d %v", n, err)
+	// 临时构建目录每次带随机后缀（如 go test 的 /tmp/go-build<digits>/b001/*.test）：按前缀 contains 收窄
+	for i := 0; i < 5; i++ {
+		p := `/tmp/go-build1000` + string(rune('0'+i)) + `/b001/pkg.test`
+		f.incident("gotest", "false_positive", "alice", "", `{"process":{"file":{"path":"`+p+`"},"cmd_line":"`+p+` -test.paniconexit0"}}`)
+	}
+
+	if n, err := s.Sweep(ctx, time.Now()); err != nil || n != 4 || len(submitted) != 4 {
+		t.Fatalf("应生成 4 条草案，得到 %d %v", n, err)
 	}
 	for _, rule := range []string{"few", "real", "aiprop", "external", "ratio", "purged", "covered", "critical", "xdr:new-process"} {
 		if d := f.drafts(rule); len(d) != 0 {
@@ -144,6 +150,12 @@ func TestSweep(t *testing.T) {
 
 	if shell := f.drafts("shell"); len(shell) != 1 || len(shell[0].Conditions) != 0 {
 		t.Errorf("通用 shell 映像不该当实体收窄：%+v", shell)
+	}
+
+	gotest := f.drafts("gotest")
+	wantGoTest := []suppress.Condition{{Field: "process.file.path", Op: "contains", Value: "/tmp/go-build"}}
+	if len(gotest) != 1 || !subset(wantGoTest, gotest[0].Conditions) || len(gotest[0].Conditions) != 1 {
+		t.Errorf("临时构建目录应按前缀 contains 收窄：%+v", gotest)
 	}
 
 	// 草案未批准不生效

@@ -222,6 +222,14 @@ impl ProcessRegistry {
         self.guids.get(&pid).and_then(|e| e.command.clone())
     }
 
+    /// 当前注册表里是否有已由 agent 直接子进程核验登记的同 ID 平台指令在运行
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn has_command(&self, cmd: &str) -> bool {
+        self.guids
+            .values()
+            .any(|e| e.command.as_deref() == Some(cmd))
+    }
+
     /// 进程退出后删掉登记。不删的话表满时会按登记先后清理，最先被清掉的恰恰是
     /// 早于 agent 启动的长驻服务，它们之后的网络连接就挂不回进程树了
     pub fn forget(&mut self, pid: u32) {
