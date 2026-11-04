@@ -3,19 +3,81 @@
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 0.x 期间接口、配置与数据库结构仍可能不兼容变更，升级前请看对应条目。
 
-## [未发布]
+## [0.4.0] - 2026-11-05
 
-### 自主响应与指令签名（见 `docs/autonomous-response-design.md`）
+从这一版起，OpenXDR 是一个**自治**的平台：从察觉到处置自己走完，确定性的攻击信号秒级遏制，不等研判、不等人；人在事后审阅、一键撤回。
+同时把 OpenXDR 自己当成最高等级的资产来保护——能自主动手的安全平台，本身就是攻击者最想拿下的目标。
+本版的设计与验收都来自 2026-11 一次真实的内网跳板攻击复盘，见 [跨主机攻击的关联与升级](docs/attack-campaign-design.md)
+与 [自主响应与自身防护](docs/autonomous-response-design.md)。
 
-- 响应指令端到端签名（`cmdsign`）：server 用 `HOST_CREDENTIAL_KEY` 派生的 Ed25519 私钥对每条下发指令签名，载荷覆盖
-  `command_id`、`agent_id`、`issued_at` 与动作参数；agent 首次收到有效签名时钉住公钥（TOFU），拒收未签名、过期、跨主机重绑或被篡改的指令。
-- 自主响应引擎（`containment`）：快慢双路径协同处置——
-  - 快路径（确定性规则秒级响应）：内网横向喷洒（`xdr:internal-lateral-spray`）自动隔离源端、高置信情报命中自动封禁对端 IP（`BLOCK_IP`）并结束进程、暴力破解自动封禁来源 IP、反弹 shell 与挖矿自动结束进程、恶意落盘自动隔离文件（`QUARANTINE_FILE`）。
-  - 容器级精准隔离（`ISOLATE_CONTAINER` / `UNISOLATE_CONTAINER`）：横向喷洒来自容器（事件带 `container.uid`）时，agent 只进入该容器的网络命名空间挂载 `inet openxdr_isolation` 断网，不切断宿主机与同机其他容器；宿主机自身喷洒照旧隔离主机。
-  - 数据库服务拉起 shell 检测与遏制：新增规则 `lnx_database_spawns_shell.yml`（`postgres` / `mysqld` / `mariadbd` / `redis-server` / `mongod` 拉起 shell，级别 critical），快路径立即结束该 shell 进程并封禁触发它的入站对端 IP，不杀数据库主进程；agent 在父进程未登记时现场读取 `/proc/<ppid>` 补齐父进程名、路径与命令行，覆盖 `COPY ... FROM PROGRAM` 等由 fork 后端拉起子进程的情形。
-  - 慢路径（AI 研判分级处置）：研判结论新增 `response_tier`（`observe` / `contain` / `isolate`），高置信恶意事件自动执行对应级别的遏制或隔离。
-  - 租约、自动解封与熔断：所有自动遏制动作均带 TTL 租约，到期自动下发解除指令（`UNBLOCK_IP` / `RESTORE_FILE` / `UNISOLATE` / `UNISOLATE_CONTAINER`）；联动平台指令、已知自动化、容器健康检查与关键资产保护豁免，设全局熔断器防级联误封；控制台新增「自主响应」页面，支持查看当前生效遏制、熔断状态与人工一键解除。
+### 本版要点 / Highlights
+
+- **自主响应**：内网横向喷洒、爆破得手、数据库拉起 shell、高级别情报命中，秒级自动遏制——
+  隔离攻击容器或实验机、封锁来源、锁定被攻破的账号、结束恶意进程、隔离恶意文件；租约到期由 AI 复核，带熔断与一键撤回。
+  *Autonomous containment of lateral spray, brute-force success, database-spawned shells and high-severity intel hits,
+  with per-host response tiers assigned by AI, leases reviewed by AI at expiry, a fuse and one-click rollback.*
+- **按角色与处置等级下手**：遏制攻击来源、受害方只做外科手术式处置；AI 给每台资产定实验 / 生产 / 核心三档等级。
+  *Contain the source, operate surgically on victims; every asset gets a lab / production / core tier.*
+- **平台自身防护**：响应指令端到端签名、agent 安装包离线发布签名、审计日志 HMAC 链、控制面配置与节点 agent 自我监控、
+  控制面端口收口。*Signed commands, offline-signed agent releases, a sealed audit chain and self-monitoring of the control plane.*
+- **跨主机攻击的关联与升级**：按资产 + 容器分桶、受害方横向证据、内网喷洒合成告警、研判明细抽样、通知看门狗。
+  *Cross-host campaign correlation and escalation that no longer splits one attack into many "suspicious" incidents.*
+- **AI 全自动执行**：AI 发起的高风险命令与抑制草案由 AI 审计员当场评审，不再整夜等人点批准；硬拒绝清单兜底。
+  *AI-initiated high-risk commands and suppression drafts are reviewed by an AI auditor instead of waiting for a human.*
+
+### 升级须知
+
+- **开了 `RESPONSE_ENABLED` 必须配 `COMMAND_SIGNING_KEY_FILE`**，否则 server 拒绝启动。一行安装脚本会自动生成 `certs/command-signing.key`；
+  自己编排的用 `gencerts` 生成（已有则沿用），多节点必须是同一把。**先升 server 再升 agent**：新 agent 只执行签名指令，
+  首次注册时固定公钥，之后不换，私钥要和 CA 一起备份。
+- 数据库结构有变化，启动时自动建：新表 `containments`；`assets` 加 `response_tier`、`response_tier_reason`，`zones` 加 `response_tier`，
+  `audit_logs` 加 `seq`、`seal`，`lateral_evidence` 加 `src_ip`；另有下文各节提到的列与索引。
+- 自主响应默认关闭（`CONTAINMENT_ENABLED=false`）；建议先用 `CONTAINMENT_SCOPE=lab` 只处置涉及实验等级主机的攻击，观察一段时间再放开。
+- HA 部署：渲染新增必填 `PATRONI_RESTAPI_PASSWORD`；`guard.sh` 多管 NATS 6222 与 IPv6，重装 `openxdr-guard@` 后重启生效；
+  编排新增 `SELFWATCH_PATRONI_URL`。详见「安全：HA 部署模板加固」。
+- 已有库的关键词检索索引不在启动时现建，见「存储」；手工开通 Pi 查询身份的重跑 `deploy/pi-query/group-views.sql`。
+- 沙箱模式下 sandboxd 的 `SANDBOX_MAX_MINUTES` 要不小于新的 Pi 运行期限，见「AI 全自动执行」。
+
+### 自主响应（见 [自主响应与自身防护](docs/autonomous-response-design.md)）
+
+- 处置引擎（`internal/containment`，单活，每 5 秒一轮）：确定性信号命中后直接遏制，不等研判与人工。
+  平台指令、已知自动化引起的告警不处置。
+
+  | 信号 | 处置 |
+  |---|---|
+  | 内网横向喷洒 `xdr:internal-lateral-spray` | 认出发起攻击的容器就只隔离容器；实验等级的主机认不出容器才隔离整机；受害方封锁实际看到的来源地址 |
+  | 爆破得手 `xdr:bruteforce-success` | 封锁登录来源、锁定被攻破的账号（内置账号与核心主机不锁）；来源是纳管主机时按喷洒同样遏制 |
+  | 数据库拉起 shell（新规则 `lnx_database_spawns_shell`） | 结束该进程；从 PostgreSQL 后端进程标题取出客户端地址，在数据库主机上封锁 |
+  | 情报命中 IP / 域名 / 文件哈希（级别 ≥ 4） | 封锁；本机主动外连时结束进程（入站命中不碰本机服务）；进程自身哈希命中时隔离文件 |
+
+- 处置等级：资产分实验 / 生产 / 核心三档，AI 资产标注时一并给出（重要程度高于 2 却给实验的按生产处理），人工可改且锁定，
+  区域可整体指定；运行 OpenXDR server 的资产始终是核心。实验可以隔离整机，生产不隔离，核心只封锁与结束确认恶意的进程，
+  两台核心之间不互封。新接口 `PUT /api/assets/{id}/response-tier`，区域增删改带 `responseTier`。
+- 容器隔离：agent 新增 `ISOLATE_CONTAINER` / `UNISOLATE_CONTAINER`，进容器自己的网络命名空间丢弃全部流量，宿主机与其他容器不受影响；
+  用宿主机网络的容器拒绝执行。
+- 租约：封锁与隔离按租约生效，新证据续期；到期配了模型先由 AI 复核（只能解除或续期，出错按续期，最长 7 天），没配模型直接解除。
+  结束进程、隔离文件、锁定账号一次性执行，不自动恢复。原地 exec 的进程（`sh -c` 变成目标程序）按 exec 后的身份结束。
+- 熔断：一小时内生效的处置超过 `CONTAINMENT_MAX_PER_HOUR`（默认 10）、或一个组同时隔离超过纳管主机的 20% 就只记录不执行。
+  每个决定（包括没执行的）都落 `containments` 与审计。
+- 控制台新增「自主响应」页面：开关、范围与熔断状态，决策记录与指令结果，人工解除或恢复（解除之前的证据不再触发同一处置），处置策略矩阵。
+  新接口 `GET /api/containments`、`GET /api/containments/status`、`POST /api/containments/{id}/lift`。
+- 配置：`CONTAINMENT_ENABLED`（默认关）、`CONTAINMENT_SCOPE`（`lab` / `all`）、`CONTAINMENT_TTL_HOURS`、`CONTAINMENT_MAX_PER_HOUR`。
+- agent 补全父进程：父进程不在注册表里但还活着时（PostgreSQL、sshd 这类 fork 不 exec 的后端），启动事件现场从 `/proc` 补上名字、路径与命令行，
+  按父进程判断的规则才认得出 `COPY ... FROM PROGRAM`。
 - 指令归属与健康检查判定收口：server `cmdorigin` 严格按事件携带的 `platform_command.uid` 核对平台指令，不再按命令子串模糊归属无标事件；agent 只对自身直接子进程读取环境区的 `OPENXDR_COMMAND_ID`（子 shell 仅沿 `/proc/<ppid>/status` 父进程链继承已登记指令），容器健康检查严格要求命令行与容器配置的 `HEALTHCHECK` 逐字一致，拿不准的一律照常告警。
+
+### 平台自身防护
+
+- 响应指令端到端签名：每条指令装进绑定目标 agent、一小时有效的 Ed25519 签名信封（`COMMAND_SIGNING_KEY_FILE`）。
+  agent 首次注册固定公钥，只执行验签通过的指令；数据库、跨节点 NATS 或单条投递链路被人摸到，都伪造不出 agent 肯执行的指令。
+- agent 安装包发布签名：`server/cmd/signrelease` 用离线私钥给安装包签名（`<安装包>.sig`），server 随升级指示下发、自己不持有私钥；
+  构建时设 `OPENXDR_RELEASE_PUBKEY` 的 agent 下载前先验签，拿下 server 节点也推不了恶意 agent。开源默认构建不嵌公钥，行为不变。
+  见 [主机接入](docs/host-enrollment.md#安装包发布签名)。
+- 审计防篡改（`internal/auditchain`）：审计日志事后封存成 HMAC 链，密钥由指令签名私钥派生、不在库里；每 10 分钟全量校验，
+  断链出 `xdr:audit-tamper`（5 级）。最新编号导出为 `openxdr_audit_sealed_seq`，HA 告警规则 `OpenXDRAuditChainShrunk` 在它倒退时报警；
+  平台 admin 可用 `GET /api/audit/chain` 手动核对。
+- 自身监控（`internal/selfwatch`）：Patroni 动态配置（DCS）被改出 `xdr:control-plane-change`（pg_hba、`*_command`、预加载库等 5 级），
+  运行 OpenXDR server 的节点 agent 停止上报出 `xdr:core-agent-silent`（4 级）。HA 编排配 `SELFWATCH_PATRONI_URL`。
 
 ### 安全：HA 部署模板加固
 
@@ -29,7 +91,8 @@
   删掉 Patroni 4 已不支持的 `bootstrap.users` 与 `bootstrap.pg_hba`。
 - patroni 容器不再收 `OPENXDR_PASSWORD`、`REPLICATION_PASSWORD` 环境变量：初始化读渲染出的
   `runtime/openxdr-db-password`（0400），replicator 由 Patroni 创建；只挂 etcd 所需的三个证书文件。
-- 新增 `deploy/ha/guard.sh` 与 `openxdr-guard@.service`：节点 5432 / 8008、witness 2379 按来源放行。
+- 新增 `deploy/ha/guard.sh` 与 `openxdr-guard@.service`：节点 5432 / 8008 / 6222、witness 2379 / 6222 按来源放行，
+  IPv4 与 IPv6 各一条（etcd、NATS 监听 `0.0.0.0` 实际是双栈）。NATS 集群路由 6222 拿到口令就能以集群成员身份读写整个事件流，不能只靠口令。
 - **升级须知**：渲染需新增 `PATRONI_RESTAPI_PASSWORD`；重新渲染后先跑 `prepare-runtime.sh` 再重建 patroni，
   逐节点进行；已手工装过防火墙的环境按 README 迁移，避免两套链并存。
 
@@ -565,6 +628,7 @@
 - 跨宿主机高可用部署（Patroni + 三节点 JetStream + Keepalived VIP）与滚动发布脚本。
 - Web 控制台：中英双语，AI 助手为主入口，命令面板。
 
+[0.4.0]: https://github.com/yaklang/OpenXDR/releases/tag/v0.4.0
 [0.3.0]: https://github.com/yaklang/OpenXDR/releases/tag/v0.3.0
 [0.2.1]: https://github.com/yaklang/OpenXDR/releases/tag/v0.2.1
 [0.2.0]: https://github.com/yaklang/OpenXDR/releases/tag/v0.2.0

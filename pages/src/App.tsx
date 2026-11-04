@@ -7,6 +7,7 @@ import { Features } from "@/components/story/features";
 import { Funnel } from "@/components/story/funnel";
 import { Learn } from "@/components/story/learn";
 import { Onboard } from "@/components/story/onboard";
+import { Respond } from "@/components/story/respond";
 import { Surface } from "@/components/story/surface";
 import { useLocale } from "@/i18n";
 
@@ -27,6 +28,7 @@ export default function App() {
         <Onboard />
         <Funnel />
         <Assistant />
+        <Respond />
         <Surface />
         <Learn />
         <Features />

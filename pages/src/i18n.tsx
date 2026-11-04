@@ -11,14 +11,14 @@ export type Locale = "en" | "zh-CN";
 
 const pageMetadata = {
   en: {
-    title: "OpenXDR - Onboarded means operated and secured",
+    title: "OpenXDR - Open-source autonomous XDR",
     description:
-      "Open-source XDR. Install the agent, pick a group, and detection, triage, daily checkups and response fall into place. The risky part waits for your nod.",
+      "Open-source autonomous XDR. Install the agent, pick a group, and it notices, judges and acts on its own — every step with its reasons, every action reversible.",
   },
   "zh-CN": {
-    title: "OpenXDR - 纳管即运维，纳管即安全",
+    title: "OpenXDR - 开源的自治 XDR",
     description:
-      "开源 XDR。装上 agent，分好组，检测、降噪、巡检与处置一次到位。真正危险的那一步，等你点头。",
+      "开源的自治 XDR。装上 agent，分好组，它自己察觉、研判、处置——每一步都留下理由，每一次处置都能撤回。",
   },
 } satisfies Record<Locale, { title: string; description: string }>;
 

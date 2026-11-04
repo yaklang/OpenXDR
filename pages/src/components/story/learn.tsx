@@ -101,7 +101,7 @@ export function Learn() {
   const card = t.cards[step];
   const last = step === LEVELS.length - 1;
 
-  const head = <ChapterHead index="05" kicker={t.kicker} title={t.title} body={t.body} />;
+  const head = <ChapterHead index="06" kicker={t.kicker} title={t.title} body={t.body} />;
 
   const demo = (
     <Console title={t.console} badge={<DemoBadge label={t.demo} />}>

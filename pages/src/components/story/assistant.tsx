@@ -23,10 +23,10 @@ const COPY = {
         <span className="text-neutral-500">它就去做。</span>
       </>
     ),
-    body: "执行命令、查数据、记待办、写报告，都在组内主机上完成。\n到了危险的一步，它会停下来，等你。",
+    body: "执行命令、查数据、记待办、写报告，都在组内主机上完成。\n到了危险的一步，审计员先把关；碰不得的事，它一律不做。",
     points: [
       "寻常命令，直接执行，不用每条都点批准",
-      "高风险命令先暂停，再通知管理员。不是拒绝，所以它不必绕路",
+      "高风险命令先送审计员：AI 发起的由 AI 审计员当场裁决，整夜也不会卡住；人发起的等组管理员",
       "对话在服务端运行。关掉浏览器，它也不会停",
       "它在隔离沙箱里干活：手里没有任何凭据，只能经平台受控的命令操作，查数据也只用本组的只读视图",
     ],
@@ -36,7 +36,7 @@ const COPY = {
     demo: "演示",
     send: "巡检一下生产组：磁盘、异常服务、可疑账户，能修的直接修。",
     sendLabel: "发送",
-    gate: "命中高风险名单，已暂停，等待组管理员批准（已通知）",
+    gate: "命中高风险名单，送审计员评审（这里由你来当审计员）",
     approve: "批准",
     reject: "拒绝",
     approved: "已批准 · 你",
@@ -74,10 +74,10 @@ const COPY = {
         <span className="text-neutral-500">It gets it done.</span>
       </>
     ),
-    body: "Run commands, query data, track findings, write reports — all on the group's hosts.\nAt the risky step, it stops and waits for you.",
+    body: "Run commands, query data, track findings, write reports — all on the group's hosts.\nAt a risky step, an auditor rules first; the things it must never do, it never does.",
     points: [
       "Routine commands just run. No approving every line",
-      "High-risk commands pause and notify an admin. Not denied, so there's nothing to work around",
+      "High-risk commands go to an auditor: the AI auditor rules on the AI's own commands on the spot, so nothing stalls overnight; a person's commands wait for a group admin",
       "Conversations run on the server. Close the browser; the work goes on",
       "It works in an isolated sandbox: no credentials of its own, only platform-controlled commands, and read-only views of its own group's data",
     ],
@@ -87,7 +87,7 @@ const COPY = {
     demo: "Demo",
     send: "Inspect the prod group: disks, failing services, suspicious accounts. Fix what you can.",
     sendLabel: "Send",
-    gate: "On the high-risk list — paused, waiting for a group admin (notified)",
+    gate: "On the high-risk list — sent to the auditor (here, that's you)",
     approve: "Approve",
     reject: "Reject",
     approved: "Approved · you",

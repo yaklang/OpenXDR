@@ -38,22 +38,22 @@ export function Hero24() {
   const copy =
     locale === "zh-CN"
       ? {
-          badge: "开源 XDR",
-          headline: "纳管即运维，",
-          headlineAccent: "纳管即安全。",
+          badge: "开源 · 自治 XDR",
+          headline: "它自己值守，",
+          headlineAccent: "你只需审阅。",
           description:
-            "装上 agent，分好组，剩下的交给它。\n检测、降噪、巡检、处置，一次到位。\n真正危险的那一步，等你点头。",
+            "装上 agent，分好组，剩下的交给它。\n察觉、研判、处置，它自己走完。\n每一步都留下理由，随时可以推翻。",
           github: "在 GitHub 查看",
           pipeline: "看看它怎么工作",
           evidence: "一个平台，全都看见",
           partners: ["端点", "流量", "日志", "AI", "审计"],
         }
       : {
-          badge: "Open-source XDR",
-          headline: "Onboarded means operated.",
-          headlineAccent: "Onboarded means secured.",
+          badge: "Open-source · Autonomous XDR",
+          headline: "It keeps the watch.",
+          headlineAccent: "You review.",
           description:
-            "Install the agent. Pick a group. That's it.\nDetection, triage, daily checkups and response, all in place.\nAnd the risky part waits for your nod.",
+            "Install the agent. Pick a group. That's it.\nIt notices, judges and acts — all the way through.\nEvery step leaves its reasons. Overrule it any time.",
           github: "View on GitHub",
           pipeline: "See how it works",
           evidence: "One platform. Everything in view.",

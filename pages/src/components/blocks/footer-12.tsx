@@ -25,7 +25,7 @@ export default function Footer12() {
     locale === "zh-CN"
       ? {
           summary:
-            "开源 XDR：纳管即运维，纳管即安全。",
+            "开源的自治 XDR：它自己值守，你只需审阅。",
           copyright: "© 2026 OpenXDR 贡献者",
           navGroups: [
             {
@@ -34,6 +34,7 @@ export default function Footer12() {
                 { label: "接入", href: "#onboard" },
                 { label: "安全", href: "#secure" },
                 { label: "运维", href: "#operate" },
+                { label: "自治", href: "#respond" },
                 { label: "资产", href: "#surface" },
                 { label: "开始", href: "#start" },
               ],
@@ -67,7 +68,7 @@ export default function Footer12() {
         }
       : {
           summary:
-            "Open-source XDR: onboarded means operated, onboarded means secured.",
+            "Open-source autonomous XDR: it keeps the watch, you review.",
           copyright: "© 2026 OpenXDR contributors",
           navGroups: [
             {
@@ -76,6 +77,7 @@ export default function Footer12() {
                 { label: "Onboard", href: "#onboard" },
                 { label: "Secure", href: "#secure" },
                 { label: "Operate", href: "#operate" },
+                { label: "Autonomy", href: "#respond" },
                 { label: "Assets", href: "#surface" },
                 { label: "Start", href: "#start" },
               ],
