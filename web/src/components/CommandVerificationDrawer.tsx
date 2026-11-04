@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { Alert, App, Button, Card, Descriptions, Drawer, Empty, Form, Input, Pagination, Select, Skeleton, Space, Typography } from 'antd'
+import { Alert, App, Button, Card, Descriptions, Drawer, Empty, Form, Input, Pagination, Select, Skeleton, Space, Tag, Typography } from 'antd'
 import { useState } from 'react'
-import { fetchCommandVerification, fetchCommandVerifications, recordCommandVerification, type CommandRow, type CommandVerificationInput } from '../api'
+import { fetchCommandVerification, fetchCommandVerifications, recordCommandVerification, type CommandRow, type CommandVerificationInput, type VerificationEvidence } from '../api'
 import { useSession } from '../app/session'
 import { useI18n, type MsgKey } from '../i18n'
 import { CommandStatusTag, commandKind, errText, fmtTime } from './format'
@@ -9,6 +9,26 @@ import { LoadError } from './LoadError'
 
 const outcomes: Record<CommandVerificationInput['outcome'], MsgKey> = {
   effective: 'verificationEffective', ineffective: 'verificationIneffective', inconclusive: 'verificationInconclusive',
+}
+const sources: Record<string, MsgKey> = {
+  human: 'verificationSourceHuman', system: 'verificationSourceSystem', ai: 'verificationSourceAI',
+}
+const methods: Record<string, MsgKey> = {
+  manual_review: 'verificationMethodManual', telemetry_post_action: 'verificationMethodTelemetry',
+  exec_probe: 'verificationMethodProbe', receipt_correlation: 'verificationMethodReceipt',
+  context_only: 'verificationMethodContext', ai_investigation: 'verificationMethodAI',
+}
+
+function EvidenceList({ title, items }: { title: string; items: VerificationEvidence[] }) {
+  if (!items.length) return null
+  return <Space orientation="vertical" style={{ width: '100%' }}>
+    <Typography.Text strong>{title}</Typography.Text>
+    {items.map(e => <div key={e.id} style={{ width: '100%' }}>
+      <Typography.Text copyable>{e.id}</Typography.Text>
+      <div>{fmtTime(e.ts)} · {e.source} · {e.classUid}</div>
+      <pre className="json-block">{JSON.stringify(e.raw, null, 2)}</pre>
+    </div>)}
+  </Space>
 }
 
 function Evidence({ commandId, id, scope }: { commandId: string; id: string; scope: string }) {
@@ -18,11 +38,8 @@ function Evidence({ commandId, id, scope }: { commandId: string; id: string; sco
   if (query.isError) return <LoadError error={query.error} onRetry={() => query.refetch()} />
   return <Space orientation="vertical" style={{ width: '100%' }}>
     {!query.data.evidence.length && <Typography.Text type="secondary">{t('verificationNoEvidence')}</Typography.Text>}
-    {query.data.evidence.map(e => <div key={e.id} style={{ width: '100%' }}>
-      <Typography.Text copyable>{e.id}</Typography.Text>
-      <div>{fmtTime(e.ts)} · {e.source} · {e.classUid}</div>
-      <pre className="json-block">{JSON.stringify(e.raw, null, 2)}</pre>
-    </div>)}
+    <EvidenceList title={t('verificationAfterEvidence')} items={query.data.evidence} />
+    <EvidenceList title={t('verificationBeforeContext')} items={query.data.context ?? []} />
   </Space>
 }
 
@@ -83,7 +100,10 @@ export function CommandVerificationDrawer({ command, canEdit, onClose }: { comma
         {!query.data.items.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('verificationEmpty')} />}
         {query.data.items.slice((currentPage - 1) * 10, currentPage * 10).map(row => <Card key={row.id} size="small" title={t(outcomes[row.outcome])}>
           <Descriptions column={1} size="small" items={[
+            { key: 'source', label: t('verificationSource'), children: <Tag color={row.source === 'ai' ? 'purple' : row.source === 'system' ? 'blue' : undefined}>{t(sources[row.source ?? 'human'] ?? 'verificationSourceUnknown')}</Tag> },
             { key: 'reviewer', label: t('verificationReviewer'), children: row.reviewer },
+            ...(row.method ? [{ key: 'method', label: t('verificationMethod'), children: methods[row.method] ? t(methods[row.method]) : row.method }] : []),
+            ...(row.sessionId ? [{ key: 'session', label: t('verificationSession'), children: <Typography.Text copyable>{row.sessionId}</Typography.Text> }] : []),
             { key: 'time', label: t('thTime'), children: fmtTime(row.createdAt) },
             { key: 'status', label: t('verificationReceipt'), children: <CommandStatusTag value={row.commandStatus} /> },
             { key: 'expected', label: t('verificationExpected'), children: <span style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.expected}</span> },

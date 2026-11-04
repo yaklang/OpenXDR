@@ -318,6 +318,14 @@ export interface CommandVerificationInput {
   observed: string
   eventIds: string[]
 }
+export interface VerificationEvidence {
+  id: string
+  ts: string
+  source: string
+  classUid: number
+  processGuid?: string
+  raw?: unknown
+}
 export interface CommandVerification extends Omit<CommandVerificationInput, 'eventIds'> {
   id: string
   commandId: string
@@ -325,7 +333,11 @@ export interface CommandVerification extends Omit<CommandVerificationInput, 'eve
   createdAt: string
   reviewer: string
   commandStatus: string
-  evidence: { id: string; ts: string; source: string; classUid: number; raw?: unknown }[]
+  source?: 'human' | 'system' | 'ai'
+  method?: string
+  sessionId?: string
+  evidence: VerificationEvidence[]
+  context?: VerificationEvidence[]
 }
 export const fetchCommandVerifications = (id: string) =>
   get<{ items: CommandVerification[]; truncated: boolean }>(`/api/commands/${id}/verifications`)
