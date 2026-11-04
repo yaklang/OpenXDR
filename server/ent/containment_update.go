@@ -336,6 +336,26 @@ func (_u *ContainmentUpdate) ClearEndedAt() *ContainmentUpdate {
 	return _u
 }
 
+// SetLiftedBy sets the "lifted_by" field.
+func (_u *ContainmentUpdate) SetLiftedBy(v string) *ContainmentUpdate {
+	_u.mutation.SetLiftedBy(v)
+	return _u
+}
+
+// SetNillableLiftedBy sets the "lifted_by" field if the given value is not nil.
+func (_u *ContainmentUpdate) SetNillableLiftedBy(v *string) *ContainmentUpdate {
+	if v != nil {
+		_u.SetLiftedBy(*v)
+	}
+	return _u
+}
+
+// ClearLiftedBy clears the value of the "lifted_by" field.
+func (_u *ContainmentUpdate) ClearLiftedBy() *ContainmentUpdate {
+	_u.mutation.ClearLiftedBy()
+	return _u
+}
+
 // Mutation returns the ContainmentMutation object of the builder.
 func (_u *ContainmentUpdate) Mutation() *ContainmentMutation {
 	return _u.mutation
@@ -475,6 +495,12 @@ func (_u *ContainmentUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.EndedAtCleared() {
 		_spec.ClearField(containment.FieldEndedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.LiftedBy(); ok {
+		_spec.SetField(containment.FieldLiftedBy, field.TypeString, value)
+	}
+	if _u.mutation.LiftedByCleared() {
+		_spec.ClearField(containment.FieldLiftedBy, field.TypeString)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -803,6 +829,26 @@ func (_u *ContainmentUpdateOne) ClearEndedAt() *ContainmentUpdateOne {
 	return _u
 }
 
+// SetLiftedBy sets the "lifted_by" field.
+func (_u *ContainmentUpdateOne) SetLiftedBy(v string) *ContainmentUpdateOne {
+	_u.mutation.SetLiftedBy(v)
+	return _u
+}
+
+// SetNillableLiftedBy sets the "lifted_by" field if the given value is not nil.
+func (_u *ContainmentUpdateOne) SetNillableLiftedBy(v *string) *ContainmentUpdateOne {
+	if v != nil {
+		_u.SetLiftedBy(*v)
+	}
+	return _u
+}
+
+// ClearLiftedBy clears the value of the "lifted_by" field.
+func (_u *ContainmentUpdateOne) ClearLiftedBy() *ContainmentUpdateOne {
+	_u.mutation.ClearLiftedBy()
+	return _u
+}
+
 // Mutation returns the ContainmentMutation object of the builder.
 func (_u *ContainmentUpdateOne) Mutation() *ContainmentMutation {
 	return _u.mutation
@@ -972,6 +1018,12 @@ func (_u *ContainmentUpdateOne) sqlSave(ctx context.Context) (_node *Containment
 	}
 	if _u.mutation.EndedAtCleared() {
 		_spec.ClearField(containment.FieldEndedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.LiftedBy(); ok {
+		_spec.SetField(containment.FieldLiftedBy, field.TypeString, value)
+	}
+	if _u.mutation.LiftedByCleared() {
+		_spec.ClearField(containment.FieldLiftedBy, field.TypeString)
 	}
 	_node = &Containment{config: _u.config}
 	_spec.Assign = _node.assignValues

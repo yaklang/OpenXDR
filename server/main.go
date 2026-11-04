@@ -116,7 +116,7 @@ func main() {
 	hub.Signer = commandSigner(hub.Enabled)
 	allowlist := isolationAllowlist()
 	triageEngine := startTriage(ctx, db, client, rules, llmFor, hub, allowlist)
-	startContainment(ctx, db, client, hub, allowlist)
+	containmentEngine := startContainment(ctx, db, client, hub, allowlist)
 	notifySettings, webhook := startNotify(ctx, db, client, rules, triageEngine.LLM.Enabled)
 	silentAfter := time.Duration(getenvInt("AGENT_SILENT_MINUTES", 10)) * time.Minute
 	startLiveness(ctx, db, client, webhook, silentAfter)
@@ -157,6 +157,8 @@ func main() {
 	registerSQLRoutes(routes, db)
 	routes.Handle("GET /api/trusted-sources/candidates", api.TrustedCandidates(client, db))
 	routes.Handle("GET /api/notify/health", api.NotifyHealth(client, notifySettings))
+	routes.Handle("/api/containments", api.Containments(client, hub, containmentEngine))
+	routes.Handle("/api/containments/", api.Containments(client, hub, containmentEngine))
 	registerHostRoutes(ctx, routes, db, client, rules, credentialVault, enrollSvc, conf)
 	registerSettingsRoutes(routes, db, client, credentialVault, notifySettings, webhook, aiConf, intelFeeds, enrollSvc, dists)
 	// 冷归档读取默认关闭：EVENT_ARCHIVE_READ=1 才把连接交给 /api/events 与问 AI 入口，关着时行为与改动前一致
@@ -416,13 +418,13 @@ func startTriage(ctx context.Context, db *sql.DB, client *ent.Client, rules sigm
 }
 
 // startContainment 自主响应：确定性信号命中后按角色与处置等级直接遏制，显式开启才运行，仍受 RESPONSE_ENABLED 约束
-func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *response.Hub, allowlist []string) {
+func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *response.Hub, allowlist []string) *containment.Engine {
 	if os.Getenv("CONTAINMENT_ENABLED") != "true" {
-		return
+		return nil
 	}
 	if !hub.Enabled {
 		slog.Warn("CONTAINMENT_ENABLED 需要 RESPONSE_ENABLED=true，自主响应不启动")
-		return
+		return nil
 	}
 	scope := getenv("CONTAINMENT_SCOPE", containment.ScopeLab)
 	if scope != containment.ScopeLab && scope != containment.ScopeAll {
@@ -437,6 +439,7 @@ func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *
 	}
 	slog.Info("自主响应已开启", "scope", scope, "ttl", engine.TTL, "maxPerHour", engine.MaxPerHour)
 	go cluster.RunLeader(ctx, db, "containment", engine.Run)
+	return engine
 }
 
 // startNotify 推送目标以控制台保存的为准，环境变量只是首次部署的默认值

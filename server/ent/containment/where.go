@@ -135,6 +135,11 @@ func EndedAt(v time.Time) predicate.Containment {
 	return predicate.Containment(sql.FieldEQ(FieldEndedAt, v))
 }
 
+// LiftedBy applies equality check predicate on the "lifted_by" field. It's identical to LiftedByEQ.
+func LiftedBy(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldEQ(FieldLiftedBy, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.Containment {
 	return predicate.Containment(sql.FieldEQ(FieldCreatedAt, v))
@@ -1018,6 +1023,81 @@ func EndedAtIsNil() predicate.Containment {
 // EndedAtNotNil applies the NotNil predicate on the "ended_at" field.
 func EndedAtNotNil() predicate.Containment {
 	return predicate.Containment(sql.FieldNotNull(FieldEndedAt))
+}
+
+// LiftedByEQ applies the EQ predicate on the "lifted_by" field.
+func LiftedByEQ(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldEQ(FieldLiftedBy, v))
+}
+
+// LiftedByNEQ applies the NEQ predicate on the "lifted_by" field.
+func LiftedByNEQ(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldNEQ(FieldLiftedBy, v))
+}
+
+// LiftedByIn applies the In predicate on the "lifted_by" field.
+func LiftedByIn(vs ...string) predicate.Containment {
+	return predicate.Containment(sql.FieldIn(FieldLiftedBy, vs...))
+}
+
+// LiftedByNotIn applies the NotIn predicate on the "lifted_by" field.
+func LiftedByNotIn(vs ...string) predicate.Containment {
+	return predicate.Containment(sql.FieldNotIn(FieldLiftedBy, vs...))
+}
+
+// LiftedByGT applies the GT predicate on the "lifted_by" field.
+func LiftedByGT(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldGT(FieldLiftedBy, v))
+}
+
+// LiftedByGTE applies the GTE predicate on the "lifted_by" field.
+func LiftedByGTE(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldGTE(FieldLiftedBy, v))
+}
+
+// LiftedByLT applies the LT predicate on the "lifted_by" field.
+func LiftedByLT(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldLT(FieldLiftedBy, v))
+}
+
+// LiftedByLTE applies the LTE predicate on the "lifted_by" field.
+func LiftedByLTE(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldLTE(FieldLiftedBy, v))
+}
+
+// LiftedByContains applies the Contains predicate on the "lifted_by" field.
+func LiftedByContains(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldContains(FieldLiftedBy, v))
+}
+
+// LiftedByHasPrefix applies the HasPrefix predicate on the "lifted_by" field.
+func LiftedByHasPrefix(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldHasPrefix(FieldLiftedBy, v))
+}
+
+// LiftedByHasSuffix applies the HasSuffix predicate on the "lifted_by" field.
+func LiftedByHasSuffix(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldHasSuffix(FieldLiftedBy, v))
+}
+
+// LiftedByIsNil applies the IsNil predicate on the "lifted_by" field.
+func LiftedByIsNil() predicate.Containment {
+	return predicate.Containment(sql.FieldIsNull(FieldLiftedBy))
+}
+
+// LiftedByNotNil applies the NotNil predicate on the "lifted_by" field.
+func LiftedByNotNil() predicate.Containment {
+	return predicate.Containment(sql.FieldNotNull(FieldLiftedBy))
+}
+
+// LiftedByEqualFold applies the EqualFold predicate on the "lifted_by" field.
+func LiftedByEqualFold(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldEqualFold(FieldLiftedBy, v))
+}
+
+// LiftedByContainsFold applies the ContainsFold predicate on the "lifted_by" field.
+func LiftedByContainsFold(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldContainsFold(FieldLiftedBy, v))
 }
 
 // And groups predicates with the AND operator between them.

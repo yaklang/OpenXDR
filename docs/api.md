@@ -147,6 +147,9 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | GET / POST | `/api/zones` | viewer / 组 admin；区域定义，同名 409。`responseTier` 为自主响应处置等级 `lab` / `production` / `core`，不传为不指定（区域内资产按 AI 定级） |
 | PUT / DELETE | `/api/zones/{id}` | 组 admin；不传 `responseTier` 保持原值，null 清空 |
 | PUT | `/api/assets/{id}/zone` | 组 admin；`{zoneId}`，null 回到自动划分 |
+| GET | `/api/containments?state=&assetId=&page=&pageSize=` | viewer；自主响应决策记录 `{items,total}`，按组可见，来源主机在别组时不给主机名；`state` 可逗号分隔多个（active / executed / expired / lifted / held / skipped / failed） |
+| GET | `/api/containments/status` | 登录用户；开关、范围、租约时长、近一小时处置与熔断计数、生效中数量 |
+| POST | `/api/containments/{id}/lift` | 组 analyst；`{reason?}` 人工解除封锁、隔离主机，或恢复隔离文件、锁定账号：下发恢复动作，送达才记 lifted；解除之前的证据不再触发同一处置。结束进程撤不回、不在生效中的返回 409 |
 | PUT | `/api/assets/{id}/response-tier` | 组 admin；`{tier}` 人工指定自主响应处置等级并锁定（AI 不再覆盖），null 解锁并请 AI 重新定级；运行 OpenXDR server 的资产始终按核心处理，见 [自主响应设计](autonomous-response-design.md) |
 | POST | `/api/assets/{id}/annotate` | 组 analyst；请求 AI 重新标注，未配置模型返回 503 |
 | PUT | `/api/assets/{id}/services` | 组 analyst；人工标注服务 `{port,name,note?,risk?}` |

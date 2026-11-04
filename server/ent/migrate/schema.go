@@ -417,12 +417,13 @@ var (
 		{Name: "incident_id", Type: field.TypeUUID, Nullable: true},
 		{Name: "source_asset_id", Type: field.TypeUUID, Nullable: true},
 		{Name: "role", Type: field.TypeEnum, Enums: []string{"source", "victim", "host"}},
-		{Name: "state", Type: field.TypeEnum, Enums: []string{"active", "expired", "executed", "held", "skipped", "failed"}},
+		{Name: "state", Type: field.TypeEnum, Enums: []string{"active", "expired", "executed", "lifted", "held", "skipped", "failed"}},
 		{Name: "reason", Type: field.TypeString, Size: 2147483647},
 		{Name: "command_id", Type: field.TypeUUID, Nullable: true},
 		{Name: "lift_command_id", Type: field.TypeUUID, Nullable: true},
 		{Name: "expires_at", Type: field.TypeTime, Nullable: true},
 		{Name: "ended_at", Type: field.TypeTime, Nullable: true},
+		{Name: "lifted_by", Type: field.TypeString, Nullable: true},
 	}
 	// ContainmentsTable holds the schema information for the "containments" table.
 	ContainmentsTable = &schema.Table{

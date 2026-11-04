@@ -12589,6 +12589,7 @@ type ContainmentMutation struct {
 	lift_command_id *uuid.UUID
 	expires_at      *time.Time
 	ended_at        *time.Time
+	lifted_by       *string
 	clearedFields   map[string]struct{}
 	done            bool
 	oldValue        func(context.Context) (*Containment, error)
@@ -13471,6 +13472,55 @@ func (m *ContainmentMutation) ResetEndedAt() {
 	delete(m.clearedFields, containment.FieldEndedAt)
 }
 
+// SetLiftedBy sets the "lifted_by" field.
+func (m *ContainmentMutation) SetLiftedBy(s string) {
+	m.lifted_by = &s
+}
+
+// LiftedBy returns the value of the "lifted_by" field in the mutation.
+func (m *ContainmentMutation) LiftedBy() (r string, exists bool) {
+	v := m.lifted_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLiftedBy returns the old "lifted_by" field's value of the Containment entity.
+// If the Containment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ContainmentMutation) OldLiftedBy(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLiftedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLiftedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLiftedBy: %w", err)
+	}
+	return oldValue.LiftedBy, nil
+}
+
+// ClearLiftedBy clears the value of the "lifted_by" field.
+func (m *ContainmentMutation) ClearLiftedBy() {
+	m.lifted_by = nil
+	m.clearedFields[containment.FieldLiftedBy] = struct{}{}
+}
+
+// LiftedByCleared returns if the "lifted_by" field was cleared in this mutation.
+func (m *ContainmentMutation) LiftedByCleared() bool {
+	_, ok := m.clearedFields[containment.FieldLiftedBy]
+	return ok
+}
+
+// ResetLiftedBy resets all changes to the "lifted_by" field.
+func (m *ContainmentMutation) ResetLiftedBy() {
+	m.lifted_by = nil
+	delete(m.clearedFields, containment.FieldLiftedBy)
+}
+
 // Where appends a list predicates to the ContainmentMutation builder.
 func (m *ContainmentMutation) Where(ps ...predicate.Containment) {
 	m.predicates = append(m.predicates, ps...)
@@ -13505,7 +13555,7 @@ func (m *ContainmentMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ContainmentMutation) Fields() []string {
-	fields := make([]string, 0, 18)
+	fields := make([]string, 0, 19)
 	if m.created_at != nil {
 		fields = append(fields, containment.FieldCreatedAt)
 	}
@@ -13560,6 +13610,9 @@ func (m *ContainmentMutation) Fields() []string {
 	if m.ended_at != nil {
 		fields = append(fields, containment.FieldEndedAt)
 	}
+	if m.lifted_by != nil {
+		fields = append(fields, containment.FieldLiftedBy)
+	}
 	return fields
 }
 
@@ -13604,6 +13657,8 @@ func (m *ContainmentMutation) Field(name string) (ent.Value, bool) {
 		return m.ExpiresAt()
 	case containment.FieldEndedAt:
 		return m.EndedAt()
+	case containment.FieldLiftedBy:
+		return m.LiftedBy()
 	}
 	return nil, false
 }
@@ -13649,6 +13704,8 @@ func (m *ContainmentMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldExpiresAt(ctx)
 	case containment.FieldEndedAt:
 		return m.OldEndedAt(ctx)
+	case containment.FieldLiftedBy:
+		return m.OldLiftedBy(ctx)
 	}
 	return nil, fmt.Errorf("unknown Containment field %s", name)
 }
@@ -13784,6 +13841,13 @@ func (m *ContainmentMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetEndedAt(v)
 		return nil
+	case containment.FieldLiftedBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLiftedBy(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Containment field %s", name)
 }
@@ -13853,6 +13917,9 @@ func (m *ContainmentMutation) ClearedFields() []string {
 	if m.FieldCleared(containment.FieldEndedAt) {
 		fields = append(fields, containment.FieldEndedAt)
 	}
+	if m.FieldCleared(containment.FieldLiftedBy) {
+		fields = append(fields, containment.FieldLiftedBy)
+	}
 	return fields
 }
 
@@ -13890,6 +13957,9 @@ func (m *ContainmentMutation) ClearField(name string) error {
 		return nil
 	case containment.FieldEndedAt:
 		m.ClearEndedAt()
+		return nil
+	case containment.FieldLiftedBy:
+		m.ClearLiftedBy()
 		return nil
 	}
 	return fmt.Errorf("unknown Containment nullable field %s", name)
@@ -13952,6 +14022,9 @@ func (m *ContainmentMutation) ResetField(name string) error {
 		return nil
 	case containment.FieldEndedAt:
 		m.ResetEndedAt()
+		return nil
+	case containment.FieldLiftedBy:
+		m.ResetLiftedBy()
 		return nil
 	}
 	return fmt.Errorf("unknown Containment field %s", name)
