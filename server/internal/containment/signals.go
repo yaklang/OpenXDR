@@ -3,6 +3,7 @@ package containment
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,10 +20,17 @@ import (
 // intelMinSeverity 情报命中要达到的级别才自动处置；低级别条目多是泛化的扫描源，误伤面大
 const intelMinSeverity = 4
 
+// RuleDatabaseShell rules/lnx_database_spawns_shell.yml：数据库服务进程拉起 shell（COPY FROM PROGRAM、UDF）。
+// 数据库正常运行不派生这些进程，确定性足够进快路径
+const RuleDatabaseShell = "8b0f2e64-5c1a-4d7e-9a35-2f6c1d8e4b70"
+
+// pgClient PostgreSQL 后端的进程标题「postgres: 用户 库 客户端地址(端口) 命令」里的客户端地址
+var pgClient = regexp.MustCompile(`^postgres: \S+ \S+ ([0-9A-Fa-f.:]+)\(\d+\)`)
+
 // signalAlerts 快路径的信号：只认确定性的合成检测与高级别情报命中，不认 Sigma 规则与 AI 结论
 func signalAlerts() predicate.Alert {
 	return alert.Or(
-		alert.RuleIDIn(sigma.RuleLateralSpray, sigma.RuleBruteforceSuccess),
+		alert.RuleIDIn(sigma.RuleLateralSpray, sigma.RuleBruteforceSuccess, RuleDatabaseShell),
 		alert.And(alert.RuleIDHasPrefix("intel:"), alert.SeverityGTE(intelMinSeverity)),
 	)
 }
@@ -33,6 +41,8 @@ func (e *Engine) planFor(ctx context.Context, al *ent.Alert) (plan, error) {
 		return e.planSpray(ctx, al)
 	case al.RuleID == sigma.RuleBruteforceSuccess:
 		return e.planBruteforce(ctx, al)
+	case al.RuleID == RuleDatabaseShell:
+		return e.planDatabaseShell(ctx, al)
 	default:
 		return e.planIntel(ctx, al)
 	}
@@ -223,6 +233,52 @@ func (e *Engine) planIntel(ctx context.Context, al *ent.Alert) (plan, error) {
 	return p, nil
 }
 
+// planDatabaseShell 数据库拉起 shell：数据库主机就是被打的一方。结束这个 shell；PostgreSQL 的进程标题里有发起
+// 命令的客户端地址，在数据库主机上封锁它（核心资产也封，只是不隔离）；客户端是纳管主机就按喷洒同样的办法遏制来源
+func (e *Engine) planDatabaseShell(ctx context.Context, al *ent.Alert) (plan, error) {
+	host, err := e.DB.Asset.Get(ctx, *al.AssetID)
+	if err != nil {
+		return plan{}, err
+	}
+	ev, err := e.eventOf(ctx, al)
+	if err != nil || ev == nil {
+		return plan{}, err
+	}
+	var doc eventDoc
+	_ = json.Unmarshal(ev.Raw, &doc)
+	ip := ""
+	if m := pgClient.FindStringSubmatch(doc.Process.Parent.CmdLine); m != nil {
+		ip = authfields.CanonicalIP(m[1])
+	}
+	src, err := e.ownerOf(ctx, ip, host)
+	if err != nil {
+		return plan{}, err
+	}
+	outOfScope, err := e.scoped(ctx, host, src)
+	if err != nil {
+		return plan{}, err
+	}
+	p := plan{source: src}
+	if src != nil {
+		st, _, err := e.tier(ctx, src)
+		if err != nil {
+			return plan{}, err
+		}
+		containers, err := e.sourceContainers(ctx, src, map[uuid.UUID]bool{host.ID: true}, al.Ts.Add(-bruteforceLookback), al.Ts)
+		if err != nil {
+			return plan{}, err
+		}
+		p.actions = e.containSource(src, st, containers, outOfScope, "数据库命令执行")
+	}
+	p.actions = append(p.actions, e.killProcess(host, ev, doc, outOfScope,
+		"数据库进程拉起 "+doc.Process.Name+"（COPY FROM PROGRAM 一类的命令执行），结束该进程"))
+	if ip != "" {
+		p.actions = append(p.actions, action{asset: host, kind: "block_network", target: ip, role: "victim", skip: outOfScope,
+			why: "数据库客户端 " + ip + " 经数据库执行系统命令，封锁该地址"})
+	}
+	return p, nil
+}
+
 // bruteforceLookback 爆破得手时往前找来源容器外连记录的范围，与爆破序列的判定窗口一致
 const bruteforceLookback = 10 * time.Minute
 
@@ -338,9 +394,12 @@ func (e *Engine) ownerOf(ctx context.Context, ip string, except *ent.Asset) (*en
 // eventDoc 处置用到的事件字段（OCSF 风格，agent 上报的原文）
 type eventDoc struct {
 	Process struct {
-		PID  uint32   `json:"pid"`
-		Name string   `json:"name"`
-		File fileInfo `json:"file"`
+		PID    uint32   `json:"pid"`
+		Name   string   `json:"name"`
+		File   fileInfo `json:"file"`
+		Parent struct {
+			CmdLine string `json:"cmd_line"`
+		} `json:"parent_process"`
 	} `json:"process"`
 	File       fileInfo `json:"file"`
 	Connection struct {

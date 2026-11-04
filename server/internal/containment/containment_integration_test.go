@@ -527,3 +527,42 @@ func TestSprayIsolatesSourceContainer(t *testing.T) {
 		t.Fatalf("到期解除容器隔离：%v", got)
 	}
 }
+
+// 数据库拉起 shell（2026-11-03 原样）：核心的数据库主机上结束 shell、封锁 COPY 的客户端地址；客户端是实验等级的纳管主机就隔离它。
+// 本机 socket 连入（[local]）没有客户端地址，只结束 shell；范围 lab 下核心主机自己的事不处置
+func TestDatabaseShellKillsBlocksAndContainsClient(t *testing.T) {
+	f := setup(t)
+	server := `[{"process":"openxdr-server","port":8081}]`
+	node1 := f.host(t, "openxdr-node1", "10.1.1.198", nil, server)
+	f.host(t, "uos-server", "10.1.1.170", tierPtr(entasset.ResponseTierLab), "")
+	raw := `{"process":{"pid":2268957,"name":"sh","file":{"path":"/bin/sh"},"cmd_line":"sh -c id",` +
+		`"parent_process":{"pid":2268947,"name":"postgres","cmd_line":"postgres: postgres openxdr 10.1.1.170(41866) COPY"}}}`
+	f.alertOn(t, node1, RuleDatabaseShell, 1007, "70", raw)
+	if err := f.engine(ScopeLab).Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := f.received("openxdr-node1")
+	if len(got) != 2 || got[0].Kind != pb.CommandKind_KILL_PROCESS || got[0].Pid != 2268957 ||
+		got[1].Kind != pb.CommandKind_BLOCK_NETWORK || got[1].Target != "10.1.1.170" {
+		t.Fatalf("数据库主机应结束 shell 并封锁客户端：%v", got)
+	}
+	if got := f.received("uos-server"); len(got) != 1 || got[0].Kind != pb.CommandKind_ISOLATE_HOST {
+		t.Fatalf("实验等级的客户端主机应隔离：%v", got)
+	}
+
+	g := setup(t)
+	node1 = g.host(t, "openxdr-node1", "10.1.1.198", nil, server)
+	g.alertOn(t, node1, RuleDatabaseShell, 1007, "70", `{"process":{"pid":7,"name":"sh","parent_process":{"name":"postgres","cmd_line":"postgres: postgres openxdr [local] COPY"}}}`)
+	if err := g.engine(ScopeLab).Tick(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := g.received("openxdr-node1"); len(got) != 0 {
+		t.Fatalf("范围 lab 下核心主机自己的事不处置：%v", got)
+	}
+	if err := g.engine(ScopeAll).Tick(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := g.received("openxdr-node1"); len(got) != 0 {
+		t.Fatalf("同一条告警已经决定过（skipped），放开范围后不追溯：%v", got)
+	}
+}

@@ -1,0 +1,47 @@
+title: Database Server Spawns Shell
+id: 8b0f2e64-5c1a-4d7e-9a35-2f6c1d8e4b70
+status: experimental
+description: |
+  检测数据库服务进程拉起 shell、脚本解释器或下载工具：PostgreSQL 的 COPY ... FROM PROGRAM、
+  MySQL / MariaDB 的 UDF 与 sys_exec、Redis 的模块加载、MongoDB 的服务端脚本，落到主机上都是数据库进程直接派生命令。
+  数据库正常运行不派生这些进程；唯一的良性例外是 PostgreSQL 启动时经 sh 执行 locale -a 枚举系统区域设置。
+  2026-11-03 生产库入侵就是这样执行的命令（patroni 容器里 postgres 后端拉起 sh -c 读环境变量与密钥）。
+author: OpenXDR
+references:
+  - https://www.postgresql.org/docs/current/sql-copy.html
+tags:
+  - attack.execution
+  - attack.t1059.004
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  database:
+    ParentImage|endswith:
+      - '/postgres'
+      - '/postmaster'
+      - '/mysqld'
+      - '/mariadbd'
+      - '/redis-server'
+      - '/mongod'
+      - '/sqlservr'
+  child:
+    Image|endswith:
+      - '/sh'
+      - '/bash'
+      - '/dash'
+      - '/zsh'
+      - '/ash'
+      - '/busybox'
+      - '/python'
+      - '/python3'
+      - '/perl'
+      - '/curl'
+      - '/wget'
+      - '/nc'
+      - '/ncat'
+      - '/socat'
+  locale:
+    CommandLine|endswith: 'locale -a'
+  condition: database and child and not locale
+level: critical
