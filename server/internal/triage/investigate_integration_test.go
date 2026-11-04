@@ -45,8 +45,8 @@ func TestInvestigateWithTools(t *testing.T) {
 		turns++
 		switch turns {
 		case 1:
-			if len(req.Tools) != 4 {
-				t.Errorf("第一轮应带 4 个工具，实际 %d", len(req.Tools))
+			if len(req.Tools) != 5 {
+				t.Errorf("第一轮应带 5 个工具，实际 %d", len(req.Tools))
 			}
 			// 模型要求调查 6.6.6.6
 			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"",
