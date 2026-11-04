@@ -424,6 +424,7 @@ var (
 		{Name: "expires_at", Type: field.TypeTime, Nullable: true},
 		{Name: "ended_at", Type: field.TypeTime, Nullable: true},
 		{Name: "lifted_by", Type: field.TypeString, Nullable: true},
+		{Name: "reviews", Type: field.TypeInt, Default: 0},
 	}
 	// ContainmentsTable holds the schema information for the "containments" table.
 	ContainmentsTable = &schema.Table{

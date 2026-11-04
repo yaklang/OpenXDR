@@ -55,7 +55,9 @@ type Containment struct {
 	// EndedAt holds the value of the "ended_at" field.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
 	// LiftedBy holds the value of the "lifted_by" field.
-	LiftedBy     *string `json:"lifted_by,omitempty"`
+	LiftedBy *string `json:"lifted_by,omitempty"`
+	// Reviews holds the value of the "reviews" field.
+	Reviews      int `json:"reviews,omitempty"`
 	selectValues sql.SelectValues
 }
 
@@ -66,7 +68,7 @@ func (*Containment) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case containment.FieldGroupID, containment.FieldIncidentID, containment.FieldSourceAssetID, containment.FieldCommandID, containment.FieldLiftCommandID:
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
-		case containment.FieldPid:
+		case containment.FieldPid, containment.FieldReviews:
 			values[i] = new(sql.NullInt64)
 		case containment.FieldKind, containment.FieldTarget, containment.FieldKey, containment.FieldSignal, containment.FieldRole, containment.FieldState, containment.FieldReason, containment.FieldLiftedBy:
 			values[i] = new(sql.NullString)
@@ -217,6 +219,12 @@ func (_m *Containment) assignValues(columns []string, values []any) error {
 				_m.LiftedBy = new(string)
 				*_m.LiftedBy = value.String
 			}
+		case containment.FieldReviews:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field reviews", values[i])
+			} else if value.Valid {
+				_m.Reviews = int(value.Int64)
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -325,6 +333,9 @@ func (_m *Containment) String() string {
 		builder.WriteString("lifted_by=")
 		builder.WriteString(*v)
 	}
+	builder.WriteString(", ")
+	builder.WriteString("reviews=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Reviews))
 	builder.WriteByte(')')
 	return builder.String()
 }

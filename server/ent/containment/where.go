@@ -140,6 +140,11 @@ func LiftedBy(v string) predicate.Containment {
 	return predicate.Containment(sql.FieldEQ(FieldLiftedBy, v))
 }
 
+// Reviews applies equality check predicate on the "reviews" field. It's identical to ReviewsEQ.
+func Reviews(v int) predicate.Containment {
+	return predicate.Containment(sql.FieldEQ(FieldReviews, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.Containment {
 	return predicate.Containment(sql.FieldEQ(FieldCreatedAt, v))
@@ -1098,6 +1103,46 @@ func LiftedByEqualFold(v string) predicate.Containment {
 // LiftedByContainsFold applies the ContainsFold predicate on the "lifted_by" field.
 func LiftedByContainsFold(v string) predicate.Containment {
 	return predicate.Containment(sql.FieldContainsFold(FieldLiftedBy, v))
+}
+
+// ReviewsEQ applies the EQ predicate on the "reviews" field.
+func ReviewsEQ(v int) predicate.Containment {
+	return predicate.Containment(sql.FieldEQ(FieldReviews, v))
+}
+
+// ReviewsNEQ applies the NEQ predicate on the "reviews" field.
+func ReviewsNEQ(v int) predicate.Containment {
+	return predicate.Containment(sql.FieldNEQ(FieldReviews, v))
+}
+
+// ReviewsIn applies the In predicate on the "reviews" field.
+func ReviewsIn(vs ...int) predicate.Containment {
+	return predicate.Containment(sql.FieldIn(FieldReviews, vs...))
+}
+
+// ReviewsNotIn applies the NotIn predicate on the "reviews" field.
+func ReviewsNotIn(vs ...int) predicate.Containment {
+	return predicate.Containment(sql.FieldNotIn(FieldReviews, vs...))
+}
+
+// ReviewsGT applies the GT predicate on the "reviews" field.
+func ReviewsGT(v int) predicate.Containment {
+	return predicate.Containment(sql.FieldGT(FieldReviews, v))
+}
+
+// ReviewsGTE applies the GTE predicate on the "reviews" field.
+func ReviewsGTE(v int) predicate.Containment {
+	return predicate.Containment(sql.FieldGTE(FieldReviews, v))
+}
+
+// ReviewsLT applies the LT predicate on the "reviews" field.
+func ReviewsLT(v int) predicate.Containment {
+	return predicate.Containment(sql.FieldLT(FieldReviews, v))
+}
+
+// ReviewsLTE applies the LTE predicate on the "reviews" field.
+func ReviewsLTE(v int) predicate.Containment {
+	return predicate.Containment(sql.FieldLTE(FieldReviews, v))
 }
 
 // And groups predicates with the AND operator between them.

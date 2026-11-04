@@ -6,6 +6,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/testdb"
+	"openxdr/server/internal/triage"
 	"openxdr/server/pb"
 )
 
@@ -589,5 +592,75 @@ func TestKillFollowsInPlaceExec(t *testing.T) {
 	got := f.received("openxdr-test-linux")
 	if len(got) != 1 || got[0].Kind != pb.CommandKind_KILL_PROCESS || got[0].ProcessGuid != sleep.ProcessGUID.String() {
 		t.Fatalf("应按 exec 后的 GUID 结束进程 %s：%v", sleep.ProcessGUID, got)
+	}
+}
+
+// 到期复核：模型说解除才解除；说续期就续一个租约；认不出就续一小时尽快再问；满 7 天不再问，直接解除
+func TestExpiryReview(t *testing.T) {
+	var answer string
+	calls := 0
+	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": answer}}}})
+	}))
+	t.Cleanup(llm.Close)
+
+	f := setup(t)
+	src := f.host(t, "range", "10.1.1.170", tierPtr(entasset.ResponseTierLab), "")
+	v := f.host(t, "web", "10.1.1.183", nil, "")
+	f.spray(t, src, "10.1.1.170", v)
+	e := f.engine(ScopeLab)
+	e.LLM = triage.NewLLM(llm.URL, "fake", "", 5*time.Second)
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.received("range")
+	f.received("web")
+	block := func() *ent.Containment {
+		return f.client.Containment.Query().Where(entcontainment.KindEQ("block_network")).OnlyX(f.ctx)
+	}
+
+	answer = `{"decision":"extend","reason":"来源仍在喷洒"}`
+	f.now = f.now.Add(25 * time.Hour)
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if c := block(); c.State != entcontainment.StateActive || c.Reviews != 1 || !c.ExpiresAt.Equal(f.now.Add(24*time.Hour)) || !strings.Contains(c.Reason, "来源仍在喷洒") {
+		t.Fatalf("续期一个租约并记下依据：%+v", c)
+	}
+	if got := f.received("web"); len(got) != 0 {
+		t.Fatalf("续期不下发解除：%v", got)
+	}
+
+	answer = "我觉得可以先观察一下"
+	f.now = f.now.Add(25 * time.Hour)
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if c := block(); c.State != entcontainment.StateActive || !c.ExpiresAt.Equal(f.now.Add(time.Hour)) {
+		t.Fatalf("认不出的输出续一小时：%+v", c)
+	}
+
+	answer = `{"decision":"lift","reason":"租约期间没有新告警，来源已清理"}`
+	f.now = f.now.Add(2 * time.Hour)
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.received("web"); len(got) != 1 || got[0].Kind != pb.CommandKind_UNBLOCK_NETWORK {
+		t.Fatalf("模型说解除才下发解除：%v", got)
+	}
+	if c := block(); c.State != entcontainment.StateExpired || !strings.Contains(c.Reason, "AI 复核解除") {
+		t.Fatalf("解除并记下依据：%+v", c)
+	}
+
+	// 隔离那条一直续期，满 7 天不再问模型
+	answer = `{"decision":"extend","reason":"仍可疑"}`
+	f.now = f.now.Add(8 * 24 * time.Hour)
+	before := calls
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.received("range"); len(got) != 1 || got[0].Kind != pb.CommandKind_UNISOLATE_HOST || calls != before {
+		t.Fatalf("满最长期限直接解除、不再问模型：%v（调用 %d→%d）", got, before, calls)
 	}
 }

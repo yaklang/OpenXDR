@@ -63,6 +63,7 @@ import (
 	"openxdr/server/internal/report"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/schedule"
+	"openxdr/server/internal/selfwatch"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/suppressreview"
@@ -116,7 +117,11 @@ func main() {
 	hub.Signer = commandSigner(hub.Enabled)
 	allowlist := isolationAllowlist()
 	triageEngine := startTriage(ctx, db, client, rules, llmFor, hub, allowlist)
-	containmentEngine := startContainment(ctx, db, client, hub, allowlist)
+	containmentEngine := startContainment(ctx, db, client, hub, allowlist, llmFor("containment"))
+	// 自身监控：平台节点的 agent 掉线；配了 SELFWATCH_PATRONI_URL（HA 部署）再盯 Patroni 动态配置
+	go cluster.RunLeader(ctx, db, "selfwatch", (&selfwatch.Watch{
+		DB: client, PatroniURL: os.Getenv("SELFWATCH_PATRONI_URL"), Interval: time.Minute,
+	}).Run)
 	notifySettings, webhook := startNotify(ctx, db, client, rules, triageEngine.LLM.Enabled)
 	silentAfter := time.Duration(getenvInt("AGENT_SILENT_MINUTES", 10)) * time.Minute
 	startLiveness(ctx, db, client, webhook, silentAfter)
@@ -418,7 +423,7 @@ func startTriage(ctx context.Context, db *sql.DB, client *ent.Client, rules sigm
 }
 
 // startContainment 自主响应：确定性信号命中后按角色与处置等级直接遏制，显式开启才运行，仍受 RESPONSE_ENABLED 约束
-func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *response.Hub, allowlist []string) *containment.Engine {
+func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *response.Hub, allowlist []string, llm *triage.LLM) *containment.Engine {
 	if os.Getenv("CONTAINMENT_ENABLED") != "true" {
 		return nil
 	}
@@ -436,6 +441,7 @@ func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *
 		TTL:        time.Duration(getenvInt("CONTAINMENT_TTL_HOURS", 24)) * time.Hour,
 		MaxPerHour: getenvInt("CONTAINMENT_MAX_PER_HOUR", 10),
 		Interval:   5 * time.Second,
+		LLM:        llm,
 	}
 	slog.Info("自主响应已开启", "scope", scope, "ttl", engine.TTL, "maxPerHour", engine.MaxPerHour)
 	go cluster.RunLeader(ctx, db, "containment", engine.Run)

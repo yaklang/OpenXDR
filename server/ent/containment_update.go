@@ -356,6 +356,27 @@ func (_u *ContainmentUpdate) ClearLiftedBy() *ContainmentUpdate {
 	return _u
 }
 
+// SetReviews sets the "reviews" field.
+func (_u *ContainmentUpdate) SetReviews(v int) *ContainmentUpdate {
+	_u.mutation.ResetReviews()
+	_u.mutation.SetReviews(v)
+	return _u
+}
+
+// SetNillableReviews sets the "reviews" field if the given value is not nil.
+func (_u *ContainmentUpdate) SetNillableReviews(v *int) *ContainmentUpdate {
+	if v != nil {
+		_u.SetReviews(*v)
+	}
+	return _u
+}
+
+// AddReviews adds value to the "reviews" field.
+func (_u *ContainmentUpdate) AddReviews(v int) *ContainmentUpdate {
+	_u.mutation.AddReviews(v)
+	return _u
+}
+
 // Mutation returns the ContainmentMutation object of the builder.
 func (_u *ContainmentUpdate) Mutation() *ContainmentMutation {
 	return _u.mutation
@@ -501,6 +522,12 @@ func (_u *ContainmentUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.LiftedByCleared() {
 		_spec.ClearField(containment.FieldLiftedBy, field.TypeString)
+	}
+	if value, ok := _u.mutation.Reviews(); ok {
+		_spec.SetField(containment.FieldReviews, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedReviews(); ok {
+		_spec.AddField(containment.FieldReviews, field.TypeInt, value)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -849,6 +876,27 @@ func (_u *ContainmentUpdateOne) ClearLiftedBy() *ContainmentUpdateOne {
 	return _u
 }
 
+// SetReviews sets the "reviews" field.
+func (_u *ContainmentUpdateOne) SetReviews(v int) *ContainmentUpdateOne {
+	_u.mutation.ResetReviews()
+	_u.mutation.SetReviews(v)
+	return _u
+}
+
+// SetNillableReviews sets the "reviews" field if the given value is not nil.
+func (_u *ContainmentUpdateOne) SetNillableReviews(v *int) *ContainmentUpdateOne {
+	if v != nil {
+		_u.SetReviews(*v)
+	}
+	return _u
+}
+
+// AddReviews adds value to the "reviews" field.
+func (_u *ContainmentUpdateOne) AddReviews(v int) *ContainmentUpdateOne {
+	_u.mutation.AddReviews(v)
+	return _u
+}
+
 // Mutation returns the ContainmentMutation object of the builder.
 func (_u *ContainmentUpdateOne) Mutation() *ContainmentMutation {
 	return _u.mutation
@@ -1024,6 +1072,12 @@ func (_u *ContainmentUpdateOne) sqlSave(ctx context.Context) (_node *Containment
 	}
 	if _u.mutation.LiftedByCleared() {
 		_spec.ClearField(containment.FieldLiftedBy, field.TypeString)
+	}
+	if value, ok := _u.mutation.Reviews(); ok {
+		_spec.SetField(containment.FieldReviews, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedReviews(); ok {
+		_spec.AddField(containment.FieldReviews, field.TypeInt, value)
 	}
 	_node = &Containment{config: _u.config}
 	_spec.Assign = _node.assignValues

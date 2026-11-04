@@ -29,6 +29,7 @@ import (
 	entcontainment "openxdr/server/ent/containment"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/response"
+	"openxdr/server/internal/triage"
 )
 
 // 自动处置范围：lab 只处置涉及实验等级主机的攻击（上线初期），all 不限
@@ -51,6 +52,8 @@ type Engine struct {
 	Interval   time.Duration
 	// 测试回放历史时刻用，默认 time.Now
 	Now func() time.Time
+	// 租约到期时复核用的模型；未配置时到期直接解除
+	LLM *triage.LLM
 }
 
 // lookback 每轮回看多久内有新证据的告警。处置是幂等的，回看长一点只为单活切换期间不漏
@@ -301,7 +304,8 @@ func (e *Engine) fuse(ctx context.Context, a action) (string, error) {
 	return "", nil
 }
 
-// expire 给到期的租约下发解除。解除下发失败（agent 离线）就推迟重试，租约保持生效，不能当成已解除
+// expire 处理到期的租约：配了模型就先请 AI 复核，续期则推迟、解除才下发恢复动作；没配模型或租约已满最长期限就直接解除。
+// 解除下发失败（agent 离线）就推迟重试，租约保持生效，不能当成已解除
 func (e *Engine) expire(ctx context.Context) error {
 	now := e.now()
 	due, err := e.DB.Containment.Query().
@@ -311,6 +315,26 @@ func (e *Engine) expire(ctx context.Context) error {
 		return err
 	}
 	for _, c := range due {
+		reason := c.Reason
+		switch {
+		case now.Sub(c.CreatedAt) >= maxLease:
+			reason += "；已到最长期限 7 天，不再复核，解除"
+		case e.LLM != nil && e.LLM.Enabled():
+			v := e.review(ctx, c)
+			if !v.lift {
+				// 正常续一个租约；没拿到有效结论只续一小时，尽快再问
+				next := now.Add(e.TTL)
+				if v.retry {
+					next = now.Add(reviewRetry)
+				}
+				audit.System(ctx, e.DB, "containment_extended", c.ID.String(), c.Kind+" "+c.Target+"：AI 复核续期："+v.why)
+				if err := c.Update().SetExpiresAt(next).AddReviews(1).SetReason(c.Reason + "；AI 复核续期：" + v.why).Exec(ctx); err != nil {
+					return err
+				}
+				continue
+			}
+			reason += "；AI 复核解除：" + v.why
+		}
 		kind := leases[c.Kind]
 		cmd, err := e.Hub.Issue(ctx, response.Request{
 			AssetID: c.AssetID, Kind: kind, Target: c.Target, IncidentID: c.IncidentID, IssuedBy: "auto",
@@ -323,7 +347,7 @@ func (e *Engine) expire(ctx context.Context) error {
 			continue
 		}
 		audit.System(ctx, e.DB, "containment_expired", cmd.ID.String(), kind+" "+c.Target+"（租约到期）")
-		if err := c.Update().SetState(entcontainment.StateExpired).SetLiftCommandID(cmd.ID).SetEndedAt(now).Exec(ctx); err != nil {
+		if err := c.Update().SetState(entcontainment.StateExpired).SetLiftCommandID(cmd.ID).SetEndedAt(now).SetReason(reason).Exec(ctx); err != nil {
 			return err
 		}
 	}
