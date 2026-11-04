@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -564,5 +565,29 @@ func TestDatabaseShellKillsBlocksAndContainsClient(t *testing.T) {
 	}
 	if got := g.received("openxdr-node1"); len(got) != 0 {
 		t.Fatalf("同一条告警已经决定过（skipped），放开范围后不追溯：%v", got)
+	}
+}
+
+// 原地 exec：sh -c 'sleep 90' 的 sh 变成 sleep，PID 与父进程不变、GUID 换了；结束进程要用现在的 GUID。
+// 父进程不同的同 PID 进程（PID 复用）不算
+func TestKillFollowsInPlaceExec(t *testing.T) {
+	f := setup(t)
+	host := f.host(t, "openxdr-test-linux", "10.1.1.137", tierPtr(entasset.ResponseTierLab), "")
+	raw := func(name string, ppid int) string {
+		return `{"activity_id":1,"process":{"pid":13311,"name":"` + name + `","parent_process":{"pid":` + strconv.Itoa(ppid) +
+			`,"name":"postgres","cmd_line":"postgres: postgres postgres [local] COPY"}}}`
+	}
+	al := f.alertOn(t, host, RuleDatabaseShell, 1007, "70", raw("sh", 13300))
+	sh := f.client.Event.GetX(f.ctx, *al.EventID)
+	sleep := f.client.Event.Create().SetTs(sh.Ts.Add(time.Millisecond)).SetClassUID(1007).SetSource("agent").SetAssetID(host.ID).
+		SetProcessGUID(uuid.New()).SetRaw(json.RawMessage(raw("sleep", 13300))).SaveX(f.ctx)
+	f.client.Event.Create().SetTs(sh.Ts.Add(2*time.Millisecond)).SetClassUID(1007).SetSource("agent").SetAssetID(host.ID).
+		SetProcessGUID(uuid.New()).SetRaw(json.RawMessage(raw("other", 1))).SaveX(f.ctx)
+	if err := f.engine(ScopeLab).Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := f.received("openxdr-test-linux")
+	if len(got) != 1 || got[0].Kind != pb.CommandKind_KILL_PROCESS || got[0].ProcessGuid != sleep.ProcessGUID.String() {
+		t.Fatalf("应按 exec 后的 GUID 结束进程 %s：%v", sleep.ProcessGUID, got)
 	}
 }
