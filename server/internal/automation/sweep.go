@@ -273,7 +273,7 @@ func (a *Auto) create(ctx context.Context, as *Assessment, now time.Time) error 
 		row, err := tx.TrustedSource.Create().SetGroupID(as.Group).SetName(name).SetCreatedBy(actor).SetOrigin("auto").
 			SetExpiresAt(now.AddDate(0, 0, a.Config.TTLDays)).SetCreatedAt(now).
 			SetKeyFingerprint(as.KeyFP).SetSourceCidr(as.CIDR).SetLoginUser(as.User).
-			SetEvidence(as.Evidence(a.Config, now)).SetNotice(NoticeIdentified).Save(ctx)
+			SetEvidence(as.Evidence(a.Config, now)).Save(ctx)
 		if err != nil {
 			return err
 		}
@@ -282,14 +282,13 @@ func (a *Auto) create(ctx context.Context, as *Assessment, now time.Time) error 
 	})
 }
 
-// renew 续期；revive 为真时是过期后重新满足条件，重新生效要再通知一次
+// renew 续期；revive 为真时是过期后重新满足条件，落审计但不发通知打扰人
 func (a *Auto) renew(ctx context.Context, t *ent.TrustedSource, as *Assessment, now time.Time, revive bool) error {
 	return a.tx(ctx, func(tx *ent.Tx) error {
 		upd := tx.TrustedSource.UpdateOneID(t.ID).SetExpiresAt(now.AddDate(0, 0, a.Config.TTLDays)).
 			SetSourceCidr(as.CIDR).SetEvidence(as.Evidence(a.Config, now))
 		action := "trusted_source_auto_renewed"
 		if revive {
-			upd.SetNotice(NoticeIdentified)
 			action = "trusted_source_auto_revived"
 		}
 		if err := upd.Exec(ctx); err != nil {
@@ -347,8 +346,9 @@ func (a *Auto) notify(ctx context.Context) error {
 		if len(rows) == 0 {
 			continue
 		}
-		title, body, path := message(kind, rows, groups, titles)
-		if a.Notify != nil {
+		// 仅停用（告警被判恶意/可疑触发熔断）需要通知人介入；日常自动识别只落审计，静默清掉遗留标记
+		if kind == NoticeRevoked && a.Notify != nil {
+			title, body, path := message(kind, rows, groups, titles)
 			if err := a.Notify(ctx, title, body, path); err != nil {
 				slog.Error("运维自动化通知失败，下轮重试", "kind", kind, "err", err)
 				continue

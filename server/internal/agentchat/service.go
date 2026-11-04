@@ -520,7 +520,7 @@ func focus(kind string, turns int) string {
 		return "open_findings 是本组遗留的运维待办：复查其中与本任务主题相关的（按 key 与标题判断，任务说明要求全量复查时才全部复查），已修复用 track 标 resolved，仍存在用 track 标 open；新发现的问题也用 track 登记，key 按任务说明的前缀起名。" +
 			"对比上一轮报告时只查 reports 的 created_at, level, summary，严禁读取历史报告的 markdown 正文（防止旧报告冗长篇幅传染本轮）。" +
 			"报告编写必须精炼、异常先行、凸显 AI 自治（全文尽量控制在 1,500–2,500 字以内）：把「## 已执行的操作」放在「## 结论」之后展示本轮已自主完成的待办同步、记忆更新或服务/外联标记；「## 需要人处理」每条限 1–2 行并配 🔴/🟡/✅ 标记；「## 证据」中无异常主机合并为一张紧凑表格或一句话，严禁逐台罗列「未见异常」流水账。" +
-			"report 的 level 如实选择：没有需要人处理的事项写 ok（只存档、不打扰人），有新增或仍未解决的事项写 attention，疑似入侵或服务即将中断写 urgent。" +
+			"report 的 level 如实选择：没有需要人处理的事项写 ok，有日常待办写 attention（ok 与 attention 均只存档、不推送打扰人），疑似入侵或服务即将中断等需要人立即介入的大事写 urgent（推送通知）。" +
 			fmt.Sprintf("本轮最多 %d 次模型调用（每次可并行多个工具）：先做巡检与待办复查，再按余量深挖，务必在用完前提交 report。", turns)
 	}
 	return "open_findings 是本组遗留的运维待办，仅供参考：用户没有提到或没有交给你的，不要去复查、登记或处理。" +
@@ -671,7 +671,7 @@ const queryDescription = "通过当前组专属只读数据库身份查询授权
 var reportTool = piruntime.Tool{Name: "report", Description: "保存当前会话的报告。title 是「对象 + 主题」的短标题；summary 是一句话结论（含异常数量与 AI 已自主完成的动作摘要）；markdown 正文按二级标题分节，" +
 	"必须有「## 结论」「## 需要人处理」「## 未验证」（没有就写「无」），可选「## 已执行的操作」「## 证据」「## 推断」，推荐顺序：结论 → 已执行的操作 → 需要人处理 → 证据 → 推断 → 未验证，不要再写一级标题。" +
 	"正常主机合并成一张紧凑表格或一句话，只对异常主机列核心证据（≤4 条/台），严禁写成逐台罗列正常项的流水账。" +
-	"level：ok 本轮没有需要人处理的事项（只存档，不推送通知）；attention 有新增或仍未解决、需要人处理的事项（默认）；urgent 需要立即处理，如疑似入侵、服务即将中断。",
+	"level：ok 本轮没有需要人处理的事项；attention 有日常待办事项（默认，与 ok 一样只存档、不推送通知）；urgent 需要人立即介入的大事，如疑似入侵、服务即将中断（会推送通知）。",
 	Parameters: json.RawMessage(`{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":50},"summary":{"type":"string","minLength":1,"maxLength":120},"markdown":{"type":"string","minLength":1,"maxLength":262144},"level":{"type":"string","enum":["ok","attention","urgent"]}},"required":["title","summary","markdown"],"additionalProperties":false}`)}
 
 func (s *Service) tools(ctx context.Context, group uuid.UUID) []piruntime.Tool {

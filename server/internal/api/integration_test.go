@@ -211,9 +211,11 @@ func TestAPIIncidentsReview(t *testing.T) {
 		review          bool
 	}{
 		{"open", "", 1, true},
-		{"triaged", `{"verdict":"suspicious"}`, 1, true},
+		{"triaged", `{"verdict":"suspicious"}`, 1, false},
+		{"triaged", `{"verdict":"suspicious"}`, 4, true},
+		{"triaged", `{"verdict":"malicious"}`, 2, true},
 		{"triaged", `{"verdict":"benign"}`, 3, false},
-		{"triaged", `{"verdict":"benign"}`, 4, true},
+		{"triaged", `{"verdict":"benign"}`, 4, false},
 		{"open", `{"confidence":3}`, 1, true},
 		{"closed", `{"verdict":"malicious"}`, 5, false},
 	}

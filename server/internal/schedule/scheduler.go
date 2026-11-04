@@ -499,14 +499,11 @@ func (s *Scheduler) pushReports(ctx context.Context, g *ent.Group, session *ent.
 		return
 	}
 	for _, r := range reports {
-		// 无异常的只存档：任务多了，「一切正常」的推送本身就是噪音
-		if r.Level == "ok" {
+		// 仅 urgent（疑似入侵、高危风险或服务即将中断）才推送通知；ok 与日常 attention 报告只存档不打扰人
+		if r.Level != "urgent" {
 			continue
 		}
-		title := r.Title
-		if r.Level == "urgent" {
-			title = "【紧急】" + title
-		}
+		title := "【紧急】" + r.Title
 		// 一句话结论 + AI 自治摘要 + 待办要点；旧报告没有结论时退回正文摘录
 		text := formatReportPushText(g.Name, r)
 		if err := s.Notify(ctx, title, text, "/api/agent-reports/"+r.ID.String()+"/html"); err != nil {

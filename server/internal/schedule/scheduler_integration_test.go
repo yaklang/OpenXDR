@@ -39,7 +39,7 @@ func (f *fakeRunner) RunTask(_ context.Context, job Job) error {
 		return errors.New("会话结束但没有提交报告")
 	}
 	return f.db.Report.Create().SetSessionID(job.Session.ID).SetGroupID(job.Session.GroupID).
-		SetTitle("日报").SetMarkdown("# 一切正常").Exec(context.Background())
+		SetTitle("日报").SetMarkdown("# 发现紧急风险").SetLevel("urgent").Exec(context.Background())
 }
 
 func TestSchedulerTick(t *testing.T) {
@@ -96,9 +96,9 @@ func TestSchedulerTick(t *testing.T) {
 	if status[gA.ID.String()] != "succeeded" || status[gB.ID.String()] != "failed" {
 		t.Errorf("运行终态不符：%v", status)
 	}
-	// A 推报告（带摘要与链接），B 推失败
-	if len(notes) != 2 || !strings.Contains(notes["日报"], "一切正常") ||
-		!strings.Contains(notes["日报"], "/api/agent-reports/") || notes["任务失败：巡检"] == "" {
+	// A 推紧急报告（带摘要与链接），B 推失败
+	if len(notes) != 2 || !strings.Contains(notes["【紧急】日报"], "发现紧急风险") ||
+		!strings.Contains(notes["【紧急】日报"], "/api/agent-reports/") || notes["任务失败：巡检"] == "" {
 		t.Errorf("通知不符：%v", notes)
 	}
 
@@ -172,7 +172,7 @@ func TestSchedulerRetriesOnce(t *testing.T) {
 	if !client.AgentSession.Query().Where(agentsession.IDEQ(runner.jobs[0].Session.ID)).ExistX(ctx) {
 		t.Error("失败那次的会话应保留")
 	}
-	if len(titles) != 1 || titles[0] != "日报" {
+	if len(titles) != 1 || titles[0] != "【紧急】日报" {
 		t.Errorf("重试成功只应推报告：%v", titles)
 	}
 }
@@ -331,7 +331,7 @@ func TestGroupEnabledAndQuietReports(t *testing.T) {
 		}
 	}
 	write("false")
-	runner := &levelRunner{db: client, levels: map[string]string{gA.ID.String(): "ok", gB.ID.String(): "urgent"}}
+	runner := &levelRunner{db: client, levels: map[string]string{gA.ID.String(): "attention", gB.ID.String(): "urgent"}}
 	var mu sync.Mutex
 	var titles []string
 	s := &Scheduler{

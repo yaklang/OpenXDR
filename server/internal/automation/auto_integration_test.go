@@ -202,8 +202,8 @@ func TestAutoIdentify(t *testing.T) {
 			t.Fatalf("%s 不该被识别: %+v", fpN(i), r)
 		}
 	}
-	if len(w.sent) != 1 || !strings.Contains(w.sent[0], "认出 2 个日常自动化") || !strings.Contains(w.sent[0], "1 个事件经人工判为误报") {
-		t.Fatalf("应合成一条生效通知: %q", w.sent)
+	if len(w.sent) != 0 {
+		t.Fatalf("日常自动识别不应发送通知打扰人: %q", w.sent)
 	}
 	if n := w.audits("trusted_source_auto_created"); n != 2 {
 		t.Fatalf("生效应以 system 落审计，实际 %d 条", n)
@@ -222,10 +222,10 @@ func TestAutoIdentify(t *testing.T) {
 		}
 	}
 
-	// 再扫一轮：不重复建、不重复通知
+	// 再扫一轮：不重复建、不发通知
 	w.sweep(w.base.Add(time.Minute))
-	if len(w.sent) != 1 || w.db.TrustedSource.Query().CountX(w.ctx) != 2 {
-		t.Fatalf("重复识别或重复通知: %d 条通知", len(w.sent))
+	if len(w.sent) != 0 || w.db.TrustedSource.Query().CountX(w.ctx) != 2 {
+		t.Fatalf("重复识别或异常通知: %d 条通知", len(w.sent))
 	}
 
 	// 自动识别之后，这个身份的新告警挂到条目上
@@ -235,21 +235,28 @@ func TestAutoIdentify(t *testing.T) {
 	}
 }
 
-// 推送失败不落标记，下轮重试；生效不因推送失败而推迟
+// 停用通知推送失败时不清标记，下轮重试；停用本身不因推送失败而推迟
 func TestAutoNoticeRetry(t *testing.T) {
 	w := newWorld(t)
 	ls := session("root", "10.1.1.35", "publickey", fpN(1))
 	w.logins(4, 6, ls)
 	inc := w.incident("false_positive", "benign", "lead", "")
 	w.alert(ls, 3, &inc, nil, false)
-	w.failed = true
 	w.sweep(w.base)
-	if row := w.autoRow(fpN(1)); row == nil || row.Notice == nil {
-		t.Fatalf("推送失败应保留待发标记: %+v", row)
+	row := w.autoRow(fpN(1))
+	if row == nil {
+		t.Fatal("应先自动识别")
+	}
+	mal := w.incident("triaged", "malicious", "", "")
+	w.alert(ls, 4, &mal, &row.ID, true)
+	w.failed = true
+	w.sweep(w.base.Add(time.Minute))
+	if row = w.autoRow(fpN(1)); row == nil || row.RevokedAt == nil || row.Notice == nil {
+		t.Fatalf("停用推送失败应保留待发标记: %+v", row)
 	}
 	w.failed = false
-	w.sweep(w.base.Add(time.Minute))
-	if row := w.autoRow(fpN(1)); row.Notice != nil || len(w.sent) != 1 {
+	w.sweep(w.base.Add(2 * time.Minute))
+	if row = w.autoRow(fpN(1)); row.Notice != nil || len(w.sent) != 1 {
 		t.Fatalf("重试成功后应清标记: %+v %d", row, len(w.sent))
 	}
 }
@@ -397,8 +404,8 @@ func TestAutoRenewExpireAndUserDecisions(t *testing.T) {
 	w.alert(a, 3, &inc, nil, false)
 	w.sweep(w.base.Add(time.Minute))
 	got = w.autoRow(fpN(1))
-	if !got.ExpiresAt.After(w.base.AddDate(0, 0, 29)) || got.ID != ra.ID || len(w.sent) != 1 {
-		t.Fatalf("过期后重新满足应复用原条目重新生效并通知: %+v %q", got, w.sent)
+	if !got.ExpiresAt.After(w.base.AddDate(0, 0, 29)) || got.ID != ra.ID || len(w.sent) != 0 {
+		t.Fatalf("过期后重新满足应复用原条目重新生效且不发通知: %+v %q", got, w.sent)
 	}
 	if n := w.audits("trusted_source_auto_revived"); n != 1 {
 		t.Fatalf("重新生效应落审计，实际 %d", n)

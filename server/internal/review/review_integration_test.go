@@ -40,6 +40,8 @@ func TestPredicates(t *testing.T) {
 		}
 	}
 	benign := `{"verdict":"benign","summary":"运维脚本"}`
+	suspicious := `{"verdict":"suspicious","summary":"未知来源"}`
+	suspiciousResp := `{"verdict":"suspicious","action_codes":["review_response"]}`
 	malicious := `{"verdict":"malicious"}`
 	dec := decoy.ObservationRulePrefix + "honeyfile"
 
@@ -55,7 +57,10 @@ func TestPredicates(t *testing.T) {
 		}
 	}
 	mk("判良性低危新", "triaged", benign, now, al{"r1", 1})
-	mk("判良性但高危", "triaged", benign, old, al{"r1", 2}, al{"r2", 4})
+	mk("判良性高危旧", "triaged", benign, old, al{"r1", 2}, al{"r2", 4})
+	mk("判可疑低危旧", "triaged", suspicious, old, al{"r1", 3})
+	mk("判可疑高危", "triaged", suspicious, old, al{"r1", 4})
+	mk("判可疑低危需响应", "triaged", suspiciousResp, old, al{"r1", 3})
 	mk("判良性含诱饵与真实告警", "open", benign, old, al{"r1", 1}, al{dec, 1})
 	mk("判良性仅诱饵", "open", benign, old, al{dec, 1})
 	mk("未研判仅诱饵", "open", "", old, al{dec, 2})
@@ -82,10 +87,10 @@ func TestPredicates(t *testing.T) {
 	}
 
 	expect("Needed", query(Needed()),
-		"未研判", "判恶意", "判良性但高危", "判良性含诱饵与真实告警", "判良性仅诱饵", "未研判仅诱饵", "结论缺 verdict 字段", "结论大小写不符")
-	expect("StaleBenign", query(StaleBenign(cutoff)), "判良性低危旧")
+		"未研判", "判恶意", "重开良性低危旧", "判可疑高危", "判可疑低危需响应", "判良性含诱饵与真实告警", "判良性仅诱饵", "未研判仅诱饵", "结论缺 verdict 字段", "结论大小写不符")
+	expect("StaleBenign", query(StaleBenign(cutoff)), "判良性低危旧", "判良性高危旧", "判可疑低危旧")
 	// 截止时间放到未来，新创建的良性低危事件也算过期
-	expect("StaleBenign(未来)", query(StaleBenign(now.Add(time.Hour))), "判良性低危旧", "判良性低危新")
+	expect("StaleBenign(未来)", query(StaleBenign(now.Add(time.Hour))), "判良性低危旧", "判良性高危旧", "判可疑低危旧", "判良性低危新")
 	expect("DecoyOnly", query(DecoyOnly()), "判良性仅诱饵", "未研判仅诱饵", "已结案含诱饵")
 
 	// 自动结案与人工复核互斥：任何事件都不能同时属于两边

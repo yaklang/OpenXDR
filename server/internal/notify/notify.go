@@ -68,6 +68,7 @@ type verdict struct {
 	Verdict       string   `json:"verdict"`
 	Confidence    int      `json:"confidence"`
 	Summary       string   `json:"summary"`
+	ResponseTier  string   `json:"response_tier"`
 	ActionCodes   []string `json:"action_codes"`
 	QueryEvidence []struct {
 		Tool string `json:"tool"`
@@ -139,10 +140,21 @@ func (n *Notifier) decide(inc *ent.Incident, severity int16) (bool, string) {
 	}
 	var v verdict
 	_ = json.Unmarshal(inc.AiVerdict, &v)
-	if v.Verdict == "benign" && severity < review.Severity {
+	if v.Verdict == "benign" {
 		return false, "AI 判定良性"
 	}
+	if v.Verdict == "suspicious" && !needsResponse(v) && (severity < review.Severity || hasFalsePositiveProposal(inc)) {
+		return false, "可疑事件无需人工即时介入"
+	}
 	return true, ""
+}
+
+func needsResponse(v verdict) bool {
+	return v.ResponseTier == "contain" || v.ResponseTier == "isolate" || slices.Contains(v.ActionCodes, "review_response")
+}
+
+func hasFalsePositiveProposal(inc *ent.Incident) bool {
+	return inc.ClosureProposal != nil && inc.ClosureProposal.Status == "false_positive"
 }
 
 // giveUpAfter 研判连续失败这么多次后通知不再等结论
