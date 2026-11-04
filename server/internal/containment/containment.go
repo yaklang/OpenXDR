@@ -61,7 +61,7 @@ const groupIsolationPercent = 20
 const liftRetry = 5 * time.Minute
 
 // leases 可逆、按租约到期自动解除的动作与对应的解除动作；其余动作一次性执行
-var leases = map[string]string{"isolate_host": "unisolate_host", "block_network": "unblock_network"}
+var leases = map[string]string{"isolate_host": "unisolate_host", "block_network": "unblock_network", "isolate_container": "unisolate_container"}
 
 func (e *Engine) now() time.Time {
 	if e.Now != nil {
@@ -206,7 +206,7 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a
 			return create.SetState(entcontainment.StateSkipped).SetReason("事件没有可核对的进程 GUID 与 PID").Exec(ctx)
 		}
 		req.ProcessGUID, req.PID = &guid, a.pid
-	case "block_network", "quarantine_file", "disable_account":
+	case "block_network", "quarantine_file", "disable_account", "isolate_container":
 		target, err := response.NormalizeTarget(a.kind, a.target, response.ProtectedAddrs(e.AllowEndpoints))
 		if err != nil {
 			return create.SetState(entcontainment.StateSkipped).SetReason("目标不能处置：" + err.Error()).Exec(ctx)

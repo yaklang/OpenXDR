@@ -94,7 +94,7 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | POST | `/api/commands/{id}/verifications` | 组 analyst（或全局 admin）；提交复核判断，留存证据，见 [响应复核](response-verification.md) |
 | GET | `/api/commands/{id}/verifications/{verificationId}` | 同指令可见范围；单条复核的完整留存快照，包括事件原文 |
 | GET | `/api/commands/{id}` | 指令详情，按资产组校验权限，包含完整命令与输出 |
-| POST | `/api/commands` | `{"kind":"kill_process\|isolate_host\|unisolate_host\|exec\|block_network\|unblock_network\|quarantine_file\|restore_file\|disable_account\|enable_account","assetId","incidentId","pid","target"}`（一律真执行，没有演练模式）；封锁、隔离文件、锁定账号必须带 `target`（IP / 网段 / 域名、文件绝对路径、账号名），不合法或会封到 server 自己时 400；`exec` 另带 `"cmd"`（必填）与 `"timeoutMs"`（0 = agent 默认 60s），结果回写 `exitCode` / `stdout` / `stderr` / `truncated`（各截断到 64KB） |
+| POST | `/api/commands` | `{"kind":"kill_process\|isolate_host\|unisolate_host\|exec\|block_network\|unblock_network\|quarantine_file\|restore_file\|disable_account\|enable_account\|isolate_container\|unisolate_container","assetId","incidentId","pid","target"}`（一律真执行，没有演练模式）；封锁、隔离文件、锁定账号、隔离容器必须带 `target`（IP / 网段 / 域名、文件绝对路径、账号名、容器 ID：docker 系 12–64 位十六进制或 LXC VMID），不合法或会封到 server 自己时 400；`exec` 另带 `"cmd"`（必填）与 `"timeoutMs"`（0 = agent 默认 60s），结果回写 `exitCode` / `stdout` / `stderr` / `truncated`（各截断到 64KB） |
 
 需 server 配置 `RESPONSE_ENABLED=true`；隔离要求 `ISOLATION_ALLOW` 包含 server
 的 gRPC 端点，否则 agent 拒绝执行。
@@ -149,7 +149,7 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | PUT | `/api/assets/{id}/zone` | 组 admin；`{zoneId}`，null 回到自动划分 |
 | GET | `/api/containments?state=&assetId=&page=&pageSize=` | viewer；自主响应决策记录 `{items,total}`，按组可见，来源主机在别组时不给主机名；`state` 可逗号分隔多个（active / executed / expired / lifted / held / skipped / failed） |
 | GET | `/api/containments/status` | 登录用户；开关、范围、租约时长、近一小时处置与熔断计数、生效中数量 |
-| POST | `/api/containments/{id}/lift` | 组 analyst；`{reason?}` 人工解除封锁、隔离主机，或恢复隔离文件、锁定账号：下发恢复动作，送达才记 lifted；解除之前的证据不再触发同一处置。结束进程撤不回、不在生效中的返回 409 |
+| POST | `/api/containments/{id}/lift` | 组 analyst；`{reason?}` 人工解除封锁、隔离主机、隔离容器，或恢复隔离文件、锁定账号：下发恢复动作，送达才记 lifted；解除之前的证据不再触发同一处置。结束进程撤不回、不在生效中的返回 409 |
 | PUT | `/api/assets/{id}/response-tier` | 组 admin；`{tier}` 人工指定自主响应处置等级并锁定（AI 不再覆盖），null 解锁并请 AI 重新定级；运行 OpenXDR server 的资产始终按核心处理，见 [自主响应设计](autonomous-response-design.md) |
 | POST | `/api/assets/{id}/annotate` | 组 analyst；请求 AI 重新标注，未配置模型返回 503 |
 | PUT | `/api/assets/{id}/services` | 组 analyst；人工标注服务 `{port,name,note?,risk?}` |

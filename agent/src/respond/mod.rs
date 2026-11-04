@@ -8,6 +8,7 @@
 use crate::pb::{Command, CommandKind, CommandResult, command_result::Status};
 
 mod account;
+mod container;
 mod exec;
 mod netblock;
 mod process;
@@ -98,6 +99,8 @@ pub async fn execute(agent_id: &str, cmd: &Command) -> CommandResult {
         CommandKind::RestoreFile => quarantine::restore(cmd),
         CommandKind::DisableAccount => account::disable(cmd),
         CommandKind::EnableAccount => account::enable(cmd),
+        CommandKind::IsolateContainer => container::isolate(cmd),
+        CommandKind::UnisolateContainer => container::unisolate(cmd),
         CommandKind::Unspecified => Outcome::failed("未指定动作"),
     };
 

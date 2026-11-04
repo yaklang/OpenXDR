@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -80,10 +81,15 @@ WHERE src_asset=$1 AND ts>$2 AND ts<=$3 AND src_ip IS NOT NULL AND victim_asset<
 		return plan{}, err
 	}
 
-	p := plan{source: src}
-	if srcTier == TierLab {
-		p.actions = append(p.actions, e.isolateSource(src, outOfScope, "内网横向喷洒的来源，隔离本机"))
+	victims := map[uuid.UUID]bool{}
+	for _, h := range hits {
+		victims[h.victim] = true
 	}
+	containers, err := e.sourceContainers(ctx, src, victims, al.Ts.Add(-ingest.SprayWindow), last)
+	if err != nil {
+		return plan{}, err
+	}
+	p := plan{source: src, actions: e.containSource(src, srcTier, containers, outOfScope, "内网横向喷洒")}
 	for _, h := range hits {
 		victim, err := e.DB.Asset.Get(ctx, h.victim)
 		if err != nil {
@@ -131,11 +137,15 @@ func (e *Engine) planBruteforce(ctx context.Context, al *ent.Alert) (plan, error
 	}
 	p := plan{source: src}
 	if src != nil {
-		if st, _, err := e.tier(ctx, src); err != nil {
+		st, _, err := e.tier(ctx, src)
+		if err != nil {
 			return plan{}, err
-		} else if st == TierLab {
-			p.actions = append(p.actions, e.isolateSource(src, outOfScope, "爆破得手的来源，隔离本机"))
 		}
+		containers, err := e.sourceContainers(ctx, src, map[uuid.UUID]bool{victim.ID: true}, al.Ts.Add(-bruteforceLookback), al.Ts)
+		if err != nil {
+			return plan{}, err
+		}
+		p.actions = e.containSource(src, st, containers, outOfScope, "爆破得手")
 	}
 	if ip != "" {
 		p.actions = append(p.actions, action{asset: victim, kind: "block_network", target: ip, role: "victim", skip: outOfScope,
@@ -213,13 +223,71 @@ func (e *Engine) planIntel(ctx context.Context, al *ent.Alert) (plan, error) {
 	return p, nil
 }
 
-// isolateSource 隔离来源主机的计划；没配置隔离放行地址时不隔离，隔离后收不到解除指令
-func (e *Engine) isolateSource(src *ent.Asset, outOfScope, why string) action {
-	a := action{asset: src, kind: "isolate_host", role: "source", skip: outOfScope, why: why}
+// bruteforceLookback 爆破得手时往前找来源容器外连记录的范围，与爆破序列的判定窗口一致
+const bruteforceLookback = 10 * time.Minute
+
+// containSource 来源主机的处置：认出发起攻击的容器就只隔离容器（宿主机与其他容器不受影响），
+// 实验等级认不出容器才隔离整机，生产等级认不出就不动来源，核心不动来源
+func (e *Engine) containSource(src *ent.Asset, tier string, containers []container, outOfScope, signal string) []action {
+	if tier == TierCore {
+		return nil
+	}
+	var out []action
+	for _, c := range containers {
+		out = append(out, action{asset: src, kind: "isolate_container", target: c.uid, role: "source", skip: outOfScope,
+			why: signal + "的来源是容器 " + c.label() + "，隔离该容器（宿主机与其他容器不受影响）"})
+	}
+	if len(out) > 0 || tier != TierLab {
+		return out
+	}
+	a := action{asset: src, kind: "isolate_host", role: "source", skip: outOfScope, why: signal + "的来源，隔离本机"}
 	if len(e.AllowEndpoints) == 0 {
 		a.skip = "未配置 ISOLATION_ALLOW，隔离后收不到解除指令"
 	}
-	return a
+	return []action{a}
+}
+
+type container struct{ uid, name string }
+
+func (c container) label() string {
+	if c.name == "" {
+		return c.uid
+	}
+	return c.name + "（" + c.uid + "）"
+}
+
+// sourceContainers 来源主机上，窗口内连向这些受害主机的外连是哪些容器发起的。
+// 容器流量出宿主机时经过 NAT，受害方只看得到宿主机地址；宿主机上的 agent 按 cgroup 认得出容器。
+// QEMU 虚拟机没有独立于宿主机的可隔离网络命名空间，不算
+func (e *Engine) sourceContainers(ctx context.Context, src *ent.Asset, victims map[uuid.UUID]bool, from, to time.Time) ([]container, error) {
+	var ips []string
+	for id := range victims {
+		v, err := e.DB.Asset.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		ips = append(ips, v.IPAddrs...)
+	}
+	if len(ips) == 0 {
+		return nil, nil
+	}
+	rows, err := e.SQL.QueryContext(ctx, `SELECT DISTINCT raw->'container'->>'uid', COALESCE(raw->'container'->>'name','') FROM events
+WHERE asset_id=$1 AND class_uid=4001 AND ts>$2 AND ts<=$3 AND raw ? 'container'
+  AND raw->'connection_info'->>'direction'='outbound' AND raw->'dst_endpoint'->>'ip' = ANY($4)
+  AND raw->'container'->>'runtime' <> 'qemu' ORDER BY 1`, src.ID, from, to, ips)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []container
+	for rows.Next() {
+		var c container
+		if err := rows.Scan(&c.uid, &c.name); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 func (e *Engine) killProcess(host *ent.Asset, ev *ent.Event, doc eventDoc, outOfScope, why string) action {

@@ -41,6 +41,10 @@ const (
 	// 锁定本机账号（Linux 锁密码并置过期，公钥登录同样被挡住；Windows 停用账号）
 	CommandKind_DISABLE_ACCOUNT CommandKind = 9
 	CommandKind_ENABLE_ACCOUNT  CommandKind = 10
+	// 隔离容器：target 是容器 ID（docker 系前 12 位，LXC 为 VMID）。进容器自己的网络命名空间丢弃全部流量，
+	// 宿主机与其他容器不受影响；用宿主机网络的容器拒绝执行。仅 Linux
+	CommandKind_ISOLATE_CONTAINER   CommandKind = 11
+	CommandKind_UNISOLATE_CONTAINER CommandKind = 12
 )
 
 // Enum value maps for CommandKind.
@@ -57,6 +61,8 @@ var (
 		8:  "RESTORE_FILE",
 		9:  "DISABLE_ACCOUNT",
 		10: "ENABLE_ACCOUNT",
+		11: "ISOLATE_CONTAINER",
+		12: "UNISOLATE_CONTAINER",
 	}
 	CommandKind_value = map[string]int32{
 		"COMMAND_KIND_UNSPECIFIED": 0,
@@ -70,6 +76,8 @@ var (
 		"RESTORE_FILE":             8,
 		"DISABLE_ACCOUNT":          9,
 		"ENABLE_ACCOUNT":           10,
+		"ISOLATE_CONTAINER":        11,
+		"UNISOLATE_CONTAINER":      12,
 	}
 )
 
@@ -263,7 +271,7 @@ type Command struct {
 	Cmd       string `protobuf:"bytes,7,opt,name=cmd,proto3" json:"cmd,omitempty"`
 	TimeoutMs uint32 `protobuf:"varint,8,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
 	// BLOCK_NETWORK / UNBLOCK_NETWORK：IP、网段（CIDR）或域名；QUARANTINE_FILE / RESTORE_FILE：文件绝对路径；
-	// DISABLE_ACCOUNT / ENABLE_ACCOUNT：本机账号名
+	// DISABLE_ACCOUNT / ENABLE_ACCOUNT：本机账号名；ISOLATE_CONTAINER / UNISOLATE_CONTAINER：容器 ID
 	Target string `protobuf:"bytes,9,opt,name=target,proto3" json:"target,omitempty"`
 	// 签名信封：序列化的 SignedCommand 与 server 指令签名私钥对它的 Ed25519 签名。
 	// agent 只执行验签通过的信封里的指令，上面的明文字段仅供 server 内部投递与回写，agent 不采信。
@@ -1076,7 +1084,7 @@ const file_agent_proto_rawDesc = "" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1f\n" +
 	"\vhealth_json\x18\x02 \x01(\tR\n" +
 	"healthJson\"\v\n" +
-	"\tHealthAck*\xe5\x01\n" +
+	"\tHealthAck*\x95\x02\n" +
 	"\vCommandKind\x12\x1c\n" +
 	"\x18COMMAND_KIND_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fKILL_PROCESS\x10\x01\x12\x10\n" +
@@ -1089,7 +1097,9 @@ const file_agent_proto_rawDesc = "" +
 	"\fRESTORE_FILE\x10\b\x12\x13\n" +
 	"\x0fDISABLE_ACCOUNT\x10\t\x12\x12\n" +
 	"\x0eENABLE_ACCOUNT\x10\n" +
-	"2\xf8\x03\n" +
+	"\x12\x15\n" +
+	"\x11ISOLATE_CONTAINER\x10\v\x12\x17\n" +
+	"\x13UNISOLATE_CONTAINER\x10\f2\xf8\x03\n" +
 	"\fAgentService\x12Q\n" +
 	"\bRegister\x12!.openxdr.agent.v1.RegisterRequest\x1a\".openxdr.agent.v1.RegisterResponse\x12L\n" +
 	"\fReportHealth\x12\x1f.openxdr.agent.v1.HealthRequest\x1a\x1b.openxdr.agent.v1.HealthAck\x12K\n" +

@@ -86,7 +86,11 @@ fn split_endpoint(ep: &str) -> (&str, Option<&str>) {
 fn apply(script: &str) -> Result<(), String> {
     // 先删旧表：隔离必须是幂等的，重复下发不应叠加出半套规则
     let _ = run_nft(&["delete", "table", "inet", TABLE]);
+    nft_script(script)
+}
 
+/// 整段规则交给 nft -f - 原子执行。容器隔离在容器的网络命名空间里也用它
+pub(super) fn nft_script(script: &str) -> Result<(), String> {
     let mut child = Proc::new("nft")
         .arg("-f")
         .arg("-")

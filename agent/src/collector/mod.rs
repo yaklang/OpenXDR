@@ -441,6 +441,12 @@ fn container_of(pid: u32) -> Option<Arc<Container>> {
     container::of(pid)
 }
 
+/// 进程所在容器的 ID，响应侧按它找容器的网络命名空间
+#[cfg(target_os = "linux")]
+pub(crate) fn container_uid(pid: u32) -> Option<String> {
+    container::of(pid).map(|c| c.uid.clone())
+}
+
 /// 新进程是不是 docker 容器配置的健康检查（HEALTHCHECK）：是就给容器打上标记，server 据此不把它的告警
 /// 送进关联与研判。dockerd 每隔几秒在容器里执行一次健康检查，nc -z、/dev/tcp 探测这类命令天天误中规则。
 ///

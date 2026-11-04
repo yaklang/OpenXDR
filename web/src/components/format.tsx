@@ -143,6 +143,8 @@ const COMMAND_KIND: Record<string, MsgKey> = {
   restore_file: 'restoreFile',
   disable_account: 'disableAccount',
   enable_account: 'enableAccount',
+  isolate_container: 'isolateContainer',
+  unisolate_container: 'unisolateContainer',
 }
 
 export const commandKind = (kind: string, t: (k: MsgKey) => string) => (COMMAND_KIND[kind] ? t(COMMAND_KIND[kind]) : kind)
