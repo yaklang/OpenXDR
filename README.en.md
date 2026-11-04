@@ -5,12 +5,13 @@
 
 [中文](README.md) | English
 
-An open-source, AI-native XDR platform: EDR + SIEM + network traffic analysis.
-**Detection, triage and response close the loop on their own; people audit afterwards and can overrule at any time.**
+An open-source autonomous XDR: EDR + SIEM + network traffic analysis.
 
-- **Ten thousand alerts in, three real incidents out.** Rules, intel, dedup, suppression and correlation narrow things down, then an AI with investigation tools triages each incident.
-- **When a real attack lands, the platform moves first.** Internal lateral movement, a successful brute force, a database abused to run commands — within seconds it isolates the attacking container, blocks the source and kills the process, without waiting for triage or a human.
-- **Onboarded means operated, onboarded means secured.** Install the agent and put the host in a group: continuous collection, detection, daily inspections and an AI operations assistant you can talk to.
+**From the first sign to the last action, it walks the whole way on its own. You review — or overrule.**
+
+- **It never sleeps.** Collection, detection, triage and inspections run day and night; the noise settles here, and what remains is worth your time.
+- **It acts.** Seconds after an attack lands, the offending container is cut off, the source is blocked and the fallen account is locked.
+- **It answers for itself.** Every decision is written down with its reasons, every action can be undone in one click. No one has to keep watch at the screen — only read what it left behind when morning comes.
 
 > Detailed documentation under `docs/` is currently written in Chinese.
 

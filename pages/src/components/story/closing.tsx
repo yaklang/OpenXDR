@@ -50,7 +50,7 @@ const COPY = {
     copied: "已复制",
     github: "在 GitHub 查看",
     docs: "安装说明",
-    motto: ["纳管即运维，", "纳管即安全。"],
+    motto: ["它自己值守，", "你只需审阅。"],
     license: "Apache-2.0 开源",
   },
   en: {
@@ -91,7 +91,7 @@ const COPY = {
     copied: "Copied",
     github: "View on GitHub",
     docs: "Install guide",
-    motto: ["Onboarded means operated,", "onboarded means secured."],
+    motto: ["It keeps the watch.", "You review."],
     license: "Open source · Apache-2.0",
   },
 };
@@ -111,7 +111,7 @@ export function Closing() {
       <div className="mx-auto max-w-[1400px]">
         <div className="grid gap-14 lg:grid-cols-2 lg:items-center">
           <div>
-            <ChapterHead index="06" kicker={t.kicker} title={t.title} body={t.body} />
+            <ChapterHead index="07" kicker={t.kicker} title={t.title} body={t.body} />
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
