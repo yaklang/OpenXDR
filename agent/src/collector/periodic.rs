@@ -10,9 +10,11 @@
 //! 或者发起网络连接与 DNS 查询，压着的启动事件（连同被折叠的祖先）先补发出去，异常的血缘照样完整。
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use super::Container;
 use crate::pb::AgentEvent;
 
 /// 认定与汇总共用一个窗口
@@ -47,17 +49,24 @@ pub struct Sample {
     pub parent_name: String,
     pub parent_exe: Option<String>,
     pub parent_cmd_line: Option<String>,
+    pub container: Option<Arc<Container>>,
 }
 
 impl Sample {
     fn key(&self) -> String {
         let s = |v: &Option<String>| v.clone().unwrap_or_default();
         let c = |v: &Option<String>| v.as_deref().map(volatile_free).unwrap_or_default();
+        let ctr = self
+            .container
+            .as_ref()
+            .map(|k| format!("{}:{}:{}", k.runtime, k.uid, k.healthcheck))
+            .unwrap_or_default();
         [
             s(&self.parent_exe),
             c(&self.parent_cmd_line),
             s(&self.exe),
             c(&self.cmd_line),
+            ctr,
         ]
         .join("\0")
     }
@@ -184,7 +193,7 @@ fn summary(agent_id: &str, st: &Stat) -> AgentEvent {
     if let Some(cmd) = &s.parent_cmd_line {
         parent["cmd_line"] = cmd.as_str().into();
     }
-    let raw = serde_json::json!({
+    let mut raw = serde_json::json!({
         "activity_id": ACTIVITY_PERIODIC,
         "process": {
             "name": s.name,
@@ -199,6 +208,9 @@ fn summary(agent_id: &str, st: &Stat) -> AgentEvent {
             "window_ms": WINDOW.as_millis() as u64,
         },
     });
+    if let Some(c) = &s.container {
+        raw["container"] = c.to_json();
+    }
     AgentEvent {
         agent_id: agent_id.to_string(),
         ts_unix_ns: last
@@ -334,5 +346,29 @@ mod tests {
             !p.observe(&s, t0 + IDLE + WINDOW, SystemTime::now()),
             "久不出现的键忘掉后应重新逐条上报"
         );
+    }
+
+    #[test]
+    fn summary_preserves_container_and_healthcheck() {
+        let mut p = Periodic::default();
+        let t0 = Instant::now();
+        let wall = SystemTime::now();
+        let mut s = sample("/bin/sh -c wget -q --spider http://localhost:8123/");
+        s.container = Some(Arc::new(Container {
+            runtime: "docker",
+            uid: "1eed7f11d20f".into(),
+            name: Some("sentry-clickhouse".into()),
+            healthcheck: true,
+        }));
+        for i in 0..THRESHOLD {
+            assert!(!p.observe(&s, t0 + Duration::from_secs(i as u64), wall));
+        }
+        assert!(p.observe(&s, t0 + Duration::from_secs(30), wall));
+        let out = p.flush("a", t0 + WINDOW + Duration::from_secs(1));
+        assert_eq!(out.len(), 1);
+        let v: serde_json::Value = serde_json::from_str(&out[0].raw_json).unwrap();
+        assert_eq!(v["container"]["uid"], "1eed7f11d20f");
+        assert_eq!(v["container"]["name"], "sentry-clickhouse");
+        assert_eq!(v["container"]["healthcheck"], true);
     }
 }

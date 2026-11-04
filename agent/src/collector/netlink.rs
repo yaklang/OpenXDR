@@ -7,6 +7,7 @@
 //! 内核只给 pid，命令行和可执行路径仍要现场从 /proc 补；进程退得太快
 //! 时补不到，但事件本身不会丢——这点比轮询强。
 
+use std::collections::HashMap;
 use std::io;
 use std::os::fd::RawFd;
 use std::sync::{Arc, Mutex};
@@ -92,6 +93,9 @@ fn start(
     }))
 }
 
+/// fork 父子映射表上限：正常只有存活进程，超限时清空重来
+const MAX_FORKS: usize = 1 << 16;
+
 fn pump(
     sock: Socket,
     agent_id: String,
@@ -100,6 +104,7 @@ fn pump(
     stop: &Stop,
 ) {
     let mut buf = vec![0u8; 8192];
+    let mut forks: HashMap<u32, u32> = HashMap::new();
 
     while !tx.is_closed() && !stop.requested() {
         let n = match sock.recv(&mut buf) {
@@ -110,9 +115,25 @@ fn pump(
                 return;
             }
         };
-        for event in parse_events(&buf[..n]) {
+        for mut event in parse_events(&buf[..n]) {
+            if event.what == PROC_EVENT_FORK {
+                if let Some(ppid) = event.ppid {
+                    if forks.len() >= MAX_FORKS {
+                        forks.clear();
+                    }
+                    forks.insert(event.pid, ppid);
+                }
+                continue;
+            }
+            if event.what == PROC_EVENT_EXEC && event.ppid.is_none() {
+                event.ppid = forks.get(&event.pid).copied();
+            } else if event.what == PROC_EVENT_EXIT {
+                forks.remove(&event.pid);
+            }
             let Some(d) = describe(&event) else { continue };
             let mut registry = registry.lock().unwrap_or_else(|e| e.into_inner());
+            // 若父进程是未调用 execve 的中间子 shell，顺着 fork 表向上找到已登记祖先
+            let ppid = resolve_fork_ppid(d.ppid, &forks, &registry);
             let events = emit_process(
                 &agent_id,
                 &mut registry,
@@ -122,7 +143,7 @@ fn pump(
                     name: &d.name,
                     exe: d.exe.as_deref(),
                     cmd_line: d.cmd_line.as_deref(),
-                    ppid: d.ppid,
+                    ppid,
                     username: username_of(d.pid),
                     exit_code: d.exit_code,
                 },
@@ -135,6 +156,27 @@ fn pump(
             }
         }
     }
+}
+
+fn resolve_fork_ppid(
+    ppid: Option<u32>,
+    forks: &HashMap<u32, u32>,
+    registry: &ProcessRegistry,
+) -> Option<u32> {
+    let mut cur = ppid?;
+    for _ in 0..4 {
+        if registry.known(cur).is_some() {
+            return Some(cur);
+        }
+        let Some(&parent) = forks.get(&cur) else {
+            break;
+        };
+        if parent == 0 || parent == cur {
+            break;
+        }
+        cur = parent;
+    }
+    ppid
 }
 
 struct ProcEvent {
@@ -170,13 +212,15 @@ fn parse_events(buf: &[u8]) -> Vec<ProcEvent> {
                 ppid: None,
                 exit_code: None,
             }),
-            // fork: parent_pid, parent_tgid, child_pid, child_tgid
-            PROC_EVENT_FORK if data.len() >= 16 => events.push(ProcEvent {
-                what,
-                pid: u32::from_ne_bytes(data[8..12].try_into().unwrap()),
-                ppid: Some(u32::from_ne_bytes(data[0..4].try_into().unwrap())),
-                exit_code: None,
-            }),
+            // fork: parent_pid, parent_tgid, child_pid, child_tgid。只记主线程（child_pid == child_tgid）的进程级 fork
+            PROC_EVENT_FORK if data.len() >= 16 && data[8..12] == data[12..16] => {
+                events.push(ProcEvent {
+                    what,
+                    pid: u32::from_ne_bytes(data[12..16].try_into().unwrap()),
+                    ppid: Some(u32::from_ne_bytes(data[4..8].try_into().unwrap())),
+                    exit_code: None,
+                })
+            }
             // exit: process_pid, process_tgid, exit_code, exit_signal。
             // 每个线程退出都会来一条，只有主线程（pid == tgid）退出才是进程退出
             PROC_EVENT_EXIT if data.len() >= 16 && data[0..4] == data[4..8] => {

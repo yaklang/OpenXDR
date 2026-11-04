@@ -464,6 +464,26 @@ fn container_of(pid: u32) -> Option<Arc<Container>> {
     container::of(pid)
 }
 
+/// 进程所属容器：优先读 /proc/<pid>/cgroup；短命进程在读取前已退场（cgroup 文件已不存在）时，
+/// 沿同 pid 先前登记（原地 exec）或已在容器内的父进程登记继承（容器内进程 fork 的子进程不可能脱离该容器 cgroup）。
+#[cfg(target_os = "linux")]
+fn container_or_inherited(
+    registry: &ProcessRegistry,
+    pid: u32,
+    ppid: Option<u32>,
+) -> Option<Arc<Container>> {
+    if let Some(c) = container_of(pid) {
+        return Some(c);
+    }
+    if std::path::Path::new(&format!("/proc/{pid}/cgroup")).exists() {
+        return None;
+    }
+    [Some(pid), ppid]
+        .into_iter()
+        .flatten()
+        .find_map(|p| registry.known(p)?.container)
+}
+
 /// 进程所在容器的 ID，响应侧按它找容器的网络命名空间
 #[cfg(target_os = "linux")]
 pub(crate) fn container_uid(pid: u32) -> Option<String> {
@@ -570,6 +590,15 @@ fn healthcheck_of(
 }
 
 #[cfg(not(target_os = "linux"))]
+fn container_or_inherited(
+    _registry: &ProcessRegistry,
+    pid: u32,
+    _ppid: Option<u32>,
+) -> Option<Arc<Container>> {
+    container_of(pid)
+}
+
+#[cfg(not(target_os = "linux"))]
 fn container_of(_pid: u32) -> Option<Arc<Container>> {
     None
 }
@@ -670,7 +699,8 @@ fn emit_process(
             .flatten();
         if let Some(event) = process_event(agent_id, registry, activity, info) {
             // 平台指令拉起的进程从不折叠：server 要逐条核对指令归属
-            let fold = sample.is_some_and(|s| {
+            let fold = sample.is_some_and(|mut s| {
+                s.container = registry.known(pid).and_then(|k| k.container);
                 registry.command_of(pid).is_none()
                     && registry
                         .periodic
@@ -707,6 +737,7 @@ fn sample_of(registry: &ProcessRegistry, info: &ProcessInfo<'_>) -> Option<perio
         parent_name,
         parent_exe,
         parent_cmd_line,
+        container: None,
     })
 }
 
@@ -757,48 +788,48 @@ fn process_event(
     // 父进程的名字、路径与命令行（启动事件才有）：规则按父进程判断（ParentImage / ParentCommandLine）不用再回查
     let mut parent = None;
     let now = SystemTime::now();
-    let (guid, parent_guid, name, exe, started, container, command, login) = if activity
-        == ACTIVITY_TERMINATE
-    {
-        known = registry.known(pid)?;
-        registry.forget(pid);
-        (
-            known.guid,
-            ppid.and_then(|p| registry.guid_of(p)),
-            if name.is_empty() {
-                known.name.as_str()
-            } else {
-                name
-            },
-            exe.or(known.exe.as_deref()),
-            known.started,
-            known.container.clone(),
-            known.command.clone(),
-            known.login.clone(),
-        )
-    } else {
-        let name = full_name(name, exe);
-        let command = command_of(registry, pid, ppid);
-        let login = login_of(registry, pid, ppid);
-        parent = ppid.and_then(|p| registry.known(p));
-        // 健康检查的认定要看这个 pid 之前的登记（原地 exec），登记新进程之前取
-        let container = container_of(pid).map(|c| healthcheck_of(registry, pid, ppid, c, cmd_line));
-        let (guid, parent_guid) = registry.register(pid, ppid);
-        registry.describe(pid, name, exe);
-        registry.set_cmd_line(pid, cmd_line);
-        registry.annotate(pid, Some(now), container.clone(), command.clone());
-        registry.set_login(pid, login.clone());
-        (
-            guid,
-            parent_guid,
-            name,
-            exe,
-            None,
-            container,
-            command,
-            login,
-        )
-    };
+    let (guid, parent_guid, name, exe, started, container, command, login) =
+        if activity == ACTIVITY_TERMINATE {
+            known = registry.known(pid)?;
+            registry.forget(pid);
+            (
+                known.guid,
+                ppid.and_then(|p| registry.guid_of(p)),
+                if name.is_empty() {
+                    known.name.as_str()
+                } else {
+                    name
+                },
+                exe.or(known.exe.as_deref()),
+                known.started,
+                known.container.clone(),
+                known.command.clone(),
+                known.login.clone(),
+            )
+        } else {
+            let name = full_name(name, exe);
+            let command = command_of(registry, pid, ppid);
+            let login = login_of(registry, pid, ppid);
+            parent = ppid.and_then(|p| registry.known(p));
+            // 健康检查的认定要看这个 pid 之前的登记（原地 exec），登记新进程之前取
+            let container = container_or_inherited(registry, pid, ppid)
+                .map(|c| healthcheck_of(registry, pid, ppid, c, cmd_line));
+            let (guid, parent_guid) = registry.register(pid, ppid);
+            registry.describe(pid, name, exe);
+            registry.set_cmd_line(pid, cmd_line);
+            registry.annotate(pid, Some(now), container.clone(), command.clone());
+            registry.set_login(pid, login.clone());
+            (
+                guid,
+                parent_guid,
+                name,
+                exe,
+                None,
+                container,
+                command,
+                login,
+            )
+        };
     let mut raw = serde_json::json!({
         "activity_id": activity,
         "process": {
