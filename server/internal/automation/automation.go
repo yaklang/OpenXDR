@@ -129,12 +129,20 @@ var (
 	// 技术按前缀比，子技术一并算：T1070 指标清除（清日志、清历史）、T1562 削弱防御（关审计、关防火墙）、
 	// T1003 凭据转储、T1485/T1486/T1490 数据销毁、加密勒索、删备份与卷影
 	watchTechniques = []string{"T1003", "T1070", "T1562", "T1485", "T1486", "T1490"}
+	// 低/中危（severity≤3）规则里仅涉及常规权限/时间戳调整、根证书更新、通用配置文件编辑的技术：
+	// SigmaHQ 给这类规则也标了 defense-impairment / impact（如 chmod /tmp、update-ca-certificates、sed /etc/*.conf），
+	// 把它们当高危例外会让日常构建和运维脚本跳过（规则, 资产）去重、每半小时触发重研判甚至插队。
+	// 仅当规则声明的全部技术均在此窄列表内且 severity≤3 时才豁免；凭据窃取、关防护（T1562）、清日志、破坏或高危（severity≥4）一律保留高危例外。
+	routineLowMedTechniques = []string{"T1222", "T1553", "T1565", "T1070.006"}
 )
 
-// syntheticWatch 不在规则库里、按自身性质列入高危例外的平台合成规则：爆破得手（凭据）、内部横向喷洒
+// syntheticWatch 不在规则库里、按自身性质列入高危例外的平台合成规则：爆破得手（凭据）、内部横向喷洒、平台自身监控与审计篡改
 var syntheticWatch = map[string]bool{
-	sigma.RuleBruteforceSuccess: true,
-	sigma.RuleLateralSpray:      true,
+	sigma.RuleBruteforceSuccess:  true,
+	sigma.RuleLateralSpray:       true,
+	sigma.RuleControlPlaneChange: true,
+	sigma.RuleCoreAgentSilent:    true,
+	sigma.RuleAuditTamper:        true,
 }
 
 // Watch 来自可信来源的这条命中是否仍要进关联与研判。情报命中（已知恶意的地址、域名、文件）一律进；
@@ -165,16 +173,38 @@ func watch(ruleID string, rules []*sigma.Rule) (critical, known bool) {
 
 // Critical 规则是否属于高危例外
 func Critical(r *sigma.Rule) bool {
+	if r.Severity > 0 && r.Severity <= 3 && routineLowMed(r.Techniques) {
+		return false
+	}
 	for _, t := range r.Tactics {
 		if watchTactics[t] {
 			return true
 		}
 	}
 	for _, t := range r.Techniques {
-		for _, w := range watchTechniques {
-			if t == w || strings.HasPrefix(t, w+".") {
-				return true
-			}
+		if matchesTechnique(strings.ToUpper(t), watchTechniques) {
+			return true
+		}
+	}
+	return false
+}
+
+func routineLowMed(techniques []string) bool {
+	if len(techniques) == 0 {
+		return false
+	}
+	for _, t := range techniques {
+		if !matchesTechnique(strings.ToUpper(t), routineLowMedTechniques) {
+			return false
+		}
+	}
+	return true
+}
+
+func matchesTechnique(tech string, prefixes []string) bool {
+	for _, w := range prefixes {
+		if tech == w || strings.HasPrefix(tech, w+".") {
+			return true
 		}
 	}
 	return false

@@ -36,9 +36,22 @@ func containerOf(al *ent.Alert) string {
 	return raw.Container.UID
 }
 
+// platformSelfRule 平台自身控制面变更、核心节点失联与审计链篡改：与宿主机上的普通进程/网络告警性质不同，
+// 各自按（规则, 资产）独立分桶，不靠普通时间窗混进宿主机的日常运维事件里。
+func platformSelfRule(ruleID string) bool {
+	return ruleID == sigma.RuleControlPlaneChange || ruleID == sigma.RuleCoreAgentSilent || ruleID == sigma.RuleAuditTamper
+}
+
 // correlationBucket 时间窗归并的归属桶：有资产的按资产 + 容器，同一台宿主机上一个容器的噪声撑不住另一个容器的 incident；
-// 无资产的 Suricata 告警按组、探针与连接，其余进全局 unknown 桶
+// 平台自身监控按规则独立分桶；无资产的 Suricata 告警按组、探针与连接，其余进全局 unknown 桶
 func correlationBucket(al *ent.Alert) string {
+	if platformSelfRule(al.RuleID) {
+		asset := uuid.Nil.String()
+		if al.AssetID != nil {
+			asset = al.AssetID.String()
+		}
+		return "selfwatch|" + al.RuleID + "|" + asset
+	}
 	if al.AssetID != nil {
 		return al.AssetID.String() + "|" + containerOf(al)
 	}
@@ -50,15 +63,22 @@ func correlationBucket(al *ent.Alert) string {
 
 // bucketScope 归属桶在告警表上的范围，与 correlationBucket 同一口径
 func bucketScope(al *ent.Alert) predicate.Alert {
+	if platformSelfRule(al.RuleID) {
+		if al.AssetID != nil {
+			return alert.And(alert.RuleIDEQ(al.RuleID), alert.AssetIDEQ(*al.AssetID))
+		}
+		return alert.And(alert.RuleIDEQ(al.RuleID), alert.AssetIDIsNil())
+	}
+	notSelf := alert.RuleIDNotIn(sigma.RuleControlPlaneChange, sigma.RuleCoreAgentSilent, sigma.RuleAuditTamper)
 	if al.AssetID != nil {
-		return alert.And(alert.AssetIDEQ(*al.AssetID), inContainer(containerOf(al)))
+		return alert.And(notSelf, alert.AssetIDEQ(*al.AssetID), inContainer(containerOf(al)))
 	}
 	if scope := externalScope(al); scope != "" {
-		return alert.And(alert.AssetIDIsNil(), alert.TsLTE(al.Ts), alert.HasEventWith(event.SourceEQ("suricata"), func(s *sql.Selector) {
+		return alert.And(notSelf, alert.AssetIDIsNil(), alert.TsLTE(al.Ts), alert.HasEventWith(event.SourceEQ("suricata"), func(s *sql.Selector) {
 			s.Where(sqljson.ValueEQ(event.FieldRaw, scope, sqljson.Path("metadata", "suricata_scope")))
 		}))
 	}
-	return alert.And(alert.AssetIDIsNil(), alert.Not(alert.HasEventWith(event.SourceEQ("suricata"))))
+	return alert.And(notSelf, alert.AssetIDIsNil(), alert.Not(alert.HasEventWith(event.SourceEQ("suricata"))))
 }
 
 // inContainer 告警事件的容器是 uid（空串即宿主机自身）。events 按天分区，告警时间就是事件时间，

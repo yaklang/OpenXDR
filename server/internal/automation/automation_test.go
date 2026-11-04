@@ -56,13 +56,29 @@ func TestWatch(t *testing.T) {
 		{ID: "auditoff", Tactics: []string{"defense-evasion"}, Techniques: []string{"T1562.012"}},
 		{ID: "wipe", Tactics: []string{"impact"}},
 		{ID: "lookalike", Techniques: []string{"T10700"}},
+		{ID: "rootca-low", Severity: 2, Tactics: []string{"defense-impairment"}, Techniques: []string{"T1553.004"}},
+		{ID: "chmod-med", Severity: 3, Tactics: []string{"defense-impairment"}, Techniques: []string{"T1222.002"}},
+		{ID: "sed-med", Severity: 3, Tactics: []string{"impact"}, Techniques: []string{"T1565.001"}},
+		{ID: "timestomp-med", Severity: 3, Tactics: []string{"defense-evasion"}, Techniques: []string{"T1070.006"}},
+		{ID: "histdel-high", Severity: 4, Tactics: []string{"impact"}, Techniques: []string{"T1565.001"}},
+		{ID: "ufw-med", Severity: 3, Tactics: []string{"defense-impairment"}, Techniques: []string{"T1686"}},
+		{ID: "dump-low", Severity: 2, Tactics: []string{"credential-access"}, Techniques: []string{"T1003.008"}},
+		{ID: "auditoff-low", Severity: 2, Tactics: []string{"defense-evasion"}, Techniques: []string{"T1562.012"}},
+		{ID: "wipe-low", Severity: 2, Tactics: []string{"impact"}, Techniques: []string{"T1485"}},
+		{ID: "chmod-plus-auditoff", Severity: 2, Tactics: []string{"defense-impairment"}, Techniques: []string{"T1222.002", "T1562.001"}},
 	}
 	cases := map[string]bool{
 		"recon": false, "revshell": false, "lookalike": false,
+		"rootca-low": false, "chmod-med": false, "sed-med": false, "timestomp-med": false,
 		"dump": true, "logclear": true, "auditoff": true, "wipe": true,
-		"intel:ip:1.2.3.4":     true,
-		"不在命中列表里":              true,
-		sigma.RuleLateralSpray: true,
+		"histdel-high": true, "ufw-med": true,
+		"dump-low": true, "auditoff-low": true, "wipe-low": true, "chmod-plus-auditoff": true,
+		"intel:ip:1.2.3.4":           true,
+		"不在命中列表里":                    true,
+		sigma.RuleLateralSpray:       true,
+		sigma.RuleControlPlaneChange: true,
+		sigma.RuleCoreAgentSilent:    true,
+		sigma.RuleAuditTamper:        true,
 	}
 	for id, want := range cases {
 		if got := Watch(id, rules); got != want {
@@ -71,8 +87,12 @@ func TestWatch(t *testing.T) {
 	}
 	// 确知的高危例外：查不到的规则不兜底
 	known := map[string]bool{
-		"recon": false, "dump": true, "intel:ip:1.2.3.4": true, "不在命中列表里": false,
-		sigma.RuleLateralSpray: true, sigma.RuleBruteforceSuccess: true, sigma.RuleNewProcess: false,
+		"recon": false, "rootca-low": false, "chmod-med": false, "sed-med": false,
+		"dump": true, "histdel-high": true, "ufw-med": true,
+		"intel:ip:1.2.3.4": true, "不在命中列表里": false,
+		sigma.RuleLateralSpray: true, sigma.RuleBruteforceSuccess: true,
+		sigma.RuleControlPlaneChange: true, sigma.RuleCoreAgentSilent: true, sigma.RuleAuditTamper: true,
+		sigma.RuleNewProcess: false,
 	}
 	for id, want := range known {
 		if got := KnownCritical(id, rules); got != want {

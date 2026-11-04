@@ -15,6 +15,7 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/auditlog"
+	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 )
@@ -40,7 +41,8 @@ func setup(t *testing.T) *fixture {
 		db.Alert.Create().SetTs(time.Now()).SetRuleID("probe").SetSeverity(2).SetAssetID(host.ID).SetEventID(ev.ID).SaveX(ctx)
 	}
 	f := &fixture{ctx: ctx, db: db, host: host.ID, store: suppress.New(db, time.Hour)}
-	f.r = &Reviewer{DB: db, Store: f.store, Model: func() string { return "platform-model" }, Interval: time.Hour,
+	f.r = &Reviewer{DB: db, Store: f.store, Rules: stubCatalog{{ID: "probe", Title: "DNS Probe", Severity: 2}},
+		Model: func() string { return "platform-model" }, Interval: time.Hour,
 		Judge: func(_ context.Context, model, material string) (bool, string, error) {
 			f.models, f.content = append(f.models, model), material
 			return f.answer()

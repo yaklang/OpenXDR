@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"openxdr/server/ent"
 	"openxdr/server/internal/sigma"
 )
@@ -109,5 +111,27 @@ func TestCoarseKey(t *testing.T) {
 	}
 	if c := coarseOf(recurAlert("r", 4003, `{"query":{"hostname":"a.top"}}`)); c != "" {
 		t.Errorf("非进程类不应有粗键：%q", c)
+	}
+}
+
+func TestSelfWatchCorrelationBucket(t *testing.T) {
+	host := uuid.New()
+	proc := &ent.Alert{RuleID: "30bcce26", AssetID: &host}
+	cp1 := &ent.Alert{RuleID: sigma.RuleControlPlaneChange, AssetID: &host}
+	cp2 := &ent.Alert{RuleID: sigma.RuleControlPlaneChange, AssetID: &host}
+	silent := &ent.Alert{RuleID: sigma.RuleCoreAgentSilent, AssetID: &host}
+	tamper := &ent.Alert{RuleID: sigma.RuleAuditTamper}
+
+	if correlationBucket(cp1) != correlationBucket(cp2) {
+		t.Fatalf("同节点控制面变更告警应进同一桶：%q vs %q", correlationBucket(cp1), correlationBucket(cp2))
+	}
+	if correlationBucket(cp1) == correlationBucket(proc) {
+		t.Fatalf("控制面变更不应与宿主机普通进程告警同桶：%q", correlationBucket(cp1))
+	}
+	if correlationBucket(cp1) == correlationBucket(silent) {
+		t.Fatalf("不同类的平台自监控不应同桶：%q", correlationBucket(cp1))
+	}
+	if correlationBucket(tamper) == correlationBucket(&ent.Alert{RuleID: "other"}) {
+		t.Fatalf("审计链篡改不应进普通无资产桶：%q", correlationBucket(tamper))
 	}
 }

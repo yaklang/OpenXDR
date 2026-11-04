@@ -27,6 +27,16 @@ detection:
       - 'sh -i >&'
       - 'nc -e /bin/'
       - 'ncat -e /bin/'
-      - 'socket.SOCK_STREAM'
-  condition: devsock_shell_io or explicit
+  py_revshell:
+    CommandLine|contains: 'socket.SOCK_STREAM'
+  py_revshell_exec:
+    CommandLine|contains:
+      - 'subprocess'
+      - 'pty.spawn'
+      - 'os.dup2'
+      - 'os.popen'
+      - 'os.system'
+      - '/bin/sh'
+      - '/bin/bash'
+  condition: devsock_shell_io or explicit or (py_revshell and py_revshell_exec)
 level: critical

@@ -429,14 +429,18 @@ func parseVerdict(incidentID, answer string) json.RawMessage {
 	return fallback
 }
 
-// 告警明细条数：失败一次减半（超时多半是上下文太大），最少留几条；汇总照常是全量
+// 告警明细条数与图节点上限：失败一次减半（超时多半是上下文太大），最少留几条；汇总照常是全量
 const (
 	detailLimit    = 50
 	minDetailLimit = 5
+	graphNodeLimit = 60
+	minGraphNodes  = 10
 )
 
 func (e *Engine) buildContext(ctx context.Context, inc *ent.Incident) (string, error) {
-	limit := max(detailLimit>>min(inc.TriageFailures, 10), minDetailLimit)
+	shift := min(inc.TriageFailures, 10)
+	limit := max(detailLimit>>shift, minDetailLimit)
+	graphMax := max(graphNodeLimit>>shift, minGraphNodes)
 	scope := alert.IncidentIDEQ(inc.ID)
 	total, err := e.DB.Alert.Query().Where(scope).Count(ctx)
 	if err != nil {
@@ -453,7 +457,7 @@ func (e *Engine) buildContext(ctx context.Context, inc *ent.Incident) (string, e
 		title = *inc.Title
 	}
 	fmt.Fprintf(&sb, "# 事件: %s\n创建时间: %s\n", title, inc.CreatedAt.Format(time.RFC3339))
-	fmt.Fprintf(&sb, "## 实体关系图\n%s\n", inc.Graph)
+	fmt.Fprintf(&sb, "## 实体关系图\n%s\n", compactGraph(inc.Graph, graphMax))
 	if err := e.appendRuleTally(ctx, &sb, "## 告警汇总（按规则统计同类重复，含明细未列出的）\n", scope); err != nil {
 		return "", err
 	}
@@ -904,4 +908,97 @@ func excerpt(s string, n int) string {
 		return string(r)
 	}
 	return string(r[:n]) + "…"
+}
+
+// compactGraph 裁剪给模型看的实体关系图：incidents.graph 最多 500 个节点（约 145KB JSON），
+// 多轮工具调用每轮重发会消耗 20 万+ Token 且让失败退避缩容失效。
+// 小图原样保留；超限时优先保留全部跨主机横向移动（lateral）端点与 asset 节点，其次保留最新加入的进程/连接/文件节点，
+// 最后才保留已被下方「告警汇总/明细」覆盖的 alert 叶子节点，并显式标记 truncated / dropped_nodes / dropped_edges 防止模型将截断子图误判为完整全貌。
+func compactGraph(raw json.RawMessage, maxNodes int) string {
+	type node struct {
+		ID    string `json:"id"`
+		Type  string `json:"type"`
+		Label string `json:"label"`
+	}
+	type edge struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+		Rel  string `json:"rel"`
+	}
+	var g struct {
+		Nodes        []node `json:"nodes"`
+		Edges        []edge `json:"edges"`
+		Overflow     int    `json:"overflow,omitempty"`
+		Truncated    bool   `json:"truncated,omitempty"`
+		DroppedNodes int    `json:"dropped_nodes,omitempty"`
+		DroppedEdges int    `json:"dropped_edges,omitempty"`
+	}
+	if maxNodes <= 0 || json.Unmarshal(raw, &g) != nil || (len(g.Nodes) <= maxNodes && len(g.Edges) <= maxNodes*2) {
+		return string(raw)
+	}
+	lateralEnd := map[string]bool{}
+	for _, e := range g.Edges {
+		if e.Rel == "lateral" {
+			lateralEnd[e.From] = true
+			lateralEnd[e.To] = true
+		}
+	}
+	keepID := make(map[string]bool, maxNodes)
+	pickReverse := func(match func(node) bool) {
+		for i := len(g.Nodes) - 1; i >= 0 && len(keepID) < maxNodes; i-- {
+			n := g.Nodes[i]
+			if !keepID[n.ID] && match(n) {
+				keepID[n.ID] = true
+			}
+		}
+	}
+	// 1. 跨主机横向边端点与资产节点最高优先（从后往前保最新加入的横向源/目标主机）
+	pickReverse(func(n node) bool { return lateralEnd[n.ID] || n.Type == "asset" })
+	// 2. 非 alert 实体节点（进程、连接、文件等，从后往前保留最新攻击链）
+	pickReverse(func(n node) bool { return n.Type != "alert" })
+	// 3. 仍有富余时才保留最新 alert 叶子节点
+	pickReverse(func(n node) bool { return n.Type == "alert" })
+
+	kept := make([]node, 0, len(keepID))
+	for _, n := range g.Nodes {
+		if keepID[n.ID] {
+			kept = append(kept, n)
+		}
+	}
+
+	maxEdges := maxNodes * 2
+	keepEdge := make([]bool, len(g.Edges))
+	edgeCount := 0
+	for i := len(g.Edges) - 1; i >= 0 && edgeCount < maxEdges; i-- {
+		e := g.Edges[i]
+		if e.Rel == "lateral" && keepID[e.From] && keepID[e.To] {
+			keepEdge[i] = true
+			edgeCount++
+		}
+	}
+	for i := len(g.Edges) - 1; i >= 0 && edgeCount < maxEdges; i-- {
+		e := g.Edges[i]
+		if !keepEdge[i] && keepID[e.From] && keepID[e.To] {
+			keepEdge[i] = true
+			edgeCount++
+		}
+	}
+	edges := make([]edge, 0, edgeCount)
+	for i, e := range g.Edges {
+		if keepEdge[i] {
+			edges = append(edges, e)
+		}
+	}
+
+	g.DroppedNodes = len(g.Nodes) - len(kept)
+	g.DroppedEdges = len(g.Edges) - len(edges)
+	g.Truncated = g.DroppedNodes > 0 || g.DroppedEdges > 0
+	g.Overflow += g.DroppedNodes
+	g.Nodes = kept
+	g.Edges = edges
+	out, err := json.Marshal(g)
+	if err != nil {
+		return string(raw)
+	}
+	return string(out)
 }

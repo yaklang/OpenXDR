@@ -113,3 +113,34 @@ func TestIPFacts(t *testing.T) {
 		t.Fatalf("得到 %q", got)
 	}
 }
+
+func TestCompactGraph(t *testing.T) {
+	small := `{"nodes":[{"id":"asset:1","type":"asset","label":"h1"}]}`
+	if got := compactGraph(json.RawMessage(small), 60); got != small {
+		t.Fatalf("小图应原样保留，得到 %s", got)
+	}
+
+	raw := `{"nodes":[` +
+		`{"id":"alert:1","type":"alert","label":"a1"},` +
+		`{"id":"proc:old","type":"process","label":"old-sh"},` +
+		`{"id":"asset:1","type":"asset","label":"web"},` +
+		`{"id":"alert:2","type":"alert","label":"a2"},` +
+		`{"id":"proc:new","type":"process","label":"new-bash"},` +
+		`{"id":"asset:2","type":"asset","label":"db-src"}` +
+		`],"edges":[` +
+		`{"from":"asset:1","to":"proc:old","rel":"hosts"},` +
+		`{"from":"proc:old","to":"alert:1","rel":"triggered"},` +
+		`{"from":"asset:1","to":"proc:new","rel":"hosts"},` +
+		`{"from":"proc:new","to":"alert:2","rel":"triggered"},` +
+		`{"from":"asset:2","to":"asset:1","rel":"lateral"}` +
+		`]}`
+	got := compactGraph(json.RawMessage(raw), 3)
+	for _, want := range []string{`"asset:1"`, `"asset:2"`, `"proc:new"`, `"rel":"lateral"`, `"truncated":true`, `"dropped_nodes":3`, `"dropped_edges":3`, `"overflow":3`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("裁剪结果缺少 %s：%s", want, got)
+		}
+	}
+	if strings.Contains(got, `"alert:1"`) || strings.Contains(got, `"proc:old"`) {
+		t.Fatalf("超限时应先裁掉 alert 叶子与早期普通进程，保留后出现的横向主机与最新进程：%s", got)
+	}
+}

@@ -107,6 +107,16 @@ cases:
         name: python3
         cmd_line: "python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((\"10.0.0.1\",4444))'"
 
+  - name: python socket 端口连通性探测（不该单独告警）
+    source: atomic T1059.006 良性对照
+    class: 1007
+    os: linux
+    expect: undetected
+    event:
+      process:
+        name: python3
+        cmd_line: "python3 -c 'import socket; s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.connect((\"127.0.0.1\",2222)); s.close()'"
+
   - name: 下载后管道进 shell
     source: atomic T1059.004
     class: 1007
