@@ -555,7 +555,26 @@ func (e *Engine) EvaluateSignals(classUID int, os string, raw map[string]any) []
 	return e.evaluate(classUID, os, raw, true)
 }
 
+// isProcessExit 进程退出事件（class_uid=1007, activity_id=2）只用于血缘与耗时留痕，
+// 不带命令行与父进程详情，不能拿去匹配 process_creation 等进程活动规则。
+func isProcessExit(classUID int, raw map[string]any) bool {
+	if classUID != 1007 || raw == nil {
+		return false
+	}
+	switch v := raw["activity_id"].(type) {
+	case float64:
+		return v == 2
+	case int:
+		return v == 2
+	default:
+		return false
+	}
+}
+
 func (e *Engine) evaluate(classUID int, os string, raw map[string]any, signal bool) []*Rule {
+	if isProcessExit(classUID, raw) {
+		return nil
+	}
 	s := e.load()
 	ctx, _ := s.contexts.Get().(*evalCtx)
 	if ctx == nil {
@@ -598,7 +617,7 @@ func (e *Engine) Rules() []*Rule {
 // Matches 对单条事件独立求值，供控制台规则回测使用。
 // 跨事件时序规则（Kind 非空）无单事件条件树，直接返回 false。
 func (r *Rule) Matches(classUID int, os string, raw map[string]any) bool {
-	if r == nil || r.cond == nil || r.Kind != "" {
+	if r == nil || r.cond == nil || r.Kind != "" || isProcessExit(classUID, raw) {
 		return false
 	}
 	if r.ClassUID != 0 && r.ClassUID != classUID {

