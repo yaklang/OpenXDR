@@ -122,10 +122,6 @@ func (_c *ZoneCreate) ExecX(ctx context.Context) {
 
 // defaults sets the default values of the builder before save.
 func (_c *ZoneCreate) defaults() {
-	if _, ok := _c.mutation.ResponseTier(); !ok {
-		v := zone.DefaultResponseTier
-		_c.mutation.SetResponseTier(v)
-	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		v := zone.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
@@ -156,9 +152,6 @@ func (_c *ZoneCreate) check() error {
 		if err := zone.KindValidator(v); err != nil {
 			return &ValidationError{Name: "kind", err: fmt.Errorf(`ent: validator failed for field "Zone.kind": %w`, err)}
 		}
-	}
-	if _, ok := _c.mutation.ResponseTier(); !ok {
-		return &ValidationError{Name: "response_tier", err: errors.New(`ent: missing required field "Zone.response_tier"`)}
 	}
 	if v, ok := _c.mutation.ResponseTier(); ok {
 		if err := zone.ResponseTierValidator(v); err != nil {
@@ -221,7 +214,7 @@ func (_c *ZoneCreate) createSpec() (*Zone, *sqlgraph.CreateSpec) {
 	}
 	if value, ok := _c.mutation.ResponseTier(); ok {
 		_spec.SetField(zone.FieldResponseTier, field.TypeEnum, value)
-		_node.ResponseTier = value
+		_node.ResponseTier = &value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(zone.FieldCreatedAt, field.TypeTime, value)

@@ -23,16 +23,20 @@ func (Containment) Fields() []ent.Field {
 		// isolate_host / block_network；target 是封锁的地址
 		field.String("kind"),
 		field.String("target").Optional(),
+		// 结束进程用：target 是进程 GUID，这里是 PID（agent 两个都核对）
+		field.Uint32("pid").Default(0),
 		// 资产 + 动作 + 目标：同一个键同时只有一条 active，新证据续期它而不是重复下发
 		field.String("key"),
-		// 触发信号（规则 ID）与告警；来源主机是攻击方，role 说明这条处置落在来源还是受害方
+		// 触发信号（规则 ID）与告警；来源主机是发起攻击的纳管主机（外部来源时为空）。
+		// role 说明这条处置落在哪一方：source 来源 / victim 受害方 / host 失陷主机自身（情报命中）
 		field.String("signal"),
 		field.UUID("alert_id", uuid.UUID{}),
 		field.UUID("incident_id", uuid.UUID{}).Optional().Nillable(),
-		field.UUID("source_asset_id", uuid.UUID{}),
-		field.Enum("role").Values("source", "victim"),
-		// active 生效中 / expired 到期已解除 / held 熔断挡下 / skipped 不该自动处置 / failed 下发失败
-		field.Enum("state").Values("active", "expired", "held", "skipped", "failed"),
+		field.UUID("source_asset_id", uuid.UUID{}).Optional().Nillable(),
+		field.Enum("role").Values("source", "victim", "host"),
+		// active 生效中（封锁、隔离主机这类可逆处置的租约）/ expired 到期已解除 / executed 一次性处置已下发
+		// （结束进程、隔离文件、锁定账号：自动恢复比不恢复更危险，只能人工恢复）/ held 熔断挡下 / skipped 不该自动处置 / failed 下发失败
+		field.Enum("state").Values("active", "expired", "executed", "held", "skipped", "failed"),
 		field.Text("reason"),
 		field.UUID("command_id", uuid.UUID{}).Optional().Nillable(),
 		field.UUID("lift_command_id", uuid.UUID{}).Optional().Nillable(),

@@ -25,6 +25,8 @@ const (
 	FieldKind = "kind"
 	// FieldTarget holds the string denoting the target field in the database.
 	FieldTarget = "target"
+	// FieldPid holds the string denoting the pid field in the database.
+	FieldPid = "pid"
 	// FieldKey holds the string denoting the key field in the database.
 	FieldKey = "key"
 	// FieldSignal holds the string denoting the signal field in the database.
@@ -61,6 +63,7 @@ var Columns = []string{
 	FieldGroupID,
 	FieldKind,
 	FieldTarget,
+	FieldPid,
 	FieldKey,
 	FieldSignal,
 	FieldAlertID,
@@ -88,6 +91,8 @@ func ValidColumn(column string) bool {
 var (
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
+	// DefaultPid holds the default value on creation for the "pid" field.
+	DefaultPid uint32
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
@@ -99,6 +104,7 @@ type Role string
 const (
 	RoleSource Role = "source"
 	RoleVictim Role = "victim"
+	RoleHost   Role = "host"
 )
 
 func (r Role) String() string {
@@ -108,7 +114,7 @@ func (r Role) String() string {
 // RoleValidator is a validator for the "role" field enum values. It is called by the builders before save.
 func RoleValidator(r Role) error {
 	switch r {
-	case RoleSource, RoleVictim:
+	case RoleSource, RoleVictim, RoleHost:
 		return nil
 	default:
 		return fmt.Errorf("containment: invalid enum value for role field: %q", r)
@@ -120,11 +126,12 @@ type State string
 
 // State values.
 const (
-	StateActive  State = "active"
-	StateExpired State = "expired"
-	StateHeld    State = "held"
-	StateSkipped State = "skipped"
-	StateFailed  State = "failed"
+	StateActive   State = "active"
+	StateExpired  State = "expired"
+	StateExecuted State = "executed"
+	StateHeld     State = "held"
+	StateSkipped  State = "skipped"
+	StateFailed   State = "failed"
 )
 
 func (s State) String() string {
@@ -134,7 +141,7 @@ func (s State) String() string {
 // StateValidator is a validator for the "state" field enum values. It is called by the builders before save.
 func StateValidator(s State) error {
 	switch s {
-	case StateActive, StateExpired, StateHeld, StateSkipped, StateFailed:
+	case StateActive, StateExpired, StateExecuted, StateHeld, StateSkipped, StateFailed:
 		return nil
 	default:
 		return fmt.Errorf("containment: invalid enum value for state field: %q", s)
@@ -172,6 +179,11 @@ func ByKind(opts ...sql.OrderTermOption) OrderOption {
 // ByTarget orders the results by the target field.
 func ByTarget(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTarget, opts...).ToFunc()
+}
+
+// ByPid orders the results by the pid field.
+func ByPid(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPid, opts...).ToFunc()
 }
 
 // ByKey orders the results by the key field.

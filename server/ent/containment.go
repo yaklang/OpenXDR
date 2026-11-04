@@ -28,6 +28,8 @@ type Containment struct {
 	Kind string `json:"kind,omitempty"`
 	// Target holds the value of the "target" field.
 	Target string `json:"target,omitempty"`
+	// Pid holds the value of the "pid" field.
+	Pid uint32 `json:"pid,omitempty"`
 	// Key holds the value of the "key" field.
 	Key string `json:"key,omitempty"`
 	// Signal holds the value of the "signal" field.
@@ -37,7 +39,7 @@ type Containment struct {
 	// IncidentID holds the value of the "incident_id" field.
 	IncidentID *uuid.UUID `json:"incident_id,omitempty"`
 	// SourceAssetID holds the value of the "source_asset_id" field.
-	SourceAssetID uuid.UUID `json:"source_asset_id,omitempty"`
+	SourceAssetID *uuid.UUID `json:"source_asset_id,omitempty"`
 	// Role holds the value of the "role" field.
 	Role containment.Role `json:"role,omitempty"`
 	// State holds the value of the "state" field.
@@ -60,13 +62,15 @@ func (*Containment) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case containment.FieldGroupID, containment.FieldIncidentID, containment.FieldCommandID, containment.FieldLiftCommandID:
+		case containment.FieldGroupID, containment.FieldIncidentID, containment.FieldSourceAssetID, containment.FieldCommandID, containment.FieldLiftCommandID:
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
+		case containment.FieldPid:
+			values[i] = new(sql.NullInt64)
 		case containment.FieldKind, containment.FieldTarget, containment.FieldKey, containment.FieldSignal, containment.FieldRole, containment.FieldState, containment.FieldReason:
 			values[i] = new(sql.NullString)
 		case containment.FieldCreatedAt, containment.FieldExpiresAt, containment.FieldEndedAt:
 			values[i] = new(sql.NullTime)
-		case containment.FieldID, containment.FieldAssetID, containment.FieldAlertID, containment.FieldSourceAssetID:
+		case containment.FieldID, containment.FieldAssetID, containment.FieldAlertID:
 			values[i] = new(uuid.UUID)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -120,6 +124,12 @@ func (_m *Containment) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.Target = value.String
 			}
+		case containment.FieldPid:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field pid", values[i])
+			} else if value.Valid {
+				_m.Pid = uint32(value.Int64)
+			}
 		case containment.FieldKey:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field key", values[i])
@@ -146,10 +156,11 @@ func (_m *Containment) assignValues(columns []string, values []any) error {
 				*_m.IncidentID = *value.S.(*uuid.UUID)
 			}
 		case containment.FieldSourceAssetID:
-			if value, ok := values[i].(*uuid.UUID); !ok {
+			if value, ok := values[i].(*sql.NullScanner); !ok {
 				return fmt.Errorf("unexpected type %T for field source_asset_id", values[i])
-			} else if value != nil {
-				_m.SourceAssetID = *value
+			} else if value.Valid {
+				_m.SourceAssetID = new(uuid.UUID)
+				*_m.SourceAssetID = *value.S.(*uuid.UUID)
 			}
 		case containment.FieldRole:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -250,6 +261,9 @@ func (_m *Containment) String() string {
 	builder.WriteString("target=")
 	builder.WriteString(_m.Target)
 	builder.WriteString(", ")
+	builder.WriteString("pid=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Pid))
+	builder.WriteString(", ")
 	builder.WriteString("key=")
 	builder.WriteString(_m.Key)
 	builder.WriteString(", ")
@@ -264,8 +278,10 @@ func (_m *Containment) String() string {
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
 	builder.WriteString(", ")
-	builder.WriteString("source_asset_id=")
-	builder.WriteString(fmt.Sprintf("%v", _m.SourceAssetID))
+	if v := _m.SourceAssetID; v != nil {
+		builder.WriteString("source_asset_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
 	builder.WriteString(", ")
 	builder.WriteString("role=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Role))

@@ -565,6 +565,26 @@ func (_u *AssetUpdate) ClearResponseTier() *AssetUpdate {
 	return _u
 }
 
+// SetResponseTierReason sets the "response_tier_reason" field.
+func (_u *AssetUpdate) SetResponseTierReason(v string) *AssetUpdate {
+	_u.mutation.SetResponseTierReason(v)
+	return _u
+}
+
+// SetNillableResponseTierReason sets the "response_tier_reason" field if the given value is not nil.
+func (_u *AssetUpdate) SetNillableResponseTierReason(v *string) *AssetUpdate {
+	if v != nil {
+		_u.SetResponseTierReason(*v)
+	}
+	return _u
+}
+
+// ClearResponseTierReason clears the value of the "response_tier_reason" field.
+func (_u *AssetUpdate) ClearResponseTierReason() *AssetUpdate {
+	_u.mutation.ClearResponseTierReason()
+	return _u
+}
+
 // SetRole sets the "role" field.
 func (_u *AssetUpdate) SetRole(v string) *AssetUpdate {
 	_u.mutation.SetRole(v)
@@ -1110,6 +1130,12 @@ func (_u *AssetUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.ResponseTierCleared() {
 		_spec.ClearField(asset.FieldResponseTier, field.TypeEnum)
+	}
+	if value, ok := _u.mutation.ResponseTierReason(); ok {
+		_spec.SetField(asset.FieldResponseTierReason, field.TypeString, value)
+	}
+	if _u.mutation.ResponseTierReasonCleared() {
+		_spec.ClearField(asset.FieldResponseTierReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.Role(); ok {
 		_spec.SetField(asset.FieldRole, field.TypeString, value)
@@ -1859,6 +1885,26 @@ func (_u *AssetUpdateOne) ClearResponseTier() *AssetUpdateOne {
 	return _u
 }
 
+// SetResponseTierReason sets the "response_tier_reason" field.
+func (_u *AssetUpdateOne) SetResponseTierReason(v string) *AssetUpdateOne {
+	_u.mutation.SetResponseTierReason(v)
+	return _u
+}
+
+// SetNillableResponseTierReason sets the "response_tier_reason" field if the given value is not nil.
+func (_u *AssetUpdateOne) SetNillableResponseTierReason(v *string) *AssetUpdateOne {
+	if v != nil {
+		_u.SetResponseTierReason(*v)
+	}
+	return _u
+}
+
+// ClearResponseTierReason clears the value of the "response_tier_reason" field.
+func (_u *AssetUpdateOne) ClearResponseTierReason() *AssetUpdateOne {
+	_u.mutation.ClearResponseTierReason()
+	return _u
+}
+
 // SetRole sets the "role" field.
 func (_u *AssetUpdateOne) SetRole(v string) *AssetUpdateOne {
 	_u.mutation.SetRole(v)
@@ -2434,6 +2480,12 @@ func (_u *AssetUpdateOne) sqlSave(ctx context.Context) (_node *Asset, err error)
 	}
 	if _u.mutation.ResponseTierCleared() {
 		_spec.ClearField(asset.FieldResponseTier, field.TypeEnum)
+	}
+	if value, ok := _u.mutation.ResponseTierReason(); ok {
+		_spec.SetField(asset.FieldResponseTierReason, field.TypeString, value)
+	}
+	if _u.mutation.ResponseTierReasonCleared() {
+		_spec.ClearField(asset.FieldResponseTierReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.Role(); ok {
 		_spec.SetField(asset.FieldRole, field.TypeString, value)

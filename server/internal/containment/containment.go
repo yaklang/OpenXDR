@@ -1,9 +1,11 @@
 // Package containment 自主响应：确定性信号命中后，不等研判、不等人，按角色和处置等级直接遏制。
 //
 // 设计见 docs/autonomous-response-design.md。要点：
-//   - 遏制攻击来源，受害方只做外科手术式的处置（封锁来源地址），永远不隔离受害主机
-//   - 动作强度看来源的处置等级：实验可以隔离整机，生产与核心不隔离
-//   - 每次执行都是租约：证据持续就续期，到期自动解除；没执行的决定也落表，决策记录就是 containments
+//   - 遏制攻击来源，受害方只做外科手术式的处置（封锁来源、锁定被攻破的账号），永远不隔离受害主机
+//   - 动作强度看处置等级：实验可以隔离整机，生产不隔离，核心只封锁与结束确认恶意的进程
+//   - 封锁与隔离主机是租约：证据持续就续期，到期自动解除。结束进程、隔离文件、锁定账号一次性执行，
+//     不自动恢复——把被爆破的账号自动解锁、把恶意文件自动放回，都比不恢复更危险
+//   - 没执行的决定也落表，决策记录就是 containments
 //   - 熔断：一小时内执行太多、或一个组里隔离的主机太多，就只记录不执行。宁可漏处置，不能让一个误报信号关掉全网
 //
 // 单活运行（cluster.RunLeader），同一时刻只有一个节点在做决定，表里的键不会并发撞车。
@@ -14,6 +16,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,12 +26,10 @@ import (
 	entasset "openxdr/server/ent/asset"
 	entcontainment "openxdr/server/ent/containment"
 	"openxdr/server/internal/audit"
-	"openxdr/server/internal/ingest"
 	"openxdr/server/internal/response"
-	"openxdr/server/internal/sigma"
 )
 
-// 自动处置范围：lab 只处置来源是实验等级的攻击（上线初期），all 不限
+// 自动处置范围：lab 只处置涉及实验等级主机的攻击（上线初期），all 不限
 const (
 	ScopeLab = "lab"
 	ScopeAll = "all"
@@ -58,6 +59,9 @@ const groupIsolationPercent = 20
 
 // 解除失败（agent 离线等）多久后再试
 const liftRetry = 5 * time.Minute
+
+// leases 可逆、按租约到期自动解除的动作与对应的解除动作；其余动作一次性执行
+var leases = map[string]string{"isolate_host": "unisolate_host", "block_network": "unblock_network"}
 
 func (e *Engine) now() time.Time {
 	if e.Now != nil {
@@ -89,23 +93,32 @@ func (e *Engine) Tick(ctx context.Context) error {
 	return e.expire(ctx)
 }
 
-// action 一条计划中的处置：在 asset 上做 kind（封锁时目标是 target）
+// action 一条计划中的处置：在 asset 上做 kind。target 是封锁的地址、隔离的文件、锁定的账号或结束的进程 GUID
 type action struct {
 	asset  *ent.Asset
 	kind   string
 	target string
+	pid    uint32
 	role   string
 	// 非空表示按规则就不该自动执行，记 skipped
 	skip string
+	// 进决策记录与审计的理由
+	why string
 }
 
 func (a action) key() string { return a.asset.ID.String() + "|" + a.kind + "|" + a.target }
 
-// react 对回看窗口内有新证据的信号告警逐条做决定。
+// plan 一条告警的处置计划。source 是发起攻击的纳管主机（没有就是 nil）
+type plan struct {
+	source  *ent.Asset
+	actions []action
+}
+
+// react 对回看窗口内有新证据的信号告警逐条做决定。平台指令与已知自动化引起的告警不处置
 func (e *Engine) react(ctx context.Context) error {
 	now := e.now()
 	alerts, err := e.DB.Alert.Query().
-		Where(alert.RuleIDEQ(sigma.RuleLateralSpray), alert.AssetIDNotNil(),
+		Where(signalAlerts(), alert.AssetIDNotNil(), alert.CommandIDIsNil(), alert.AutomationIDIsNil(),
 			alert.Or(alert.LastTsGTE(now.Add(-lookback)), alert.And(alert.LastTsIsNil(), alert.TsGTE(now.Add(-lookback)))),
 			alert.TsLTE(now)).
 		All(ctx)
@@ -113,7 +126,7 @@ func (e *Engine) react(ctx context.Context) error {
 		return err
 	}
 	for _, al := range alerts {
-		plan, err := e.planSpray(ctx, al)
+		p, err := e.planFor(ctx, al)
 		if err != nil {
 			return fmt.Errorf("告警 %s: %w", al.ID, err)
 		}
@@ -121,8 +134,8 @@ func (e *Engine) react(ctx context.Context) error {
 		if al.LastTs != nil {
 			last = *al.LastTs
 		}
-		for _, a := range plan {
-			if err := e.decide(ctx, al, a, last.Add(e.TTL)); err != nil {
+		for _, a := range p.actions {
+			if err := e.decide(ctx, al, p.source, a, last.Add(e.TTL)); err != nil {
 				return fmt.Errorf("告警 %s 处置 %s: %w", al.ID, a.key(), err)
 			}
 		}
@@ -130,79 +143,27 @@ func (e *Engine) react(ctx context.Context) error {
 	return nil
 }
 
-// planSpray 内网横向喷洒：来源是告警所在主机，受害方取证据表里窗口内的主机与它们看到的来源地址。
-func (e *Engine) planSpray(ctx context.Context, al *ent.Alert) ([]action, error) {
-	src, err := e.DB.Asset.Get(ctx, *al.AssetID)
-	if err != nil {
-		return nil, err
+// scoped 上线初期的范围限制：攻击涉及的主机里有实验等级的才处置。返回非空表示超出范围
+func (e *Engine) scoped(ctx context.Context, involved ...*ent.Asset) (string, error) {
+	if e.Scope == ScopeAll {
+		return "", nil
 	}
-	srcTier, why, err := e.tier(ctx, src)
-	if err != nil {
-		return nil, err
-	}
-	last := al.Ts
-	if al.LastTs != nil {
-		last = *al.LastTs
-	}
-	rows, err := e.SQL.QueryContext(ctx, `SELECT DISTINCT victim_asset, src_ip FROM lateral_evidence
-WHERE src_asset=$1 AND ts>$2 AND ts<=$3 AND src_ip IS NOT NULL AND victim_asset<>src_asset ORDER BY 1, 2`,
-		src.ID, al.Ts.Add(-ingest.SprayWindow), last)
-	if err != nil {
-		return nil, err
-	}
-	type hit struct {
-		victim uuid.UUID
-		ip     string
-	}
-	var hits []hit
-	for rows.Next() {
-		var h hit
-		if err := rows.Scan(&h.victim, &h.ip); err != nil {
-			rows.Close()
-			return nil, err
+	var names []string
+	for _, a := range involved {
+		if a == nil {
+			continue
 		}
-		hits = append(hits, h)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	outOfScope := ""
-	if e.Scope != ScopeAll && srcTier != TierLab {
-		outOfScope = "自动处置范围只含实验等级的来源，" + src.Hostname + " 是" + tierName(srcTier) + "（" + why + "）"
-	}
-	var plan []action
-	if srcTier == TierLab {
-		a := action{asset: src, kind: "isolate_host", role: "source", skip: outOfScope}
-		if len(e.AllowEndpoints) == 0 {
-			a.skip = "未配置 ISOLATION_ALLOW，隔离后收不到解除指令"
+		t, why, err := e.tier(ctx, a)
+		if err != nil || t == TierLab {
+			return "", err
 		}
-		plan = append(plan, a)
+		names = append(names, a.Hostname+" 是"+tierName(t)+"（"+why+"）")
 	}
-	for _, h := range hits {
-		victim, err := e.DB.Asset.Get(ctx, h.victim)
-		if err != nil {
-			return nil, err
-		}
-		a := action{asset: victim, kind: "block_network", target: h.ip, role: "victim", skip: outOfScope}
-		if a.skip == "" && srcTier == TierCore {
-			// 来源与受害方都是核心时不封：两台平台节点互封等于自己切断控制面
-			vt, _, err := e.tier(ctx, victim)
-			if err != nil {
-				return nil, err
-			}
-			if vt == TierCore {
-				a.skip = "来源与受害方都是核心资产，互相封锁会切断控制面"
-			}
-		}
-		plan = append(plan, a)
-	}
-	return plan, nil
+	return "自动处置范围只含实验等级主机涉及的攻击，" + strings.Join(names, "，"), nil
 }
 
 // decide 一条计划处置落表：已有生效租约就续期；这条告警已经为它做过决定就不再动；否则新决定，能执行就下发。
-func (e *Engine) decide(ctx context.Context, al *ent.Alert, a action, expires time.Time) error {
+func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a action, expires time.Time) error {
 	key := a.key()
 	active, err := e.DB.Containment.Query().
 		Where(entcontainment.KeyEQ(key), entcontainment.StateEQ(entcontainment.StateActive)).
@@ -225,18 +186,29 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, a action, expires ti
 
 	create := e.DB.Containment.Create().SetCreatedAt(e.now()).
 		SetAssetID(a.asset.ID).SetNillableGroupID(a.asset.GroupID).
-		SetKind(a.kind).SetTarget(a.target).SetKey(key).
+		SetKind(a.kind).SetTarget(a.target).SetPid(a.pid).SetKey(key).
 		SetSignal(al.RuleID).SetAlertID(al.ID).SetNillableIncidentID(al.IncidentID).
-		SetSourceAssetID(*al.AssetID).SetRole(entcontainment.Role(a.role))
+		SetRole(entcontainment.Role(a.role))
+	if source != nil {
+		create.SetSourceAssetID(source.ID)
+	}
 	if a.skip != "" {
 		return create.SetState(entcontainment.StateSkipped).SetReason(a.skip).Exec(ctx)
 	}
-	if a.kind == "block_network" {
+	req := response.Request{AssetID: a.asset.ID, Kind: a.kind, IncidentID: al.IncidentID, IssuedBy: "auto", AllowEndpoints: e.AllowEndpoints}
+	switch a.kind {
+	case "kill_process":
+		guid, err := uuid.Parse(a.target)
+		if err != nil || a.pid == 0 {
+			return create.SetState(entcontainment.StateSkipped).SetReason("事件没有可核对的进程 GUID 与 PID").Exec(ctx)
+		}
+		req.ProcessGUID, req.PID = &guid, a.pid
+	case "block_network", "quarantine_file", "disable_account":
 		target, err := response.NormalizeTarget(a.kind, a.target, response.ProtectedAddrs(e.AllowEndpoints))
 		if err != nil {
-			return create.SetState(entcontainment.StateSkipped).SetReason("目标不能封锁：" + err.Error()).Exec(ctx)
+			return create.SetState(entcontainment.StateSkipped).SetReason("目标不能处置：" + err.Error()).Exec(ctx)
 		}
-		a.target = target
+		req.Target = target
 	}
 	if held, err := e.fuse(ctx, a); err != nil || held != "" {
 		if err != nil {
@@ -246,11 +218,7 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, a action, expires ti
 		return create.SetState(entcontainment.StateHeld).SetReason(held).Exec(ctx)
 	}
 
-	reason := describe(al, a)
-	cmd, err := e.Hub.Issue(ctx, response.Request{
-		AssetID: a.asset.ID, Kind: a.kind, Target: a.target, IncidentID: al.IncidentID,
-		IssuedBy: "auto", AllowEndpoints: e.AllowEndpoints,
-	})
+	cmd, err := e.Hub.Issue(ctx, req)
 	if err != nil || cmd.Status == "failed" {
 		detail := ""
 		if err != nil {
@@ -259,22 +227,26 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, a action, expires ti
 			detail = *cmd.Detail
 		}
 		audit.System(ctx, e.DB, "containment_failed", al.ID.String(), a.asset.Hostname+" "+a.kind+" "+a.target+"："+detail)
-		create.SetState(entcontainment.StateFailed).SetReason(reason + "；下发失败：" + detail)
+		create.SetState(entcontainment.StateFailed).SetReason(a.why + "；下发失败：" + detail)
 		if cmd != nil {
 			create.SetCommandID(cmd.ID)
 		}
 		return create.Exec(ctx)
 	}
-	audit.System(ctx, e.DB, "containment", cmd.ID.String(), a.asset.Hostname+" "+a.kind+" "+a.target+"："+reason)
-	return create.SetState(entcontainment.StateActive).SetReason(reason).SetCommandID(cmd.ID).SetExpiresAt(expires).Exec(ctx)
+	audit.System(ctx, e.DB, "containment", cmd.ID.String(), a.asset.Hostname+" "+a.kind+" "+a.target+"："+a.why)
+	create.SetReason(a.why).SetCommandID(cmd.ID)
+	if _, lease := leases[a.kind]; lease {
+		return create.SetState(entcontainment.StateActive).SetExpiresAt(expires).Exec(ctx)
+	}
+	return create.SetState(entcontainment.StateExecuted).Exec(ctx)
 }
 
-// fuse 熔断：返回非空表示挡下。只数真正生效过的处置（生效中、已到期解除）；没送到的不算，
+// fuse 熔断：返回非空表示挡下。只数真正生效过的处置；没送到的不算，
 // 否则几台没装 agent 的受害主机就能把熔断顶满
 func (e *Engine) fuse(ctx context.Context, a action) (string, error) {
 	executed, err := e.DB.Containment.Query().
 		Where(entcontainment.CreatedAtGTE(e.now().Add(-time.Hour)),
-			entcontainment.StateIn(entcontainment.StateActive, entcontainment.StateExpired)).
+			entcontainment.StateIn(entcontainment.StateActive, entcontainment.StateExpired, entcontainment.StateExecuted)).
 		Count(ctx)
 	if err != nil {
 		return "", err
@@ -312,7 +284,7 @@ func (e *Engine) expire(ctx context.Context) error {
 		return err
 	}
 	for _, c := range due {
-		kind := map[string]string{"isolate_host": "unisolate_host", "block_network": "unblock_network"}[c.Kind]
+		kind := leases[c.Kind]
 		cmd, err := e.Hub.Issue(ctx, response.Request{
 			AssetID: c.AssetID, Kind: kind, Target: c.Target, IncidentID: c.IncidentID, IssuedBy: "auto",
 		})
@@ -329,18 +301,4 @@ func (e *Engine) expire(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-// describe 处置理由，进审计与决策记录，人一眼能看懂为什么动了
-func describe(al *ent.Alert, a action) string {
-	detail := ""
-	if al.Detail != nil {
-		detail = "：" + *al.Detail
-	}
-	switch a.role {
-	case "source":
-		return "内网横向喷洒的来源，隔离本机" + detail
-	default:
-		return "遭受来自 " + a.target + " 的内网横向喷洒，封锁该地址" + detail
-	}
 }

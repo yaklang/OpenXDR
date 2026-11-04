@@ -75,6 +75,20 @@ func (_c *ContainmentCreate) SetNillableTarget(v *string) *ContainmentCreate {
 	return _c
 }
 
+// SetPid sets the "pid" field.
+func (_c *ContainmentCreate) SetPid(v uint32) *ContainmentCreate {
+	_c.mutation.SetPid(v)
+	return _c
+}
+
+// SetNillablePid sets the "pid" field if the given value is not nil.
+func (_c *ContainmentCreate) SetNillablePid(v *uint32) *ContainmentCreate {
+	if v != nil {
+		_c.SetPid(*v)
+	}
+	return _c
+}
+
 // SetKey sets the "key" field.
 func (_c *ContainmentCreate) SetKey(v string) *ContainmentCreate {
 	_c.mutation.SetKey(v)
@@ -110,6 +124,14 @@ func (_c *ContainmentCreate) SetNillableIncidentID(v *uuid.UUID) *ContainmentCre
 // SetSourceAssetID sets the "source_asset_id" field.
 func (_c *ContainmentCreate) SetSourceAssetID(v uuid.UUID) *ContainmentCreate {
 	_c.mutation.SetSourceAssetID(v)
+	return _c
+}
+
+// SetNillableSourceAssetID sets the "source_asset_id" field if the given value is not nil.
+func (_c *ContainmentCreate) SetNillableSourceAssetID(v *uuid.UUID) *ContainmentCreate {
+	if v != nil {
+		_c.SetSourceAssetID(*v)
+	}
 	return _c
 }
 
@@ -240,6 +262,10 @@ func (_c *ContainmentCreate) defaults() {
 		v := containment.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
 	}
+	if _, ok := _c.mutation.Pid(); !ok {
+		v := containment.DefaultPid
+		_c.mutation.SetPid(v)
+	}
 	if _, ok := _c.mutation.ID(); !ok {
 		v := containment.DefaultID()
 		_c.mutation.SetID(v)
@@ -257,6 +283,9 @@ func (_c *ContainmentCreate) check() error {
 	if _, ok := _c.mutation.Kind(); !ok {
 		return &ValidationError{Name: "kind", err: errors.New(`ent: missing required field "Containment.kind"`)}
 	}
+	if _, ok := _c.mutation.Pid(); !ok {
+		return &ValidationError{Name: "pid", err: errors.New(`ent: missing required field "Containment.pid"`)}
+	}
 	if _, ok := _c.mutation.Key(); !ok {
 		return &ValidationError{Name: "key", err: errors.New(`ent: missing required field "Containment.key"`)}
 	}
@@ -265,9 +294,6 @@ func (_c *ContainmentCreate) check() error {
 	}
 	if _, ok := _c.mutation.AlertID(); !ok {
 		return &ValidationError{Name: "alert_id", err: errors.New(`ent: missing required field "Containment.alert_id"`)}
-	}
-	if _, ok := _c.mutation.SourceAssetID(); !ok {
-		return &ValidationError{Name: "source_asset_id", err: errors.New(`ent: missing required field "Containment.source_asset_id"`)}
 	}
 	if _, ok := _c.mutation.Role(); !ok {
 		return &ValidationError{Name: "role", err: errors.New(`ent: missing required field "Containment.role"`)}
@@ -343,6 +369,10 @@ func (_c *ContainmentCreate) createSpec() (*Containment, *sqlgraph.CreateSpec) {
 		_spec.SetField(containment.FieldTarget, field.TypeString, value)
 		_node.Target = value
 	}
+	if value, ok := _c.mutation.Pid(); ok {
+		_spec.SetField(containment.FieldPid, field.TypeUint32, value)
+		_node.Pid = value
+	}
 	if value, ok := _c.mutation.Key(); ok {
 		_spec.SetField(containment.FieldKey, field.TypeString, value)
 		_node.Key = value
@@ -361,7 +391,7 @@ func (_c *ContainmentCreate) createSpec() (*Containment, *sqlgraph.CreateSpec) {
 	}
 	if value, ok := _c.mutation.SourceAssetID(); ok {
 		_spec.SetField(containment.FieldSourceAssetID, field.TypeUUID, value)
-		_node.SourceAssetID = value
+		_node.SourceAssetID = &value
 	}
 	if value, ok := _c.mutation.Role(); ok {
 		_spec.SetField(containment.FieldRole, field.TypeEnum, value)

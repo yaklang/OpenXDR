@@ -5007,6 +5007,7 @@ type AssetMutation struct {
 	appendegress_notes     json.RawMessage
 	zone_id                *uuid.UUID
 	response_tier          *asset.ResponseTier
+	response_tier_reason   *string
 	role                   *string
 	summary                *string
 	criticality            *int
@@ -6635,6 +6636,55 @@ func (m *AssetMutation) ResetResponseTier() {
 	delete(m.clearedFields, asset.FieldResponseTier)
 }
 
+// SetResponseTierReason sets the "response_tier_reason" field.
+func (m *AssetMutation) SetResponseTierReason(s string) {
+	m.response_tier_reason = &s
+}
+
+// ResponseTierReason returns the value of the "response_tier_reason" field in the mutation.
+func (m *AssetMutation) ResponseTierReason() (r string, exists bool) {
+	v := m.response_tier_reason
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResponseTierReason returns the old "response_tier_reason" field's value of the Asset entity.
+// If the Asset object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AssetMutation) OldResponseTierReason(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResponseTierReason is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResponseTierReason requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResponseTierReason: %w", err)
+	}
+	return oldValue.ResponseTierReason, nil
+}
+
+// ClearResponseTierReason clears the value of the "response_tier_reason" field.
+func (m *AssetMutation) ClearResponseTierReason() {
+	m.response_tier_reason = nil
+	m.clearedFields[asset.FieldResponseTierReason] = struct{}{}
+}
+
+// ResponseTierReasonCleared returns if the "response_tier_reason" field was cleared in this mutation.
+func (m *AssetMutation) ResponseTierReasonCleared() bool {
+	_, ok := m.clearedFields[asset.FieldResponseTierReason]
+	return ok
+}
+
+// ResetResponseTierReason resets all changes to the "response_tier_reason" field.
+func (m *AssetMutation) ResetResponseTierReason() {
+	m.response_tier_reason = nil
+	delete(m.clearedFields, asset.FieldResponseTierReason)
+}
+
 // SetRole sets the "role" field.
 func (m *AssetMutation) SetRole(s string) {
 	m.role = &s
@@ -7309,7 +7359,7 @@ func (m *AssetMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AssetMutation) Fields() []string {
-	fields := make([]string, 0, 37)
+	fields := make([]string, 0, 38)
 	if m.hostname != nil {
 		fields = append(fields, asset.FieldHostname)
 	}
@@ -7393,6 +7443,9 @@ func (m *AssetMutation) Fields() []string {
 	}
 	if m.response_tier != nil {
 		fields = append(fields, asset.FieldResponseTier)
+	}
+	if m.response_tier_reason != nil {
+		fields = append(fields, asset.FieldResponseTierReason)
 	}
 	if m.role != nil {
 		fields = append(fields, asset.FieldRole)
@@ -7485,6 +7538,8 @@ func (m *AssetMutation) Field(name string) (ent.Value, bool) {
 		return m.ZoneID()
 	case asset.FieldResponseTier:
 		return m.ResponseTier()
+	case asset.FieldResponseTierReason:
+		return m.ResponseTierReason()
 	case asset.FieldRole:
 		return m.Role()
 	case asset.FieldSummary:
@@ -7568,6 +7623,8 @@ func (m *AssetMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldZoneID(ctx)
 	case asset.FieldResponseTier:
 		return m.OldResponseTier(ctx)
+	case asset.FieldResponseTierReason:
+		return m.OldResponseTierReason(ctx)
 	case asset.FieldRole:
 		return m.OldRole(ctx)
 	case asset.FieldSummary:
@@ -7791,6 +7848,13 @@ func (m *AssetMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetResponseTier(v)
 		return nil
+	case asset.FieldResponseTierReason:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResponseTierReason(v)
+		return nil
 	case asset.FieldRole:
 		v, ok := value.(string)
 		if !ok {
@@ -7986,6 +8050,9 @@ func (m *AssetMutation) ClearedFields() []string {
 	if m.FieldCleared(asset.FieldResponseTier) {
 		fields = append(fields, asset.FieldResponseTier)
 	}
+	if m.FieldCleared(asset.FieldResponseTierReason) {
+		fields = append(fields, asset.FieldResponseTierReason)
+	}
 	if m.FieldCleared(asset.FieldRole) {
 		fields = append(fields, asset.FieldRole)
 	}
@@ -8101,6 +8168,9 @@ func (m *AssetMutation) ClearField(name string) error {
 		return nil
 	case asset.FieldResponseTier:
 		m.ClearResponseTier()
+		return nil
+	case asset.FieldResponseTierReason:
+		m.ClearResponseTierReason()
 		return nil
 	case asset.FieldRole:
 		m.ClearRole()
@@ -8220,6 +8290,9 @@ func (m *AssetMutation) ResetField(name string) error {
 		return nil
 	case asset.FieldResponseTier:
 		m.ResetResponseTier()
+		return nil
+	case asset.FieldResponseTierReason:
+		m.ResetResponseTierReason()
 		return nil
 	case asset.FieldRole:
 		m.ResetRole()
@@ -12502,6 +12575,8 @@ type ContainmentMutation struct {
 	group_id        *uuid.UUID
 	kind            *string
 	target          *string
+	pid             *uint32
+	addpid          *int32
 	key             *string
 	signal          *string
 	alert_id        *uuid.UUID
@@ -12830,6 +12905,62 @@ func (m *ContainmentMutation) ResetTarget() {
 	delete(m.clearedFields, containment.FieldTarget)
 }
 
+// SetPid sets the "pid" field.
+func (m *ContainmentMutation) SetPid(u uint32) {
+	m.pid = &u
+	m.addpid = nil
+}
+
+// Pid returns the value of the "pid" field in the mutation.
+func (m *ContainmentMutation) Pid() (r uint32, exists bool) {
+	v := m.pid
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPid returns the old "pid" field's value of the Containment entity.
+// If the Containment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ContainmentMutation) OldPid(ctx context.Context) (v uint32, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPid is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPid requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPid: %w", err)
+	}
+	return oldValue.Pid, nil
+}
+
+// AddPid adds u to the "pid" field.
+func (m *ContainmentMutation) AddPid(u int32) {
+	if m.addpid != nil {
+		*m.addpid += u
+	} else {
+		m.addpid = &u
+	}
+}
+
+// AddedPid returns the value that was added to the "pid" field in this mutation.
+func (m *ContainmentMutation) AddedPid() (r int32, exists bool) {
+	v := m.addpid
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetPid resets all changes to the "pid" field.
+func (m *ContainmentMutation) ResetPid() {
+	m.pid = nil
+	m.addpid = nil
+}
+
 // SetKey sets the "key" field.
 func (m *ContainmentMutation) SetKey(s string) {
 	m.key = &s
@@ -13004,7 +13135,7 @@ func (m *ContainmentMutation) SourceAssetID() (r uuid.UUID, exists bool) {
 // OldSourceAssetID returns the old "source_asset_id" field's value of the Containment entity.
 // If the Containment object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ContainmentMutation) OldSourceAssetID(ctx context.Context) (v uuid.UUID, err error) {
+func (m *ContainmentMutation) OldSourceAssetID(ctx context.Context) (v *uuid.UUID, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldSourceAssetID is only allowed on UpdateOne operations")
 	}
@@ -13018,9 +13149,22 @@ func (m *ContainmentMutation) OldSourceAssetID(ctx context.Context) (v uuid.UUID
 	return oldValue.SourceAssetID, nil
 }
 
+// ClearSourceAssetID clears the value of the "source_asset_id" field.
+func (m *ContainmentMutation) ClearSourceAssetID() {
+	m.source_asset_id = nil
+	m.clearedFields[containment.FieldSourceAssetID] = struct{}{}
+}
+
+// SourceAssetIDCleared returns if the "source_asset_id" field was cleared in this mutation.
+func (m *ContainmentMutation) SourceAssetIDCleared() bool {
+	_, ok := m.clearedFields[containment.FieldSourceAssetID]
+	return ok
+}
+
 // ResetSourceAssetID resets all changes to the "source_asset_id" field.
 func (m *ContainmentMutation) ResetSourceAssetID() {
 	m.source_asset_id = nil
+	delete(m.clearedFields, containment.FieldSourceAssetID)
 }
 
 // SetRole sets the "role" field.
@@ -13361,7 +13505,7 @@ func (m *ContainmentMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ContainmentMutation) Fields() []string {
-	fields := make([]string, 0, 17)
+	fields := make([]string, 0, 18)
 	if m.created_at != nil {
 		fields = append(fields, containment.FieldCreatedAt)
 	}
@@ -13376,6 +13520,9 @@ func (m *ContainmentMutation) Fields() []string {
 	}
 	if m.target != nil {
 		fields = append(fields, containment.FieldTarget)
+	}
+	if m.pid != nil {
+		fields = append(fields, containment.FieldPid)
 	}
 	if m.key != nil {
 		fields = append(fields, containment.FieldKey)
@@ -13431,6 +13578,8 @@ func (m *ContainmentMutation) Field(name string) (ent.Value, bool) {
 		return m.Kind()
 	case containment.FieldTarget:
 		return m.Target()
+	case containment.FieldPid:
+		return m.Pid()
 	case containment.FieldKey:
 		return m.Key()
 	case containment.FieldSignal:
@@ -13474,6 +13623,8 @@ func (m *ContainmentMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldKind(ctx)
 	case containment.FieldTarget:
 		return m.OldTarget(ctx)
+	case containment.FieldPid:
+		return m.OldPid(ctx)
 	case containment.FieldKey:
 		return m.OldKey(ctx)
 	case containment.FieldSignal:
@@ -13541,6 +13692,13 @@ func (m *ContainmentMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetTarget(v)
+		return nil
+	case containment.FieldPid:
+		v, ok := value.(uint32)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPid(v)
 		return nil
 	case containment.FieldKey:
 		v, ok := value.(string)
@@ -13633,13 +13791,21 @@ func (m *ContainmentMutation) SetField(name string, value ent.Value) error {
 // AddedFields returns all numeric fields that were incremented/decremented during
 // this mutation.
 func (m *ContainmentMutation) AddedFields() []string {
-	return nil
+	var fields []string
+	if m.addpid != nil {
+		fields = append(fields, containment.FieldPid)
+	}
+	return fields
 }
 
 // AddedField returns the numeric value that was incremented/decremented on a field
 // with the given name. The second boolean return value indicates that this field
 // was not set, or was not defined in the schema.
 func (m *ContainmentMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case containment.FieldPid:
+		return m.AddedPid()
+	}
 	return nil, false
 }
 
@@ -13648,6 +13814,13 @@ func (m *ContainmentMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *ContainmentMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case containment.FieldPid:
+		v, ok := value.(int32)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddPid(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Containment numeric field %s", name)
 }
@@ -13664,6 +13837,9 @@ func (m *ContainmentMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(containment.FieldIncidentID) {
 		fields = append(fields, containment.FieldIncidentID)
+	}
+	if m.FieldCleared(containment.FieldSourceAssetID) {
+		fields = append(fields, containment.FieldSourceAssetID)
 	}
 	if m.FieldCleared(containment.FieldCommandID) {
 		fields = append(fields, containment.FieldCommandID)
@@ -13700,6 +13876,9 @@ func (m *ContainmentMutation) ClearField(name string) error {
 	case containment.FieldIncidentID:
 		m.ClearIncidentID()
 		return nil
+	case containment.FieldSourceAssetID:
+		m.ClearSourceAssetID()
+		return nil
 	case containment.FieldCommandID:
 		m.ClearCommandID()
 		return nil
@@ -13734,6 +13913,9 @@ func (m *ContainmentMutation) ResetField(name string) error {
 		return nil
 	case containment.FieldTarget:
 		m.ResetTarget()
+		return nil
+	case containment.FieldPid:
+		m.ResetPid()
 		return nil
 	case containment.FieldKey:
 		m.ResetKey()
@@ -47064,7 +47246,7 @@ func (m *ZoneMutation) ResponseTier() (r zone.ResponseTier, exists bool) {
 // OldResponseTier returns the old "response_tier" field's value of the Zone entity.
 // If the Zone object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *ZoneMutation) OldResponseTier(ctx context.Context) (v zone.ResponseTier, err error) {
+func (m *ZoneMutation) OldResponseTier(ctx context.Context) (v *zone.ResponseTier, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldResponseTier is only allowed on UpdateOne operations")
 	}
@@ -47078,9 +47260,22 @@ func (m *ZoneMutation) OldResponseTier(ctx context.Context) (v zone.ResponseTier
 	return oldValue.ResponseTier, nil
 }
 
+// ClearResponseTier clears the value of the "response_tier" field.
+func (m *ZoneMutation) ClearResponseTier() {
+	m.response_tier = nil
+	m.clearedFields[zone.FieldResponseTier] = struct{}{}
+}
+
+// ResponseTierCleared returns if the "response_tier" field was cleared in this mutation.
+func (m *ZoneMutation) ResponseTierCleared() bool {
+	_, ok := m.clearedFields[zone.FieldResponseTier]
+	return ok
+}
+
 // ResetResponseTier resets all changes to the "response_tier" field.
 func (m *ZoneMutation) ResetResponseTier() {
 	m.response_tier = nil
+	delete(m.clearedFields, zone.FieldResponseTier)
 }
 
 // SetCreatedAt sets the "created_at" field.
@@ -47297,6 +47492,9 @@ func (m *ZoneMutation) ClearedFields() []string {
 	if m.FieldCleared(zone.FieldCidrs) {
 		fields = append(fields, zone.FieldCidrs)
 	}
+	if m.FieldCleared(zone.FieldResponseTier) {
+		fields = append(fields, zone.FieldResponseTier)
+	}
 	return fields
 }
 
@@ -47313,6 +47511,9 @@ func (m *ZoneMutation) ClearField(name string) error {
 	switch name {
 	case zone.FieldCidrs:
 		m.ClearCidrs()
+		return nil
+	case zone.FieldResponseTier:
+		m.ClearResponseTier()
 		return nil
 	}
 	return fmt.Errorf("unknown Zone nullable field %s", name)

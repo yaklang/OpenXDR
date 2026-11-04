@@ -227,6 +227,10 @@ func init() {
 	containmentDescCreatedAt := containmentFields[1].Descriptor()
 	// containment.DefaultCreatedAt holds the default value on creation for the created_at field.
 	containment.DefaultCreatedAt = containmentDescCreatedAt.Default.(func() time.Time)
+	// containmentDescPid is the schema descriptor for pid field.
+	containmentDescPid := containmentFields[6].Descriptor()
+	// containment.DefaultPid holds the default value on creation for the pid field.
+	containment.DefaultPid = containmentDescPid.Default.(uint32)
 	// containmentDescID is the schema descriptor for id field.
 	containmentDescID := containmentFields[0].Descriptor()
 	// containment.DefaultID holds the default value on creation for the id field.

@@ -80,6 +80,11 @@ func Target(v string) predicate.Containment {
 	return predicate.Containment(sql.FieldEQ(FieldTarget, v))
 }
 
+// Pid applies equality check predicate on the "pid" field. It's identical to PidEQ.
+func Pid(v uint32) predicate.Containment {
+	return predicate.Containment(sql.FieldEQ(FieldPid, v))
+}
+
 // Key applies equality check predicate on the "key" field. It's identical to KeyEQ.
 func Key(v string) predicate.Containment {
 	return predicate.Containment(sql.FieldEQ(FieldKey, v))
@@ -400,6 +405,46 @@ func TargetContainsFold(v string) predicate.Containment {
 	return predicate.Containment(sql.FieldContainsFold(FieldTarget, v))
 }
 
+// PidEQ applies the EQ predicate on the "pid" field.
+func PidEQ(v uint32) predicate.Containment {
+	return predicate.Containment(sql.FieldEQ(FieldPid, v))
+}
+
+// PidNEQ applies the NEQ predicate on the "pid" field.
+func PidNEQ(v uint32) predicate.Containment {
+	return predicate.Containment(sql.FieldNEQ(FieldPid, v))
+}
+
+// PidIn applies the In predicate on the "pid" field.
+func PidIn(vs ...uint32) predicate.Containment {
+	return predicate.Containment(sql.FieldIn(FieldPid, vs...))
+}
+
+// PidNotIn applies the NotIn predicate on the "pid" field.
+func PidNotIn(vs ...uint32) predicate.Containment {
+	return predicate.Containment(sql.FieldNotIn(FieldPid, vs...))
+}
+
+// PidGT applies the GT predicate on the "pid" field.
+func PidGT(v uint32) predicate.Containment {
+	return predicate.Containment(sql.FieldGT(FieldPid, v))
+}
+
+// PidGTE applies the GTE predicate on the "pid" field.
+func PidGTE(v uint32) predicate.Containment {
+	return predicate.Containment(sql.FieldGTE(FieldPid, v))
+}
+
+// PidLT applies the LT predicate on the "pid" field.
+func PidLT(v uint32) predicate.Containment {
+	return predicate.Containment(sql.FieldLT(FieldPid, v))
+}
+
+// PidLTE applies the LTE predicate on the "pid" field.
+func PidLTE(v uint32) predicate.Containment {
+	return predicate.Containment(sql.FieldLTE(FieldPid, v))
+}
+
 // KeyEQ applies the EQ predicate on the "key" field.
 func KeyEQ(v string) predicate.Containment {
 	return predicate.Containment(sql.FieldEQ(FieldKey, v))
@@ -658,6 +703,16 @@ func SourceAssetIDLT(v uuid.UUID) predicate.Containment {
 // SourceAssetIDLTE applies the LTE predicate on the "source_asset_id" field.
 func SourceAssetIDLTE(v uuid.UUID) predicate.Containment {
 	return predicate.Containment(sql.FieldLTE(FieldSourceAssetID, v))
+}
+
+// SourceAssetIDIsNil applies the IsNil predicate on the "source_asset_id" field.
+func SourceAssetIDIsNil() predicate.Containment {
+	return predicate.Containment(sql.FieldIsNull(FieldSourceAssetID))
+}
+
+// SourceAssetIDNotNil applies the NotNil predicate on the "source_asset_id" field.
+func SourceAssetIDNotNil() predicate.Containment {
+	return predicate.Containment(sql.FieldNotNull(FieldSourceAssetID))
 }
 
 // RoleEQ applies the EQ predicate on the "role" field.

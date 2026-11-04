@@ -111,7 +111,7 @@ func createZone(db *ent.Client) http.HandlerFunc {
 			return
 		}
 		row, err := db.Zone.Create().SetGroupID(body.GroupID).SetName(body.Name).SetKind(zone.Kind(body.Kind)).SetCidrs(body.Cidrs).
-			SetResponseTier(zone.ResponseTier(body.ResponseTier)).Save(r.Context())
+			SetNillableResponseTier((*zone.ResponseTier)(body.ResponseTier)).Save(r.Context())
 		if !zoneSaved(w, err) {
 			return
 		}
@@ -128,12 +128,17 @@ func updateZone(db *ent.Client) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		body := zoneBody{GroupID: row.GroupID, ResponseTier: string(row.ResponseTier)}
+		body := zoneBody{GroupID: row.GroupID, ResponseTier: (*string)(row.ResponseTier)}
 		if !body.decode(w, r) || !requireGroup(w, r, db, row.GroupID, "admin") {
 			return
 		}
-		row, err := row.Update().SetName(body.Name).SetKind(zone.Kind(body.Kind)).SetCidrs(body.Cidrs).
-			SetResponseTier(zone.ResponseTier(body.ResponseTier)).Save(r.Context())
+		upd := row.Update().SetName(body.Name).SetKind(zone.Kind(body.Kind)).SetCidrs(body.Cidrs)
+		if body.ResponseTier == nil {
+			upd.ClearResponseTier()
+		} else {
+			upd.SetResponseTier(zone.ResponseTier(*body.ResponseTier))
+		}
+		row, err := upd.Save(r.Context())
 		if !zoneSaved(w, err) {
 			return
 		}
@@ -311,7 +316,7 @@ func assignAssetZone(db *ent.Client) http.HandlerFunc {
 	}
 }
 
-// setAssetResponseTier 组管理员单独指定资产的自主响应处置等级，null 回到跟随区域。
+// setAssetResponseTier 组管理员指定资产的自主响应处置等级并锁定，AI 不再覆盖；null 解锁并请 AI 重新定级。
 // 跑着 OpenXDR server 的资产始终按核心处理，这里改不动
 func setAssetResponseTier(db *ent.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -333,13 +338,17 @@ func setAssetResponseTier(db *ent.Client) http.HandlerFunc {
 			http.Error(w, "请求无效", http.StatusBadRequest)
 			return
 		}
-		upd, detail := a.Update().ClearResponseTier(), a.Hostname+" → 跟随区域"
+		locks := slices.DeleteFunc(slices.Clone(a.LockedFields), func(f string) bool { return f == "response_tier" })
+		upd, detail := a.Update().ClearResponseTier().ClearResponseTierReason().SetLockedFields(locks).
+			SetAnnotateRequestedAt(time.Now()), a.Hostname+" → 交还 AI 定级"
 		if body.Tier != nil {
 			if entasset.ResponseTierValidator(entasset.ResponseTier(*body.Tier)) != nil {
 				http.Error(w, "tier 须为 lab / production / core 或 null", http.StatusBadRequest)
 				return
 			}
-			upd, detail = a.Update().SetResponseTier(entasset.ResponseTier(*body.Tier)), a.Hostname+" → "+*body.Tier
+			upd = a.Update().SetResponseTier(entasset.ResponseTier(*body.Tier)).
+				SetResponseTierReason("人工指定").SetLockedFields(append(locks, "response_tier"))
+			detail = a.Hostname + " → " + *body.Tier
 		}
 		if err := upd.Exec(r.Context()); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -410,8 +419,8 @@ type zoneBody struct {
 	Name    string    `json:"name"`
 	Kind    string    `json:"kind"`
 	Cidrs   []string  `json:"cidrs"`
-	// 自主响应处置等级；不传时新建为 production、修改保持原值
-	ResponseTier string `json:"responseTier"`
+	// 自主响应处置等级；修改时不传保持原值，null 清空（区域内资产回到 AI 定级）
+	ResponseTier *string `json:"responseTier"`
 }
 
 // decode 校验并规范化：网段统一成网络地址写法，非法的直接拒绝
@@ -429,11 +438,8 @@ func (b *zoneBody) decode(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "名称须为 1-64 字", http.StatusBadRequest)
 		return false
 	}
-	if b.ResponseTier == "" {
-		b.ResponseTier = string(zone.DefaultResponseTier)
-	}
-	if zone.ResponseTierValidator(zone.ResponseTier(b.ResponseTier)) != nil {
-		http.Error(w, "responseTier 须为 lab / production / core", http.StatusBadRequest)
+	if b.ResponseTier != nil && zone.ResponseTierValidator(zone.ResponseTier(*b.ResponseTier)) != nil {
+		http.Error(w, "responseTier 须为 lab / production / core 或 null", http.StatusBadRequest)
 		return false
 	}
 	if zone.KindValidator(zone.Kind(b.Kind)) != nil {

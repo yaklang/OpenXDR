@@ -28,7 +28,7 @@ type Zone struct {
 	// Cidrs holds the value of the "cidrs" field.
 	Cidrs []string `json:"cidrs,omitempty"`
 	// ResponseTier holds the value of the "response_tier" field.
-	ResponseTier zone.ResponseTier `json:"response_tier,omitempty"`
+	ResponseTier *zone.ResponseTier `json:"response_tier,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt    time.Time `json:"created_at,omitempty"`
 	selectValues sql.SelectValues
@@ -98,7 +98,8 @@ func (_m *Zone) assignValues(columns []string, values []any) error {
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field response_tier", values[i])
 			} else if value.Valid {
-				_m.ResponseTier = zone.ResponseTier(value.String)
+				_m.ResponseTier = new(zone.ResponseTier)
+				*_m.ResponseTier = zone.ResponseTier(value.String)
 			}
 		case zone.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -154,8 +155,10 @@ func (_m *Zone) String() string {
 	builder.WriteString("cidrs=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Cidrs))
 	builder.WriteString(", ")
-	builder.WriteString("response_tier=")
-	builder.WriteString(fmt.Sprintf("%v", _m.ResponseTier))
+	if v := _m.ResponseTier; v != nil {
+		builder.WriteString("response_tier=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

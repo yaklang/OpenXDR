@@ -111,6 +111,27 @@ func (_u *ContainmentUpdate) ClearTarget() *ContainmentUpdate {
 	return _u
 }
 
+// SetPid sets the "pid" field.
+func (_u *ContainmentUpdate) SetPid(v uint32) *ContainmentUpdate {
+	_u.mutation.ResetPid()
+	_u.mutation.SetPid(v)
+	return _u
+}
+
+// SetNillablePid sets the "pid" field if the given value is not nil.
+func (_u *ContainmentUpdate) SetNillablePid(v *uint32) *ContainmentUpdate {
+	if v != nil {
+		_u.SetPid(*v)
+	}
+	return _u
+}
+
+// AddPid adds value to the "pid" field.
+func (_u *ContainmentUpdate) AddPid(v int32) *ContainmentUpdate {
+	_u.mutation.AddPid(v)
+	return _u
+}
+
 // SetKey sets the "key" field.
 func (_u *ContainmentUpdate) SetKey(v string) *ContainmentUpdate {
 	_u.mutation.SetKey(v)
@@ -184,6 +205,12 @@ func (_u *ContainmentUpdate) SetNillableSourceAssetID(v *uuid.UUID) *Containment
 	if v != nil {
 		_u.SetSourceAssetID(*v)
 	}
+	return _u
+}
+
+// ClearSourceAssetID clears the value of the "source_asset_id" field.
+func (_u *ContainmentUpdate) ClearSourceAssetID() *ContainmentUpdate {
+	_u.mutation.ClearSourceAssetID()
 	return _u
 }
 
@@ -389,6 +416,12 @@ func (_u *ContainmentUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if _u.mutation.TargetCleared() {
 		_spec.ClearField(containment.FieldTarget, field.TypeString)
 	}
+	if value, ok := _u.mutation.Pid(); ok {
+		_spec.SetField(containment.FieldPid, field.TypeUint32, value)
+	}
+	if value, ok := _u.mutation.AddedPid(); ok {
+		_spec.AddField(containment.FieldPid, field.TypeUint32, value)
+	}
 	if value, ok := _u.mutation.Key(); ok {
 		_spec.SetField(containment.FieldKey, field.TypeString, value)
 	}
@@ -406,6 +439,9 @@ func (_u *ContainmentUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if value, ok := _u.mutation.SourceAssetID(); ok {
 		_spec.SetField(containment.FieldSourceAssetID, field.TypeUUID, value)
+	}
+	if _u.mutation.SourceAssetIDCleared() {
+		_spec.ClearField(containment.FieldSourceAssetID, field.TypeUUID)
 	}
 	if value, ok := _u.mutation.Role(); ok {
 		_spec.SetField(containment.FieldRole, field.TypeEnum, value)
@@ -542,6 +578,27 @@ func (_u *ContainmentUpdateOne) ClearTarget() *ContainmentUpdateOne {
 	return _u
 }
 
+// SetPid sets the "pid" field.
+func (_u *ContainmentUpdateOne) SetPid(v uint32) *ContainmentUpdateOne {
+	_u.mutation.ResetPid()
+	_u.mutation.SetPid(v)
+	return _u
+}
+
+// SetNillablePid sets the "pid" field if the given value is not nil.
+func (_u *ContainmentUpdateOne) SetNillablePid(v *uint32) *ContainmentUpdateOne {
+	if v != nil {
+		_u.SetPid(*v)
+	}
+	return _u
+}
+
+// AddPid adds value to the "pid" field.
+func (_u *ContainmentUpdateOne) AddPid(v int32) *ContainmentUpdateOne {
+	_u.mutation.AddPid(v)
+	return _u
+}
+
 // SetKey sets the "key" field.
 func (_u *ContainmentUpdateOne) SetKey(v string) *ContainmentUpdateOne {
 	_u.mutation.SetKey(v)
@@ -615,6 +672,12 @@ func (_u *ContainmentUpdateOne) SetNillableSourceAssetID(v *uuid.UUID) *Containm
 	if v != nil {
 		_u.SetSourceAssetID(*v)
 	}
+	return _u
+}
+
+// ClearSourceAssetID clears the value of the "source_asset_id" field.
+func (_u *ContainmentUpdateOne) ClearSourceAssetID() *ContainmentUpdateOne {
+	_u.mutation.ClearSourceAssetID()
 	return _u
 }
 
@@ -850,6 +913,12 @@ func (_u *ContainmentUpdateOne) sqlSave(ctx context.Context) (_node *Containment
 	if _u.mutation.TargetCleared() {
 		_spec.ClearField(containment.FieldTarget, field.TypeString)
 	}
+	if value, ok := _u.mutation.Pid(); ok {
+		_spec.SetField(containment.FieldPid, field.TypeUint32, value)
+	}
+	if value, ok := _u.mutation.AddedPid(); ok {
+		_spec.AddField(containment.FieldPid, field.TypeUint32, value)
+	}
 	if value, ok := _u.mutation.Key(); ok {
 		_spec.SetField(containment.FieldKey, field.TypeString, value)
 	}
@@ -867,6 +936,9 @@ func (_u *ContainmentUpdateOne) sqlSave(ctx context.Context) (_node *Containment
 	}
 	if value, ok := _u.mutation.SourceAssetID(); ok {
 		_spec.SetField(containment.FieldSourceAssetID, field.TypeUUID, value)
+	}
+	if _u.mutation.SourceAssetIDCleared() {
+		_spec.ClearField(containment.FieldSourceAssetID, field.TypeUUID)
 	}
 	if value, ok := _u.mutation.Role(); ok {
 		_spec.SetField(containment.FieldRole, field.TypeEnum, value)

@@ -89,9 +89,6 @@ func KindValidator(k Kind) error {
 // ResponseTier defines the type for the "response_tier" enum field.
 type ResponseTier string
 
-// ResponseTierProduction is the default value of the ResponseTier enum.
-const DefaultResponseTier = ResponseTierProduction
-
 // ResponseTier values.
 const (
 	ResponseTierLab        ResponseTier = "lab"

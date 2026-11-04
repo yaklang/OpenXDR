@@ -104,6 +104,12 @@ func (_u *ZoneUpdate) SetNillableResponseTier(v *zone.ResponseTier) *ZoneUpdate 
 	return _u
 }
 
+// ClearResponseTier clears the value of the "response_tier" field.
+func (_u *ZoneUpdate) ClearResponseTier() *ZoneUpdate {
+	_u.mutation.ClearResponseTier()
+	return _u
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_u *ZoneUpdate) SetCreatedAt(v time.Time) *ZoneUpdate {
 	_u.mutation.SetCreatedAt(v)
@@ -205,6 +211,9 @@ func (_u *ZoneUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.ResponseTier(); ok {
 		_spec.SetField(zone.FieldResponseTier, field.TypeEnum, value)
 	}
+	if _u.mutation.ResponseTierCleared() {
+		_spec.ClearField(zone.FieldResponseTier, field.TypeEnum)
+	}
 	if value, ok := _u.mutation.CreatedAt(); ok {
 		_spec.SetField(zone.FieldCreatedAt, field.TypeTime, value)
 	}
@@ -299,6 +308,12 @@ func (_u *ZoneUpdateOne) SetNillableResponseTier(v *zone.ResponseTier) *ZoneUpda
 	if v != nil {
 		_u.SetResponseTier(*v)
 	}
+	return _u
+}
+
+// ClearResponseTier clears the value of the "response_tier" field.
+func (_u *ZoneUpdateOne) ClearResponseTier() *ZoneUpdateOne {
+	_u.mutation.ClearResponseTier()
 	return _u
 }
 
@@ -432,6 +447,9 @@ func (_u *ZoneUpdateOne) sqlSave(ctx context.Context) (_node *Zone, err error) {
 	}
 	if value, ok := _u.mutation.ResponseTier(); ok {
 		_spec.SetField(zone.FieldResponseTier, field.TypeEnum, value)
+	}
+	if _u.mutation.ResponseTierCleared() {
+		_spec.ClearField(zone.FieldResponseTier, field.TypeEnum)
 	}
 	if value, ok := _u.mutation.CreatedAt(); ok {
 		_spec.SetField(zone.FieldCreatedAt, field.TypeTime, value)

@@ -122,7 +122,7 @@ func TestLabSourceIsolatedVictimsBlockSource(t *testing.T) {
 		t.Fatalf("应有 3 条生效租约，实际 %d", len(active))
 	}
 	for _, c := range active {
-		if c.AlertID != al.ID || c.SourceAssetID != src.ID || c.CommandID == nil || !c.ExpiresAt.Equal(al.LastTs.Add(24*time.Hour)) {
+		if c.AlertID != al.ID || c.SourceAssetID == nil || *c.SourceAssetID != src.ID || c.CommandID == nil || !c.ExpiresAt.Equal(al.LastTs.Add(24*time.Hour)) {
 			t.Fatalf("租约内容不对：%+v", c)
 		}
 	}
@@ -268,5 +268,155 @@ func TestGroupIsolationCap(t *testing.T) {
 	}
 	if n := f.client.Containment.Query().Where(entcontainment.StateEQ(entcontainment.StateHeld)).CountX(f.ctx); n != 1 {
 		t.Fatalf("第二台应被挡下，实际 %d", n)
+	}
+}
+
+// event 在主机上落一条事件并挂告警
+func (f *fixture) alertOn(t *testing.T, host *ent.Asset, rule string, class int, user string, raw string) *ent.Alert {
+	guid := uuid.New()
+	create := f.client.Event.Create().SetTs(f.now.Add(-2 * time.Minute)).SetClassUID(class).SetSource("agent").
+		SetAssetID(host.ID).SetProcessGUID(guid).SetRaw(json.RawMessage(raw))
+	if user != "" {
+		create.SetUsername(user)
+	}
+	ev := create.SaveX(f.ctx)
+	return f.client.Alert.Create().SetRuleID(rule).SetSeverity(5).SetAssetID(host.ID).SetEventID(ev.ID).
+		SetTs(ev.Ts).SaveX(f.ctx)
+}
+
+func (f *fixture) states() map[string]entcontainment.State {
+	out := map[string]entcontainment.State{}
+	for _, c := range f.client.Containment.Query().AllX(f.ctx) {
+		out[c.Kind+" "+c.Target] = c.State
+	}
+	return out
+}
+
+// 爆破得手：封锁来源、锁定账号；来源是实验等级的纳管主机就隔离它。锁账号是一次性的，到期不解锁
+func TestBruteforceSuccessBlocksLocksAndIsolatesLabSource(t *testing.T) {
+	f := setup(t)
+	f.host(t, "range", "10.1.1.170", tierPtr(entasset.ResponseTierLab), "")
+	victim := f.host(t, "web", "10.1.1.183", nil, "")
+	f.alertOn(t, victim, sigma.RuleBruteforceSuccess, 3002, "deploy", `{"src_endpoint":{"ip":"10.1.1.170"},"user":{"name":"deploy"}}`)
+	e := f.engine(ScopeLab)
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.received("range"); len(got) != 1 || got[0].Kind != pb.CommandKind_ISOLATE_HOST {
+		t.Fatalf("实验等级来源应隔离：%v", got)
+	}
+	got := f.received("web")
+	if len(got) != 2 || got[0].Kind != pb.CommandKind_BLOCK_NETWORK || got[0].Target != "10.1.1.170" ||
+		got[1].Kind != pb.CommandKind_DISABLE_ACCOUNT || got[1].Target != "deploy" {
+		t.Fatalf("受害方应封锁来源并锁定账号：%v", got)
+	}
+	if s := f.states(); s["disable_account deploy"] != entcontainment.StateExecuted || s["block_network 10.1.1.170"] != entcontainment.StateActive {
+		t.Fatalf("锁账号一次性、封锁走租约：%v", s)
+	}
+	f.now = f.now.Add(25 * time.Hour)
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.received("web") {
+		if c.Kind == pb.CommandKind_ENABLE_ACCOUNT {
+			t.Fatal("到期不能自动解锁被爆破的账号")
+		}
+	}
+}
+
+// 爆破得手：外部来源时只看受害方；内置账号由目标校验挡下，核心主机不锁账号；范围 lab 下生产主机不处置
+func TestBruteforceGuards(t *testing.T) {
+	f := setup(t)
+	web := f.host(t, "web", "10.1.1.183", nil, "")
+	core := f.host(t, "db", "10.1.1.184", tierPtr(entasset.ResponseTierCore), "")
+	f.alertOn(t, web, sigma.RuleBruteforceSuccess, 3002, "root", `{"src_endpoint":{"ip":"203.0.113.5"}}`)
+	f.alertOn(t, core, sigma.RuleBruteforceSuccess, 3002, "deploy", `{"src_endpoint":{"ip":"203.0.113.6"}}`)
+	if err := f.engine(ScopeLab).Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.received("web")) + len(f.received("db")); n != 0 {
+		t.Fatalf("范围 lab 下生产与核心主机不处置，实际下发 %d 条", n)
+	}
+
+	g := setup(t)
+	web = g.host(t, "web", "10.1.1.183", nil, "")
+	core = g.host(t, "db", "10.1.1.184", tierPtr(entasset.ResponseTierCore), "")
+	g.alertOn(t, web, sigma.RuleBruteforceSuccess, 3002, "root", `{"src_endpoint":{"ip":"203.0.113.5"}}`)
+	g.alertOn(t, core, sigma.RuleBruteforceSuccess, 3002, "deploy", `{"src_endpoint":{"ip":"203.0.113.6"}}`)
+	if err := g.engine(ScopeAll).Tick(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := g.received("web"); len(got) != 1 || got[0].Target != "203.0.113.5" {
+		t.Fatalf("root 不能锁，只封锁来源：%v", got)
+	}
+	if got := g.received("db"); len(got) != 1 || got[0].Target != "203.0.113.6" {
+		t.Fatalf("核心主机只封锁来源：%v", got)
+	}
+	s := g.states()
+	if s["disable_account root"] != entcontainment.StateSkipped || s["disable_account deploy"] != entcontainment.StateSkipped {
+		t.Fatalf("内置账号与核心主机的锁定应记 skipped：%v", s)
+	}
+}
+
+// 情报命中 IP：主动外连时封锁并结束进程；入站命中只封锁，不碰本机服务进程
+func TestIntelIPOutboundKillsInboundOnlyBlocks(t *testing.T) {
+	f := setup(t)
+	out := f.host(t, "app", "10.1.1.50", nil, "")
+	in := f.host(t, "nginx", "10.1.1.51", nil, "")
+	f.alertOn(t, out, "intel:ip:198.51.100.7", 4001, "",
+		`{"process":{"pid":4242,"name":"miner"},"connection_info":{"direction":"outbound"},"dst_endpoint":{"ip":"198.51.100.7","port":443}}`)
+	f.alertOn(t, in, "intel:ip:198.51.100.8", 4001, "",
+		`{"process":{"pid":80,"name":"nginx"},"connection_info":{"direction":"inbound"},"src_endpoint":{"ip":"198.51.100.8"},"dst_endpoint":{"ip":"10.1.1.51","port":443}}`)
+	// 低级别情报不处置
+	low := f.alertOn(t, in, "intel:ip:198.51.100.9", 4001, "", `{"connection_info":{"direction":"inbound"}}`)
+	f.client.Alert.UpdateOneID(low.ID).SetSeverity(3).ExecX(f.ctx)
+	if err := f.engine(ScopeAll).Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := f.received("app")
+	if len(got) != 2 || got[0].Kind != pb.CommandKind_BLOCK_NETWORK || got[1].Kind != pb.CommandKind_KILL_PROCESS || got[1].Pid != 4242 || got[1].ProcessGuid == "" {
+		t.Fatalf("外连情报地址应封锁并结束进程：%v", got)
+	}
+	if got := f.received("nginx"); len(got) != 1 || got[0].Kind != pb.CommandKind_BLOCK_NETWORK || got[0].Target != "198.51.100.8" {
+		t.Fatalf("入站命中只封锁：%v", got)
+	}
+}
+
+// 情报命中文件哈希：进程本身命中就结束进程并隔离文件；核心资产不隔离文件；哈希碰在父进程上的不处置
+func TestIntelHashKillsAndQuarantines(t *testing.T) {
+	f := setup(t)
+	app := f.host(t, "app", "10.1.1.50", nil, "")
+	core := f.host(t, "db", "10.1.1.51", tierPtr(entasset.ResponseTierCore), "")
+	other := f.host(t, "dev", "10.1.1.52", nil, "")
+	const evil = "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12"
+	proc := `{"process":{"pid":777,"name":"x","file":{"path":"/tmp/x","sha256":"` + evil + `"}}}`
+	f.alertOn(t, app, "intel:hash:"+evil, 1007, "", proc)
+	f.alertOn(t, core, "intel:hash:"+evil, 1007, "", proc)
+	f.alertOn(t, other, "intel:hash:"+evil, 1007, "", `{"process":{"pid":9,"name":"bash","file":{"path":"/bin/bash"},"parent_process":{"file":{"sha256":"`+evil+`"}}}}`)
+	if err := f.engine(ScopeAll).Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.received("app"); len(got) != 2 || got[0].Kind != pb.CommandKind_KILL_PROCESS || got[1].Kind != pb.CommandKind_QUARANTINE_FILE || got[1].Target != "/tmp/x" {
+		t.Fatalf("应结束进程并隔离文件：%v", got)
+	}
+	if got := f.received("db"); len(got) != 1 || got[0].Kind != pb.CommandKind_KILL_PROCESS {
+		t.Fatalf("核心资产只结束进程：%v", got)
+	}
+	if got := f.received("dev"); len(got) != 0 {
+		t.Fatalf("哈希不是这个进程自己的，不处置：%v", got)
+	}
+}
+
+// 平台指令与已知自动化引起的告警不处置
+func TestOwnOperationsAreNotContained(t *testing.T) {
+	f := setup(t)
+	web := f.host(t, "web", "10.1.1.183", nil, "")
+	al := f.alertOn(t, web, sigma.RuleBruteforceSuccess, 3002, "deploy", `{"src_endpoint":{"ip":"203.0.113.5"}}`)
+	f.client.Alert.UpdateOneID(al.ID).SetAutomationID(uuid.New()).ExecX(f.ctx)
+	if err := f.engine(ScopeAll).Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.received("web"); len(got) != 0 || f.client.Containment.Query().CountX(f.ctx) != 0 {
+		t.Fatalf("已知自动化的告警不该处置：%v", got)
 	}
 }

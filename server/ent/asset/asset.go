@@ -72,6 +72,8 @@ const (
 	FieldZoneID = "zone_id"
 	// FieldResponseTier holds the string denoting the response_tier field in the database.
 	FieldResponseTier = "response_tier"
+	// FieldResponseTierReason holds the string denoting the response_tier_reason field in the database.
+	FieldResponseTierReason = "response_tier_reason"
 	// FieldRole holds the string denoting the role field in the database.
 	FieldRole = "role"
 	// FieldSummary holds the string denoting the summary field in the database.
@@ -152,6 +154,7 @@ var Columns = []string{
 	FieldEgressNotes,
 	FieldZoneID,
 	FieldResponseTier,
+	FieldResponseTierReason,
 	FieldRole,
 	FieldSummary,
 	FieldCriticality,
@@ -307,6 +310,11 @@ func ByZoneID(opts ...sql.OrderTermOption) OrderOption {
 // ByResponseTier orders the results by the response_tier field.
 func ByResponseTier(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldResponseTier, opts...).ToFunc()
+}
+
+// ByResponseTierReason orders the results by the response_tier_reason field.
+func ByResponseTierReason(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldResponseTierReason, opts...).ToFunc()
 }
 
 // ByRole orders the results by the role field.

@@ -75,6 +75,8 @@ type Asset struct {
 	ZoneID *uuid.UUID `json:"zone_id,omitempty"`
 	// ResponseTier holds the value of the "response_tier" field.
 	ResponseTier *asset.ResponseTier `json:"response_tier,omitempty"`
+	// ResponseTierReason holds the value of the "response_tier_reason" field.
+	ResponseTierReason *string `json:"response_tier_reason,omitempty"`
 	// Role holds the value of the "role" field.
 	Role *string `json:"role,omitempty"`
 	// Summary holds the value of the "summary" field.
@@ -150,7 +152,7 @@ func (*Asset) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case asset.FieldHealthDropped, asset.FieldCriticality:
 			values[i] = new(sql.NullInt64)
-		case asset.FieldHostname, asset.FieldOs, asset.FieldOsDisplay, asset.FieldSensorVersion, asset.FieldSensorProblem, asset.FieldAgentVersion, asset.FieldHealthProblem, asset.FieldResponseTier, asset.FieldRole, asset.FieldSummary, asset.FieldAnnotationReason, asset.FieldAnnotatedFacts:
+		case asset.FieldHostname, asset.FieldOs, asset.FieldOsDisplay, asset.FieldSensorVersion, asset.FieldSensorProblem, asset.FieldAgentVersion, asset.FieldHealthProblem, asset.FieldResponseTier, asset.FieldResponseTierReason, asset.FieldRole, asset.FieldSummary, asset.FieldAnnotationReason, asset.FieldAnnotatedFacts:
 			values[i] = new(sql.NullString)
 		case asset.FieldFirstSeen, asset.FieldLastSeen, asset.FieldSensorSeen, asset.FieldSilentSince, asset.FieldHealthDroppedAt, asset.FieldInventoryAt, asset.FieldSoftwareAt, asset.FieldAnnotatedAt, asset.FieldAnnotateRequestedAt:
 			values[i] = new(sql.NullTime)
@@ -378,6 +380,13 @@ func (_m *Asset) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.ResponseTier = new(asset.ResponseTier)
 				*_m.ResponseTier = asset.ResponseTier(value.String)
+			}
+		case asset.FieldResponseTierReason:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field response_tier_reason", values[i])
+			} else if value.Valid {
+				_m.ResponseTierReason = new(string)
+				*_m.ResponseTierReason = value.String
 			}
 		case asset.FieldRole:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -609,6 +618,11 @@ func (_m *Asset) String() string {
 	if v := _m.ResponseTier; v != nil {
 		builder.WriteString("response_tier=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.ResponseTierReason; v != nil {
+		builder.WriteString("response_tier_reason=")
+		builder.WriteString(*v)
 	}
 	builder.WriteString(", ")
 	if v := _m.Role; v != nil {

@@ -35,7 +35,7 @@ const (
 )
 
 // Lockable 人工可改的标注字段；改过即锁定，AI 不再覆盖
-var Lockable = []string{"role", "summary", "criticality"}
+var Lockable = []string{"role", "summary", "criticality", "response_tier"}
 
 // Facts 喂给模型的事实。指纹只取相对稳定的部分：程序清单会随新进程不断增长，
 // 公网目的地址经常变化，都不进指纹，否则会反复触发标注。
@@ -288,8 +288,12 @@ const annotatePrompt = `你是资产梳理助手。根据给出的一台主机�
 3 一般业务；
 2 辅助、开发测试；
 1 临时或无业务。
+自主响应处置等级 responseTier 决定这台主机被认定为攻击来源时，平台能否不问人直接把它断网：
+lab 实验：靶场、CTF、攻防演练、安全测试、临时实验机，断网只影响实验本身；
+production 生产：有业务在跑、断网会造成事故，拿不准一律选它；
+core 核心：安全与监控平台、数据库、虚拟化宿主机、域控、网关、DNS、CI/CD 这类失陷或断网影响全局的机器。
 只输出一个 JSON 对象，不要其他文字：
-{"role":"不超过 16 字的角色，如 PostgreSQL 数据库","summary":"不超过 120 字的功能说明","criticality":1-5,"reason":"不超过 150 字的重要程度依据","relations":[{"peer":"对端，必须原样取自 outbound 或 inbound 里的主机名或 IP","note":"不超过 30 字的关系说明，如 读写业务库"}],"services":[{"port":"原样取自 unknownServices 开头的 协议/端口","name":"不超过 16 字的服务名，如 Corosync 集群通信","note":"不超过 60 字的用途"}]}
+{"role":"不超过 16 字的角色，如 PostgreSQL 数据库","summary":"不超过 120 字的功能说明","criticality":1-5,"reason":"不超过 150 字的重要程度依据","responseTier":"lab、production 或 core","tierReason":"不超过 80 字的定级依据","relations":[{"peer":"对端，必须原样取自 outbound 或 inbound 里的主机名或 IP","note":"不超过 30 字的关系说明，如 读写业务库"}],"services":[{"port":"原样取自 unknownServices 开头的 协议/端口","name":"不超过 16 字的服务名，如 Corosync 集群通信","note":"不超过 60 字的用途"}]}
 services 只为 unknownServices 里的端口命名；凭进程名与路径认不出就不要写，不要猜。
 public 是本机连过的公网地址（按连接量取前若干个），带端口、发起进程、反向解析 ptr、VirusTotal 给的归属 owner、国家 country、
 判恶意的引擎数 malicious 与历史解析域名 domains。在上面的 JSON 里再加一个字段为认得出的地址写用途：
@@ -298,12 +302,15 @@ public 是本机连过的公网地址（按连接量取前若干个），带端�
 
 // Annotation 模型给出的标注，已校验
 type Annotation struct {
-	Role        string            `json:"role"`
-	Summary     string            `json:"summary"`
-	Criticality int               `json:"criticality"`
-	Reason      string            `json:"reason"`
-	Relations   map[string]string `json:"relations"`
-	Services    map[string]ServiceNote
+	Role        string `json:"role"`
+	Summary     string `json:"summary"`
+	Criticality int    `json:"criticality"`
+	Reason      string `json:"reason"`
+	// 处置等级与依据，已按约束校正（见 parseAnnotation）
+	Tier       string            `json:"responseTier"`
+	TierReason string            `json:"tierReason"`
+	Relations  map[string]string `json:"relations"`
+	Services   map[string]ServiceNote
 }
 
 func (e *Engine) annotate(ctx context.Context, w *World, a *ent.Asset) error {
@@ -348,6 +355,9 @@ func (e *Engine) annotate(ctx context.Context, w *World, a *ent.Asset) error {
 	if !locked("criticality") {
 		upd.SetCriticality(ann.Criticality).SetAnnotationReason(ann.Reason)
 	}
+	if !locked("response_tier") {
+		upd.SetResponseTier(asset.ResponseTier(ann.Tier)).SetResponseTierReason(ann.TierReason)
+	}
 	return upd.Exec(ctx)
 }
 
@@ -363,6 +373,8 @@ func parseAnnotation(answer string, peers, unknown, public []string) (Annotation
 		Summary     string `json:"summary"`
 		Criticality int    `json:"criticality"`
 		Reason      string `json:"reason"`
+		Tier        string `json:"responseTier"`
+		TierReason  string `json:"tierReason"`
 		Relations   []struct {
 			Peer string `json:"peer"`
 			Note string `json:"note"`
@@ -385,6 +397,7 @@ func parseAnnotation(answer string, peers, unknown, public []string) (Annotation
 	if ann.Role == "" || ann.Criticality < 1 || ann.Criticality > 5 {
 		return Annotation{}, fmt.Errorf("角色为空或重要程度越界")
 	}
+	ann.Tier, ann.TierReason = tierOf(raw.Tier, clean(raw.TierReason, 160), ann.Criticality)
 	for _, r := range raw.Relations {
 		if note := clean(r.Note, 60); note != "" && slices.Contains(peers, r.Peer) && len(ann.Relations) < maxPeers {
 			ann.Relations[r.Peer] = note
@@ -459,4 +472,16 @@ func servicePort(s string) string {
 		return b + "/" + a
 	}
 	return first
+}
+
+// tierOf 校正模型给的处置等级：认不出的按生产；实验等级意味着可以不问人直接断网，
+// 模型自己判的重要程度高于 2（一般业务及以上）却给实验，两个判断矛盾，按生产处理
+func tierOf(tier, reason string, criticality int) (string, string) {
+	switch {
+	case tier != "lab" && tier != "production" && tier != "core":
+		return "production", "模型未给出有效等级，按生产处理"
+	case tier == "lab" && criticality > 2:
+		return "production", fmt.Sprintf("模型给了实验等级，但重要程度为 %d，按生产处理；原依据：%s", criticality, reason)
+	}
+	return tier, reason
 }
