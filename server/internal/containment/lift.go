@@ -9,6 +9,7 @@ import (
 
 	"openxdr/server/ent"
 	entcontainment "openxdr/server/ent/containment"
+	"openxdr/server/ent/predicate"
 	"openxdr/server/internal/response"
 )
 
@@ -137,6 +138,13 @@ func Lift(ctx context.Context, db *ent.Client, hub *response.Hub, c *ent.Contain
 	return db.Containment.Get(ctx, curr.ID)
 }
 
+func sameLiftCommandPredicate(curr *ent.Containment) predicate.Containment {
+	if curr.LiftCommandID == nil {
+		return entcontainment.LiftCommandIDIsNil()
+	}
+	return entcontainment.LiftCommandIDEQ(*curr.LiftCommandID)
+}
+
 func settleExistingLift(ctx context.Context, db *ent.Client, curr *ent.Containment, prev *ent.Command, actor, reason string) (*ent.Containment, error) {
 	switch prev.Status {
 	case "succeeded":
@@ -145,12 +153,12 @@ func settleExistingLift(ctx context.Context, db *ent.Client, curr *ent.Containme
 			ended = *prev.CompletedAt
 		}
 		_ = db.Containment.Update().
-			Where(entcontainment.IDEQ(curr.ID), entcontainment.StateIn(entcontainment.StateActive, entcontainment.StateExecuted)).
+			Where(entcontainment.IDEQ(curr.ID), entcontainment.StateIn(entcontainment.StateActive, entcontainment.StateExecuted), sameLiftCommandPredicate(curr)).
 			SetLiftCommandID(prev.ID).SetState(entcontainment.StateLifted).SetLiftedBy(actor).SetEndedAt(ended).SetReason(reason).Exec(ctx)
 		return db.Containment.Get(ctx, curr.ID)
 	case "sent", "pending", "unknown":
 		upd := db.Containment.Update().
-			Where(entcontainment.IDEQ(curr.ID), entcontainment.StateIn(entcontainment.StateActive, entcontainment.StateExecuted)).
+			Where(entcontainment.IDEQ(curr.ID), entcontainment.StateIn(entcontainment.StateActive, entcontainment.StateExecuted), sameLiftCommandPredicate(curr)).
 			SetLiftCommandID(prev.ID).SetReason(reason)
 		if curr.LiftedBy == nil || *curr.LiftedBy == "" {
 			upd.SetLiftedBy(actor)

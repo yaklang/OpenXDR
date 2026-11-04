@@ -714,7 +714,7 @@ func (e *Engine) expire(ctx context.Context) error {
 		if existingCmd != nil {
 			if c.LiftCommandID == nil || *c.LiftCommandID != existingCmd.ID {
 				if err := e.DB.Containment.Update().
-					Where(entcontainment.IDEQ(c.ID), entcontainment.StateEQ(entcontainment.StateActive)).
+					Where(entcontainment.IDEQ(c.ID), entcontainment.StateEQ(entcontainment.StateActive), sameLiftCommandPredicate(c)).
 					SetLiftCommandID(existingCmd.ID).Exec(ctx); err != nil {
 					return err
 				}
