@@ -284,6 +284,9 @@ var Kinds = map[string]pb.CommandKind{
 	"restore_file":    pb.CommandKind_RESTORE_FILE,
 	"disable_account": pb.CommandKind_DISABLE_ACCOUNT,
 	"enable_account":  pb.CommandKind_ENABLE_ACCOUNT,
+
+	"isolate_container":   pb.CommandKind_ISOLATE_CONTAINER,
+	"unisolate_container": pb.CommandKind_UNISOLATE_CONTAINER,
 }
 
 func kindToProto(kind string) pb.CommandKind {

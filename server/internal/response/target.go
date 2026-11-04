@@ -18,6 +18,8 @@ const (
 var (
 	hostLabel   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	accountName = regexp.MustCompile(`^[A-Za-z0-9._][A-Za-z0-9._-]{0,31}$`)
+	// docker 系容器 ID（agent 上报前 12 位，也接受完整的 64 位）或 LXC / QEMU 的 VMID
+	containerID = regexp.MustCompile(`^([0-9a-f]{12,64}|[0-9]{1,9})$`)
 	builtin     = map[string]bool{"root": true, "administrator": true, "system": true, "localsystem": true, "defaultaccount": true}
 )
 
@@ -26,6 +28,7 @@ var TargetKinds = map[string]bool{
 	"block_network": true, "unblock_network": true,
 	"quarantine_file": true, "restore_file": true,
 	"disable_account": true, "enable_account": true,
+	"isolate_container": true, "unisolate_container": true,
 }
 
 // NormalizeTarget 校验并规范化动作目标。protected 是 server 自己的地址：封锁不能覆盖它们，
@@ -74,6 +77,11 @@ func NormalizeTarget(kind, target string, protected []netip.Addr) (string, error
 			return "", fmt.Errorf("%s 是系统内置账号，锁定会让主机无法管理", target)
 		}
 		return target, nil
+	case "isolate_container", "unisolate_container":
+		if !containerID.MatchString(strings.ToLower(target)) {
+			return "", errors.New("容器 ID 必须是 12–64 位十六进制或数字 VMID")
+		}
+		return strings.ToLower(target), nil
 	}
 	return "", fmt.Errorf("%s 不需要目标", kind)
 }

@@ -105,7 +105,7 @@ func mapCommands(api *http.ServeMux, db *ent.Client, rules sigma.Catalog, hub *r
 			return
 		}
 		if _, ok := response.Kinds[body.Kind]; !ok {
-			http.Error(w, "kind 必须是 kill_process / isolate_host / unisolate_host / exec / block_network / unblock_network / quarantine_file / restore_file / disable_account / enable_account", http.StatusBadRequest)
+			http.Error(w, "kind 必须是 kill_process / isolate_host / unisolate_host / exec / block_network / unblock_network / quarantine_file / restore_file / disable_account / enable_account / isolate_container / unisolate_container", http.StatusBadRequest)
 			return
 		}
 		target := ""

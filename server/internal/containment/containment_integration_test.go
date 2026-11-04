@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -473,5 +474,56 @@ func TestManualLiftSticksUntilNewEvidence(t *testing.T) {
 		SetSignal("intel:ip:1.2.3.4").SetAlertID(first.ID).SetRole("host").SetState("executed").SetReason("x").SaveX(f.ctx)
 	if _, err := Lift(f.ctx, f.client, f.hub, kill, "kei", ""); err != ErrNotLiftable {
 		t.Fatalf("结束进程不能撤回：%v", err)
+	}
+}
+
+// outbound 在来源主机上落一条容器发起的外连
+func (f *fixture) outbound(t *testing.T, src *ent.Asset, dst, uid, name, runtime string) {
+	raw := `{"connection_info":{"direction":"outbound"},"dst_endpoint":{"ip":"` + dst + `","port":22},` +
+		`"container":{"uid":"` + uid + `","name":"` + name + `","runtime":"` + runtime + `"}}`
+	f.client.Event.Create().SetTs(f.now.Add(-5 * time.Minute)).SetClassUID(4001).SetSource("agent").
+		SetAssetID(src.ID).SetRaw(json.RawMessage(raw)).SaveX(f.ctx)
+}
+
+// 认出发起喷洒的容器：只隔离容器，不动宿主机；生产等级的来源也隔离容器；核心不动；QEMU 与连向别处的不算
+func TestSprayIsolatesSourceContainer(t *testing.T) {
+	f := setup(t)
+	lab := f.host(t, "uos-server", "10.1.1.170", tierPtr(entasset.ResponseTierLab), "")
+	prod := f.host(t, "docker-host", "10.1.1.34", nil, "")
+	core := f.host(t, "pve", "10.1.1.2", tierPtr(entasset.ResponseTierCore), "")
+	v1 := f.host(t, "node1", "10.1.1.198", nil, "")
+	v2 := f.host(t, "web", "10.1.1.183", nil, "")
+	f.outbound(t, lab, "10.1.1.198", "4f173e0d45b0", "range_c11_comp1_t2", "docker")
+	f.outbound(t, lab, "10.1.1.183", "4f173e0d45b0", "range_c11_comp1_t2", "docker")
+	f.outbound(t, lab, "8.8.8.8", "aaaaaaaaaaaa", "dns-tool", "docker")
+	f.outbound(t, prod, "10.1.1.198", "bbbbbbbbbbbb", "ctf0-web", "docker")
+	f.outbound(t, prod, "10.1.1.183", "201", "", "qemu")
+	f.outbound(t, core, "10.1.1.198", "cccccccccccc", "x", "docker")
+	f.spray(t, lab, "10.1.1.170", v1, v2)
+	f.spray(t, prod, "10.1.1.34", v1, v2)
+	f.spray(t, core, "10.1.1.2", v1, v2)
+	if err := f.engine(ScopeAll).Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.received("uos-server"); len(got) != 1 || got[0].Kind != pb.CommandKind_ISOLATE_CONTAINER || got[0].Target != "4f173e0d45b0" {
+		t.Fatalf("实验等级认出容器只隔离容器：%v", got)
+	}
+	if got := f.received("docker-host"); len(got) != 1 || got[0].Kind != pb.CommandKind_ISOLATE_CONTAINER || got[0].Target != "bbbbbbbbbbbb" {
+		t.Fatalf("生产等级也隔离来源容器，QEMU 不算：%v", got)
+	}
+	if got := f.received("pve"); len(got) != 0 {
+		t.Fatalf("核心来源不动：%v", got)
+	}
+	c := f.client.Containment.Query().Where(entcontainment.TargetEQ("4f173e0d45b0")).OnlyX(f.ctx)
+	if c.State != entcontainment.StateActive || c.ExpiresAt == nil || !strings.Contains(c.Reason, "range_c11_comp1_t2") {
+		t.Fatalf("容器隔离走租约并写明容器名：%+v", c)
+	}
+	// 到期解除容器隔离
+	f.now = f.now.Add(25 * time.Hour)
+	if err := f.engine(ScopeAll).Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.received("uos-server"); len(got) != 1 || got[0].Kind != pb.CommandKind_UNISOLATE_CONTAINER || got[0].Target != "4f173e0d45b0" {
+		t.Fatalf("到期解除容器隔离：%v", got)
 	}
 }

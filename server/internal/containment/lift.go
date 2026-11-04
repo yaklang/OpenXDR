@@ -12,10 +12,11 @@ import (
 
 // reverse 人工能撤回的处置与对应的恢复动作。结束进程撤不回
 var reverse = map[string]string{
-	"isolate_host":    "unisolate_host",
-	"block_network":   "unblock_network",
-	"quarantine_file": "restore_file",
-	"disable_account": "enable_account",
+	"isolate_host":      "unisolate_host",
+	"isolate_container": "unisolate_container",
+	"block_network":     "unblock_network",
+	"quarantine_file":   "restore_file",
+	"disable_account":   "enable_account",
 }
 
 // ErrNotLiftable 这条处置不在生效中，或动作撤不回（结束进程）
