@@ -1,0 +1,15 @@
+# 实例名是 guard.sh 的角色：数据节点启用 openxdr-guard@node，witness 启用 openxdr-guard@witness。
+# 在 Docker 与 etcd 之前装好规则；本单元停止时不撤规则，宁可误拦也不放开。
+[Unit]
+Description=OpenXDR HA 端口来源限制（%i）
+After=netfilter-persistent.service firewalld.service ufw.service
+Before=docker.service openxdr-etcd-witness.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/openxdr-guard
+ExecStart=/usr/local/sbin/openxdr-guard.sh %i
+
+[Install]
+WantedBy=multi-user.target

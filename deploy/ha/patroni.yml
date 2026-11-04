@@ -2,9 +2,17 @@ scope: openxdr
 namespace: /openxdr/
 name: __NODE_NAME__
 
+# REST API 仍监听全部地址：对端 HAProxy 用 HEAD /primary 判主、两端 Prometheus 抓 /metrics、
+# Patroni 之间互相 GET 状态，都要跨节点访问。这些只读接口不需要口令；会改变集群的接口
+# （PATCH/PUT /config、POST /restart /reload /switchover /failover /reinitialize 等）要求下面的
+# Basic 认证。来源地址由宿主机防火墙 guard.sh 收窄到本机、两个节点与 VIP（可选监控主机）。
+# 容器内 patronictl -c /etc/patroni/patroni.yml 会自动带上这组凭据。
 restapi:
   listen: 0.0.0.0:8008
   connect_address: __NODE_IP__:8008
+  authentication:
+    username: patroni-admin
+    password: __PATRONI_RESTAPI_PASSWORD_YAML__
 
 etcd3:
   hosts:
@@ -37,18 +45,8 @@ bootstrap:
   initdb:
     - encoding: UTF8
     - data-checksums
-  pg_hba:
-    - host replication replicator 10.1.1.197/32 scram-sha-256
-    - host replication replicator 10.1.1.198/32 scram-sha-256
-    - host all all 127.0.0.1/32 scram-sha-256
-    - host all all 10.1.1.197/32 scram-sha-256
-    - host all all 10.1.1.198/32 scram-sha-256
-  users:
-    openxdr:
-      password: __OPENXDR_PASSWORD_YAML__
-      options:
-        - createdb
-        - createrole
+  # openxdr 角色由 post-bootstrap.sh 创建（Patroni 4 已不支持 bootstrap.users），
+  # replicator 角色由 Patroni 按 postgresql.authentication.replication 创建并设口令。
 
 postgresql:
   listen: 0.0.0.0:5432
@@ -64,6 +62,24 @@ postgresql:
       password: __REPLICATION_PASSWORD_YAML__
   parameters:
     unix_socket_directories: /var/run/postgresql
+  # pg_hba 写在本地配置而不是 bootstrap.dcs：本地 postgresql.* 优先于 DCS 里的动态配置，
+  # 经 REST API 或 etcd 改动态配置里的 pg_hba 不会生效；Patroni 每次启动按这里重写
+  # pg_hba.conf，initdb 默认留下的 127.0.0.1 / ::1 trust 行也一并去掉。
+  # - local trust：unix socket 只在容器里，能连上它的进程已经是容器内 postgres 用户、
+  #   可以直接读数据目录；备份脚本经 docker exec 走这里。
+  # - 127.0.0.1：Patroni 自己经 TCP 连本机（未开 use_unix_socket），超级用户口令在 initdb 时写入；
+  #   备库读本机时间线（切换、pg_rewind 前）用 replicator 走复制连接连 127.0.0.1。
+  # - 两个节点：HAProxy 从节点地址转发应用连接；复制与 pg_rewind 也从节点地址发起，
+  #   切换后任一节点都可能是备库，所以两个节点都要有 replication 行。
+  # VIP 只是目的地址，没有客户端以它为源地址连数据库，不必列出。其余来源一律没有匹配行。
+  pg_hba:
+    - local all all trust
+    - host all all 127.0.0.1/32 scram-sha-256
+    - host replication replicator 127.0.0.1/32 scram-sha-256
+    - host replication replicator 10.1.1.198/32 scram-sha-256
+    - host replication replicator 10.1.1.197/32 scram-sha-256
+    - host all all 10.1.1.198/32 scram-sha-256
+    - host all all 10.1.1.197/32 scram-sha-256
 
 tags:
   nofailover: false

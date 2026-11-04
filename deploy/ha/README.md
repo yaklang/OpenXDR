@@ -20,13 +20,21 @@ mTLS 接受连接。任一 PVE 整机失联后，剩余 PostgreSQL 副本可晋�
 ```bash
 deploy/ha/generate-certs.sh runtime/pki <witness-address>
 export OPENXDR_PASSWORD=... POSTGRES_PASSWORD=... REPLICATION_PASSWORD=...
-export NATS_ROUTE_PASSWORD=... VRRP_PASSWORD=... ADMIN_PASSWORD=...
-export GRAFANA_ADMIN_PASSWORD=...                 # VRRP 密码最多 8 字符
+export PATRONI_RESTAPI_PASSWORD=... NATS_ROUTE_PASSWORD=... VRRP_PASSWORD=...
+export ADMIN_PASSWORD=... GRAFANA_ADMIN_PASSWORD=...   # VRRP 密码最多 8 字符
 deploy/ha/render.py --node node1 --witness <witness-address>
 sudo deploy/ha/prepare-runtime.sh runtime
+sudo install -m 0755 deploy/ha/guard.sh /usr/local/sbin/openxdr-guard.sh
+sudo install -m 0644 deploy/ha/systemd/openxdr-guard@.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now openxdr-guard@node
 docker compose -f docker-compose.ha-node.yml config --quiet
 docker compose -f docker-compose.ha-node.yml up -d --build
 ```
+
+`.env` 只需 compose 用到的 `OPENXDR_PASSWORD`、`ADMIN_PASSWORD`、`GRAFANA_ADMIN_PASSWORD` 等；
+`POSTGRES_PASSWORD`、`REPLICATION_PASSWORD`、`PATRONI_RESTAPI_PASSWORD` 只在渲染时使用，渲染进
+`runtime/patroni.yml`，不进 patroni 容器的环境变量。`OPENXDR_PASSWORD` 另渲染成
+`runtime/openxdr-db-password` 供初始化建角色。
 
 `OPENXDR_PASSWORD` 与 `NATS_ROUTE_PASSWORD` 只允许 URL-safe 字符
 `A-Z a-z 0-9 . _ ~ -`；`VRRP_PASSWORD` 只允许 1-8 位字母或数字。渲染器会拒绝
@@ -38,10 +46,52 @@ Witness 使用 [witness-compose.yml](witness-compose.yml) 和渲染后的
 `witness-nats.conf`，只接收 `2379/tcp` 与 `6222/tcp`。如果 witness 上已有不能
 重启的 Docker 工作负载，可安装固定版本的 etcd、NATS 二进制，并使用
 [`systemd/`](systemd/) 中的受限服务单元；部署前按实际地址调整 etcd 的
-`--advertise-client-urls`。公网端口即使有 mTLS，也应在上游防火墙限制来源地址。
+`--advertise-client-urls`。公网端口即使有 mTLS，也要限制来源地址：witness 上同样安装
+`guard.sh` 与 `openxdr-guard@.service`，在 `/etc/default/openxdr-guard` 写
+`ETCD_ALLOW="<两节点访问 witness 的出口地址>"` 后启用 `openxdr-guard@witness`。
 
 `runtime/` 已被 Git 忽略。CA 私钥不能留在应用 VM；签发完成后应复制到至少两个
 受控的离线备份位置，再从节点删除。应用节点只保留运行所需的叶子证书。
+
+## 安全边界
+
+2026-11-03 生产遭遇过一次内网横向：攻击者在内网直接调用无认证的 Patroni REST API，
+`PATCH /config` 往动态配置写入放行整个网段的 `trust` pg_hba 并触发重启，随后以 postgres
+超级用户 `COPY ... FROM PROGRAM` 在 patroni 容器里执行命令，从 `/proc/1/environ` 读到经环境变量
+传入的数据库口令。etcd 只有客户端证书一道闸，且公网可达。下面这些控制都是为此加的，改模板时不要退回：
+
+| 控制 | 做法 |
+|---|---|
+| Patroni REST 认证 | `restapi.authentication`（用户 `patroni-admin`，口令 `PATRONI_RESTAPI_PASSWORD`）。只读接口（`/primary`、`/readiness`、`/metrics` 等）仍免口令，HAProxy 与 Prometheus 不用改；改配置、重启、切换等写接口要口令 |
+| pg_hba 不可远程改写 | 写在本地 `postgresql.pg_hba`，优先于 DCS 动态配置；经 REST 或 etcd 改动态配置里的 pg_hba 不生效。除容器内 unix socket 外不用 `trust`，TCP 只收本机与两个节点、`scram-sha-256` |
+| 口令不进环境变量 | patroni 容器不再收 `OPENXDR_PASSWORD`、`REPLICATION_PASSWORD`；初始化读只读挂载的 `openxdr-db-password`（0400），replicator 由 Patroni 自己按配置创建 |
+| 少挂密钥 | patroni 容器只挂 HA CA 与 etcd 客户端证书，不再挂整个 `runtime/secrets`（NATS 节点私钥不在里面） |
+| 宿主机防火墙 | `guard.sh node`：5432 / 8008 只收本机、两个节点、VIP，8008 另收 `MONITOR_IPS`；`guard.sh witness`：2379 只收 `ETCD_ALLOW` |
+
+有一条做不到隔离，要清楚它的边界：Patroni 与 PostgreSQL 在同一镜像里以同一个 `postgres`
+用户（UID 70）运行，Patroni 必须读得到 `patroni.yml`（含超级用户与复制口令）和 etcd 客户端私钥。
+所以谁拿到超级用户、能 `COPY ... FROM PROGRAM`，谁就能读到这些文件、以 Patroni 的身份改 DCS。
+真正的防线是前两道：超级用户只能从两个节点经网络登录（pg_hba + 防火墙），会改集群的 REST
+接口要口令。口令改走文件只是不再让它们出现在 `docker inspect`、每个子进程的环境和 `/proc/*/environ` 里。
+
+运维要点：
+
+- 容器已设 `PATRONICTL_CONFIG_FILE`，`docker exec openxdr-ha-patroni-1 patronictl list` 直接可用，
+  `restart`、`switchover` 等会自动带上 REST 口令；节点外用 `curl` 调写接口要 `-u patroni-admin:<口令>`。
+  `patronictl edit-config` 直接写 etcd，不经 REST，但改不了本地的 pg_hba。
+- 换 REST 口令：重新渲染 `patroni.yml` 后对两个节点各执行 `docker kill -s HUP openxdr-ha-patroni-1`
+  让 Patroni 重读配置（`patronictl reload` 会拿新口令去调还认旧口令的接口）。
+- `guard.sh` 可重复执行，整链重建，只管 IPv4；参数写在 `/etc/default/openxdr-guard`
+  （`NODE_IPS`、`VIP`、`MONITOR_IPS`、`ETCD_ALLOW`）。单元停止时不撤规则。
+  防火墙管理器（firewalld 重载等）清掉 INPUT 后要 `systemctl restart openxdr-guard@<角色>`。
+- 从手工规则迁移（生产在本仓库模板之前手工装过同样作用的 `KEI-DBGUARD` / `KEI-ETCDGUARD` 链，
+  由 `/usr/local/sbin/kei-guard.sh` 与 `kei-guard.service` 维护）：先按上面装好并启用
+  `openxdr-guard@<角色>`，`iptables -S INPUT` 确认新跳转在前，再 `systemctl disable --now kei-guard.service`，
+  用 `iptables -S INPUT | grep KEI-` 找出旧跳转逐条 `iptables -D`，最后 `iptables -F` / `iptables -X` 删除旧链。
+- 已有集群换上新模板：重新渲染并执行 `prepare-runtime.sh`（新增的 `openxdr-db-password` 与三个证书文件
+  不存在时它会报错），`.env` 可删掉 `REPLICATION_PASSWORD`。先在备库 `docker compose up -d patroni`
+  重建，确认 `pg_hba.conf` 与复制正常，再受控切换后处理原主库。`patronictl show-config` 里若残留
+  动态 `pg_hba`，用 `patronictl edit-config` 删掉，免得以后有人去掉本地 pg_hba 时它重新生效。
 
 ## 升级
 
@@ -81,7 +131,7 @@ Patroni 探测使用 `HEAD /primary`，保留主库 200、从库 503 判定，�
 
 ## 验收
 
-1. `patronictl list` 必须是一主一同步副本；
+1. `docker exec openxdr-ha-patroni-1 patronictl list` 必须是一主一同步副本；
 2. JetStream stream 必须 `replicas=3` 且三个 peer current；
 3. `curl http://10.1.1.199:8080/readyz` 与实际 agent 上报均成功；
 4. 依次停止 node1、node2（一次只停一个），确认 VIP 漂移、PostgreSQL 晋升、事件持续增长；

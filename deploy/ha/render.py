@@ -15,6 +15,7 @@ REQUIRED_SECRETS = (
     "OPENXDR_PASSWORD",
     "POSTGRES_PASSWORD",
     "REPLICATION_PASSWORD",
+    "PATRONI_RESTAPI_PASSWORD",
     "NATS_ROUTE_PASSWORD",
     "VRRP_PASSWORD",
 )
@@ -64,6 +65,7 @@ def main() -> None:
         "OPENXDR_PASSWORD_YAML": json.dumps(os.environ["OPENXDR_PASSWORD"]),
         "POSTGRES_PASSWORD_YAML": json.dumps(os.environ["POSTGRES_PASSWORD"]),
         "REPLICATION_PASSWORD_YAML": json.dumps(os.environ["REPLICATION_PASSWORD"]),
+        "PATRONI_RESTAPI_PASSWORD_YAML": json.dumps(os.environ["PATRONI_RESTAPI_PASSWORD"]),
         "NATS_ROUTE_PASSWORD_CONF": json.dumps(os.environ["NATS_ROUTE_PASSWORD"]),
         "NATS_ROUTE_PASSWORD_URL": quote(os.environ["NATS_ROUTE_PASSWORD"], safe=""),
         "VRRP_PASSWORD": os.environ["VRRP_PASSWORD"],
@@ -72,6 +74,10 @@ def main() -> None:
     render(root / "deploy/ha/patroni.yml", args.output / "patroni.yml", values)
     render(root / "deploy/ha/nats.conf", args.output / "nats.conf", values)
     render(root / "deploy/ha/keepalived.conf", args.output / "keepalived.conf", values)
+    # post-bootstrap.sh 建 openxdr 角色用；以文件挂进 patroni 容器，不经环境变量传
+    password_file = args.output / "openxdr-db-password"
+    password_file.write_text(os.environ["OPENXDR_PASSWORD"])
+    password_file.chmod(0o600)
 
 
 if __name__ == "__main__":
