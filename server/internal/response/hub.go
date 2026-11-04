@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -161,12 +162,12 @@ func (h *Hub) issue(ctx context.Context, req Request) (*ent.Command, error) {
 		return nil, fmt.Errorf("该资产没有 agent，无法下发指令")
 	}
 
-	var automaticID uuid.UUID
+	cmdID := req.CommandID
 	if req.automatic {
 		if req.Kind != "isolate_host" || req.IncidentID == nil || *req.IncidentID == uuid.Nil {
 			return nil, fmt.Errorf("自动响应必须绑定事件与隔离动作")
 		}
-		automaticID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("openxdr:auto-isolate|"+req.IncidentID.String()+"|"+a.ID.String()))
+		cmdID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("openxdr:auto-isolate|"+req.IncidentID.String()+"|"+a.ID.String()))
 	}
 	create := h.DB.Command.Create().
 		SetKind(req.Kind).
@@ -179,14 +180,14 @@ func (h *Hub) issue(ctx context.Context, req Request) (*ent.Command, error) {
 	if req.Target != "" {
 		create.SetTarget(req.Target)
 	}
-	if automaticID != uuid.Nil {
-		create.SetID(automaticID)
+	if cmdID != uuid.Nil {
+		create.SetID(cmdID)
 	}
 	cmd, err := create.Save(ctx)
 	if err != nil {
-		if automaticID != uuid.Nil && ent.IsConstraintError(err) {
-			prior, lookupErr := h.DB.Command.Get(ctx, automaticID)
-			if lookupErr == nil && prior.Kind == req.Kind && prior.AssetID == a.ID && prior.IncidentID != nil && *prior.IncidentID == *req.IncidentID && prior.IssuedBy == req.IssuedBy {
+		if cmdID != uuid.Nil && ent.IsConstraintError(err) {
+			prior, lookupErr := h.DB.Command.Get(ctx, cmdID)
+			if lookupErr == nil && sameCommandIntent(prior, a.ID, req) {
 				return prior, nil
 			}
 		}
@@ -202,7 +203,7 @@ func (h *Hub) issue(ctx context.Context, req Request) (*ent.Command, error) {
 		if err != nil {
 			return h.finish(ctx, cmd.ID, "failed", err.Error())
 		}
-		return h.mark(ctx, cmd.ID, "sent")
+		return h.mark(ctx, cmd, "sent")
 	}
 	if h.Router == nil {
 		return h.finish(ctx, cmd.ID, "failed", "agent 未连接指令通道")
@@ -217,7 +218,7 @@ func (h *Hub) issue(ctx context.Context, req Request) (*ent.Command, error) {
 		}
 		return out, finishErr
 	}
-	return h.mark(ctx, cmd.ID, "sent")
+	return h.mark(ctx, cmd, "sent")
 }
 
 // enqueue 与重连关闭通道共用锁；旧 Router 回调不能向新连接投递。
@@ -238,7 +239,10 @@ func (h *Hub) enqueue(agentID uuid.UUID, expected chan *pb.Command, cmd *pb.Comm
 
 type Request struct {
 	// 仅 Auto 可设置；不接受 HTTP/模型提供的幂等身份。
-	automatic   bool
+	automatic bool
+	// CommandID 内部调用方（如 containment）预留的确定性指令 ID；非零时以该 ID 幂等建单，
+	// 若库里已有同 ID 且完整动作身份一致的指令则直接返回已有记录，绝不重复签名或重复投递。
+	CommandID   uuid.UUID `json:"-"`
 	AssetID     uuid.UUID
 	Kind        string
 	IncidentID  *uuid.UUID
@@ -270,6 +274,43 @@ func (r Request) toProto(id uuid.UUID) *pb.Command {
 		cmd.ProcessGuid = r.ProcessGUID.String()
 	}
 	return cmd
+}
+
+func sameCommandIntent(prior *ent.Command, assetID uuid.UUID, req Request) bool {
+	if prior == nil || prior.Kind != req.Kind || prior.AssetID != assetID || prior.IssuedBy != req.IssuedBy {
+		return false
+	}
+	if req.automatic {
+		return prior.IncidentID != nil && req.IncidentID != nil && *prior.IncidentID == *req.IncidentID
+	}
+	if prior.Pid != req.PID || prior.TimeoutMs != req.TimeoutMS {
+		return false
+	}
+	if !sameOptionalText(prior.Target, req.Target) || !sameUUIDPtr(prior.IncidentID, req.IncidentID) || !sameUUIDPtr(prior.ProcessGUID, req.ProcessGUID) || !sameStringPtr(prior.Cmd, req.Cmd) {
+		return false
+	}
+	return slices.Equal(prior.AllowEndpoints, req.AllowEndpoints)
+}
+
+func sameOptionalText(ptr *string, val string) bool {
+	if val == "" {
+		return ptr == nil || *ptr == ""
+	}
+	return ptr != nil && *ptr == val
+}
+
+func sameStringPtr(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func sameUUIDPtr(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 // Kinds 支持的动作，同时用于 API 参数校验。
@@ -305,16 +346,17 @@ func resultStatus(st pb.CommandResult_Status) string {
 	return "unknown"
 }
 
-func (h *Hub) mark(ctx context.Context, id uuid.UUID, status string) (*ent.Command, error) {
+func (h *Hub) mark(ctx context.Context, cmd *ent.Command, status string) (*ent.Command, error) {
+	id := cmd.ID
 	// 快速回执可能先于投递确认到达，不能把终态改回 sent。
 	if _, err := h.DB.Command.Update().Where(entcommand.IDEQ(id), entcommand.StatusEQ("pending")).SetStatus(status).Save(ctx); err != nil {
-		return nil, fmt.Errorf("%w：命令 %s 可能已下发，状态回写失败，禁止自动重试: %v", ErrDeliveryUnknown, id, err)
+		return cmd, fmt.Errorf("%w：命令 %s 可能已下发，状态回写失败，禁止自动重试: %v", ErrDeliveryUnknown, id, err)
 	}
-	cmd, err := h.DB.Command.Get(ctx, id)
+	updated, err := h.DB.Command.Get(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("%w：命令 %s 已投递，读取状态失败，禁止自动重试: %v", ErrDeliveryUnknown, id, err)
+		return cmd, fmt.Errorf("%w：命令 %s 已投递，读取状态失败，禁止自动重试: %v", ErrDeliveryUnknown, id, err)
 	}
-	return cmd, nil
+	return updated, nil
 }
 
 func (h *Hub) finish(ctx context.Context, id uuid.UUID, status, detail string) (*ent.Command, error) {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -774,5 +775,63 @@ func TestReceiptReconciliationAndSafetyBounds(t *testing.T) {
 	block = f.client.Containment.GetX(f.ctx, block.ID)
 	if block.State != entcontainment.StateExpired || block.EndedAt == nil {
 		t.Fatalf("解除指令成功回执后应转 expired 并写 EndedAt: %+v", block)
+	}
+}
+
+func TestContainmentCommandIdempotencyAndConcurrency(t *testing.T) {
+	f := setup(t)
+	host := f.host(t, "endpoint", "10.0.1.31", tierPtr(entasset.ResponseTierLab), "")
+
+	al := f.client.Alert.Create().SetTs(f.now).SetRuleID("test.idempotent").SetSeverity(5).SetAssetID(host.ID).SaveX(f.ctx)
+	e := f.engine(ScopeAll)
+	act := action{asset: host, kind: "block_network", target: "198.51.100.77", role: "host", why: "幂等与并发核验"}
+	if err := e.decide(f.ctx, al, nil, act, f.now); err != nil {
+		t.Fatal(err)
+	}
+	initProto := <-f.inbox["endpoint"]
+	c := f.client.Containment.Query().Where(entcontainment.AlertIDEQ(al.ID)).OnlyX(f.ctx)
+	initCmdID := *c.CommandID
+
+	// 同一 CommandID + 完全一致动作身份重复调用：返回已有 prior，不再投递
+	prior, err := f.hub.Issue(f.ctx, response.Request{
+		CommandID: initCmdID, AssetID: host.ID, Kind: "block_network", Target: "198.51.100.77", IssuedBy: "auto", AllowEndpoints: e.AllowEndpoints,
+	})
+	if err != nil || prior.ID != initCmdID || len(f.inbox["endpoint"]) != 0 {
+		t.Fatalf("同身份幂等复用异常: prior=%v err=%v inbox=%d", prior, err, len(f.inbox["endpoint"]))
+	}
+
+	// 同一 CommandID 但目标不同：拒绝复用，防止跨目标回执串号
+	if _, err := f.hub.Issue(f.ctx, response.Request{
+		CommandID: initCmdID, AssetID: host.ID, Kind: "block_network", Target: "198.51.100.88", IssuedBy: "auto", AllowEndpoints: e.AllowEndpoints,
+	}); err == nil {
+		t.Fatalf("同 CommandID 不同目标应当拒绝复用")
+	}
+
+	// 初次处置回执成功 -> active，再并发调用 Lift：只建一条解除指令、投递一次
+	agentID := *host.AgentID
+	if err := f.hub.Complete(f.ctx, agentID, &pb.CommandResult{
+		CommandId: initProto.Id, Status: pb.CommandResult_SUCCEEDED, Detail: "blocked",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	c = f.client.Containment.GetX(f.ctx, c.ID)
+
+	var wg sync.WaitGroup
+	for _, actor := range []string{"alice", "bob"} {
+		wg.Add(1)
+		go func(who string) {
+			defer wg.Done()
+			_, _ = Lift(f.ctx, f.client, f.hub, c, who, "并发人工解除")
+		}(actor)
+	}
+	wg.Wait()
+	if n := f.client.Command.Query().CountX(f.ctx); n != 2 {
+		t.Fatalf("并发人工解除应只产生 1 条解除指令（含初次封禁共 2 条），实得 %d", n)
+	}
+	if len(f.inbox["endpoint"]) != 1 {
+		t.Fatalf("并发人工解除应只投递 1 次解除指令，实得 %d", len(f.inbox["endpoint"]))
 	}
 }
