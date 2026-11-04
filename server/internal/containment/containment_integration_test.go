@@ -420,3 +420,58 @@ func TestOwnOperationsAreNotContained(t *testing.T) {
 		t.Fatalf("已知自动化的告警不该处置：%v", got)
 	}
 }
+
+// 人工解除：下发恢复动作；解除之前的证据（包括同一批的另一条告警）不再触发同一处置，之后的新证据照样触发
+func TestManualLiftSticksUntilNewEvidence(t *testing.T) {
+	f := setup(t)
+	src := f.host(t, "range", "10.1.1.170", tierPtr(entasset.ResponseTierLab), "")
+	v := f.host(t, "web", "10.1.1.183", nil, "")
+	first := f.spray(t, src, "10.1.1.170", v)
+	e := f.engine(ScopeLab)
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.received("range")
+	f.received("web")
+	block := f.client.Containment.Query().Where(entcontainment.KindEQ("block_network")).OnlyX(f.ctx)
+	if _, err := Lift(f.ctx, f.client, f.hub, block, "kei", "确认是演练"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.received("web"); len(got) != 1 || got[0].Kind != pb.CommandKind_UNBLOCK_NETWORK {
+		t.Fatalf("解除应下发 unblock：%v", got)
+	}
+	if _, err := Lift(f.ctx, f.client, f.hub, f.client.Containment.GetX(f.ctx, block.ID), "kei", ""); err != ErrNotLiftable {
+		t.Fatalf("已解除的不能再解除：%v", err)
+	}
+
+	// 同一批证据的另一条告警晚到：不再封
+	second := f.client.Alert.Create().SetRuleID(sigma.RuleLateralSpray).SetSeverity(5).SetAssetID(src.ID).
+		SetTs(first.Ts).SetLastTs(*first.LastTs).SaveX(f.ctx)
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.received("web"); len(got) != 0 {
+		t.Fatalf("解除之前的证据不该重新封锁：%v", got)
+	}
+
+	// 解除之后的新证据：照样封
+	f.now = f.now.Add(10 * time.Minute)
+	f.client.Alert.UpdateOneID(second.ID).SetLastTs(f.now).ExecX(f.ctx)
+	if _, err := f.db.Exec(`INSERT INTO lateral_evidence(event_id,src_asset,victim_asset,ts,src_ip) VALUES($1,$2,$3,$4,$5)`,
+		uuid.New(), src.ID, v.ID, f.now, "10.1.1.170"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.received("web"); len(got) != 1 || got[0].Kind != pb.CommandKind_BLOCK_NETWORK {
+		t.Fatalf("新证据应重新封锁：%v", got)
+	}
+
+	// 结束进程撤不回
+	kill := f.client.Containment.Create().SetAssetID(v.ID).SetKind("kill_process").SetTarget(uuid.NewString()).SetKey("k").
+		SetSignal("intel:ip:1.2.3.4").SetAlertID(first.ID).SetRole("host").SetState("executed").SetReason("x").SaveX(f.ctx)
+	if _, err := Lift(f.ctx, f.client, f.hub, kill, "kei", ""); err != ErrNotLiftable {
+		t.Fatalf("结束进程不能撤回：%v", err)
+	}
+}

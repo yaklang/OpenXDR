@@ -209,6 +209,20 @@ func (_c *ContainmentCreate) SetNillableEndedAt(v *time.Time) *ContainmentCreate
 	return _c
 }
 
+// SetLiftedBy sets the "lifted_by" field.
+func (_c *ContainmentCreate) SetLiftedBy(v string) *ContainmentCreate {
+	_c.mutation.SetLiftedBy(v)
+	return _c
+}
+
+// SetNillableLiftedBy sets the "lifted_by" field if the given value is not nil.
+func (_c *ContainmentCreate) SetNillableLiftedBy(v *string) *ContainmentCreate {
+	if v != nil {
+		_c.SetLiftedBy(*v)
+	}
+	return _c
+}
+
 // SetID sets the "id" field.
 func (_c *ContainmentCreate) SetID(v uuid.UUID) *ContainmentCreate {
 	_c.mutation.SetID(v)
@@ -420,6 +434,10 @@ func (_c *ContainmentCreate) createSpec() (*Containment, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.EndedAt(); ok {
 		_spec.SetField(containment.FieldEndedAt, field.TypeTime, value)
 		_node.EndedAt = &value
+	}
+	if value, ok := _c.mutation.LiftedBy(); ok {
+		_spec.SetField(containment.FieldLiftedBy, field.TypeString, value)
+		_node.LiftedBy = &value
 	}
 	return _node, _spec
 }

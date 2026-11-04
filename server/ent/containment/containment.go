@@ -51,6 +51,8 @@ const (
 	FieldExpiresAt = "expires_at"
 	// FieldEndedAt holds the string denoting the ended_at field in the database.
 	FieldEndedAt = "ended_at"
+	// FieldLiftedBy holds the string denoting the lifted_by field in the database.
+	FieldLiftedBy = "lifted_by"
 	// Table holds the table name of the containment in the database.
 	Table = "containments"
 )
@@ -76,6 +78,7 @@ var Columns = []string{
 	FieldLiftCommandID,
 	FieldExpiresAt,
 	FieldEndedAt,
+	FieldLiftedBy,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -129,6 +132,7 @@ const (
 	StateActive   State = "active"
 	StateExpired  State = "expired"
 	StateExecuted State = "executed"
+	StateLifted   State = "lifted"
 	StateHeld     State = "held"
 	StateSkipped  State = "skipped"
 	StateFailed   State = "failed"
@@ -141,7 +145,7 @@ func (s State) String() string {
 // StateValidator is a validator for the "state" field enum values. It is called by the builders before save.
 func StateValidator(s State) error {
 	switch s {
-	case StateActive, StateExpired, StateExecuted, StateHeld, StateSkipped, StateFailed:
+	case StateActive, StateExpired, StateExecuted, StateLifted, StateHeld, StateSkipped, StateFailed:
 		return nil
 	default:
 		return fmt.Errorf("containment: invalid enum value for state field: %q", s)
@@ -244,4 +248,9 @@ func ByExpiresAt(opts ...sql.OrderTermOption) OrderOption {
 // ByEndedAt orders the results by the ended_at field.
 func ByEndedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldEndedAt, opts...).ToFunc()
+}
+
+// ByLiftedBy orders the results by the lifted_by field.
+func ByLiftedBy(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLiftedBy, opts...).ToFunc()
 }

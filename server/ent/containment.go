@@ -53,7 +53,9 @@ type Containment struct {
 	// ExpiresAt holds the value of the "expires_at" field.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	// EndedAt holds the value of the "ended_at" field.
-	EndedAt      *time.Time `json:"ended_at,omitempty"`
+	EndedAt *time.Time `json:"ended_at,omitempty"`
+	// LiftedBy holds the value of the "lifted_by" field.
+	LiftedBy     *string `json:"lifted_by,omitempty"`
 	selectValues sql.SelectValues
 }
 
@@ -66,7 +68,7 @@ func (*Containment) scanValues(columns []string) ([]any, error) {
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
 		case containment.FieldPid:
 			values[i] = new(sql.NullInt64)
-		case containment.FieldKind, containment.FieldTarget, containment.FieldKey, containment.FieldSignal, containment.FieldRole, containment.FieldState, containment.FieldReason:
+		case containment.FieldKind, containment.FieldTarget, containment.FieldKey, containment.FieldSignal, containment.FieldRole, containment.FieldState, containment.FieldReason, containment.FieldLiftedBy:
 			values[i] = new(sql.NullString)
 		case containment.FieldCreatedAt, containment.FieldExpiresAt, containment.FieldEndedAt:
 			values[i] = new(sql.NullTime)
@@ -208,6 +210,13 @@ func (_m *Containment) assignValues(columns []string, values []any) error {
 				_m.EndedAt = new(time.Time)
 				*_m.EndedAt = value.Time
 			}
+		case containment.FieldLiftedBy:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field lifted_by", values[i])
+			} else if value.Valid {
+				_m.LiftedBy = new(string)
+				*_m.LiftedBy = value.String
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -310,6 +319,11 @@ func (_m *Containment) String() string {
 	if v := _m.EndedAt; v != nil {
 		builder.WriteString("ended_at=")
 		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	if v := _m.LiftedBy; v != nil {
+		builder.WriteString("lifted_by=")
+		builder.WriteString(*v)
 	}
 	builder.WriteByte(')')
 	return builder.String()

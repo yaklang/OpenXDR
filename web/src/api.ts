@@ -1681,3 +1681,45 @@ export interface TriageRun {
   output_tokens?: number
 }
 export const fetchTriageRuns = (id: string, page: number) => get<{ items: TriageRun[]; more: boolean }>(`/api/incidents/${id}/triage-runs?page=${page}`)
+
+// 自主响应：处置决定（执行了的封锁、隔离是租约），见 docs/autonomous-response-design.md
+export type ContainmentState = 'active' | 'expired' | 'executed' | 'lifted' | 'held' | 'skipped' | 'failed'
+export interface Containment {
+  id: string
+  createdAt: string
+  assetId: string
+  assetHostname: string
+  kind: string
+  target: string
+  pid?: number
+  signal: string
+  alertId: string
+  incidentId: string | null
+  // 来源主机在别组时不给名字
+  sourceHostname?: string
+  role: 'source' | 'victim' | 'host'
+  state: ContainmentState
+  reason: string
+  commandId: string | null
+  commandStatus?: string
+  commandDetail?: string
+  liftStatus?: string
+  expiresAt: string | null
+  endedAt: string | null
+  liftedBy: string | null
+  liftable: boolean
+}
+export interface ContainmentStatus {
+  enabled: boolean
+  scope?: 'lab' | 'all'
+  ttlHours?: number
+  maxPerHour?: number
+  executedLastHour: number
+  heldLastHour: number
+  active: number
+  tripped: boolean
+}
+export const fetchContainments = (page: number, pageSize: number, state: string) =>
+  get<{ items: Containment[]; total: number }>(`/api/containments?page=${page}&pageSize=${pageSize}${state ? `&state=${state}` : ''}`)
+export const fetchContainmentStatus = () => get<ContainmentStatus>('/api/containments/status')
+export const liftContainment = (id: string, reason: string) => send('POST', `/api/containments/${id}/lift`, { reason })

@@ -35,13 +35,16 @@ func (Containment) Fields() []ent.Field {
 		field.UUID("source_asset_id", uuid.UUID{}).Optional().Nillable(),
 		field.Enum("role").Values("source", "victim", "host"),
 		// active 生效中（封锁、隔离主机这类可逆处置的租约）/ expired 到期已解除 / executed 一次性处置已下发
-		// （结束进程、隔离文件、锁定账号：自动恢复比不恢复更危险，只能人工恢复）/ held 熔断挡下 / skipped 不该自动处置 / failed 下发失败
-		field.Enum("state").Values("active", "expired", "executed", "held", "skipped", "failed"),
+		// （结束进程、隔离文件、锁定账号：自动恢复比不恢复更危险，只能人工恢复）/ lifted 人工解除或恢复 /
+		// held 熔断挡下 / skipped 不该自动处置 / failed 下发失败
+		field.Enum("state").Values("active", "expired", "executed", "lifted", "held", "skipped", "failed"),
 		field.Text("reason"),
 		field.UUID("command_id", uuid.UUID{}).Optional().Nillable(),
 		field.UUID("lift_command_id", uuid.UUID{}).Optional().Nillable(),
 		field.Time("expires_at").Optional().Nillable(),
+		// 租约到期、人工解除的时间；人工解除的，这之前的证据不再触发同一处置
 		field.Time("ended_at").Optional().Nillable(),
+		field.String("lifted_by").Optional().Nillable(),
 	}
 }
 

@@ -135,7 +135,7 @@ func (e *Engine) react(ctx context.Context) error {
 			last = *al.LastTs
 		}
 		for _, a := range p.actions {
-			if err := e.decide(ctx, al, p.source, a, last.Add(e.TTL)); err != nil {
+			if err := e.decide(ctx, al, p.source, a, last); err != nil {
 				return fmt.Errorf("告警 %s 处置 %s: %w", al.ID, a.key(), err)
 			}
 		}
@@ -162,9 +162,10 @@ func (e *Engine) scoped(ctx context.Context, involved ...*ent.Asset) (string, er
 	return "自动处置范围只含实验等级主机涉及的攻击，" + strings.Join(names, "，"), nil
 }
 
-// decide 一条计划处置落表：已有生效租约就续期；这条告警已经为它做过决定就不再动；否则新决定，能执行就下发。
-func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a action, expires time.Time) error {
-	key := a.key()
+// decide 一条计划处置落表：已有生效租约就续期；人工在最后一条证据之后解除过、或这条告警已经为它做过决定，
+// 就不再动；否则新决定，能执行就下发。last 是告警最后一条证据的时间
+func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a action, last time.Time) error {
+	key, expires := a.key(), last.Add(e.TTL)
 	active, err := e.DB.Containment.Query().
 		Where(entcontainment.KeyEQ(key), entcontainment.StateEQ(entcontainment.StateActive)).
 		Only(ctx)
@@ -178,7 +179,9 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a
 		return err
 	}
 	decided, err := e.DB.Containment.Query().
-		Where(entcontainment.KeyEQ(key), entcontainment.AlertIDEQ(al.ID)).
+		Where(entcontainment.KeyEQ(key), entcontainment.Or(
+			entcontainment.AlertIDEQ(al.ID),
+			entcontainment.And(entcontainment.StateEQ(entcontainment.StateLifted), entcontainment.EndedAtGTE(last)))).
 		Exist(ctx)
 	if err != nil || decided {
 		return err
@@ -246,7 +249,7 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a
 func (e *Engine) fuse(ctx context.Context, a action) (string, error) {
 	executed, err := e.DB.Containment.Query().
 		Where(entcontainment.CreatedAtGTE(e.now().Add(-time.Hour)),
-			entcontainment.StateIn(entcontainment.StateActive, entcontainment.StateExpired, entcontainment.StateExecuted)).
+			entcontainment.StateIn(entcontainment.StateActive, entcontainment.StateExpired, entcontainment.StateExecuted, entcontainment.StateLifted)).
 		Count(ctx)
 	if err != nil {
 		return "", err
