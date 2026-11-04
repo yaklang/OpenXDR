@@ -124,6 +124,53 @@ func (_u *AuditLogUpdate) SetNillableRemoteAddr(v *string) *AuditLogUpdate {
 	return _u
 }
 
+// SetSeq sets the "seq" field.
+func (_u *AuditLogUpdate) SetSeq(v int64) *AuditLogUpdate {
+	_u.mutation.ResetSeq()
+	_u.mutation.SetSeq(v)
+	return _u
+}
+
+// SetNillableSeq sets the "seq" field if the given value is not nil.
+func (_u *AuditLogUpdate) SetNillableSeq(v *int64) *AuditLogUpdate {
+	if v != nil {
+		_u.SetSeq(*v)
+	}
+	return _u
+}
+
+// AddSeq adds value to the "seq" field.
+func (_u *AuditLogUpdate) AddSeq(v int64) *AuditLogUpdate {
+	_u.mutation.AddSeq(v)
+	return _u
+}
+
+// ClearSeq clears the value of the "seq" field.
+func (_u *AuditLogUpdate) ClearSeq() *AuditLogUpdate {
+	_u.mutation.ClearSeq()
+	return _u
+}
+
+// SetSeal sets the "seal" field.
+func (_u *AuditLogUpdate) SetSeal(v string) *AuditLogUpdate {
+	_u.mutation.SetSeal(v)
+	return _u
+}
+
+// SetNillableSeal sets the "seal" field if the given value is not nil.
+func (_u *AuditLogUpdate) SetNillableSeal(v *string) *AuditLogUpdate {
+	if v != nil {
+		_u.SetSeal(*v)
+	}
+	return _u
+}
+
+// ClearSeal clears the value of the "seal" field.
+func (_u *AuditLogUpdate) ClearSeal() *AuditLogUpdate {
+	_u.mutation.ClearSeal()
+	return _u
+}
+
 // Mutation returns the AuditLogMutation object of the builder.
 func (_u *AuditLogUpdate) Mutation() *AuditLogMutation {
 	return _u.mutation
@@ -188,6 +235,21 @@ func (_u *AuditLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.RemoteAddr(); ok {
 		_spec.SetField(auditlog.FieldRemoteAddr, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.Seq(); ok {
+		_spec.SetField(auditlog.FieldSeq, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedSeq(); ok {
+		_spec.AddField(auditlog.FieldSeq, field.TypeInt64, value)
+	}
+	if _u.mutation.SeqCleared() {
+		_spec.ClearField(auditlog.FieldSeq, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.Seal(); ok {
+		_spec.SetField(auditlog.FieldSeal, field.TypeString, value)
+	}
+	if _u.mutation.SealCleared() {
+		_spec.ClearField(auditlog.FieldSeal, field.TypeString)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -305,6 +367,53 @@ func (_u *AuditLogUpdateOne) SetNillableRemoteAddr(v *string) *AuditLogUpdateOne
 	return _u
 }
 
+// SetSeq sets the "seq" field.
+func (_u *AuditLogUpdateOne) SetSeq(v int64) *AuditLogUpdateOne {
+	_u.mutation.ResetSeq()
+	_u.mutation.SetSeq(v)
+	return _u
+}
+
+// SetNillableSeq sets the "seq" field if the given value is not nil.
+func (_u *AuditLogUpdateOne) SetNillableSeq(v *int64) *AuditLogUpdateOne {
+	if v != nil {
+		_u.SetSeq(*v)
+	}
+	return _u
+}
+
+// AddSeq adds value to the "seq" field.
+func (_u *AuditLogUpdateOne) AddSeq(v int64) *AuditLogUpdateOne {
+	_u.mutation.AddSeq(v)
+	return _u
+}
+
+// ClearSeq clears the value of the "seq" field.
+func (_u *AuditLogUpdateOne) ClearSeq() *AuditLogUpdateOne {
+	_u.mutation.ClearSeq()
+	return _u
+}
+
+// SetSeal sets the "seal" field.
+func (_u *AuditLogUpdateOne) SetSeal(v string) *AuditLogUpdateOne {
+	_u.mutation.SetSeal(v)
+	return _u
+}
+
+// SetNillableSeal sets the "seal" field if the given value is not nil.
+func (_u *AuditLogUpdateOne) SetNillableSeal(v *string) *AuditLogUpdateOne {
+	if v != nil {
+		_u.SetSeal(*v)
+	}
+	return _u
+}
+
+// ClearSeal clears the value of the "seal" field.
+func (_u *AuditLogUpdateOne) ClearSeal() *AuditLogUpdateOne {
+	_u.mutation.ClearSeal()
+	return _u
+}
+
 // Mutation returns the AuditLogMutation object of the builder.
 func (_u *AuditLogUpdateOne) Mutation() *AuditLogMutation {
 	return _u.mutation
@@ -399,6 +508,21 @@ func (_u *AuditLogUpdateOne) sqlSave(ctx context.Context) (_node *AuditLog, err 
 	}
 	if value, ok := _u.mutation.RemoteAddr(); ok {
 		_spec.SetField(auditlog.FieldRemoteAddr, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.Seq(); ok {
+		_spec.SetField(auditlog.FieldSeq, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedSeq(); ok {
+		_spec.AddField(auditlog.FieldSeq, field.TypeInt64, value)
+	}
+	if _u.mutation.SeqCleared() {
+		_spec.ClearField(auditlog.FieldSeq, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.Seal(); ok {
+		_spec.SetField(auditlog.FieldSeal, field.TypeString, value)
+	}
+	if _u.mutation.SealCleared() {
+		_spec.ClearField(auditlog.FieldSeal, field.TypeString)
 	}
 	_node = &AuditLog{config: _u.config}
 	_spec.Assign = _node.assignValues

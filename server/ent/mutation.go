@@ -9328,6 +9328,9 @@ type AuditLogMutation struct {
 	target        *string
 	detail        *string
 	remote_addr   *string
+	seq           *int64
+	addseq        *int64
+	seal          *string
 	clearedFields map[string]struct{}
 	done          bool
 	oldValue      func(context.Context) (*AuditLog, error)
@@ -9680,6 +9683,125 @@ func (m *AuditLogMutation) ResetRemoteAddr() {
 	m.remote_addr = nil
 }
 
+// SetSeq sets the "seq" field.
+func (m *AuditLogMutation) SetSeq(i int64) {
+	m.seq = &i
+	m.addseq = nil
+}
+
+// Seq returns the value of the "seq" field in the mutation.
+func (m *AuditLogMutation) Seq() (r int64, exists bool) {
+	v := m.seq
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSeq returns the old "seq" field's value of the AuditLog entity.
+// If the AuditLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AuditLogMutation) OldSeq(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSeq is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSeq requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSeq: %w", err)
+	}
+	return oldValue.Seq, nil
+}
+
+// AddSeq adds i to the "seq" field.
+func (m *AuditLogMutation) AddSeq(i int64) {
+	if m.addseq != nil {
+		*m.addseq += i
+	} else {
+		m.addseq = &i
+	}
+}
+
+// AddedSeq returns the value that was added to the "seq" field in this mutation.
+func (m *AuditLogMutation) AddedSeq() (r int64, exists bool) {
+	v := m.addseq
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearSeq clears the value of the "seq" field.
+func (m *AuditLogMutation) ClearSeq() {
+	m.seq = nil
+	m.addseq = nil
+	m.clearedFields[auditlog.FieldSeq] = struct{}{}
+}
+
+// SeqCleared returns if the "seq" field was cleared in this mutation.
+func (m *AuditLogMutation) SeqCleared() bool {
+	_, ok := m.clearedFields[auditlog.FieldSeq]
+	return ok
+}
+
+// ResetSeq resets all changes to the "seq" field.
+func (m *AuditLogMutation) ResetSeq() {
+	m.seq = nil
+	m.addseq = nil
+	delete(m.clearedFields, auditlog.FieldSeq)
+}
+
+// SetSeal sets the "seal" field.
+func (m *AuditLogMutation) SetSeal(s string) {
+	m.seal = &s
+}
+
+// Seal returns the value of the "seal" field in the mutation.
+func (m *AuditLogMutation) Seal() (r string, exists bool) {
+	v := m.seal
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSeal returns the old "seal" field's value of the AuditLog entity.
+// If the AuditLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AuditLogMutation) OldSeal(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSeal is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSeal requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSeal: %w", err)
+	}
+	return oldValue.Seal, nil
+}
+
+// ClearSeal clears the value of the "seal" field.
+func (m *AuditLogMutation) ClearSeal() {
+	m.seal = nil
+	m.clearedFields[auditlog.FieldSeal] = struct{}{}
+}
+
+// SealCleared returns if the "seal" field was cleared in this mutation.
+func (m *AuditLogMutation) SealCleared() bool {
+	_, ok := m.clearedFields[auditlog.FieldSeal]
+	return ok
+}
+
+// ResetSeal resets all changes to the "seal" field.
+func (m *AuditLogMutation) ResetSeal() {
+	m.seal = nil
+	delete(m.clearedFields, auditlog.FieldSeal)
+}
+
 // Where appends a list predicates to the AuditLogMutation builder.
 func (m *AuditLogMutation) Where(ps ...predicate.AuditLog) {
 	m.predicates = append(m.predicates, ps...)
@@ -9714,7 +9836,7 @@ func (m *AuditLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AuditLogMutation) Fields() []string {
-	fields := make([]string, 0, 6)
+	fields := make([]string, 0, 8)
 	if m.ts != nil {
 		fields = append(fields, auditlog.FieldTs)
 	}
@@ -9732,6 +9854,12 @@ func (m *AuditLogMutation) Fields() []string {
 	}
 	if m.remote_addr != nil {
 		fields = append(fields, auditlog.FieldRemoteAddr)
+	}
+	if m.seq != nil {
+		fields = append(fields, auditlog.FieldSeq)
+	}
+	if m.seal != nil {
+		fields = append(fields, auditlog.FieldSeal)
 	}
 	return fields
 }
@@ -9753,6 +9881,10 @@ func (m *AuditLogMutation) Field(name string) (ent.Value, bool) {
 		return m.Detail()
 	case auditlog.FieldRemoteAddr:
 		return m.RemoteAddr()
+	case auditlog.FieldSeq:
+		return m.Seq()
+	case auditlog.FieldSeal:
+		return m.Seal()
 	}
 	return nil, false
 }
@@ -9774,6 +9906,10 @@ func (m *AuditLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldDetail(ctx)
 	case auditlog.FieldRemoteAddr:
 		return m.OldRemoteAddr(ctx)
+	case auditlog.FieldSeq:
+		return m.OldSeq(ctx)
+	case auditlog.FieldSeal:
+		return m.OldSeal(ctx)
 	}
 	return nil, fmt.Errorf("unknown AuditLog field %s", name)
 }
@@ -9825,6 +9961,20 @@ func (m *AuditLogMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetRemoteAddr(v)
 		return nil
+	case auditlog.FieldSeq:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSeq(v)
+		return nil
+	case auditlog.FieldSeal:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSeal(v)
+		return nil
 	}
 	return fmt.Errorf("unknown AuditLog field %s", name)
 }
@@ -9832,13 +9982,21 @@ func (m *AuditLogMutation) SetField(name string, value ent.Value) error {
 // AddedFields returns all numeric fields that were incremented/decremented during
 // this mutation.
 func (m *AuditLogMutation) AddedFields() []string {
-	return nil
+	var fields []string
+	if m.addseq != nil {
+		fields = append(fields, auditlog.FieldSeq)
+	}
+	return fields
 }
 
 // AddedField returns the numeric value that was incremented/decremented on a field
 // with the given name. The second boolean return value indicates that this field
 // was not set, or was not defined in the schema.
 func (m *AuditLogMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case auditlog.FieldSeq:
+		return m.AddedSeq()
+	}
 	return nil, false
 }
 
@@ -9847,6 +10005,13 @@ func (m *AuditLogMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *AuditLogMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case auditlog.FieldSeq:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSeq(v)
+		return nil
 	}
 	return fmt.Errorf("unknown AuditLog numeric field %s", name)
 }
@@ -9860,6 +10025,12 @@ func (m *AuditLogMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(auditlog.FieldDetail) {
 		fields = append(fields, auditlog.FieldDetail)
+	}
+	if m.FieldCleared(auditlog.FieldSeq) {
+		fields = append(fields, auditlog.FieldSeq)
+	}
+	if m.FieldCleared(auditlog.FieldSeal) {
+		fields = append(fields, auditlog.FieldSeal)
 	}
 	return fields
 }
@@ -9880,6 +10051,12 @@ func (m *AuditLogMutation) ClearField(name string) error {
 		return nil
 	case auditlog.FieldDetail:
 		m.ClearDetail()
+		return nil
+	case auditlog.FieldSeq:
+		m.ClearSeq()
+		return nil
+	case auditlog.FieldSeal:
+		m.ClearSeal()
 		return nil
 	}
 	return fmt.Errorf("unknown AuditLog nullable field %s", name)
@@ -9906,6 +10083,12 @@ func (m *AuditLogMutation) ResetField(name string) error {
 		return nil
 	case auditlog.FieldRemoteAddr:
 		m.ResetRemoteAddr()
+		return nil
+	case auditlog.FieldSeq:
+		m.ResetSeq()
+		return nil
+	case auditlog.FieldSeal:
+		m.ResetSeal()
 		return nil
 	}
 	return fmt.Errorf("unknown AuditLog field %s", name)

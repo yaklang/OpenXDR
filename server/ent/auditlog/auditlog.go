@@ -26,6 +26,10 @@ const (
 	FieldDetail = "detail"
 	// FieldRemoteAddr holds the string denoting the remote_addr field in the database.
 	FieldRemoteAddr = "remote_addr"
+	// FieldSeq holds the string denoting the seq field in the database.
+	FieldSeq = "seq"
+	// FieldSeal holds the string denoting the seal field in the database.
+	FieldSeal = "seal"
 	// Table holds the table name of the auditlog in the database.
 	Table = "audit_logs"
 )
@@ -39,6 +43,8 @@ var Columns = []string{
 	FieldTarget,
 	FieldDetail,
 	FieldRemoteAddr,
+	FieldSeq,
+	FieldSeal,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -94,4 +100,14 @@ func ByDetail(opts ...sql.OrderTermOption) OrderOption {
 // ByRemoteAddr orders the results by the remote_addr field.
 func ByRemoteAddr(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRemoteAddr, opts...).ToFunc()
+}
+
+// BySeq orders the results by the seq field.
+func BySeq(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSeq, opts...).ToFunc()
+}
+
+// BySeal orders the results by the seal field.
+func BySeal(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSeal, opts...).ToFunc()
 }

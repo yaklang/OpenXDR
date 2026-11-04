@@ -31,6 +31,7 @@ import (
 	"openxdr/server/internal/aijob"
 	"openxdr/server/internal/api"
 	"openxdr/server/internal/assetmap"
+	"openxdr/server/internal/auditchain"
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/automation"
 	"openxdr/server/internal/beacon"
@@ -132,6 +133,7 @@ func main() {
 	registry.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		telemetry.NewCollectorHealth(db), telemetry.NewIntegrationQueue(db), integration.RateLimitedRequests,
 		notify.NewHealthCollector(notifySettings))
+	chainKey := startAuditChain(ctx, db, client, hub, registry)
 	events, router := startEventBus(ctx, db, rules, temporalRules, suppressions, intelStore, dedupWindow, hub, registry)
 	if router != nil {
 		defer router.Close()
@@ -162,6 +164,7 @@ func main() {
 	registerSQLRoutes(routes, db)
 	routes.Handle("GET /api/trusted-sources/candidates", api.TrustedCandidates(client, db))
 	routes.Handle("GET /api/notify/health", api.NotifyHealth(client, notifySettings))
+	routes.Handle("GET /api/audit/chain", api.AuditChain(db, chainKey))
 	routes.Handle("/api/containments", api.Containments(client, hub, containmentEngine))
 	routes.Handle("/api/containments/", api.Containments(client, hub, containmentEngine))
 	registerHostRoutes(ctx, routes, db, client, rules, credentialVault, enrollSvc, conf)
@@ -420,6 +423,25 @@ func startTriage(ctx context.Context, db *sql.DB, client *ent.Client, rules sigm
 	// 常驻：模型在控制台配上就开始研判，撤掉就停
 	go cluster.RunLeader(ctx, db, "triage", triageEngine.Run)
 	return triageEngine
+}
+
+// startAuditChain 审计防篡改：有指令签名私钥才启用（链密钥由它派生，不在库里）。返回链密钥，没启用为 nil
+func startAuditChain(ctx context.Context, db *sql.DB, client *ent.Client, hub *response.Hub, registry *prometheus.Registry) []byte {
+	if hub.Signer == nil {
+		slog.Warn("未配置 COMMAND_SIGNING_KEY_FILE，审计链不启用")
+		return nil
+	}
+	key := auditchain.Key(hub.Signer)
+	go cluster.RunLeader(ctx, db, "auditchain", (&auditchain.Sealer{SQL: db, DB: client, Key: key, Interval: 5 * time.Second}).Run)
+	registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "openxdr_audit_sealed_seq",
+		Help: "审计链已封存的最大编号；存在集群外的监控里，倒退说明尾部审计被删",
+	}, func() float64 {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		return auditchain.SealedSeq(ctx, db)
+	}))
+	return key
 }
 
 // startContainment 自主响应：确定性信号命中后按角色与处置等级直接遏制，显式开启才运行，仍受 RESPONSE_ENABLED 约束

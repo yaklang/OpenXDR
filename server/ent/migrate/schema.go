@@ -298,6 +298,8 @@ var (
 		{Name: "target", Type: field.TypeString, Nullable: true},
 		{Name: "detail", Type: field.TypeString, Nullable: true},
 		{Name: "remote_addr", Type: field.TypeString},
+		{Name: "seq", Type: field.TypeInt64, Nullable: true},
+		{Name: "seal", Type: field.TypeString, Nullable: true},
 	}
 	// AuditLogsTable holds the schema information for the "audit_logs" table.
 	AuditLogsTable = &schema.Table{
@@ -309,6 +311,11 @@ var (
 				Name:    "auditlog_ts",
 				Unique:  false,
 				Columns: []*schema.Column{AuditLogsColumns[1]},
+			},
+			{
+				Name:    "auditlog_seq",
+				Unique:  true,
+				Columns: []*schema.Column{AuditLogsColumns[7]},
 			},
 		},
 	}
