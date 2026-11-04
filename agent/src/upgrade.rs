@@ -1,6 +1,6 @@
 //! 自动升级：server 分发目录里放的是哪个版本，agent 就收敛到哪个版本。
 //!
-//! 流程：经已认证的 gRPC 通道下载 → 校验哈希 → 用新二进制跑一次 `version` 自检
+//! 流程：校验发布签名 → 经已认证的 gRPC 通道下载 → 校验哈希 → 用新二进制跑一次 `version` 自检
 //! （架构、glibc 不兼容在这一步就暴露）→ 旧版改名 .prev 留作回滚 → 换上新版 → 退出，
 //! 由 systemd / 计划任务拉起新版。任何一步失败都保持旧版继续运行，下次重连再试。
 
@@ -16,6 +16,13 @@ use crate::pb::agent_service_client::AgentServiceClient;
 
 /// 换上新版后的退出码：非零，让各种守护方式都视为需要重启
 pub const EXIT_UPGRADED: i32 = 75;
+
+/// 编译时嵌入的发布公钥（Ed25519，十六进制）：构建时设 OPENXDR_RELEASE_PUBKEY。嵌了就只装发布私钥签过的安装包——
+/// 私钥不在 server 上，拿下 server 节点也推不了恶意 agent。开源默认构建不嵌，只校验哈希
+const RELEASE_PUBKEY: Option<&str> = option_env!("OPENXDR_RELEASE_PUBKEY");
+
+/// 发布签名的域前缀，与 server/cmd/signrelease 一致
+const RELEASE_CONTEXT: &[u8] = b"openxdr-agent-release-v1\0";
 
 /// 当前二进制的哈希，进程生命周期内不变，算一次即可。算不出来返回空串，server 就不会要求升级。
 pub fn self_sha256() -> &'static str {
@@ -40,12 +47,14 @@ fn sha256_hex(mut r: impl Read) -> std::io::Result<String> {
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// 下载并换上新版。成功返回后由调用方排空采集缓存再退出。
+/// 下载并换上新版。成功返回后由调用方排空采集缓存再退出。签名不对连下载都不做
 pub async fn apply(
     client: &mut AgentServiceClient<tonic::transport::Channel>,
     platform: &str,
     sha256: &str,
+    signature: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
+    verify_release(RELEASE_PUBKEY, platform, sha256, signature)?;
     let data = download(client, platform, sha256).await?;
     let version = install(&std::env::current_exe()?, &data).await?;
     eprintln!("已安装 {version}，等待事件落盘后退出重新拉起");
@@ -73,6 +82,47 @@ async fn download(
         return Err(format!("下载的安装包哈希不符：{got}").into());
     }
     Ok(data)
+}
+
+/// 发布签名：对 前缀 + 平台 + "\0" + 安装包哈希 验签。没嵌公钥就不要求（开源默认构建）
+fn verify_release(
+    pubkey: Option<&str>,
+    platform: &str,
+    sha256: &str,
+    signature: &[u8],
+) -> Result<(), String> {
+    let Some(pubkey) = pubkey else {
+        return Ok(());
+    };
+    let key = decode_hex(pubkey)
+        .filter(|k| k.len() == 32)
+        .ok_or("编译时嵌入的发布公钥无效，拒绝升级")?;
+    if signature.is_empty() {
+        return Err("安装包没有发布签名，拒绝升级（本 agent 只装签过名的版本）".into());
+    }
+    let message = [
+        RELEASE_CONTEXT,
+        platform.as_bytes(),
+        b"\0",
+        sha256.as_bytes(),
+    ]
+    .concat();
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, key)
+        .verify(&message, signature)
+        .map_err(|_| "安装包发布签名无效，拒绝升级".to_string())
+}
+
+fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    s.len()
+        .is_multiple_of(2)
+        .then(|| {
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+                .collect()
+        })
+        .flatten()
 }
 
 /// 新版先落到 .new 并自检，通过后旧版改名 .prev、新版就位。返回新版自报的版本号。
@@ -148,6 +198,49 @@ fn write_executable(path: &Path, data: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 与 server/cmd/signrelease 的 TestReleaseSignatureVector 同一组：全零种子对 linux-amd64 + "abc" 的哈希签名
+    #[test]
+    fn release_signature_vector() {
+        use ring::signature::{Ed25519KeyPair, KeyPair};
+        let key = Ed25519KeyPair::from_seed_unchecked(&[0; 32]).unwrap();
+        let pubkey: String = key
+            .public_key()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let sha = sha256_hex(&b"abc"[..]).unwrap();
+        let sig = decode_hex(
+            "e3b72a71a5927467e125239596e627ac089a981cd8c3c0421ff940747348c5fe\
+             34a7505a6edf487eae2dc5ca5b6d612d02bb33c92b1f504b1b6f0f68ed31810d",
+        )
+        .unwrap();
+        assert!(verify_release(Some(&pubkey), "linux-amd64", &sha, &sig).is_ok());
+        assert!(
+            verify_release(Some(&pubkey), "linux-arm64", &sha, &sig).is_err(),
+            "换平台不行"
+        );
+        assert!(
+            verify_release(Some(&pubkey), "linux-amd64", &"0".repeat(64), &sig).is_err(),
+            "换安装包不行"
+        );
+        assert!(
+            verify_release(Some(&pubkey), "linux-amd64", &sha, &[]).is_err(),
+            "嵌了公钥就必须有签名"
+        );
+        let mut bad = sig.clone();
+        bad[0] ^= 1;
+        assert!(verify_release(Some(&pubkey), "linux-amd64", &sha, &bad).is_err());
+        assert!(
+            verify_release(Some("zz"), "linux-amd64", &sha, &sig).is_err(),
+            "嵌入的公钥坏了就拒绝"
+        );
+        assert!(
+            verify_release(None, "linux-amd64", &sha, &[]).is_ok(),
+            "没嵌公钥只校验哈希"
+        );
+    }
 
     /// 自检失败的新版不能换上去，旧版原地不动；自检通过才换，旧版留作 .prev。
     #[cfg(unix)]

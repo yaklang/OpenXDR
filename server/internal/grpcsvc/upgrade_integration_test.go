@@ -62,6 +62,23 @@ func TestRegisterOffersUpgradeAndStreamsBinary(t *testing.T) {
 	if r := register("old", "x86_64"); r.UpgradeSha256 != want || r.UpgradePlatform != "linux-amd64" {
 		t.Fatalf("版本不同应要求升级：%+v", r)
 	}
+	if r := register("old", "x86_64"); r.UpgradeSignature != nil {
+		t.Fatal("没放 .sig 时不带发布签名")
+	}
+	sig := bytes.Repeat([]byte{7}, 64)
+	sigPath := filepath.Join(dir, "openxdr-agent-linux-amd64.sig")
+	if err := os.WriteFile(sigPath, []byte(hex.EncodeToString(sig)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if r := register("old", "x86_64"); !bytes.Equal(r.UpgradeSignature, sig) {
+		t.Fatalf("应随升级指示下发发布签名：%x", r.UpgradeSignature)
+	}
+	if err := os.WriteFile(sigPath, []byte("not-hex"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if r := register("old", "x86_64"); r.UpgradeSignature != nil {
+		t.Fatal("格式不对的签名文件不下发")
+	}
 	if got := client.Asset.Query().OnlyX(ctx); got.AgentVersion == nil || *got.AgentVersion != "0.1.0" {
 		t.Errorf("应记录 agent 版本：%v", got.AgentVersion)
 	}

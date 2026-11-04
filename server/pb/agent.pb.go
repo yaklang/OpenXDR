@@ -692,8 +692,11 @@ type RegisterResponse struct {
 	// 指令签名公钥（Ed25519，32 字节）。agent 首次见到即固定在本地，之后只认这把；
 	// 与固定值不同时拒绝一切指令，不随注册响应更换
 	CommandSigner []byte `protobuf:"bytes,5,opt,name=command_signer,json=commandSigner,proto3" json:"command_signer,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// 升级安装包的发布签名（Ed25519，64 字节）：对 "openxdr-agent-release-v1\0" + 平台 + "\0" + 安装包 SHA-256（小写十六进制）签名，
+	// 私钥不在 server 上。编译时嵌了发布公钥的 agent 只接受签名有效的安装包；分发目录没放 .sig 时为空
+	UpgradeSignature []byte `protobuf:"bytes,6,opt,name=upgrade_signature,json=upgradeSignature,proto3" json:"upgrade_signature,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RegisterResponse) Reset() {
@@ -757,6 +760,13 @@ func (x *RegisterResponse) GetUpgradePlatform() string {
 func (x *RegisterResponse) GetCommandSigner() []byte {
 	if x != nil {
 		return x.CommandSigner
+	}
+	return nil
+}
+
+func (x *RegisterResponse) GetUpgradeSignature() []byte {
+	if x != nil {
+		return x.UpgradeSignature
 	}
 	return nil
 }
@@ -1057,14 +1067,15 @@ const file_agent_proto_rawDesc = "" +
 	"\bip_addrs\x18\x03 \x03(\tR\aipAddrs\x12#\n" +
 	"\ragent_version\x18\x04 \x01(\tR\fagentVersion\x12\x12\n" +
 	"\x04arch\x18\x05 \x01(\tR\x04arch\x12#\n" +
-	"\rbinary_sha256\x18\x06 \x01(\tR\fbinarySha256\"\xc7\x01\n" +
+	"\rbinary_sha256\x18\x06 \x01(\tR\fbinarySha256\"\xf4\x01\n" +
 	"\x10RegisterResponse\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1f\n" +
 	"\vconfig_json\x18\x02 \x01(\tR\n" +
 	"configJson\x12%\n" +
 	"\x0eupgrade_sha256\x18\x03 \x01(\tR\rupgradeSha256\x12)\n" +
 	"\x10upgrade_platform\x18\x04 \x01(\tR\x0fupgradePlatform\x12%\n" +
-	"\x0ecommand_signer\x18\x05 \x01(\fR\rcommandSigner\"\xb2\x02\n" +
+	"\x0ecommand_signer\x18\x05 \x01(\fR\rcommandSigner\x12+\n" +
+	"\x11upgrade_signature\x18\x06 \x01(\fR\x10upgradeSignature\"\xb2\x02\n" +
 	"\n" +
 	"AgentEvent\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1c\n" +

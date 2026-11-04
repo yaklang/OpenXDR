@@ -119,6 +119,21 @@ Agent 将待签私钥写入 `agent.key.pending`；申请被拒绝不覆盖已有
 自动升级的二进制替换失败时恢复原路径；旧版保留 `.prev`。这不等价于启动后的健康
 自动回滚，后者仍需额外的运行时验收机制。
 
+### 安装包发布签名
+
+agent 会自动升级成 server 分发目录里的版本，所以拿下一个 server 节点，就能往全网推恶意 agent。
+发布签名把这条路堵上：
+
+- **私钥**：发布私钥只放在发布者自己的机器上，不进 server 节点。
+  `server/cmd/signrelease keygen <私钥文件>` 生成，打印的公钥十六进制在构建 agent 时设为 `OPENXDR_RELEASE_PUBKEY`，编进二进制。
+- **签名**：每次往分发目录放安装包，同时放 `signrelease sign <私钥> <平台> <安装包>` 生成的 `<安装包>.sig`。
+  签名覆盖 `openxdr-agent-release-v1\0` + 平台 + `\0` + 安装包 SHA-256。server 注册时把它随升级指示下发（`upgrade_signature`），
+  server 不持有私钥，也不校验。
+- **校验**：嵌了公钥的 agent 在下载之前先验签，没有签名、签名对不上平台或哈希，一律不升级，继续跑当前版本。
+  没嵌公钥的构建（开源默认，包括 release 工作流）只校验哈希，与以往一致。
+- **切换**：先把带公钥的 agent 签好名放进分发目录，现有 agent 按以往规则升级上去，之后的升级就都要签名。
+- **私钥丢了**：已部署的 agent 再也不接受新安装包，只能逐台重装，所以私钥要单独备份。
+
 ## API
 
 - `GET /api/host-import/status`：`credentialStorage`、`sshEnrollment`、`aiParsing` 能力状态。

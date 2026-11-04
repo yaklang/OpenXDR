@@ -4,6 +4,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe { std::env::set_var("PROTOC", protoc_bin_vendored::protoc_bin_path()?) };
     tonic_prost_build::compile_protos("../proto/agent.proto")?;
     println!("cargo:rerun-if-changed=../proto/agent.proto");
+    // 发布公钥在编译时嵌入（见 upgrade.rs），换了要重新编译
+    println!("cargo:rerun-if-env-changed=OPENXDR_RELEASE_PUBKEY");
     build_ebpf()
 }
 
