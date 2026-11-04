@@ -20,10 +20,10 @@ use std::time::{Duration, Instant};
 const UNSET: u32 = u32::MAX;
 /// 认证成功后等 PAM 会话打开的时限；过了还没对上，多半是这台机器没有 pam_loginuid
 const PENDING_TTL: Duration = Duration::from_secs(60);
-/// netlink/eBPF 捕获 sshd 子进程往往比 journalctl -f 收到 Accepted 日志早 150~300ms；
-/// 对确认有 sshd 祖先的新会话号最多等 360ms（18 × 20ms），每个会话号只等一次
+/// netlink/eBPF 捕获 sshd 子进程往往比 journalctl -f 收到 Accepted 日志早 150~500ms（实测冷启动/落盘合并可达 484ms）；
+/// 对确认有 sshd 祖先的新会话号最多等 1s（50 × 20ms），每个会话号只等一次
 const JOURNAL_WAIT_STEP: Duration = Duration::from_millis(20);
-const JOURNAL_WAIT_STEPS: usize = 18;
+const JOURNAL_WAIT_STEPS: usize = 50;
 /// 记住的会话上限。会话号单调递增，超限时丢最早的
 const MAX_SESSIONS: usize = 4096;
 const MAX_PENDING: usize = 1024;
