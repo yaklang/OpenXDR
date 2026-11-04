@@ -17,14 +17,18 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/alert"
+	entasset "openxdr/server/ent/asset"
 	"openxdr/server/ent/incident"
+	"openxdr/server/internal/containment"
 	"openxdr/server/internal/ingest"
 	"openxdr/server/internal/intel"
+	"openxdr/server/internal/response"
 	"openxdr/server/internal/review"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/temporal"
 	"openxdr/server/internal/testdb"
+	"openxdr/server/pb"
 )
 
 // campaignFile validation/campaign/ 下的回放语料：资产与按事件时间排列的时间线，时间线上另有「研判」标记，
@@ -145,6 +149,7 @@ func TestCampaignReplayProwlPivot(t *testing.T) {
 	}
 	slices.SortStableFunc(steps, func(a, b replayStep) int { return a.at.Compare(b.at) })
 
+	var contain *containmentProbe
 	var last time.Time
 	for _, s := range steps {
 		if s.at.Sub(last) >= time.Minute || s.triage != nil {
@@ -171,11 +176,19 @@ func TestCampaignReplayProwlPivot(t *testing.T) {
 			if err != nil || !spray.Ts.Equal(s.event.Timestamp) || spray.Detail == nil || !strings.Contains(*spray.Detail, "共波及 3 台") {
 				t.Fatalf("lizhen-dev 的第一条登录失败应触发喷洒告警（node2、node1、lizhen-dev）：%+v %v", spray, err)
 			}
+			// 自主响应（docs/autonomous-response-design.md）：uos-server 是靶场宿主，标成实验等级；
+			// 告警出现后 5 秒内的一轮决定就隔离它，三台受害主机封锁 10.1.1.170
+			contain = startContainment(t, client, db, assets, s.event.Timestamp.Add(5*time.Second))
+			contain.expect(t, map[string]string{"uos-server": "isolate_host", "openxdr-node2": "10.1.1.170",
+				"openxdr-node1": "10.1.1.170", "lizhen-dev": "10.1.1.170"})
 		}
 	}
 	if err := eng.batch(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// 回放结束：后来的两台受害主机也封锁，已生效的不重复下发
+	contain.now = steps[len(steps)-1].at.Add(5 * time.Second)
+	contain.expect(t, map[string]string{"openxdr-test-linux": "10.1.1.170", "dynamicdefend-v2": "10.1.1.170"})
 
 	uos := assets["uos-server"]
 	noise := incidentOfEvent(t, client, ids["ops-whoami"][0])
@@ -276,4 +289,50 @@ func incidentOfEvent(t *testing.T, client *ent.Client, event uuid.UUID) *ent.Inc
 
 func alertLabel(eng *Engine, al *ent.Alert) string {
 	return eng.alertTitle(al) + "@" + al.Ts.Format(time.TimeOnly)
+}
+
+// containmentProbe 回放里的自主响应：所有主机都挂上在线的指令通道，按回放时刻跑处置引擎
+type containmentProbe struct {
+	engine *containment.Engine
+	now    time.Time
+	inbox  map[string]chan *pb.Command
+}
+
+func startContainment(t *testing.T, client *ent.Client, db *sql.DB, assets map[string]*ent.Asset, now time.Time) *containmentProbe {
+	hub := response.NewHub(client, true)
+	p := &containmentProbe{now: now, inbox: map[string]chan *pb.Command{}}
+	for name, a := range assets {
+		agent := uuid.New()
+		upd := client.Asset.UpdateOneID(a.ID).SetAgentID(agent)
+		if name == "uos-server" {
+			upd.SetResponseTier(entasset.ResponseTierLab)
+		}
+		upd.ExecX(t.Context())
+		p.inbox[name] = hub.Attach(agent)
+	}
+	p.engine = &containment.Engine{DB: client, SQL: db, Hub: hub, AllowEndpoints: []string{"10.1.1.199:8081"},
+		Scope: containment.ScopeLab, TTL: 24 * time.Hour, MaxPerHour: 10, Now: func() time.Time { return p.now }}
+	return p
+}
+
+// expect 跑一轮决定，核对这一轮各主机收到的指令：isolate_host 表示隔离，其余是封锁的地址；没列出的主机不该收到任何指令
+func (p *containmentProbe) expect(t *testing.T, want map[string]string) {
+	t.Helper()
+	if err := p.engine.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for name, ch := range p.inbox {
+		var got []string
+		for len(ch) > 0 {
+			c := <-ch
+			if c.Kind == pb.CommandKind_ISOLATE_HOST {
+				got = append(got, "isolate_host")
+			} else {
+				got = append(got, c.Target)
+			}
+		}
+		if w, ok := want[name]; ok && (len(got) != 1 || got[0] != w) || !ok && len(got) != 0 {
+			t.Errorf("%s 收到的处置 %v，期望 %q", name, got, w)
+		}
+	}
 }

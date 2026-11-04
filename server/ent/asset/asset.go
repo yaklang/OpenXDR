@@ -3,6 +3,7 @@
 package asset
 
 import (
+	"fmt"
 	"time"
 
 	"entgo.io/ent/dialect/sql"
@@ -69,6 +70,8 @@ const (
 	FieldEgressNotes = "egress_notes"
 	// FieldZoneID holds the string denoting the zone_id field in the database.
 	FieldZoneID = "zone_id"
+	// FieldResponseTier holds the string denoting the response_tier field in the database.
+	FieldResponseTier = "response_tier"
 	// FieldRole holds the string denoting the role field in the database.
 	FieldRole = "role"
 	// FieldSummary holds the string denoting the summary field in the database.
@@ -148,6 +151,7 @@ var Columns = []string{
 	FieldServiceNotes,
 	FieldEgressNotes,
 	FieldZoneID,
+	FieldResponseTier,
 	FieldRole,
 	FieldSummary,
 	FieldCriticality,
@@ -177,6 +181,30 @@ var (
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
+
+// ResponseTier defines the type for the "response_tier" enum field.
+type ResponseTier string
+
+// ResponseTier values.
+const (
+	ResponseTierLab        ResponseTier = "lab"
+	ResponseTierProduction ResponseTier = "production"
+	ResponseTierCore       ResponseTier = "core"
+)
+
+func (rt ResponseTier) String() string {
+	return string(rt)
+}
+
+// ResponseTierValidator is a validator for the "response_tier" field enum values. It is called by the builders before save.
+func ResponseTierValidator(rt ResponseTier) error {
+	switch rt {
+	case ResponseTierLab, ResponseTierProduction, ResponseTierCore:
+		return nil
+	default:
+		return fmt.Errorf("asset: invalid enum value for response_tier field: %q", rt)
+	}
+}
 
 // OrderOption defines the ordering options for the Asset queries.
 type OrderOption func(*sql.Selector)
@@ -274,6 +302,11 @@ func BySoftwareAt(opts ...sql.OrderTermOption) OrderOption {
 // ByZoneID orders the results by the zone_id field.
 func ByZoneID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldZoneID, opts...).ToFunc()
+}
+
+// ByResponseTier orders the results by the response_tier field.
+func ByResponseTier(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldResponseTier, opts...).ToFunc()
 }
 
 // ByRole orders the results by the role field.

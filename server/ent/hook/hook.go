@@ -140,6 +140,18 @@ func (f CommandPolicyFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Valu
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.CommandPolicyMutation", m)
 }
 
+// The ContainmentFunc type is an adapter to allow the use of ordinary
+// function as Containment mutator.
+type ContainmentFunc func(context.Context, *ent.ContainmentMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ContainmentFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ContainmentMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ContainmentMutation", m)
+}
+
 // The DecoyDeploymentFunc type is an adapter to allow the use of ordinary
 // function as DecoyDeployment mutator.
 type DecoyDeploymentFunc func(context.Context, *ent.DecoyDeploymentMutation) (ent.Value, error)

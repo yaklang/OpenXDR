@@ -22,6 +22,7 @@ import (
 	"openxdr/server/ent/beaconbaseline"
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/commandpolicy"
+	"openxdr/server/ent/containment"
 	"openxdr/server/ent/decoydeployment"
 	"openxdr/server/ent/decoyenginerelease"
 	"openxdr/server/ent/decoyobservation"
@@ -95,6 +96,8 @@ type Client struct {
 	Command *CommandClient
 	// CommandPolicy is the client for interacting with the CommandPolicy builders.
 	CommandPolicy *CommandPolicyClient
+	// Containment is the client for interacting with the Containment builders.
+	Containment *ContainmentClient
 	// DecoyDeployment is the client for interacting with the DecoyDeployment builders.
 	DecoyDeployment *DecoyDeploymentClient
 	// DecoyEngineRelease is the client for interacting with the DecoyEngineRelease builders.
@@ -193,6 +196,7 @@ func (c *Client) init() {
 	c.BeaconBaseline = NewBeaconBaselineClient(c.config)
 	c.Command = NewCommandClient(c.config)
 	c.CommandPolicy = NewCommandPolicyClient(c.config)
+	c.Containment = NewContainmentClient(c.config)
 	c.DecoyDeployment = NewDecoyDeploymentClient(c.config)
 	c.DecoyEngineRelease = NewDecoyEngineReleaseClient(c.config)
 	c.DecoyObservation = NewDecoyObservationClient(c.config)
@@ -334,6 +338,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		BeaconBaseline:          NewBeaconBaselineClient(cfg),
 		Command:                 NewCommandClient(cfg),
 		CommandPolicy:           NewCommandPolicyClient(cfg),
+		Containment:             NewContainmentClient(cfg),
 		DecoyDeployment:         NewDecoyDeploymentClient(cfg),
 		DecoyEngineRelease:      NewDecoyEngineReleaseClient(cfg),
 		DecoyObservation:        NewDecoyObservationClient(cfg),
@@ -402,6 +407,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		BeaconBaseline:          NewBeaconBaselineClient(cfg),
 		Command:                 NewCommandClient(cfg),
 		CommandPolicy:           NewCommandPolicyClient(cfg),
+		Containment:             NewContainmentClient(cfg),
 		DecoyDeployment:         NewDecoyDeploymentClient(cfg),
 		DecoyEngineRelease:      NewDecoyEngineReleaseClient(cfg),
 		DecoyObservation:        NewDecoyObservationClient(cfg),
@@ -470,10 +476,10 @@ func (c *Client) Close() error {
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.AIJob, c.AIUsage, c.AgentSession, c.Alert, c.Approval, c.Asset, c.AssetLink,
-		c.AuditLog, c.BeaconBaseline, c.Command, c.CommandPolicy, c.DecoyDeployment,
-		c.DecoyEngineRelease, c.DecoyObservation, c.DecoyRevision, c.EnrollToken,
-		c.Event, c.ExternalTicket, c.Finding, c.Group, c.GroupMember, c.HostCredential,
-		c.IPInfo, c.Incident, c.Integration, c.IntegrationAttempt,
+		c.AuditLog, c.BeaconBaseline, c.Command, c.CommandPolicy, c.Containment,
+		c.DecoyDeployment, c.DecoyEngineRelease, c.DecoyObservation, c.DecoyRevision,
+		c.EnrollToken, c.Event, c.ExternalTicket, c.Finding, c.Group, c.GroupMember,
+		c.HostCredential, c.IPInfo, c.Incident, c.Integration, c.IntegrationAttempt,
 		c.IntegrationDelivery, c.IntegrationEvent, c.IntegrationGroup,
 		c.IntegrationIdempotency, c.IntegrationSubscription, c.IntegrationToken,
 		c.Intel, c.Memory, c.ProcessBaseline, c.Report, c.ReportRead, c.SSHLogin,
@@ -489,10 +495,10 @@ func (c *Client) Use(hooks ...Hook) {
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.AIJob, c.AIUsage, c.AgentSession, c.Alert, c.Approval, c.Asset, c.AssetLink,
-		c.AuditLog, c.BeaconBaseline, c.Command, c.CommandPolicy, c.DecoyDeployment,
-		c.DecoyEngineRelease, c.DecoyObservation, c.DecoyRevision, c.EnrollToken,
-		c.Event, c.ExternalTicket, c.Finding, c.Group, c.GroupMember, c.HostCredential,
-		c.IPInfo, c.Incident, c.Integration, c.IntegrationAttempt,
+		c.AuditLog, c.BeaconBaseline, c.Command, c.CommandPolicy, c.Containment,
+		c.DecoyDeployment, c.DecoyEngineRelease, c.DecoyObservation, c.DecoyRevision,
+		c.EnrollToken, c.Event, c.ExternalTicket, c.Finding, c.Group, c.GroupMember,
+		c.HostCredential, c.IPInfo, c.Incident, c.Integration, c.IntegrationAttempt,
 		c.IntegrationDelivery, c.IntegrationEvent, c.IntegrationGroup,
 		c.IntegrationIdempotency, c.IntegrationSubscription, c.IntegrationToken,
 		c.Intel, c.Memory, c.ProcessBaseline, c.Report, c.ReportRead, c.SSHLogin,
@@ -528,6 +534,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Command.mutate(ctx, m)
 	case *CommandPolicyMutation:
 		return c.CommandPolicy.mutate(ctx, m)
+	case *ContainmentMutation:
+		return c.Containment.mutate(ctx, m)
 	case *DecoyDeploymentMutation:
 		return c.DecoyDeployment.mutate(ctx, m)
 	case *DecoyEngineReleaseMutation:
@@ -2181,6 +2189,139 @@ func (c *CommandPolicyClient) mutate(ctx context.Context, m *CommandPolicyMutati
 		return (&CommandPolicyDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown CommandPolicy mutation op: %q", m.Op())
+	}
+}
+
+// ContainmentClient is a client for the Containment schema.
+type ContainmentClient struct {
+	config
+}
+
+// NewContainmentClient returns a client for the Containment from the given config.
+func NewContainmentClient(c config) *ContainmentClient {
+	return &ContainmentClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `containment.Hooks(f(g(h())))`.
+func (c *ContainmentClient) Use(hooks ...Hook) {
+	c.hooks.Containment = append(c.hooks.Containment, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `containment.Intercept(f(g(h())))`.
+func (c *ContainmentClient) Intercept(interceptors ...Interceptor) {
+	c.inters.Containment = append(c.inters.Containment, interceptors...)
+}
+
+// Create returns a builder for creating a Containment entity.
+func (c *ContainmentClient) Create() *ContainmentCreate {
+	mutation := newContainmentMutation(c.config, OpCreate)
+	return &ContainmentCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of Containment entities.
+func (c *ContainmentClient) CreateBulk(builders ...*ContainmentCreate) *ContainmentCreateBulk {
+	return &ContainmentCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ContainmentClient) MapCreateBulk(slice any, setFunc func(*ContainmentCreate, int)) *ContainmentCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ContainmentCreateBulk{err: fmt.Errorf("calling to ContainmentClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ContainmentCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ContainmentCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for Containment.
+func (c *ContainmentClient) Update() *ContainmentUpdate {
+	mutation := newContainmentMutation(c.config, OpUpdate)
+	return &ContainmentUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ContainmentClient) UpdateOne(_m *Containment) *ContainmentUpdateOne {
+	mutation := newContainmentMutation(c.config, OpUpdateOne, withContainment(_m))
+	return &ContainmentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ContainmentClient) UpdateOneID(id uuid.UUID) *ContainmentUpdateOne {
+	mutation := newContainmentMutation(c.config, OpUpdateOne, withContainmentID(id))
+	return &ContainmentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for Containment.
+func (c *ContainmentClient) Delete() *ContainmentDelete {
+	mutation := newContainmentMutation(c.config, OpDelete)
+	return &ContainmentDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ContainmentClient) DeleteOne(_m *Containment) *ContainmentDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ContainmentClient) DeleteOneID(id uuid.UUID) *ContainmentDeleteOne {
+	builder := c.Delete().Where(containment.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ContainmentDeleteOne{builder}
+}
+
+// Query returns a query builder for Containment.
+func (c *ContainmentClient) Query() *ContainmentQuery {
+	return &ContainmentQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeContainment},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a Containment entity by its id.
+func (c *ContainmentClient) Get(ctx context.Context, id uuid.UUID) (*Containment, error) {
+	return c.Query().Where(containment.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ContainmentClient) GetX(ctx context.Context, id uuid.UUID) *Containment {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ContainmentClient) Hooks() []Hook {
+	return c.hooks.Containment
+}
+
+// Interceptors returns the client interceptors.
+func (c *ContainmentClient) Interceptors() []Interceptor {
+	return c.inters.Containment
+}
+
+func (c *ContainmentClient) mutate(ctx context.Context, m *ContainmentMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ContainmentCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ContainmentUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ContainmentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ContainmentDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown Containment mutation op: %q", m.Op())
 	}
 }
 
@@ -7290,24 +7431,24 @@ func (c *ZoneClient) mutate(ctx context.Context, m *ZoneMutation) (Value, error)
 type (
 	hooks struct {
 		AIJob, AIUsage, AgentSession, Alert, Approval, Asset, AssetLink, AuditLog,
-		BeaconBaseline, Command, CommandPolicy, DecoyDeployment, DecoyEngineRelease,
-		DecoyObservation, DecoyRevision, EnrollToken, Event, ExternalTicket, Finding,
-		Group, GroupMember, HostCredential, IPInfo, Incident, Integration,
-		IntegrationAttempt, IntegrationDelivery, IntegrationEvent, IntegrationGroup,
-		IntegrationIdempotency, IntegrationSubscription, IntegrationToken, Intel,
-		Memory, ProcessBaseline, Report, ReportRead, SSHLogin, Session, SessionMessage,
-		Setting, Suppression, Task, TaskRun, TriageRun, TrustedSource, User,
-		VulnRecord, Zone []ent.Hook
+		BeaconBaseline, Command, CommandPolicy, Containment, DecoyDeployment,
+		DecoyEngineRelease, DecoyObservation, DecoyRevision, EnrollToken, Event,
+		ExternalTicket, Finding, Group, GroupMember, HostCredential, IPInfo, Incident,
+		Integration, IntegrationAttempt, IntegrationDelivery, IntegrationEvent,
+		IntegrationGroup, IntegrationIdempotency, IntegrationSubscription,
+		IntegrationToken, Intel, Memory, ProcessBaseline, Report, ReportRead, SSHLogin,
+		Session, SessionMessage, Setting, Suppression, Task, TaskRun, TriageRun,
+		TrustedSource, User, VulnRecord, Zone []ent.Hook
 	}
 	inters struct {
 		AIJob, AIUsage, AgentSession, Alert, Approval, Asset, AssetLink, AuditLog,
-		BeaconBaseline, Command, CommandPolicy, DecoyDeployment, DecoyEngineRelease,
-		DecoyObservation, DecoyRevision, EnrollToken, Event, ExternalTicket, Finding,
-		Group, GroupMember, HostCredential, IPInfo, Incident, Integration,
-		IntegrationAttempt, IntegrationDelivery, IntegrationEvent, IntegrationGroup,
-		IntegrationIdempotency, IntegrationSubscription, IntegrationToken, Intel,
-		Memory, ProcessBaseline, Report, ReportRead, SSHLogin, Session, SessionMessage,
-		Setting, Suppression, Task, TaskRun, TriageRun, TrustedSource, User,
-		VulnRecord, Zone []ent.Interceptor
+		BeaconBaseline, Command, CommandPolicy, Containment, DecoyDeployment,
+		DecoyEngineRelease, DecoyObservation, DecoyRevision, EnrollToken, Event,
+		ExternalTicket, Finding, Group, GroupMember, HostCredential, IPInfo, Incident,
+		Integration, IntegrationAttempt, IntegrationDelivery, IntegrationEvent,
+		IntegrationGroup, IntegrationIdempotency, IntegrationSubscription,
+		IntegrationToken, Intel, Memory, ProcessBaseline, Report, ReportRead, SSHLogin,
+		Session, SessionMessage, Setting, Suppression, Task, TaskRun, TriageRun,
+		TrustedSource, User, VulnRecord, Zone []ent.Interceptor
 	}
 )

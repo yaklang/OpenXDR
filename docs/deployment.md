@@ -421,6 +421,10 @@ server 全部通过环境变量配置，均有默认值：
 | `AUTO_RESPONSE_ENABLED` | `false` | AI 研判高置信度 malicious 时真实隔离涉事主机（依赖 `RESPONSE_ENABLED`，每次决策落审计） |
 | `AUTO_RESPONSE_MIN_CONFIDENCE` | `90` | 触发自动响应的置信度门槛 |
 | `AUTO_RESPONSE_EXEMPT` | 空 | 逗号分隔的主机名，绝不自动隔离 |
+| `CONTAINMENT_ENABLED` | `false` | 自主响应：内网横向喷洒等确定性信号命中后，按角色与处置等级直接遏制（来源按等级隔离，受害方封锁来源地址），不等研判与人工。依赖 `RESPONSE_ENABLED`，见 [自主响应设计](autonomous-response-design.md) |
+| `CONTAINMENT_SCOPE` | `lab` | `lab` 只处置来源是实验等级的攻击（上线初期），`all` 不限 |
+| `CONTAINMENT_TTL_HOURS` | `24` | 处置租约长度，从最后一条证据算起；证据持续就续期，到期自动解除 |
+| `CONTAINMENT_MAX_PER_HOUR` | `10` | 一小时内最多生效的自动处置数，超出熔断（只记录不执行）；另有组内同时隔离不超过纳管主机 20% 的上限 |
 | `UEBA_LEARNING_DAYS` | `7` | 首次出现检测的按资产学习期 |
 | `BEACON_ENABLED` | `1` | 外联心跳检测（新出现的规律公网外联），0 关闭 |
 | `COLLECTOR_DROP_ALERT` | `1000` | 一分钟内丢弃这么多事件就推「采集异常」，0 不看丢事件；采集器降级或缓存写不进去照常推送 |

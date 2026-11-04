@@ -1316,6 +1316,36 @@ func ZoneIDNotNil() predicate.Asset {
 	return predicate.Asset(sql.FieldNotNull(FieldZoneID))
 }
 
+// ResponseTierEQ applies the EQ predicate on the "response_tier" field.
+func ResponseTierEQ(v ResponseTier) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldResponseTier, v))
+}
+
+// ResponseTierNEQ applies the NEQ predicate on the "response_tier" field.
+func ResponseTierNEQ(v ResponseTier) predicate.Asset {
+	return predicate.Asset(sql.FieldNEQ(FieldResponseTier, v))
+}
+
+// ResponseTierIn applies the In predicate on the "response_tier" field.
+func ResponseTierIn(vs ...ResponseTier) predicate.Asset {
+	return predicate.Asset(sql.FieldIn(FieldResponseTier, vs...))
+}
+
+// ResponseTierNotIn applies the NotIn predicate on the "response_tier" field.
+func ResponseTierNotIn(vs ...ResponseTier) predicate.Asset {
+	return predicate.Asset(sql.FieldNotIn(FieldResponseTier, vs...))
+}
+
+// ResponseTierIsNil applies the IsNil predicate on the "response_tier" field.
+func ResponseTierIsNil() predicate.Asset {
+	return predicate.Asset(sql.FieldIsNull(FieldResponseTier))
+}
+
+// ResponseTierNotNil applies the NotNil predicate on the "response_tier" field.
+func ResponseTierNotNil() predicate.Asset {
+	return predicate.Asset(sql.FieldNotNull(FieldResponseTier))
+}
+
 // RoleEQ applies the EQ predicate on the "role" field.
 func RoleEQ(v string) predicate.Asset {
 	return predicate.Asset(sql.FieldEQ(FieldRole, v))

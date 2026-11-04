@@ -80,6 +80,9 @@ services:
       # 自动响应：AI 高置信度判恶意时自动隔离主机，默认关闭；开了就是真执行
       AUTO_RESPONSE_ENABLED: ${AUTO_RESPONSE_ENABLED:-false}
       AUTO_RESPONSE_EXEMPT: ${AUTO_RESPONSE_EXEMPT:-}
+      # 自主响应：确定性信号命中直接遏制（来源按处置等级隔离、受害方封锁来源），默认关闭；SCOPE=lab 只处置实验等级来源
+      CONTAINMENT_ENABLED: ${CONTAINMENT_ENABLED:-false}
+      CONTAINMENT_SCOPE: ${CONTAINMENT_SCOPE:-lab}
       # 原始事件保留天数
       RETENTION_DAYS: ${RETENTION_DAYS:-30}
       # 生产采集端必须使用 mTLS；三项同时设置才启用

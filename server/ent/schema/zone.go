@@ -21,6 +21,8 @@ func (Zone) Fields() []ent.Field {
 		// internal 内网 / dmz 隔离区 / external 公网 / cloud 云上
 		field.Enum("kind").Values("internal", "dmz", "external", "cloud"),
 		field.Strings("cidrs").Optional(),
+		// 自主响应的处置等级：lab 实验（可以直接隔离）/ production 生产（默认，不隔离整机）/ core 核心（只封锁来源）
+		field.Enum("response_tier").Values("lab", "production", "core").Default("production"),
 		field.Time("created_at").Default(time.Now),
 	}
 }

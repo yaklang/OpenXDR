@@ -230,6 +230,7 @@ var (
 		{Name: "service_notes", Type: field.TypeJSON, Nullable: true},
 		{Name: "egress_notes", Type: field.TypeJSON, Nullable: true},
 		{Name: "zone_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "response_tier", Type: field.TypeEnum, Nullable: true, Enums: []string{"lab", "production", "core"}},
 		{Name: "role", Type: field.TypeString, Nullable: true},
 		{Name: "summary", Type: field.TypeString, Nullable: true, Size: 2147483647},
 		{Name: "criticality", Type: field.TypeInt, Nullable: true},
@@ -397,6 +398,55 @@ var (
 				Name:    "commandpolicy_group_id_origin",
 				Unique:  false,
 				Columns: []*schema.Column{CommandPoliciesColumns[2], CommandPoliciesColumns[3]},
+			},
+		},
+	}
+	// ContainmentsColumns holds the columns for the "containments" table.
+	ContainmentsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "asset_id", Type: field.TypeUUID},
+		{Name: "group_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "kind", Type: field.TypeString},
+		{Name: "target", Type: field.TypeString, Nullable: true},
+		{Name: "key", Type: field.TypeString},
+		{Name: "signal", Type: field.TypeString},
+		{Name: "alert_id", Type: field.TypeUUID},
+		{Name: "incident_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "source_asset_id", Type: field.TypeUUID},
+		{Name: "role", Type: field.TypeEnum, Enums: []string{"source", "victim"}},
+		{Name: "state", Type: field.TypeEnum, Enums: []string{"active", "expired", "held", "skipped", "failed"}},
+		{Name: "reason", Type: field.TypeString, Size: 2147483647},
+		{Name: "command_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "lift_command_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "expires_at", Type: field.TypeTime, Nullable: true},
+		{Name: "ended_at", Type: field.TypeTime, Nullable: true},
+	}
+	// ContainmentsTable holds the schema information for the "containments" table.
+	ContainmentsTable = &schema.Table{
+		Name:       "containments",
+		Columns:    ContainmentsColumns,
+		PrimaryKey: []*schema.Column{ContainmentsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "containment_key_state",
+				Unique:  false,
+				Columns: []*schema.Column{ContainmentsColumns[6], ContainmentsColumns[12]},
+			},
+			{
+				Name:    "containment_state_expires_at",
+				Unique:  false,
+				Columns: []*schema.Column{ContainmentsColumns[12], ContainmentsColumns[16]},
+			},
+			{
+				Name:    "containment_alert_id",
+				Unique:  false,
+				Columns: []*schema.Column{ContainmentsColumns[8]},
+			},
+			{
+				Name:    "containment_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{ContainmentsColumns[1]},
 			},
 		},
 	}
@@ -1496,6 +1546,7 @@ var (
 		{Name: "name", Type: field.TypeString, Size: 64},
 		{Name: "kind", Type: field.TypeEnum, Enums: []string{"internal", "dmz", "external", "cloud"}},
 		{Name: "cidrs", Type: field.TypeJSON, Nullable: true},
+		{Name: "response_tier", Type: field.TypeEnum, Enums: []string{"lab", "production", "core"}, Default: "production"},
 		{Name: "created_at", Type: field.TypeTime},
 	}
 	// ZonesTable holds the schema information for the "zones" table.
@@ -1524,6 +1575,7 @@ var (
 		BeaconBaselinesTable,
 		CommandsTable,
 		CommandPoliciesTable,
+		ContainmentsTable,
 		DecoyDeploymentsTable,
 		DecoyEngineReleasesTable,
 		DecoyObservationsTable,

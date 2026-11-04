@@ -96,6 +96,34 @@ func TestAssetMapPermissionsAndLocks(t *testing.T) {
 	if code := send(t, admin, "PUT", "/api/assets/"+host.ID.String()+"/zone", `{"zoneId":"`+z.ID.String()+`"}`); code != http.StatusNoContent {
 		t.Fatal("admin 指派区域失败")
 	}
+	// 自主响应处置等级：新建默认生产；旧前端改区域不带该字段时保持原值；资产可单独指定，null 回到跟随区域
+	if z.ResponseTier != "production" {
+		t.Fatalf("新建区域默认生产等级: %s", z.ResponseTier)
+	}
+	if code := send(t, admin, "PUT", "/api/zones/"+z.ID.String(), `{"name":"DMZ","kind":"dmz","responseTier":"lab"}`); code != http.StatusOK {
+		t.Fatalf("改处置等级: %d", code)
+	}
+	if code := send(t, admin, "PUT", "/api/zones/"+z.ID.String(), `{"name":"DMZ","kind":"dmz","cidrs":["10.1.1.0/24"]}`); code != http.StatusOK ||
+		client.Zone.GetX(ctx, z.ID).ResponseTier != "lab" {
+		t.Fatal("不带 responseTier 的修改应保持原等级")
+	}
+	if code := send(t, admin, "PUT", "/api/zones/"+z.ID.String(), `{"name":"DMZ","kind":"dmz","responseTier":"max"}`); code != http.StatusBadRequest {
+		t.Errorf("非法等级应 400: %d", code)
+	}
+	tierURL := "/api/assets/" + host.ID.String() + "/response-tier"
+	if code := send(t, ana, "PUT", tierURL, `{"tier":"lab"}`); code != http.StatusForbidden {
+		t.Errorf("analyst 不能指定处置等级: %d", code)
+	}
+	if code := send(t, admin, "PUT", tierURL, `{"tier":"core"}`); code != http.StatusNoContent || *client.Asset.GetX(ctx, host.ID).ResponseTier != "core" {
+		t.Fatalf("admin 指定处置等级: %d", code)
+	}
+	if code := send(t, admin, "PUT", tierURL, `{"tier":null}`); code != http.StatusNoContent || client.Asset.GetX(ctx, host.ID).ResponseTier != nil {
+		t.Fatalf("null 应回到跟随区域: %d", code)
+	}
+	if code := send(t, admin, "PUT", tierURL, `{"tier":"max"}`); code != http.StatusBadRequest {
+		t.Errorf("非法等级应 400: %d", code)
+	}
+
 	if code := send(t, admin, "DELETE", "/api/zones/"+z.ID.String(), ``); code != http.StatusNoContent {
 		t.Fatal("删区域失败")
 	}

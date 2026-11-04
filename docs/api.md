@@ -144,9 +144,10 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | GET | `/api/assets/{id}/vulns` | viewer；单台资产的完整漏洞报告，见 [软件漏洞](vulns.md) |
 | GET | `/api/asset-map?groupId=` | viewer；资产图谱节点与有向边，见 [资产图谱与攻击面](asset-map.md#接口) |
 | GET | `/api/attack-surface?groupId=` | viewer；攻击面汇总、暴露面与盲区 |
-| GET / POST | `/api/zones` | viewer / 组 admin；区域定义，同名 409 |
-| PUT / DELETE | `/api/zones/{id}` | 组 admin |
+| GET / POST | `/api/zones` | viewer / 组 admin；区域定义，同名 409。`responseTier` 为自主响应处置等级 `lab` / `production` / `core`，新建不传为 `production` |
+| PUT / DELETE | `/api/zones/{id}` | 组 admin；不传 `responseTier` 保持原值 |
 | PUT | `/api/assets/{id}/zone` | 组 admin；`{zoneId}`，null 回到自动划分 |
+| PUT | `/api/assets/{id}/response-tier` | 组 admin；`{tier}` 单独指定自主响应处置等级，null 回到跟随区域；运行 OpenXDR server 的资产始终按核心处理，见 [自主响应设计](autonomous-response-design.md) |
 | POST | `/api/assets/{id}/annotate` | 组 analyst；请求 AI 重新标注，未配置模型返回 503 |
 | PUT | `/api/assets/{id}/services` | 组 analyst；人工标注服务 `{port,name,note?,risk?}` |
 | GET | `/api/users` | 用户列表（admin） |

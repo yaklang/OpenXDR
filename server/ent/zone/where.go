@@ -205,6 +205,26 @@ func CidrsNotNil() predicate.Zone {
 	return predicate.Zone(sql.FieldNotNull(FieldCidrs))
 }
 
+// ResponseTierEQ applies the EQ predicate on the "response_tier" field.
+func ResponseTierEQ(v ResponseTier) predicate.Zone {
+	return predicate.Zone(sql.FieldEQ(FieldResponseTier, v))
+}
+
+// ResponseTierNEQ applies the NEQ predicate on the "response_tier" field.
+func ResponseTierNEQ(v ResponseTier) predicate.Zone {
+	return predicate.Zone(sql.FieldNEQ(FieldResponseTier, v))
+}
+
+// ResponseTierIn applies the In predicate on the "response_tier" field.
+func ResponseTierIn(vs ...ResponseTier) predicate.Zone {
+	return predicate.Zone(sql.FieldIn(FieldResponseTier, vs...))
+}
+
+// ResponseTierNotIn applies the NotIn predicate on the "response_tier" field.
+func ResponseTierNotIn(vs ...ResponseTier) predicate.Zone {
+	return predicate.Zone(sql.FieldNotIn(FieldResponseTier, vs...))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.Zone {
 	return predicate.Zone(sql.FieldEQ(FieldCreatedAt, v))

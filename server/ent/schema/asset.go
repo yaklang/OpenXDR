@@ -69,6 +69,8 @@ func (Asset) Fields() []ent.Field {
 		field.JSON("egress_notes", json.RawMessage{}).Optional(),
 		// 组管理员手工指定的区域；为空按网段、云环境、IP 自动划分
 		field.UUID("zone_id", uuid.UUID{}).Optional().Nillable(),
+		// 组管理员单独指定的处置等级，优先于区域；为空跟随区域
+		field.Enum("response_tier").Values("lab", "production", "core").Optional().Nillable(),
 
 		// AI 标注：角色、功能说明、重要程度（1-5）与依据；人改过的字段记进 locked_fields，AI 不再覆盖
 		field.String("role").Optional().Nillable(),

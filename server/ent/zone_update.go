@@ -90,6 +90,20 @@ func (_u *ZoneUpdate) ClearCidrs() *ZoneUpdate {
 	return _u
 }
 
+// SetResponseTier sets the "response_tier" field.
+func (_u *ZoneUpdate) SetResponseTier(v zone.ResponseTier) *ZoneUpdate {
+	_u.mutation.SetResponseTier(v)
+	return _u
+}
+
+// SetNillableResponseTier sets the "response_tier" field if the given value is not nil.
+func (_u *ZoneUpdate) SetNillableResponseTier(v *zone.ResponseTier) *ZoneUpdate {
+	if v != nil {
+		_u.SetResponseTier(*v)
+	}
+	return _u
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_u *ZoneUpdate) SetCreatedAt(v time.Time) *ZoneUpdate {
 	_u.mutation.SetCreatedAt(v)
@@ -148,6 +162,11 @@ func (_u *ZoneUpdate) check() error {
 			return &ValidationError{Name: "kind", err: fmt.Errorf(`ent: validator failed for field "Zone.kind": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ResponseTier(); ok {
+		if err := zone.ResponseTierValidator(v); err != nil {
+			return &ValidationError{Name: "response_tier", err: fmt.Errorf(`ent: validator failed for field "Zone.response_tier": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -182,6 +201,9 @@ func (_u *ZoneUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.CidrsCleared() {
 		_spec.ClearField(zone.FieldCidrs, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.ResponseTier(); ok {
+		_spec.SetField(zone.FieldResponseTier, field.TypeEnum, value)
 	}
 	if value, ok := _u.mutation.CreatedAt(); ok {
 		_spec.SetField(zone.FieldCreatedAt, field.TypeTime, value)
@@ -266,6 +288,20 @@ func (_u *ZoneUpdateOne) ClearCidrs() *ZoneUpdateOne {
 	return _u
 }
 
+// SetResponseTier sets the "response_tier" field.
+func (_u *ZoneUpdateOne) SetResponseTier(v zone.ResponseTier) *ZoneUpdateOne {
+	_u.mutation.SetResponseTier(v)
+	return _u
+}
+
+// SetNillableResponseTier sets the "response_tier" field if the given value is not nil.
+func (_u *ZoneUpdateOne) SetNillableResponseTier(v *zone.ResponseTier) *ZoneUpdateOne {
+	if v != nil {
+		_u.SetResponseTier(*v)
+	}
+	return _u
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_u *ZoneUpdateOne) SetCreatedAt(v time.Time) *ZoneUpdateOne {
 	_u.mutation.SetCreatedAt(v)
@@ -337,6 +373,11 @@ func (_u *ZoneUpdateOne) check() error {
 			return &ValidationError{Name: "kind", err: fmt.Errorf(`ent: validator failed for field "Zone.kind": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.ResponseTier(); ok {
+		if err := zone.ResponseTierValidator(v); err != nil {
+			return &ValidationError{Name: "response_tier", err: fmt.Errorf(`ent: validator failed for field "Zone.response_tier": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -388,6 +429,9 @@ func (_u *ZoneUpdateOne) sqlSave(ctx context.Context) (_node *Zone, err error) {
 	}
 	if _u.mutation.CidrsCleared() {
 		_spec.ClearField(zone.FieldCidrs, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.ResponseTier(); ok {
+		_spec.SetField(zone.FieldResponseTier, field.TypeEnum, value)
 	}
 	if value, ok := _u.mutation.CreatedAt(); ok {
 		_spec.SetField(zone.FieldCreatedAt, field.TypeTime, value)

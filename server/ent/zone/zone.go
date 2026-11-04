@@ -23,6 +23,8 @@ const (
 	FieldKind = "kind"
 	// FieldCidrs holds the string denoting the cidrs field in the database.
 	FieldCidrs = "cidrs"
+	// FieldResponseTier holds the string denoting the response_tier field in the database.
+	FieldResponseTier = "response_tier"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// Table holds the table name of the zone in the database.
@@ -36,6 +38,7 @@ var Columns = []string{
 	FieldName,
 	FieldKind,
 	FieldCidrs,
+	FieldResponseTier,
 	FieldCreatedAt,
 }
 
@@ -83,6 +86,33 @@ func KindValidator(k Kind) error {
 	}
 }
 
+// ResponseTier defines the type for the "response_tier" enum field.
+type ResponseTier string
+
+// ResponseTierProduction is the default value of the ResponseTier enum.
+const DefaultResponseTier = ResponseTierProduction
+
+// ResponseTier values.
+const (
+	ResponseTierLab        ResponseTier = "lab"
+	ResponseTierProduction ResponseTier = "production"
+	ResponseTierCore       ResponseTier = "core"
+)
+
+func (rt ResponseTier) String() string {
+	return string(rt)
+}
+
+// ResponseTierValidator is a validator for the "response_tier" field enum values. It is called by the builders before save.
+func ResponseTierValidator(rt ResponseTier) error {
+	switch rt {
+	case ResponseTierLab, ResponseTierProduction, ResponseTierCore:
+		return nil
+	default:
+		return fmt.Errorf("zone: invalid enum value for response_tier field: %q", rt)
+	}
+}
+
 // OrderOption defines the ordering options for the Zone queries.
 type OrderOption func(*sql.Selector)
 
@@ -104,6 +134,11 @@ func ByName(opts ...sql.OrderTermOption) OrderOption {
 // ByKind orders the results by the kind field.
 func ByKind(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldKind, opts...).ToFunc()
+}
+
+// ByResponseTier orders the results by the response_tier field.
+func ByResponseTier(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldResponseTier, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

@@ -54,7 +54,7 @@
 
 ### 三、动作强度按区域等级
 
-在区域（`Zone`）上加一个处置等级字段，资产可以单独覆盖。未指定时为「生产」：
+在区域（`Zone`）上加一个处置等级字段（`response_tier`），资产可以单独覆盖（`PUT /api/assets/{id}/response-tier`）。未指定时为「生产」：
 
 | 等级 | 适用 | 来源侧 | 受害侧 |
 |---|---|---|---|
@@ -143,4 +143,25 @@ agent 新增 `ISOLATE_CONTAINER` / `UNISOLATE_CONTAINER`，目标是容器 ID：
 | P4 | 到期 AI 复核；数据库拉起 shell 等新信号的规则与回测 |
 | P5 | 自身防护待做项 1–4 |
 
-P1 上线时保持 `AUTO_RESPONSE_ENABLED` 默认关闭，生产先只对实验等级开启，观察一周再放开生产等级。
+P1 上线时 `CONTAINMENT_ENABLED` 默认关闭，生产先用 `CONTAINMENT_SCOPE=lab` 只处置实验等级的来源，观察一周再放开到 `all`。
+
+## P1 实现说明
+
+代码在 `server/internal/containment`，单活循环每 5 秒一轮（`CONTAINMENT_*` 配置见 [部署文档](deployment.md)）。
+
+- **信号**：目前只有 `xdr:internal-lateral-spray`。每轮回看最近一小时内有新证据的喷洒告警。
+- **受害方与封锁地址**：受害方取 `lateral_evidence` 里窗口内的受害主机。封锁的是受害方实际看到的来源地址（新增的 `src_ip` 列），
+  不用资产登记的地址，因为那里面有 docker 网桥这类不能封的。
+- **等级判定**：运行 `openxdr-server` 的资产（按监听清单）一律核心 > 资产单独指定 > 所在区域（`zones.response_tier`）> 默认生产。
+  监听清单是 agent 自己报的，失陷主机能伪造成核心；核心只让它自己免于隔离，受害方照样封锁它。
+  只有来源和受害方都是核心时才不封，免得平台节点互相切断控制面。
+- **动作**：来源是实验等级就隔离主机，生产与核心不动来源。受害方一律封锁来源地址。
+  `CONTAINMENT_SCOPE=lab` 时，来源不是实验等级的整条攻击只记 skipped。
+- **租约**：键是「资产 + 动作 + 目标」，同一个键同时只有一条 active。新证据（同一条或新的喷洒告警）把到期时间推到最后一条证据之后 `TTL`。
+  同一条告警已经为某个键做过决定（包括被跳过、被熔断），就不再重新决定。
+- **到期**：直接下发解除，不做 AI 复核（P4 再加）。解除下发失败（agent 离线）就推迟 5 分钟重试，租约保持生效。
+- **熔断**：按滑动窗口计数。挡下的决定记 held，不会补执行。手动恢复等 P3 的页面。
+- **受保护目标**：封锁目标经 `response.NormalizeTarget`，`ISOLATION_ALLOW` 里的 server 地址不封。未配置 `ISOLATION_ALLOW` 时不隔离。
+
+验收：`correlate.TestCampaignReplayProwlPivot` 回放到 23:30:01 喷洒告警出现，5 秒后的一轮就隔离 uos-server，
+node2、node1、lizhen-dev 封锁 10.1.1.170；回放结束时后来的 openxdr-test-linux、dynamicdefend-v2 也封锁，已生效的不重复下发。
