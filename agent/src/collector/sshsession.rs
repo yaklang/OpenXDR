@@ -12,7 +12,7 @@
 //! 容器的 journal，非特权容器也没有审计会话号）、日志晚于会话首个进程到达，都只是不打标，
 //! 告警照常——失败方向是多告警，不是漏告警。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,10 @@ use std::time::{Duration, Instant};
 const UNSET: u32 = u32::MAX;
 /// 认证成功后等 PAM 会话打开的时限；过了还没对上，多半是这台机器没有 pam_loginuid
 const PENDING_TTL: Duration = Duration::from_secs(60);
+/// netlink/eBPF 捕获 sshd 子进程往往比 journalctl -f 收到 Accepted 日志早 150~300ms；
+/// 对确认有 sshd 祖先的新会话号最多等 360ms（18 × 20ms），每个会话号只等一次
+const JOURNAL_WAIT_STEP: Duration = Duration::from_millis(20);
+const JOURNAL_WAIT_STEPS: usize = 18;
 /// 记住的会话上限。会话号单调递增，超限时丢最早的
 const MAX_SESSIONS: usize = 4096;
 const MAX_PENDING: usize = 1024;
@@ -84,6 +88,8 @@ struct State {
     /// 认证成功、会话号还没对上的 sshd 监控进程
     pending: HashMap<u32, Pending>,
     sessions: BTreeMap<u32, Bound>,
+    /// 已检查过祖先或已等待过 journal 的会话号，避免非 SSH 会话或超时会话重复读 /proc 祖先链与等待
+    checked: BTreeSet<u32>,
 }
 
 impl State {
@@ -141,8 +147,14 @@ impl State {
         self.sessions.get(&session).cloned()
     }
 
-    fn idle(&self) -> bool {
-        self.pending.is_empty() && self.sessions.is_empty()
+    fn mark_checked(&mut self, session: u32) -> bool {
+        if !self.checked.insert(session) {
+            return false;
+        }
+        while self.checked.len() > MAX_SESSIONS {
+            self.checked.pop_first();
+        }
+        true
     }
 }
 
@@ -165,14 +177,29 @@ pub fn accepted(pid: u32, login: Login) {
 
 /// 进程采集调用：新进程属于哪次 SSH 登录。外层 None 表示读不到这个进程（已退场），
 /// 调用方可以退回父进程的归属；Some(None) 表示读到了、但不属于任何认得的登录
-pub fn of(pid: u32) -> Option<Option<Bound>> {
-    let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
-    // 没有任何 SSH 登录时不读 /proc，绝大多数进程事件走这里
-    if st.idle() {
+pub fn of(pid: u32, ppid: Option<u32>) -> Option<Option<Bound>> {
+    let session = read_session(pid)?;
+    if session == UNSET {
         return Some(None);
     }
-    let session = read_session(pid)?;
-    Some(st.of(session, &read_proc, Instant::now()))
+    let should_wait = {
+        let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(b) = st.of(session, &read_proc, Instant::now()) {
+            return Some(Some(b));
+        }
+        st.mark_checked(session) && has_sshd_ancestor(pid, ppid)
+    };
+    if !should_wait {
+        return Some(None);
+    }
+    for _ in 0..JOURNAL_WAIT_STEPS {
+        std::thread::sleep(JOURNAL_WAIT_STEP);
+        let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(b) = st.of(session, &read_proc, Instant::now()) {
+            return Some(Some(b));
+        }
+    }
+    Some(None)
 }
 
 fn read_session(pid: u32) -> Option<u32> {
@@ -189,6 +216,41 @@ fn read_proc(pid: u32) -> Option<Proc> {
         session: read_session(pid)?,
         start: start_time(&stat)?,
     })
+}
+
+/// /proc/<pid>/stat 的进程名（括号内）与父进程号（右括号后第 2 列）
+fn comm_and_ppid(stat: &str) -> Option<(&str, u32)> {
+    let (_, rest) = stat.split_once('(')?;
+    let (comm, after) = rest.rsplit_once(')')?;
+    let ppid = after.split_whitespace().nth(1)?.parse().ok()?;
+    Some((comm, ppid))
+}
+
+/// 向上追最多 6 层父进程，判断新会话是否由 sshd / sshd-session 拉起
+fn has_sshd_ancestor(pid: u32, fallback_ppid: Option<u32>) -> bool {
+    let mut cur = Some(pid);
+    let mut used_fallback = false;
+    for _ in 0..6 {
+        let Some(p) = cur.filter(|&p| p > 1) else {
+            return false;
+        };
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{p}/stat")) else {
+            if !used_fallback {
+                used_fallback = true;
+                cur = fallback_ppid;
+                continue;
+            }
+            return false;
+        };
+        let Some((comm, next_ppid)) = comm_and_ppid(&stat) else {
+            return false;
+        };
+        if comm == "sshd" || comm == "sshd-session" {
+            return true;
+        }
+        cur = (next_ppid != p).then_some(next_ppid);
+    }
+    false
 }
 
 /// /proc/<pid>/stat 的第 22 列。第 2 列是带括号的进程名，可能含空格与括号，从最后一个 ')' 之后数
@@ -311,7 +373,25 @@ mod tests {
         let stat =
             "4242 (a) b (c) S 1 4242 4242 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 1000 10";
         assert_eq!(start_time(stat), Some(987654));
+        assert_eq!(comm_and_ppid(stat), Some(("a) b (c", 1)));
+        assert_eq!(
+            comm_and_ppid("999 (sshd-session) S 888 999 999 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 123"),
+            Some(("sshd-session", 888))
+        );
         assert_eq!(start_time("garbage"), None);
+        assert_eq!(comm_and_ppid("garbage"), None);
+    }
+
+    #[test]
+    fn checked_sessions_are_bounded_and_deduplicated() {
+        let mut st = State::default();
+        assert!(st.mark_checked(42));
+        assert!(!st.mark_checked(42), "同一个会话号只应等待/检查一次");
+        for s in 0..(MAX_SESSIONS as u32 + 5) {
+            st.mark_checked(s);
+        }
+        assert_eq!(st.checked.len(), MAX_SESSIONS);
+        assert!(!st.checked.contains(&0));
     }
 
     /// 会话号在 PAM 会话打开后才设置：认证日志先到，进程事件到达时再对上

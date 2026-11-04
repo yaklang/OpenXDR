@@ -443,7 +443,7 @@ fn login_of(
     pid: u32,
     ppid: Option<u32>,
 ) -> Option<Arc<serde_json::Value>> {
-    match sshsession::of(pid) {
+    match sshsession::of(pid, ppid) {
         Some(bound) => bound,
         None => registry.login_of(ppid?),
     }
