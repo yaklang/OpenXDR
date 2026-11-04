@@ -148,7 +148,7 @@ func TestAnnotateRespectsLocksAndFacts(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	reply := `{"role":"PostgreSQL 数据库","summary":"业务主库","criticality":5,"reason":"被应用依赖","relations":[{"peer":"web-01","note":"读写业务库"},{"peer":"ghost","note":"编造"}]}`
+	reply := `{"role":"PostgreSQL 数据库","summary":"业务主库","criticality":5,"reason":"被应用依赖","responseTier":"core","tierReason":"业务主库","relations":[{"peer":"web-01","note":"读写业务库"},{"peer":"ghost","note":"编造"}]}`
 	calls := 0
 	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -160,15 +160,21 @@ func TestAnnotateRespectsLocksAndFacts(t *testing.T) {
 	web, _ := client.Asset.Create().SetHostname("web-01").SetIPAddrs([]string{"10.0.0.1"}).Save(ctx)
 	dbHost, _ := client.Asset.Create().SetHostname("db-01").SetIPAddrs([]string{"10.0.0.2"}).SetInventoryAt(now).
 		SetListening(json.RawMessage(`[{"proto":"tcp","addr":"0.0.0.0","port":5432,"process":"postgres"}]`)).
-		SetRole("人工定的角色").SetLockedFields([]string{"role"}).Save(ctx)
+		SetRole("人工定的角色").SetResponseTier("lab").SetLockedFields([]string{"role", "response_tier"}).Save(ctx)
 	client.AssetLink.Create().SetSrcIP("10.0.0.1").SetSrcAssetID(web.ID).SetDstIP("10.0.0.2").SetDstPort(5432).SetProto("tcp").
 		SetCount(3).SetFirstSeen(now).SetLastSeen(now).SaveX(ctx)
 
 	e := &Engine{DB: client, SQL: db, LLM: triage.NewLLM(llm.URL, "fake", "", 5*time.Second), Interval: time.Second}
 	e.annotateDue(ctx)
 	got := client.Asset.GetX(ctx, dbHost.ID)
-	if *got.Role != "人工定的角色" || *got.Criticality != 5 || got.AnnotatedAt == nil {
-		t.Fatalf("锁定字段不能被覆盖，其余照写: role=%v crit=%v", *got.Role, got.Criticality)
+	if *got.Role != "人工定的角色" || *got.Criticality != 5 || got.AnnotatedAt == nil || *got.ResponseTier != "lab" {
+		t.Fatalf("锁定字段不能被覆盖，其余照写: role=%v crit=%v tier=%v", *got.Role, got.Criticality, *got.ResponseTier)
+	}
+	// 解锁处置等级后再标一次：AI 的定级与依据写进去
+	client.Asset.UpdateOneID(dbHost.ID).SetLockedFields([]string{"role"}).SetAnnotateRequestedAt(time.Now()).ExecX(ctx)
+	e.annotateDue(ctx)
+	if got := client.Asset.GetX(ctx, dbHost.ID); *got.ResponseTier != "core" || *got.ResponseTierReason != "业务主库" {
+		t.Fatalf("未锁定时写入 AI 定级: %v %v", got.ResponseTier, got.ResponseTierReason)
 	}
 	if got.RelationNotes["web-01"] != "读写业务库" || len(got.RelationNotes) != 1 {
 		t.Fatalf("只保留事实里出现过的对端: %v", got.RelationNotes)

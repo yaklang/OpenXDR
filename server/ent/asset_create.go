@@ -323,6 +323,34 @@ func (_c *AssetCreate) SetNillableZoneID(v *uuid.UUID) *AssetCreate {
 	return _c
 }
 
+// SetResponseTier sets the "response_tier" field.
+func (_c *AssetCreate) SetResponseTier(v asset.ResponseTier) *AssetCreate {
+	_c.mutation.SetResponseTier(v)
+	return _c
+}
+
+// SetNillableResponseTier sets the "response_tier" field if the given value is not nil.
+func (_c *AssetCreate) SetNillableResponseTier(v *asset.ResponseTier) *AssetCreate {
+	if v != nil {
+		_c.SetResponseTier(*v)
+	}
+	return _c
+}
+
+// SetResponseTierReason sets the "response_tier_reason" field.
+func (_c *AssetCreate) SetResponseTierReason(v string) *AssetCreate {
+	_c.mutation.SetResponseTierReason(v)
+	return _c
+}
+
+// SetNillableResponseTierReason sets the "response_tier_reason" field if the given value is not nil.
+func (_c *AssetCreate) SetNillableResponseTierReason(v *string) *AssetCreate {
+	if v != nil {
+		_c.SetResponseTierReason(*v)
+	}
+	return _c
+}
+
 // SetRole sets the "role" field.
 func (_c *AssetCreate) SetRole(v string) *AssetCreate {
 	_c.mutation.SetRole(v)
@@ -552,6 +580,11 @@ func (_c *AssetCreate) check() error {
 	if _, ok := _c.mutation.LastSeen(); !ok {
 		return &ValidationError{Name: "last_seen", err: errors.New(`ent: missing required field "Asset.last_seen"`)}
 	}
+	if v, ok := _c.mutation.ResponseTier(); ok {
+		if err := asset.ResponseTierValidator(v); err != nil {
+			return &ValidationError{Name: "response_tier", err: fmt.Errorf(`ent: validator failed for field "Asset.response_tier": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -694,6 +727,14 @@ func (_c *AssetCreate) createSpec() (*Asset, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ZoneID(); ok {
 		_spec.SetField(asset.FieldZoneID, field.TypeUUID, value)
 		_node.ZoneID = &value
+	}
+	if value, ok := _c.mutation.ResponseTier(); ok {
+		_spec.SetField(asset.FieldResponseTier, field.TypeEnum, value)
+		_node.ResponseTier = &value
+	}
+	if value, ok := _c.mutation.ResponseTierReason(); ok {
+		_spec.SetField(asset.FieldResponseTierReason, field.TypeString, value)
+		_node.ResponseTierReason = &value
 	}
 	if value, ok := _c.mutation.Role(); ok {
 		_spec.SetField(asset.FieldRole, field.TypeString, value)

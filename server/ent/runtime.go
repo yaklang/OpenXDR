@@ -14,6 +14,7 @@ import (
 	"openxdr/server/ent/beaconbaseline"
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/commandpolicy"
+	"openxdr/server/ent/containment"
 	"openxdr/server/ent/decoydeployment"
 	"openxdr/server/ent/decoyenginerelease"
 	"openxdr/server/ent/decoyobservation"
@@ -220,6 +221,20 @@ func init() {
 	commandpolicyDescID := commandpolicyFields[0].Descriptor()
 	// commandpolicy.DefaultID holds the default value on creation for the id field.
 	commandpolicy.DefaultID = commandpolicyDescID.Default.(func() uuid.UUID)
+	containmentFields := schema.Containment{}.Fields()
+	_ = containmentFields
+	// containmentDescCreatedAt is the schema descriptor for created_at field.
+	containmentDescCreatedAt := containmentFields[1].Descriptor()
+	// containment.DefaultCreatedAt holds the default value on creation for the created_at field.
+	containment.DefaultCreatedAt = containmentDescCreatedAt.Default.(func() time.Time)
+	// containmentDescPid is the schema descriptor for pid field.
+	containmentDescPid := containmentFields[6].Descriptor()
+	// containment.DefaultPid holds the default value on creation for the pid field.
+	containment.DefaultPid = containmentDescPid.Default.(uint32)
+	// containmentDescID is the schema descriptor for id field.
+	containmentDescID := containmentFields[0].Descriptor()
+	// containment.DefaultID holds the default value on creation for the id field.
+	containment.DefaultID = containmentDescID.Default.(func() uuid.UUID)
 	decoydeploymentFields := schema.DecoyDeployment{}.Fields()
 	_ = decoydeploymentFields
 	// decoydeploymentDescPort is the schema descriptor for port field.
@@ -969,7 +984,7 @@ func init() {
 	// zone.NameValidator is a validator for the "name" field. It is called by the builders before save.
 	zone.NameValidator = zoneDescName.Validators[0].(func(string) error)
 	// zoneDescCreatedAt is the schema descriptor for created_at field.
-	zoneDescCreatedAt := zoneFields[5].Descriptor()
+	zoneDescCreatedAt := zoneFields[6].Descriptor()
 	// zone.DefaultCreatedAt holds the default value on creation for the created_at field.
 	zone.DefaultCreatedAt = zoneDescCreatedAt.Default.(func() time.Time)
 	// zoneDescID is the schema descriptor for id field.

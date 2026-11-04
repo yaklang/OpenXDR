@@ -28,7 +28,7 @@ import (
 // 生产近三天按 60 分钟回放只在这次攻击上触发一次（纳管主机之间的正常 SSH 是密钥登录成功，不计）。
 // 告警去重同样按 60 分钟（从首条起算，见 upsertAlert）：一轮喷洒在源主机上只留一条，后来的受害主机累加计数、刷新 detail。
 const (
-	sprayWindow  = 60 * time.Minute
+	SprayWindow  = 60 * time.Minute
 	sprayVictims = 3
 	// 证据保留远长于回看窗口，写入时顺手清掉同一源主机更早的
 	sprayRetention = 24 * time.Hour
@@ -57,8 +57,8 @@ func (p *Processor) lateralSpray(ctx context.Context, tx *sql.Tx, e Envelope, ra
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "lateral-spray|"+src.String()); err != nil {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO lateral_evidence(event_id,src_asset,victim_asset,ts) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
-		e.ID, src, *e.AssetID, e.Timestamp); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO lateral_evidence(event_id,src_asset,victim_asset,ts,src_ip) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+		e.ID, src, *e.AssetID, e.Timestamp, ip); err != nil {
 		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM lateral_evidence WHERE src_asset=$1 AND ts<$2`, src, e.Timestamp.Add(-sprayRetention)); err != nil {
@@ -66,7 +66,7 @@ func (p *Processor) lateralSpray(ctx context.Context, tx *sql.Tx, e Envelope, ra
 	}
 	var victims int
 	if err := tx.QueryRowContext(ctx, `SELECT count(DISTINCT victim_asset) FROM lateral_evidence WHERE src_asset=$1 AND ts>$2 AND ts<=$3`,
-		src, e.Timestamp.Add(-sprayWindow), e.Timestamp).Scan(&victims); err != nil {
+		src, e.Timestamp.Add(-SprayWindow), e.Timestamp).Scan(&victims); err != nil {
 		return false, err
 	}
 	if victims < sprayVictims || p.Suppress.Suppressed(sigma.RuleLateralSpray, &src, raw, e.Timestamp) {
@@ -92,7 +92,7 @@ func (p *Processor) sprayDetail(ctx context.Context, tx *sql.Tx, fingerprint str
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT COALESCE(a.ip_addrs->>0, l.victim_asset::text), count(*) FROM lateral_evidence l
 LEFT JOIN assets a ON a.id=l.victim_asset
-WHERE l.src_asset=$1 AND l.ts>$2 AND l.ts<=$3 GROUP BY 1 ORDER BY 1`, src, first.Add(-sprayWindow), ts)
+WHERE l.src_asset=$1 AND l.ts>$2 AND l.ts<=$3 GROUP BY 1 ORDER BY 1`, src, first.Add(-SprayWindow), ts)
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,7 @@ WHERE l.src_asset=$1 AND l.ts>$2 AND l.ts<=$3 GROUP BY 1 ORDER BY 1`, src, first
 		return err
 	}
 	detail := fmt.Sprintf("来自 %s 的登录失败或被告警的入站，首次达到阈值前 %d 分钟起共波及 %d 台纳管主机：%s",
-		ip, int(sprayWindow/time.Minute), len(victims), strings.Join(victims, "、"))
+		ip, int(SprayWindow/time.Minute), len(victims), strings.Join(victims, "、"))
 	_, err = tx.ExecContext(ctx, `UPDATE alerts SET detail=$2 WHERE id=$1`, alertID, detail)
 	return err
 }

@@ -17,6 +17,7 @@ import (
 	"openxdr/server/ent/beaconbaseline"
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/commandpolicy"
+	"openxdr/server/ent/containment"
 	"openxdr/server/ent/decoydeployment"
 	"openxdr/server/ent/decoyenginerelease"
 	"openxdr/server/ent/decoyobservation"
@@ -132,6 +133,7 @@ func checkColumn(t, c string) error {
 			beaconbaseline.Table:          beaconbaseline.ValidColumn,
 			command.Table:                 command.ValidColumn,
 			commandpolicy.Table:           commandpolicy.ValidColumn,
+			containment.Table:             containment.ValidColumn,
 			decoydeployment.Table:         decoydeployment.ValidColumn,
 			decoyenginerelease.Table:      decoyenginerelease.ValidColumn,
 			decoyobservation.Table:        decoyobservation.ValidColumn,

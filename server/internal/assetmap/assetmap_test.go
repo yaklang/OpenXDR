@@ -348,3 +348,22 @@ func TestProcessNamesAvoidsUnneededDatabaseLookup(t *testing.T) {
 		t.Fatalf("无需回查却返回结果: %v %v", names, err)
 	}
 }
+
+// 处置等级：实验等级只给低重要程度的机器；没给或乱给的按生产
+func TestAnnotationTier(t *testing.T) {
+	for _, c := range []struct {
+		answer string
+		want   string
+	}{
+		{`{"role":"CTF 靶场","criticality":1,"responseTier":"lab","tierReason":"比赛靶机"}`, "lab"},
+		{`{"role":"业务库","criticality":4,"responseTier":"lab","tierReason":"看起来像测试"}`, "production"},
+		{`{"role":"安全平台","criticality":5,"responseTier":"core","tierReason":"XDR 节点"}`, "core"},
+		{`{"role":"未知","criticality":2}`, "production"},
+		{`{"role":"未知","criticality":2,"responseTier":"isolate-me"}`, "production"},
+	} {
+		ann, err := parseAnnotation(c.answer, nil, nil, nil)
+		if err != nil || ann.Tier != c.want || ann.TierReason == "" {
+			t.Errorf("%s → %q（%s）%v，期望 %q", c.answer, ann.Tier, ann.TierReason, err, c.want)
+		}
+	}
+}

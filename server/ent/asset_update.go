@@ -545,6 +545,46 @@ func (_u *AssetUpdate) ClearZoneID() *AssetUpdate {
 	return _u
 }
 
+// SetResponseTier sets the "response_tier" field.
+func (_u *AssetUpdate) SetResponseTier(v asset.ResponseTier) *AssetUpdate {
+	_u.mutation.SetResponseTier(v)
+	return _u
+}
+
+// SetNillableResponseTier sets the "response_tier" field if the given value is not nil.
+func (_u *AssetUpdate) SetNillableResponseTier(v *asset.ResponseTier) *AssetUpdate {
+	if v != nil {
+		_u.SetResponseTier(*v)
+	}
+	return _u
+}
+
+// ClearResponseTier clears the value of the "response_tier" field.
+func (_u *AssetUpdate) ClearResponseTier() *AssetUpdate {
+	_u.mutation.ClearResponseTier()
+	return _u
+}
+
+// SetResponseTierReason sets the "response_tier_reason" field.
+func (_u *AssetUpdate) SetResponseTierReason(v string) *AssetUpdate {
+	_u.mutation.SetResponseTierReason(v)
+	return _u
+}
+
+// SetNillableResponseTierReason sets the "response_tier_reason" field if the given value is not nil.
+func (_u *AssetUpdate) SetNillableResponseTierReason(v *string) *AssetUpdate {
+	if v != nil {
+		_u.SetResponseTierReason(*v)
+	}
+	return _u
+}
+
+// ClearResponseTierReason clears the value of the "response_tier_reason" field.
+func (_u *AssetUpdate) ClearResponseTierReason() *AssetUpdate {
+	_u.mutation.ClearResponseTierReason()
+	return _u
+}
+
 // SetRole sets the "role" field.
 func (_u *AssetUpdate) SetRole(v string) *AssetUpdate {
 	_u.mutation.SetRole(v)
@@ -862,7 +902,20 @@ func (_u *AssetUpdate) ExecX(ctx context.Context) {
 	}
 }
 
+// check runs all checks and user-defined validators on the builder.
+func (_u *AssetUpdate) check() error {
+	if v, ok := _u.mutation.ResponseTier(); ok {
+		if err := asset.ResponseTierValidator(v); err != nil {
+			return &ValidationError{Name: "response_tier", err: fmt.Errorf(`ent: validator failed for field "Asset.response_tier": %w`, err)}
+		}
+	}
+	return nil
+}
+
 func (_u *AssetUpdate) sqlSave(ctx context.Context) (_node int, err error) {
+	if err := _u.check(); err != nil {
+		return _node, err
+	}
 	_spec := sqlgraph.NewUpdateSpec(asset.Table, asset.Columns, sqlgraph.NewFieldSpec(asset.FieldID, field.TypeUUID))
 	if ps := _u.mutation.predicates; len(ps) > 0 {
 		_spec.Predicate = func(selector *sql.Selector) {
@@ -1071,6 +1124,18 @@ func (_u *AssetUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.ZoneIDCleared() {
 		_spec.ClearField(asset.FieldZoneID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.ResponseTier(); ok {
+		_spec.SetField(asset.FieldResponseTier, field.TypeEnum, value)
+	}
+	if _u.mutation.ResponseTierCleared() {
+		_spec.ClearField(asset.FieldResponseTier, field.TypeEnum)
+	}
+	if value, ok := _u.mutation.ResponseTierReason(); ok {
+		_spec.SetField(asset.FieldResponseTierReason, field.TypeString, value)
+	}
+	if _u.mutation.ResponseTierReasonCleared() {
+		_spec.ClearField(asset.FieldResponseTierReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.Role(); ok {
 		_spec.SetField(asset.FieldRole, field.TypeString, value)
@@ -1800,6 +1865,46 @@ func (_u *AssetUpdateOne) ClearZoneID() *AssetUpdateOne {
 	return _u
 }
 
+// SetResponseTier sets the "response_tier" field.
+func (_u *AssetUpdateOne) SetResponseTier(v asset.ResponseTier) *AssetUpdateOne {
+	_u.mutation.SetResponseTier(v)
+	return _u
+}
+
+// SetNillableResponseTier sets the "response_tier" field if the given value is not nil.
+func (_u *AssetUpdateOne) SetNillableResponseTier(v *asset.ResponseTier) *AssetUpdateOne {
+	if v != nil {
+		_u.SetResponseTier(*v)
+	}
+	return _u
+}
+
+// ClearResponseTier clears the value of the "response_tier" field.
+func (_u *AssetUpdateOne) ClearResponseTier() *AssetUpdateOne {
+	_u.mutation.ClearResponseTier()
+	return _u
+}
+
+// SetResponseTierReason sets the "response_tier_reason" field.
+func (_u *AssetUpdateOne) SetResponseTierReason(v string) *AssetUpdateOne {
+	_u.mutation.SetResponseTierReason(v)
+	return _u
+}
+
+// SetNillableResponseTierReason sets the "response_tier_reason" field if the given value is not nil.
+func (_u *AssetUpdateOne) SetNillableResponseTierReason(v *string) *AssetUpdateOne {
+	if v != nil {
+		_u.SetResponseTierReason(*v)
+	}
+	return _u
+}
+
+// ClearResponseTierReason clears the value of the "response_tier_reason" field.
+func (_u *AssetUpdateOne) ClearResponseTierReason() *AssetUpdateOne {
+	_u.mutation.ClearResponseTierReason()
+	return _u
+}
+
 // SetRole sets the "role" field.
 func (_u *AssetUpdateOne) SetRole(v string) *AssetUpdateOne {
 	_u.mutation.SetRole(v)
@@ -2130,7 +2235,20 @@ func (_u *AssetUpdateOne) ExecX(ctx context.Context) {
 	}
 }
 
+// check runs all checks and user-defined validators on the builder.
+func (_u *AssetUpdateOne) check() error {
+	if v, ok := _u.mutation.ResponseTier(); ok {
+		if err := asset.ResponseTierValidator(v); err != nil {
+			return &ValidationError{Name: "response_tier", err: fmt.Errorf(`ent: validator failed for field "Asset.response_tier": %w`, err)}
+		}
+	}
+	return nil
+}
+
 func (_u *AssetUpdateOne) sqlSave(ctx context.Context) (_node *Asset, err error) {
+	if err := _u.check(); err != nil {
+		return _node, err
+	}
 	_spec := sqlgraph.NewUpdateSpec(asset.Table, asset.Columns, sqlgraph.NewFieldSpec(asset.FieldID, field.TypeUUID))
 	id, ok := _u.mutation.ID()
 	if !ok {
@@ -2356,6 +2474,18 @@ func (_u *AssetUpdateOne) sqlSave(ctx context.Context) (_node *Asset, err error)
 	}
 	if _u.mutation.ZoneIDCleared() {
 		_spec.ClearField(asset.FieldZoneID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.ResponseTier(); ok {
+		_spec.SetField(asset.FieldResponseTier, field.TypeEnum, value)
+	}
+	if _u.mutation.ResponseTierCleared() {
+		_spec.ClearField(asset.FieldResponseTier, field.TypeEnum)
+	}
+	if value, ok := _u.mutation.ResponseTierReason(); ok {
+		_spec.SetField(asset.FieldResponseTierReason, field.TypeString, value)
+	}
+	if _u.mutation.ResponseTierReasonCleared() {
+		_spec.ClearField(asset.FieldResponseTierReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.Role(); ok {
 		_spec.SetField(asset.FieldRole, field.TypeString, value)

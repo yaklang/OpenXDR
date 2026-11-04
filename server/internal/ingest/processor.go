@@ -64,7 +64,9 @@ CREATE TABLE IF NOT EXISTS lateral_evidence (
  victim_asset uuid NOT NULL,
  ts timestamptz NOT NULL
 );
-CREATE INDEX IF NOT EXISTS lateral_evidence_src_ts ON lateral_evidence(src_asset, ts);`)
+CREATE INDEX IF NOT EXISTS lateral_evidence_src_ts ON lateral_evidence(src_asset, ts);
+-- 受害方看到的来源地址：自主响应在受害主机上封锁的就是它，资产登记的地址里有 docker 网桥这类不能封的
+ALTER TABLE lateral_evidence ADD COLUMN IF NOT EXISTS src_ip text;`)
 	if err != nil {
 		return err
 	}
@@ -362,7 +364,7 @@ func (p *Processor) upsertAlert(ctx context.Context, tx *sql.Tx, e Envelope, hit
 	// 内部横向喷洒按自己的回看窗口去重：一轮喷洒常常持续几十分钟，不按通用窗口切成多条
 	window := p.DedupWindow
 	if hit.RuleID == sigma.RuleLateralSpray {
-		window = sprayWindow
+		window = SprayWindow
 	}
 	if err == nil && !e.Timestamp.Before(first) && e.Timestamp.Sub(first) < window {
 		if _, err := tx.ExecContext(ctx, `UPDATE alerts SET count=count+1, last_ts=GREATEST(COALESCE(last_ts,ts),$2) WHERE id=$1`, alertID, e.Timestamp); err != nil {

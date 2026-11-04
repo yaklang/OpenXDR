@@ -39,6 +39,9 @@ type Command func(*sql.Selector)
 // CommandPolicy is the predicate function for commandpolicy builders.
 type CommandPolicy func(*sql.Selector)
 
+// Containment is the predicate function for containment builders.
+type Containment func(*sql.Selector)
+
 // DecoyDeployment is the predicate function for decoydeployment builders.
 type DecoyDeployment func(*sql.Selector)
 

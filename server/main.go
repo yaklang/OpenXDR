@@ -37,6 +37,7 @@ import (
 	"openxdr/server/internal/cluster"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/commandreview"
+	"openxdr/server/internal/containment"
 	"openxdr/server/internal/correlate"
 	"openxdr/server/internal/enroll"
 	"openxdr/server/internal/eventarchive"
@@ -115,6 +116,7 @@ func main() {
 	hub.Signer = commandSigner(hub.Enabled)
 	allowlist := isolationAllowlist()
 	triageEngine := startTriage(ctx, db, client, rules, llmFor, hub, allowlist)
+	startContainment(ctx, db, client, hub, allowlist)
 	notifySettings, webhook := startNotify(ctx, db, client, rules, triageEngine.LLM.Enabled)
 	silentAfter := time.Duration(getenvInt("AGENT_SILENT_MINUTES", 10)) * time.Minute
 	startLiveness(ctx, db, client, webhook, silentAfter)
@@ -411,6 +413,30 @@ func startTriage(ctx context.Context, db *sql.DB, client *ent.Client, rules sigm
 	// 常驻：模型在控制台配上就开始研判，撤掉就停
 	go cluster.RunLeader(ctx, db, "triage", triageEngine.Run)
 	return triageEngine
+}
+
+// startContainment 自主响应：确定性信号命中后按角色与处置等级直接遏制，显式开启才运行，仍受 RESPONSE_ENABLED 约束
+func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *response.Hub, allowlist []string) {
+	if os.Getenv("CONTAINMENT_ENABLED") != "true" {
+		return
+	}
+	if !hub.Enabled {
+		slog.Warn("CONTAINMENT_ENABLED 需要 RESPONSE_ENABLED=true，自主响应不启动")
+		return
+	}
+	scope := getenv("CONTAINMENT_SCOPE", containment.ScopeLab)
+	if scope != containment.ScopeLab && scope != containment.ScopeAll {
+		slog.Error("CONTAINMENT_SCOPE 只能是 lab 或 all", "value", scope)
+		os.Exit(1)
+	}
+	engine := &containment.Engine{
+		DB: client, SQL: db, Hub: hub, AllowEndpoints: allowlist, Scope: scope,
+		TTL:        time.Duration(getenvInt("CONTAINMENT_TTL_HOURS", 24)) * time.Hour,
+		MaxPerHour: getenvInt("CONTAINMENT_MAX_PER_HOUR", 10),
+		Interval:   5 * time.Second,
+	}
+	slog.Info("自主响应已开启", "scope", scope, "ttl", engine.TTL, "maxPerHour", engine.MaxPerHour)
+	go cluster.RunLeader(ctx, db, "containment", engine.Run)
 }
 
 // startNotify 推送目标以控制台保存的为准，环境变量只是首次部署的默认值

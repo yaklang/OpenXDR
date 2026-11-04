@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"openxdr/server/internal/testdb"
@@ -96,6 +97,45 @@ func TestAssetMapPermissionsAndLocks(t *testing.T) {
 	if code := send(t, admin, "PUT", "/api/assets/"+host.ID.String()+"/zone", `{"zoneId":"`+z.ID.String()+`"}`); code != http.StatusNoContent {
 		t.Fatal("admin 指派区域失败")
 	}
+	// 自主响应处置等级：区域默认不指定（交给 AI）；改区域不带该字段时保持原值、null 清空；
+	// 资产人工指定即锁定，null 解锁并请 AI 重新定级
+	if z.ResponseTier != nil {
+		t.Fatalf("新建区域默认不指定处置等级: %v", *z.ResponseTier)
+	}
+	if code := send(t, admin, "PUT", "/api/zones/"+z.ID.String(), `{"name":"DMZ","kind":"dmz","responseTier":"lab"}`); code != http.StatusOK {
+		t.Fatalf("改处置等级: %d", code)
+	}
+	if code := send(t, admin, "PUT", "/api/zones/"+z.ID.String(), `{"name":"DMZ","kind":"dmz","cidrs":["10.1.1.0/24"]}`); code != http.StatusOK ||
+		*client.Zone.GetX(ctx, z.ID).ResponseTier != "lab" {
+		t.Fatal("不带 responseTier 的修改应保持原等级")
+	}
+	if code := send(t, admin, "PUT", "/api/zones/"+z.ID.String(), `{"name":"DMZ","kind":"dmz","cidrs":["10.1.1.0/24"],"responseTier":null}`); code != http.StatusOK ||
+		client.Zone.GetX(ctx, z.ID).ResponseTier != nil {
+		t.Fatal("responseTier 为 null 应清空")
+	}
+	if code := send(t, admin, "PUT", "/api/zones/"+z.ID.String(), `{"name":"DMZ","kind":"dmz","responseTier":"max"}`); code != http.StatusBadRequest {
+		t.Errorf("非法等级应 400: %d", code)
+	}
+	tierURL := "/api/assets/" + host.ID.String() + "/response-tier"
+	if code := send(t, ana, "PUT", tierURL, `{"tier":"lab"}`); code != http.StatusForbidden {
+		t.Errorf("analyst 不能指定处置等级: %d", code)
+	}
+	if code := send(t, admin, "PUT", tierURL, `{"tier":"core"}`); code != http.StatusNoContent {
+		t.Fatalf("admin 指定处置等级: %d", code)
+	}
+	if got := client.Asset.GetX(ctx, host.ID); *got.ResponseTier != "core" || !slices.Contains(got.LockedFields, "response_tier") {
+		t.Fatalf("人工指定应锁定: %+v", got.LockedFields)
+	}
+	if code := send(t, admin, "PUT", tierURL, `{"tier":null}`); code != http.StatusNoContent {
+		t.Fatalf("交还 AI: %d", code)
+	}
+	if got := client.Asset.GetX(ctx, host.ID); got.ResponseTier != nil || slices.Contains(got.LockedFields, "response_tier") || got.AnnotateRequestedAt == nil {
+		t.Fatalf("null 应解锁、清空并请求重新标注: %+v", got)
+	}
+	if code := send(t, admin, "PUT", tierURL, `{"tier":"max"}`); code != http.StatusBadRequest {
+		t.Errorf("非法等级应 400: %d", code)
+	}
+
 	if code := send(t, admin, "DELETE", "/api/zones/"+z.ID.String(), ``); code != http.StatusNoContent {
 		t.Fatal("删区域失败")
 	}

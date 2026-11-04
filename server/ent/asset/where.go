@@ -146,6 +146,11 @@ func ZoneID(v uuid.UUID) predicate.Asset {
 	return predicate.Asset(sql.FieldEQ(FieldZoneID, v))
 }
 
+// ResponseTierReason applies equality check predicate on the "response_tier_reason" field. It's identical to ResponseTierReasonEQ.
+func ResponseTierReason(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldResponseTierReason, v))
+}
+
 // Role applies equality check predicate on the "role" field. It's identical to RoleEQ.
 func Role(v string) predicate.Asset {
 	return predicate.Asset(sql.FieldEQ(FieldRole, v))
@@ -1314,6 +1319,111 @@ func ZoneIDIsNil() predicate.Asset {
 // ZoneIDNotNil applies the NotNil predicate on the "zone_id" field.
 func ZoneIDNotNil() predicate.Asset {
 	return predicate.Asset(sql.FieldNotNull(FieldZoneID))
+}
+
+// ResponseTierEQ applies the EQ predicate on the "response_tier" field.
+func ResponseTierEQ(v ResponseTier) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldResponseTier, v))
+}
+
+// ResponseTierNEQ applies the NEQ predicate on the "response_tier" field.
+func ResponseTierNEQ(v ResponseTier) predicate.Asset {
+	return predicate.Asset(sql.FieldNEQ(FieldResponseTier, v))
+}
+
+// ResponseTierIn applies the In predicate on the "response_tier" field.
+func ResponseTierIn(vs ...ResponseTier) predicate.Asset {
+	return predicate.Asset(sql.FieldIn(FieldResponseTier, vs...))
+}
+
+// ResponseTierNotIn applies the NotIn predicate on the "response_tier" field.
+func ResponseTierNotIn(vs ...ResponseTier) predicate.Asset {
+	return predicate.Asset(sql.FieldNotIn(FieldResponseTier, vs...))
+}
+
+// ResponseTierIsNil applies the IsNil predicate on the "response_tier" field.
+func ResponseTierIsNil() predicate.Asset {
+	return predicate.Asset(sql.FieldIsNull(FieldResponseTier))
+}
+
+// ResponseTierNotNil applies the NotNil predicate on the "response_tier" field.
+func ResponseTierNotNil() predicate.Asset {
+	return predicate.Asset(sql.FieldNotNull(FieldResponseTier))
+}
+
+// ResponseTierReasonEQ applies the EQ predicate on the "response_tier_reason" field.
+func ResponseTierReasonEQ(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldResponseTierReason, v))
+}
+
+// ResponseTierReasonNEQ applies the NEQ predicate on the "response_tier_reason" field.
+func ResponseTierReasonNEQ(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldNEQ(FieldResponseTierReason, v))
+}
+
+// ResponseTierReasonIn applies the In predicate on the "response_tier_reason" field.
+func ResponseTierReasonIn(vs ...string) predicate.Asset {
+	return predicate.Asset(sql.FieldIn(FieldResponseTierReason, vs...))
+}
+
+// ResponseTierReasonNotIn applies the NotIn predicate on the "response_tier_reason" field.
+func ResponseTierReasonNotIn(vs ...string) predicate.Asset {
+	return predicate.Asset(sql.FieldNotIn(FieldResponseTierReason, vs...))
+}
+
+// ResponseTierReasonGT applies the GT predicate on the "response_tier_reason" field.
+func ResponseTierReasonGT(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldGT(FieldResponseTierReason, v))
+}
+
+// ResponseTierReasonGTE applies the GTE predicate on the "response_tier_reason" field.
+func ResponseTierReasonGTE(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldGTE(FieldResponseTierReason, v))
+}
+
+// ResponseTierReasonLT applies the LT predicate on the "response_tier_reason" field.
+func ResponseTierReasonLT(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldLT(FieldResponseTierReason, v))
+}
+
+// ResponseTierReasonLTE applies the LTE predicate on the "response_tier_reason" field.
+func ResponseTierReasonLTE(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldLTE(FieldResponseTierReason, v))
+}
+
+// ResponseTierReasonContains applies the Contains predicate on the "response_tier_reason" field.
+func ResponseTierReasonContains(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldContains(FieldResponseTierReason, v))
+}
+
+// ResponseTierReasonHasPrefix applies the HasPrefix predicate on the "response_tier_reason" field.
+func ResponseTierReasonHasPrefix(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldHasPrefix(FieldResponseTierReason, v))
+}
+
+// ResponseTierReasonHasSuffix applies the HasSuffix predicate on the "response_tier_reason" field.
+func ResponseTierReasonHasSuffix(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldHasSuffix(FieldResponseTierReason, v))
+}
+
+// ResponseTierReasonIsNil applies the IsNil predicate on the "response_tier_reason" field.
+func ResponseTierReasonIsNil() predicate.Asset {
+	return predicate.Asset(sql.FieldIsNull(FieldResponseTierReason))
+}
+
+// ResponseTierReasonNotNil applies the NotNil predicate on the "response_tier_reason" field.
+func ResponseTierReasonNotNil() predicate.Asset {
+	return predicate.Asset(sql.FieldNotNull(FieldResponseTierReason))
+}
+
+// ResponseTierReasonEqualFold applies the EqualFold predicate on the "response_tier_reason" field.
+func ResponseTierReasonEqualFold(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEqualFold(FieldResponseTierReason, v))
+}
+
+// ResponseTierReasonContainsFold applies the ContainsFold predicate on the "response_tier_reason" field.
+func ResponseTierReasonContainsFold(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldContainsFold(FieldResponseTierReason, v))
 }
 
 // RoleEQ applies the EQ predicate on the "role" field.
