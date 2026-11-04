@@ -490,6 +490,8 @@ fn healthcheck_of(
     pid: u32,
     ppid: Option<u32>,
     c: Arc<Container>,
+    name: &str,
+    exe: Option<&str>,
     cmd_line: Option<&str>,
 ) -> Arc<Container> {
     if c.runtime != "docker" {
@@ -510,7 +512,7 @@ fn healthcheck_of(
             .any(|p| in_ours(p) == Some(Some(true)));
     let root = || {
         parent_outside(registry, pid, ppid, &c.uid)
-            && cmd_line.is_some_and(|line| container::healthcheck(&c.uid).as_deref() == Some(line))
+            && matches_healthcheck_cmd(&c.uid, name, exe, cmd_line)
     };
     if inherited || root() {
         Arc::new(Container {
@@ -520,6 +522,31 @@ fn healthcheck_of(
     } else {
         c
     }
+}
+
+/// 核对进程是否匹配容器配置的健康检查命令：
+/// - 读到了 cmdline 时要求与 HEALTHCHECK 配置逐字一致；
+/// - 极短命的非 shell 直接健康检查（如 `HEALTHCHECK ["CMD", "nc", "-z", ...]`）在读取前已退化为僵尸或退场导致
+///   `cmd_line` 为 `None` 时，按可执行文件名/路径与配置的非 shell 程序名核对。
+#[cfg(target_os = "linux")]
+fn matches_healthcheck_cmd(
+    container_uid: &str,
+    name: &str,
+    exe: Option<&str>,
+    cmd_line: Option<&str>,
+) -> bool {
+    let Some(hc) = container::healthcheck(container_uid) else {
+        return false;
+    };
+    if let Some(line) = cmd_line {
+        return &*hc == line;
+    }
+    let Some(prog) = hc.split_whitespace().next() else {
+        return false;
+    };
+    let prog_base = prog.rsplit('/').next().unwrap_or(prog);
+    let is_shell = matches!(prog_base, "sh" | "bash" | "dash" | "ash" | "zsh");
+    !is_shell && (prog_base == name || exe == Some(prog))
 }
 
 /// 判断 pid 的父进程是否来自容器 container_uid 之外：
@@ -549,7 +576,7 @@ fn parent_outside(
             return theirs.is_none();
         }
         if !std::path::Path::new(&format!("/proc/{p}")).exists() {
-            if !refreshed && container::of(pid).is_some_and(|k| k.uid == container_uid) {
+            if !refreshed {
                 refreshed = true;
                 cur = container::ppid(pid).filter(|&np| np != p);
                 continue;
@@ -598,20 +625,11 @@ fn resolve_container(
         .and_then(|p| registry.known(p))
         .and_then(|k| k.cmd_line)?;
     let c = container::from_runtime_cmd_line(&cmd)?;
-    // 直接由 shim/runc 拉起、但退场极快导致 cmdline 与 cgroup 均已消失的 CMD 健康检查（如 nc -z）
-    if c.runtime == "docker"
-        && cmd_line.is_none()
-        && let Some(hc) = container::healthcheck(&c.uid)
-        && let Some(prog) = hc.split_whitespace().next()
-    {
-        let prog_base = prog.rsplit('/').next().unwrap_or(prog);
-        let is_shell = matches!(prog_base, "sh" | "bash" | "dash" | "ash" | "zsh");
-        if !is_shell && (prog_base == name || exe == Some(prog)) {
-            return Some(Arc::new(Container {
-                healthcheck: true,
-                ..(*c).clone()
-            }));
-        }
+    if c.runtime == "docker" && matches_healthcheck_cmd(&c.uid, name, exe, cmd_line) {
+        return Some(Arc::new(Container {
+            healthcheck: true,
+            ..(*c).clone()
+        }));
     }
     Some(c)
 }
@@ -634,6 +652,8 @@ fn healthcheck_of(
     _pid: u32,
     _ppid: Option<u32>,
     c: Arc<Container>,
+    _name: &str,
+    _exe: Option<&str>,
     _cmd_line: Option<&str>,
 ) -> Arc<Container> {
     c
@@ -718,17 +738,27 @@ fn emit_process(
         cmd_line: info.cmd_line.map(|c| truncate(c, EVENT_CMD_LINE_MAX)),
         ..info
     };
-    // runc 中间 fork 进程在 exec 瞬间退出时，内核已将容器进程收养给宿主机上的 containerd-shim；
-    // 在折叠采样与事件组装前重读一次 PPid，使周期折叠、父进程血缘与健康检查判定都能拿到真父进程
+    // runc exec --detach 的中间 fork 进程（runc:[1:CHILD]）未调 exec，且会在子进程启动瞬间退出：
+    // - 已退出时，内核已将容器进程收养给宿主机上的 containerd-shim，重读一次 /proc/<pid>/status 的 PPid；
+    // - 尚未退出时，若它的父进程是宿主机上的已登记进程（runc / containerd-shim），直接跨过这层未登记中间进程，
+    // 使周期折叠、父进程血缘与健康检查判定都能拿到真父进程
     #[cfg(target_os = "linux")]
     let info = if activity == ACTIVITY_LAUNCH
-        && info.ppid.is_some_and(|p| {
-            registry.known(p).is_none()
-                && !std::path::Path::new(&format!("/proc/{p}")).exists()
-                && container_of(info.pid).is_some()
-        }) {
+        && let Some(p) = info.ppid
+        && registry.known(p).is_none()
+        && let Some(c) = container_of(info.pid)
+    {
+        let resolved_ppid = if !std::path::Path::new(&format!("/proc/{p}")).exists() {
+            container::ppid(info.pid)
+        } else {
+            container::ppid(p).filter(|&gp| {
+                registry
+                    .known(gp)
+                    .is_some_and(|k| k.container.as_ref().is_none_or(|kc| kc.uid != c.uid))
+            })
+        };
         ProcessInfo {
-            ppid: container::ppid(info.pid).or(info.ppid),
+            ppid: resolved_ppid.or(info.ppid),
             ..info
         }
     } else {
@@ -868,7 +898,8 @@ fn process_event(
             parent = ppid.and_then(|p| registry.known(p));
             // 健康检查的认定要看这个 pid 之前的登记（原地 exec），登记新进程之前取
             let container = resolve_container(registry, pid, ppid, name, exe, cmd_line);
-            let container = container.map(|c| healthcheck_of(registry, pid, ppid, c, cmd_line));
+            let container =
+                container.map(|c| healthcheck_of(registry, pid, ppid, c, name, exe, cmd_line));
             let (guid, parent_guid) = registry.register(pid, ppid);
             registry.describe(pid, name, exe);
             registry.set_cmd_line(pid, cmd_line);
@@ -1277,7 +1308,15 @@ mod tests {
         // 宿主机上的 containerd-shim（不在容器里）
         reg.seed(100, "containerd-shim", None);
         let mark = |reg: &mut ProcessRegistry, pid: u32, ppid: u32, uid: &str, cmd: &str| {
-            let c = healthcheck_of(reg, pid, Some(ppid), docker(uid), Some(cmd));
+            let c = healthcheck_of(
+                reg,
+                pid,
+                Some(ppid),
+                docker(uid),
+                "sh",
+                Some("/bin/sh"),
+                Some(cmd),
+            );
             reg.register(pid, Some(ppid));
             reg.annotate(pid, None, Some(c.clone()), None);
             c.healthcheck
@@ -1340,6 +1379,8 @@ mod tests {
                 400,
                 Some(u32::MAX - 1),
                 docker("aaaaaaaaaaa1"),
+                "sh",
+                Some("/bin/sh"),
                 Some(hc)
             )
             .healthcheck
@@ -1352,7 +1393,9 @@ mod tests {
             name: None,
             healthcheck: false,
         });
-        assert!(!healthcheck_of(&reg, 402, Some(100), lxc, Some(hc)).healthcheck);
+        assert!(
+            !healthcheck_of(&reg, 402, Some(100), lxc, "sh", Some("/bin/sh"), Some(hc)).healthcheck
+        );
         // 标记随容器对象写进事件
         let v = Container {
             healthcheck: true,
@@ -1395,6 +1438,33 @@ mod tests {
                 .expect("应从 containerd-shim 命令行还原容器");
         assert_eq!(shim_hc.uid, "ee8c55918fa5");
         assert!(shim_hc.healthcheck);
+
+        // 3) 进程已退化为僵尸（cgroup 还在但 /proc/<pid>/cmdline 已为空）的直接 CMD 健康检查：healthcheck_of 同样识别
+        assert!(
+            healthcheck_of(
+                &reg,
+                gone_pid,
+                Some(1458),
+                docker("ee8c55918fa5"),
+                "nc",
+                Some("/usr/bin/nc"),
+                None,
+            )
+            .healthcheck
+        );
+        // 非健康检查程序名（如 cat）即使 cmdline 为空也不误标
+        assert!(
+            !healthcheck_of(
+                &reg,
+                gone_pid,
+                Some(1458),
+                docker("ee8c55918fa5"),
+                "cat",
+                Some("/usr/bin/cat"),
+                None,
+            )
+            .healthcheck
+        );
 
         // runc 自身是宿主机工具进程，不算容器内进程
         assert!(
