@@ -223,6 +223,20 @@ func (_c *ContainmentCreate) SetNillableLiftedBy(v *string) *ContainmentCreate {
 	return _c
 }
 
+// SetReviews sets the "reviews" field.
+func (_c *ContainmentCreate) SetReviews(v int) *ContainmentCreate {
+	_c.mutation.SetReviews(v)
+	return _c
+}
+
+// SetNillableReviews sets the "reviews" field if the given value is not nil.
+func (_c *ContainmentCreate) SetNillableReviews(v *int) *ContainmentCreate {
+	if v != nil {
+		_c.SetReviews(*v)
+	}
+	return _c
+}
+
 // SetID sets the "id" field.
 func (_c *ContainmentCreate) SetID(v uuid.UUID) *ContainmentCreate {
 	_c.mutation.SetID(v)
@@ -280,6 +294,10 @@ func (_c *ContainmentCreate) defaults() {
 		v := containment.DefaultPid
 		_c.mutation.SetPid(v)
 	}
+	if _, ok := _c.mutation.Reviews(); !ok {
+		v := containment.DefaultReviews
+		_c.mutation.SetReviews(v)
+	}
 	if _, ok := _c.mutation.ID(); !ok {
 		v := containment.DefaultID()
 		_c.mutation.SetID(v)
@@ -327,6 +345,9 @@ func (_c *ContainmentCreate) check() error {
 	}
 	if _, ok := _c.mutation.Reason(); !ok {
 		return &ValidationError{Name: "reason", err: errors.New(`ent: missing required field "Containment.reason"`)}
+	}
+	if _, ok := _c.mutation.Reviews(); !ok {
+		return &ValidationError{Name: "reviews", err: errors.New(`ent: missing required field "Containment.reviews"`)}
 	}
 	return nil
 }
@@ -438,6 +459,10 @@ func (_c *ContainmentCreate) createSpec() (*Containment, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.LiftedBy(); ok {
 		_spec.SetField(containment.FieldLiftedBy, field.TypeString, value)
 		_node.LiftedBy = &value
+	}
+	if value, ok := _c.mutation.Reviews(); ok {
+		_spec.SetField(containment.FieldReviews, field.TypeInt, value)
+		_node.Reviews = value
 	}
 	return _node, _spec
 }

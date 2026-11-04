@@ -66,7 +66,7 @@ Witness 使用 [witness-compose.yml](witness-compose.yml) 和渲染后的
 | pg_hba 不可远程改写 | 写在本地 `postgresql.pg_hba`，优先于 DCS 动态配置；经 REST 或 etcd 改动态配置里的 pg_hba 不生效。除容器内 unix socket 外不用 `trust`，TCP 只收本机与两个节点、`scram-sha-256` |
 | 口令不进环境变量 | patroni 容器不再收 `OPENXDR_PASSWORD`、`REPLICATION_PASSWORD`；初始化读只读挂载的 `openxdr-db-password`（0400），replicator 由 Patroni 自己按配置创建 |
 | 少挂密钥 | patroni 容器只挂 HA CA 与 etcd 客户端证书，不再挂整个 `runtime/secrets`（NATS 节点私钥不在里面） |
-| 宿主机防火墙 | `guard.sh node`：5432 / 8008 只收本机、两个节点、VIP，8008 另收 `MONITOR_IPS`；`guard.sh witness`：2379 只收 `ETCD_ALLOW` |
+| 宿主机防火墙 | `guard.sh node`：5432 / 8008 / 6222 只收本机、两个节点、VIP，8008 另收 `MONITOR_IPS`；`guard.sh witness`：2379 / 6222 只收 `ETCD_ALLOW`。6222 是 NATS 集群路由，拿到路由口令就能以集群成员身份读写整个事件流，不能只靠口令。IPv4 / IPv6 各建一条（etcd、NATS 监听 0.0.0.0 实际是双栈） |
 
 有一条做不到隔离，要清楚它的边界：Patroni 与 PostgreSQL 在同一镜像里以同一个 `postgres`
 用户（UID 70）运行，Patroni 必须读得到 `patroni.yml`（含超级用户与复制口令）和 etcd 客户端私钥。
@@ -81,7 +81,7 @@ Witness 使用 [witness-compose.yml](witness-compose.yml) 和渲染后的
   `patronictl edit-config` 直接写 etcd，不经 REST，但改不了本地的 pg_hba。
 - 换 REST 口令：重新渲染 `patroni.yml` 后对两个节点各执行 `docker kill -s HUP openxdr-ha-patroni-1`
   让 Patroni 重读配置（`patronictl reload` 会拿新口令去调还认旧口令的接口）。
-- `guard.sh` 可重复执行，整链重建，只管 IPv4；参数写在 `/etc/default/openxdr-guard`
+- `guard.sh` 可重复执行，整链重建，IPv4 与 IPv6（有 ip6tables 时）各一条；参数写在 `/etc/default/openxdr-guard`
   （`NODE_IPS`、`VIP`、`MONITOR_IPS`、`ETCD_ALLOW`）。单元停止时不撤规则。
   防火墙管理器（firewalld 重载等）清掉 INPUT 后要 `systemctl restart openxdr-guard@<角色>`。
 - 从手工规则迁移（生产在本仓库模板之前手工装过同样作用的 `KEI-DBGUARD` / `KEI-ETCDGUARD` 链，

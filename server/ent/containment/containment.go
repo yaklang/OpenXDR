@@ -53,6 +53,8 @@ const (
 	FieldEndedAt = "ended_at"
 	// FieldLiftedBy holds the string denoting the lifted_by field in the database.
 	FieldLiftedBy = "lifted_by"
+	// FieldReviews holds the string denoting the reviews field in the database.
+	FieldReviews = "reviews"
 	// Table holds the table name of the containment in the database.
 	Table = "containments"
 )
@@ -79,6 +81,7 @@ var Columns = []string{
 	FieldExpiresAt,
 	FieldEndedAt,
 	FieldLiftedBy,
+	FieldReviews,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -96,6 +99,8 @@ var (
 	DefaultCreatedAt func() time.Time
 	// DefaultPid holds the default value on creation for the "pid" field.
 	DefaultPid uint32
+	// DefaultReviews holds the default value on creation for the "reviews" field.
+	DefaultReviews int
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
@@ -253,4 +258,9 @@ func ByEndedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByLiftedBy orders the results by the lifted_by field.
 func ByLiftedBy(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldLiftedBy, opts...).ToFunc()
+}
+
+// ByReviews orders the results by the reviews field.
+func ByReviews(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldReviews, opts...).ToFunc()
 }

@@ -45,6 +45,8 @@ func (Containment) Fields() []ent.Field {
 		// 租约到期、人工解除的时间；人工解除的，这之前的证据不再触发同一处置
 		field.Time("ended_at").Optional().Nillable(),
 		field.String("lifted_by").Optional().Nillable(),
+		// 到期时 AI 复核后续期的次数（见 containment.review）
+		field.Int("reviews").Default(0),
 	}
 }
 

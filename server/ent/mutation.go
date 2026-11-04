@@ -12590,6 +12590,8 @@ type ContainmentMutation struct {
 	expires_at      *time.Time
 	ended_at        *time.Time
 	lifted_by       *string
+	reviews         *int
+	addreviews      *int
 	clearedFields   map[string]struct{}
 	done            bool
 	oldValue        func(context.Context) (*Containment, error)
@@ -13521,6 +13523,62 @@ func (m *ContainmentMutation) ResetLiftedBy() {
 	delete(m.clearedFields, containment.FieldLiftedBy)
 }
 
+// SetReviews sets the "reviews" field.
+func (m *ContainmentMutation) SetReviews(i int) {
+	m.reviews = &i
+	m.addreviews = nil
+}
+
+// Reviews returns the value of the "reviews" field in the mutation.
+func (m *ContainmentMutation) Reviews() (r int, exists bool) {
+	v := m.reviews
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReviews returns the old "reviews" field's value of the Containment entity.
+// If the Containment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ContainmentMutation) OldReviews(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReviews is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReviews requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReviews: %w", err)
+	}
+	return oldValue.Reviews, nil
+}
+
+// AddReviews adds i to the "reviews" field.
+func (m *ContainmentMutation) AddReviews(i int) {
+	if m.addreviews != nil {
+		*m.addreviews += i
+	} else {
+		m.addreviews = &i
+	}
+}
+
+// AddedReviews returns the value that was added to the "reviews" field in this mutation.
+func (m *ContainmentMutation) AddedReviews() (r int, exists bool) {
+	v := m.addreviews
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetReviews resets all changes to the "reviews" field.
+func (m *ContainmentMutation) ResetReviews() {
+	m.reviews = nil
+	m.addreviews = nil
+}
+
 // Where appends a list predicates to the ContainmentMutation builder.
 func (m *ContainmentMutation) Where(ps ...predicate.Containment) {
 	m.predicates = append(m.predicates, ps...)
@@ -13555,7 +13613,7 @@ func (m *ContainmentMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ContainmentMutation) Fields() []string {
-	fields := make([]string, 0, 19)
+	fields := make([]string, 0, 20)
 	if m.created_at != nil {
 		fields = append(fields, containment.FieldCreatedAt)
 	}
@@ -13613,6 +13671,9 @@ func (m *ContainmentMutation) Fields() []string {
 	if m.lifted_by != nil {
 		fields = append(fields, containment.FieldLiftedBy)
 	}
+	if m.reviews != nil {
+		fields = append(fields, containment.FieldReviews)
+	}
 	return fields
 }
 
@@ -13659,6 +13720,8 @@ func (m *ContainmentMutation) Field(name string) (ent.Value, bool) {
 		return m.EndedAt()
 	case containment.FieldLiftedBy:
 		return m.LiftedBy()
+	case containment.FieldReviews:
+		return m.Reviews()
 	}
 	return nil, false
 }
@@ -13706,6 +13769,8 @@ func (m *ContainmentMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldEndedAt(ctx)
 	case containment.FieldLiftedBy:
 		return m.OldLiftedBy(ctx)
+	case containment.FieldReviews:
+		return m.OldReviews(ctx)
 	}
 	return nil, fmt.Errorf("unknown Containment field %s", name)
 }
@@ -13848,6 +13913,13 @@ func (m *ContainmentMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetLiftedBy(v)
 		return nil
+	case containment.FieldReviews:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReviews(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Containment field %s", name)
 }
@@ -13859,6 +13931,9 @@ func (m *ContainmentMutation) AddedFields() []string {
 	if m.addpid != nil {
 		fields = append(fields, containment.FieldPid)
 	}
+	if m.addreviews != nil {
+		fields = append(fields, containment.FieldReviews)
+	}
 	return fields
 }
 
@@ -13869,6 +13944,8 @@ func (m *ContainmentMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
 	case containment.FieldPid:
 		return m.AddedPid()
+	case containment.FieldReviews:
+		return m.AddedReviews()
 	}
 	return nil, false
 }
@@ -13884,6 +13961,13 @@ func (m *ContainmentMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddPid(v)
+		return nil
+	case containment.FieldReviews:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddReviews(v)
 		return nil
 	}
 	return fmt.Errorf("unknown Containment numeric field %s", name)
@@ -14025,6 +14109,9 @@ func (m *ContainmentMutation) ResetField(name string) error {
 		return nil
 	case containment.FieldLiftedBy:
 		m.ResetLiftedBy()
+		return nil
+	case containment.FieldReviews:
+		m.ResetReviews()
 		return nil
 	}
 	return fmt.Errorf("unknown Containment field %s", name)

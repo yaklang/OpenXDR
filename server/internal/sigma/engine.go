@@ -649,11 +649,20 @@ const RuleBeacon = "xdr:beacon"
 // 逻辑在 ingest 侧（lateral_spray.go）
 const RuleLateralSpray = "xdr:internal-lateral-spray"
 
+// RuleControlPlaneChange OpenXDR 自身控制面被改：Patroni 动态配置（DCS）变了。2026-11-03 入侵就是改 DCS 里的 pg_hba 开的门。
+// 逻辑在 internal/selfwatch
+const RuleControlPlaneChange = "xdr:control-plane-change"
+
+// RuleCoreAgentSilent 跑着 OpenXDR server 的核心节点上 agent 不再上报：拿下节点后先停 agent 是常见动作。逻辑在 internal/selfwatch
+const RuleCoreAgentSilent = "xdr:core-agent-silent"
+
 var syntheticTitles = map[string]string{
-	RuleBruteforceSuccess: "Brute Force Success (多次失败后登录成功)",
-	RuleLateralSpray:      "Internal Lateral Password Spray (纳管主机对多台纳管主机口令喷洒)",
-	RuleNewProcess:        "New Process First Seen (新进程首次出现)",
-	RuleBeacon:            "Periodic Beacon to New Destination (新出现的周期外联)",
+	RuleControlPlaneChange: "OpenXDR Control Plane Config Changed (平台控制面配置被改)",
+	RuleCoreAgentSilent:    "Core Node Agent Silent (平台节点 agent 停止上报)",
+	RuleBruteforceSuccess:  "Brute Force Success (多次失败后登录成功)",
+	RuleLateralSpray:       "Internal Lateral Password Spray (纳管主机对多台纳管主机口令喷洒)",
+	RuleNewProcess:         "New Process First Seen (新进程首次出现)",
+	RuleBeacon:             "Periodic Beacon to New Destination (新出现的周期外联)",
 }
 
 // AuthorOf 规则作者，没有写或规则已不在返回空
