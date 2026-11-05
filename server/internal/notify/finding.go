@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,13 +21,17 @@ import (
 // sweepFindings 只通知服务端已验证的持续资源风险，不依据模型标题、严重度或普通策略阻塞打扰人。
 // 发送成功和落库无法原子提交；崩溃或并发计划变化时可能重推，完整快照 CAS 只保证不覆盖新状态。
 func (n *Notifier) sweepFindings(ctx context.Context) error {
-	target := n.Settings.Load(ctx)
+	now := time.Now()
+	target, cutoff, err := n.findingTarget(ctx)
+	if err != nil {
+		return err
+	}
 	if target.URL == "" {
 		n.start = time.Time{}
 		return nil
 	}
-	now := time.Now()
-	if n.start.IsZero() {
+	if cutoff.IsZero() {
+		cutoff = now
 		n.start = now
 	}
 	// 固定探针确认的持续紧急风险由服务端定为5级，沿用当前渠道数值门槛。
@@ -37,7 +42,7 @@ func (n *Notifier) sweepFindings(ctx context.Context) error {
 		col := s.C(finding.FieldWork)
 		s.Where(sql.ExprP(fmt.Sprintf(`%[1]s->>'version' = '2' AND %[1]s->>'risk_kind' IN ('disk_pressure','memory_pressure') AND %[1]s->>'escalated_at' IS NOT NULL AND %[1]s->>'escalation_notified_at' IS NULL`, col)))
 		s.Where(sql.P(func(b *sql.Builder) {
-			b.WriteString("(" + col + "->>'escalated_at')::timestamptz >= ").Arg(n.start).WriteString(" AND (" + col + "->>'risk_observed_at')::timestamptz >= ").Arg(now.Add(-10 * time.Minute))
+			b.WriteString("(" + col + "->>'escalated_at')::timestamptz >= ").Arg(cutoff).WriteString(" AND (" + col + "->>'risk_observed_at')::timestamptz >= ").Arg(now.Add(-10 * time.Minute))
 		}))
 	}).Order(ent.Asc(finding.FieldLastSeen), ent.Asc(finding.FieldID)).Limit(20).All(ctx)
 	if err != nil {
@@ -47,7 +52,7 @@ func (n *Notifier) sweepFindings(ctx context.Context) error {
 	for _, f := range rows {
 		now = time.Now()
 		var w findings.Work
-		if json.Unmarshal(f.Work, &w) != nil || !validFindingEscalation(f, &w, n.start, now) {
+		if json.Unmarshal(f.Work, &w) != nil || !validFindingEscalation(f, &w, cutoff, now) {
 			continue
 		}
 		valid, err := n.findingRiskReceipt(ctx, f, &w, now)
@@ -92,6 +97,23 @@ func (n *Notifier) sweepFindings(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// findingTarget 使用持久配置的激活边界，避免 HA 接管把尚未送达的合法升级错当历史。
+// 仅从未保存过配置时沿用环境默认值与进程起点；读取失败或损坏不能退回其他目标。
+func (n *Notifier) findingTarget(ctx context.Context) (Target, time.Time, error) {
+	row, err := n.Settings.DB.Setting.Get(ctx, settingKey)
+	if ent.IsNotFound(err) {
+		return n.Settings.Default, n.start, nil
+	}
+	if err != nil {
+		return Target{}, time.Time{}, fmt.Errorf("读取运维风险通知配置失败: %w", err)
+	}
+	var target *Target
+	if json.Unmarshal(row.Value, &target) != nil || target == nil || row.UpdatedAt.IsZero() {
+		return Target{}, time.Time{}, errors.New("运维风险通知配置损坏，停止发送")
+	}
+	return *target, row.UpdatedAt, nil
 }
 
 func findingAssetScope() predicate.Finding {

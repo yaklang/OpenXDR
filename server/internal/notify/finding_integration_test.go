@@ -5,6 +5,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -324,5 +325,114 @@ func TestFindingNoticeMemoryPressureContinuesAIOwnership(t *testing.T) {
 	got := f.db.Finding.GetX(f.ctx, f.f.ID)
 	if sent.Load() != 1 || got.WorkOwner != "ai" || got.Status != "open" || f.work(t).EscalationNotifiedAt == nil {
 		t.Fatal("资源紧急通知不能停止AI跟进或假结案")
+	}
+}
+
+func TestFindingNoticePersistedActivationSurvivesHATakeover(t *testing.T) {
+	f := newFindingNotice(t)
+	var sent atomic.Int64
+	var fail atomic.Bool
+	fail.Store(true)
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sent.Add(1)
+		if fail.Load() {
+			w.WriteHeader(http.StatusBadGateway)
+		}
+	}))
+	defer hook.Close()
+	first := f.notifier(hook.URL)
+	if err := first.Settings.Save(f.ctx, Target{URL: hook.URL, Format: "generic"}); err != nil {
+		t.Fatal(err)
+	}
+	activation := f.now.Add(-time.Hour)
+	f.db.Setting.UpdateOneID(settingKey).SetUpdatedAt(activation).ExecX(f.ctx)
+	// 新leader的进程起点晚于尚未发送的升级，但同一渠道已在此前持续启用。
+	first.start = f.now
+	if err := first.sweepFindings(f.ctx); err == nil {
+		t.Fatal("第一次渠道失败应保留待通知状态")
+	}
+	if sent.Load() != 1 || f.work(t).EscalationNotifiedAt != nil {
+		t.Fatal("接管把合法旧升级吞掉，或失败被标成功")
+	}
+	fail.Store(false)
+	takeover := f.notifier("http://fallback.invalid")
+	takeover.start = time.Now()
+	if err := takeover.sweepFindings(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if sent.Load() != 2 || f.work(t).EscalationNotifiedAt == nil {
+		t.Fatal("新leader未重试同一持久渠道的合法升级")
+	}
+}
+
+func TestFindingNoticeSavingNewChannelDoesNotBackfill(t *testing.T) {
+	f := newFindingNotice(t)
+	var oldSent, newSent atomic.Int64
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { oldSent.Add(1) }))
+	defer old.Close()
+	fresh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { newSent.Add(1) }))
+	defer fresh.Close()
+	n := f.notifier(old.URL)
+	if err := n.Settings.Save(f.ctx, Target{URL: old.URL, Format: "generic"}); err != nil {
+		t.Fatal(err)
+	}
+	f.db.Setting.UpdateOneID(settingKey).SetUpdatedAt(f.now.Add(-time.Hour)).ExecX(f.ctx)
+	if err := n.Settings.Save(f.ctx, Target{URL: fresh.URL, Format: "generic"}); err != nil {
+		t.Fatal(err)
+	}
+	if !f.db.Setting.GetX(f.ctx, settingKey).UpdatedAt.After(*f.w.EscalatedAt) {
+		t.Fatal("测试未建立新渠道激活边界")
+	}
+	if err := n.sweepFindings(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if oldSent.Load() != 0 || newSent.Load() != 0 || f.work(t).EscalationNotifiedAt != nil {
+		t.Fatal("新渠道不得补发旧升级或记成功")
+	}
+}
+
+func TestFindingNoticePersistedOffOrCorruptDoesNotUseFallback(t *testing.T) {
+	for _, mode := range []string{"off", "corrupt"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFindingNotice(t)
+			var sent atomic.Int64
+			hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { sent.Add(1) }))
+			defer hook.Close()
+			n := f.notifier(hook.URL)
+			if err := n.Settings.Save(f.ctx, Target{}); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "corrupt" {
+				f.db.Setting.UpdateOneID(settingKey).SetValue(json.RawMessage(`[]`)).ExecX(f.ctx)
+			}
+			err := n.sweepFindings(f.ctx)
+			if mode == "corrupt" && err == nil {
+				t.Fatal("持久配置损坏应返回错误并拒绝发送")
+			}
+			if mode == "off" && err != nil {
+				t.Fatal(err)
+			}
+			if sent.Load() != 0 || f.work(t).EscalationNotifiedAt != nil {
+				t.Fatal("持久off/坏配置不能回退到环境目标或伪记成功")
+			}
+		})
+	}
+}
+
+func TestFindingNoticeConfigurationReadFailureDoesNotUseFallback(t *testing.T) {
+	f := newFindingNotice(t)
+	var sent atomic.Int64
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { sent.Add(1) }))
+	defer hook.Close()
+	n := f.notifier(hook.URL)
+	unavailable := errors.New("settings unavailable")
+	f.db.Setting.Intercept(ent.InterceptFunc(func(next ent.Querier) ent.Querier {
+		return ent.QuerierFunc(func(ctx context.Context, q ent.Query) (ent.Value, error) { return nil, unavailable })
+	}))
+	if err := n.sweepFindings(f.ctx); !errors.Is(err, unavailable) {
+		t.Fatal("配置读取错误必须原样拒绝，不能切换环境目标", err)
+	}
+	if sent.Load() != 0 || f.work(t).EscalationNotifiedAt != nil {
+		t.Fatal("配置读取失败却回退发出或记成功")
 	}
 }
