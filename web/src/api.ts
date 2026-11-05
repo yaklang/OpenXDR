@@ -247,6 +247,16 @@ export async function resolveIncidents(ids: string[], status: 'closed' | 'false_
 
 // 运维待办：巡检 AI 登记与复查；人标已处理或忽略（须写原因，忽略原因会告诉 AI）
 export interface FindingWork {
+  version?: number
+  investigation_attempts?: number
+  repair_attempts?: number
+  verification_attempts?: number
+  transport_failures?: number
+  evidence_at?: string
+  evidence_stale?: boolean
+  risk_kind?: string
+  risk_since?: string
+  escalated_at?: string
   stage?: string
   plan?: string
   wake_on?: string

@@ -44,6 +44,7 @@ function FindingWorkSummary({ finding: f }: { finding: FindingRow }) {
       <Tag color={f.workOwner === 'ai' ? 'blue' : f.workOwner === 'human' ? 'orange' : 'default'}>{f.workOwner === 'ai' ? t('incidentWorkAI') : f.workOwner === 'human' ? t('incidentWorkHuman') : '—'}</Tag>
       {f.status === 'open' && f.work?.stage && <Typography.Text type="secondary">{stages[f.work.stage] ?? f.work.stage}</Typography.Text>}
     </Space>
+    {f.status === 'open' && f.work?.evidence_stale && <Tag color="warning">{t('findingWorkEvidenceStale')}</Tag>}
     {f.status === 'open' && f.workNextCheckAt && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t('incidentWorkNextCheck')}: {fmtTime(f.workNextCheckAt)}</Typography.Text>}
   </Space>
 }
@@ -52,13 +53,32 @@ function FindingWorkDetails({ finding: f, onCommand }: { finding: FindingRow; on
   const { t } = useI18n()
   const w = f.work
   if (!w) return null
-  const blockers: Record<string, string> = { permission: t('findingWorkPermission'), unsupported: t('findingWorkUnsupported') }
+  const blockers: Record<string, string> = {
+    permission: t('findingWorkPermission'),
+    unsupported: t('findingWorkUnsupported'),
+    policy_required: t('findingWorkPolicyRequired'),
+    maintenance_window_required: t('findingWorkMaintenanceWindow'),
+    manual_business_decision: t('findingWorkBusinessDecision'),
+    legacy_decommission_confirm: t('findingWorkDecommission'),
+    external_dependency: t('findingWorkExternalDependency'),
+  }
+  const risks: Record<string, string> = { disk_pressure: t('findingWorkDiskPressure'), memory_pressure: t('findingWorkMemoryPressure') }
+  // 新版 JSON 省略零值；旧数据缺少独立计数时保留未知，不把调查轮次冒充修复次数。
+  const count = (value: number | undefined) => value ?? (w.version != null && w.version >= 2 ? 0 : t('findingWorkNotRecorded'))
   const wake: Record<string, string> = { new_observation_or_next_check: t('findingWorkObservation'), recurrence: t('findingWorkRecurrence') }
   return <>
     <Descriptions column={1} size="small">
       {(w.original_problem && w.original_problem !== f.detail || w.original_title && w.original_title !== f.title) && <Descriptions.Item label={t('findingWorkOriginal')}><Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>{w.original_title && `${w.original_title}\n`}{w.original_problem}</Typography.Paragraph></Descriptions.Item>}
       {w.plan && <Descriptions.Item label={t('findingWorkPlan')}>{w.plan}</Descriptions.Item>}
-      <Descriptions.Item label={t('incidentWorkAttempts')}>{f.workAttempts ?? '—'}</Descriptions.Item>
+      <Descriptions.Item label={t('findingWorkInvestigations')}>{count(w.investigation_attempts ?? f.workAttempts)}</Descriptions.Item>
+      <Descriptions.Item label={t('findingWorkRepairs')}>{count(w.repair_attempts)}</Descriptions.Item>
+      <Descriptions.Item label={t('findingWorkVerifications')}>{count(w.verification_attempts)}</Descriptions.Item>
+      <Descriptions.Item label={t('findingWorkTransportFailures')}>{count(w.transport_failures)}</Descriptions.Item>
+      {w.evidence_at && <Descriptions.Item label={t('findingWorkEvidenceAt')}>{fmtTime(w.evidence_at)}</Descriptions.Item>}
+      {w.evidence_stale && <Descriptions.Item label={t('findingWorkEvidenceStatus')}><Typography.Text type="warning">{t('findingWorkEvidenceStale')}</Typography.Text></Descriptions.Item>}
+      {w.risk_kind && <Descriptions.Item label={t('findingWorkRisk')}>{risks[w.risk_kind] ?? w.risk_kind}</Descriptions.Item>}
+      {w.risk_since && <Descriptions.Item label={t('findingWorkRiskSince')}>{fmtTime(w.risk_since)}</Descriptions.Item>}
+      {w.escalated_at && <Descriptions.Item label={t('findingWorkEscalatedAt')}>{fmtTime(w.escalated_at)}</Descriptions.Item>}
       {w.blocker && <Descriptions.Item label={t('findingWorkBlocker')}>{blockers[w.blocker] ?? w.blocker}</Descriptions.Item>}
       {w.wake_on && <Descriptions.Item label={t('incidentWorkWake')}>{wake[w.wake_on] ?? w.wake_on}</Descriptions.Item>}
       {f.workSessionId && <Descriptions.Item label={t('findingWorkSession')}><Link to={`/chat/${f.workSessionId}`}>{t('openSession')}</Link></Descriptions.Item>}

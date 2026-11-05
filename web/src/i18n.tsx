@@ -2,6 +2,25 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 
 // 全部界面文案。自制轻量字典：英文由 satisfies 约束，缺键编译不过
 const zh = {
+  findingWorkInvestigations: "调查次数",
+  findingWorkRepairs: "修复尝试次数",
+  findingWorkVerifications: "效果验证次数",
+  findingWorkTransportFailures: "通信失败次数",
+  findingWorkNotRecorded: "未记录",
+  findingWorkEvidenceAt: "证据采集时间",
+  findingWorkEvidenceStatus: "证据状态",
+  findingWorkEvidenceStale: "证据已过期，需重新取证",
+  findingWorkRisk: "待处理风险",
+  findingWorkRiskSince: "风险记录起始时间",
+  findingWorkDiskPressure: "磁盘容量压力",
+  findingWorkMemoryPressure: "内存压力",
+  findingWorkEscalatedAt: "升级处理时间",
+  findingWorkPolicyRequired: "需明确修复授权策略",
+  findingWorkMaintenanceWindow: "需安排维护窗口",
+  findingWorkBusinessDecision: "需人工作出业务决策",
+  findingWorkDecommission: "需确认历史服务是否退役",
+  findingWorkExternalDependency: "需协调外部依赖",
+
   findingWorkColumn: "负责人 / 跟进",
   findingWorkAllOwners: "全部负责人",
   findingWorkPlan: "跟进计划",
@@ -1990,6 +2009,25 @@ const zh = {
 export type MsgKey = keyof typeof zh
 
 const en = {
+  findingWorkInvestigations: "Investigation attempts",
+  findingWorkRepairs: "Repair attempts",
+  findingWorkVerifications: "Effect verification attempts",
+  findingWorkTransportFailures: "Transport failures",
+  findingWorkNotRecorded: "Not recorded",
+  findingWorkEvidenceAt: "Evidence collected at",
+  findingWorkEvidenceStatus: "Evidence status",
+  findingWorkEvidenceStale: "Evidence is stale; collect new evidence",
+  findingWorkRisk: "Risk requiring follow-up",
+  findingWorkRiskSince: "Risk recorded since",
+  findingWorkDiskPressure: "Disk capacity pressure",
+  findingWorkMemoryPressure: "Memory pressure",
+  findingWorkEscalatedAt: "Escalated for handling at",
+  findingWorkPolicyRequired: "Explicit repair authorization policy required",
+  findingWorkMaintenanceWindow: "Maintenance window required",
+  findingWorkBusinessDecision: "Human business decision required",
+  findingWorkDecommission: "Confirm whether the legacy service is decommissioned",
+  findingWorkExternalDependency: "External dependency coordination required",
+
   findingWorkColumn: "Owner / follow-up",
   findingWorkAllOwners: "All owners",
   findingWorkPlan: "Follow-up plan",
