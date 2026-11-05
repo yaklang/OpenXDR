@@ -90,8 +90,8 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/commands?incidentId=&assetId=&view=summary` | 指令历史，可按事件或主机筛选；传 `page`（1–100000）和 `pageSize`（1–100，默认 20）返回 `{items,total}`，不传 `page` 保持最多 100 条数组。控制台使用 `summary`，不读取或返回 `cmd/stdout/stderr`，保留结果摘要与检测关联。省略 `view` 或使用 `full` 保留完整返回；其他值返回 400 |
-| GET | `/api/commands/{id}/verifications` | 同指令可见范围；最近 100 条复核记录，见 [响应复核](response-verification.md) |
-| POST | `/api/commands/{id}/verifications` | 组 analyst（或全局 admin）；提交复核判断，留存证据，见 [响应复核](response-verification.md) |
+| GET | `/api/commands/{id}/verifications` | 同指令可见范围；最近 100 条人工/系统/AI 来源的复核记录，见 [响应复核](response-verification.md) |
+| POST | `/api/commands/{id}/verifications` | 组 analyst（或全局 admin）；提交人工复核判断，固定 human 来源并留存证据，见 [响应复核](response-verification.md) |
 | GET | `/api/commands/{id}/verifications/{verificationId}` | 同指令可见范围；单条复核的完整留存快照，包括事件原文 |
 | GET | `/api/commands/{id}` | 指令详情，按资产组校验权限，包含完整命令与输出 |
 | POST | `/api/commands` | `{"kind":"kill_process\|isolate_host\|unisolate_host\|exec\|block_network\|unblock_network\|quarantine_file\|restore_file\|disable_account\|enable_account\|isolate_container\|unisolate_container","assetId","incidentId","pid","target"}`（一律真执行，没有演练模式）；封锁、隔离文件、锁定账号、隔离容器必须带 `target`（IP / 网段 / 域名、文件绝对路径、账号名、容器 ID：docker 系 12–64 位十六进制或 LXC VMID），不合法或会封到 server 自己时 400；`exec` 另带 `"cmd"`（必填）与 `"timeoutMs"`（0 = agent 默认 60s），结果回写 `exitCode` / `stdout` / `stderr` / `truncated`（各截断到 64KB） |

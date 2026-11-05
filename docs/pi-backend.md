@@ -22,7 +22,7 @@
 | `SANDBOX_KEY` | 空 | 与 sandboxd 的共享密钥，至少 32 个字符 |
 | `SANDBOX_CA_FILE` | 空 | 校验 sandboxd 证书的 CA；空用系统根证书 |
 
-Pi 不注册内置文件和 shell 工具，平台只暴露 exec/track/ignore/identify/egress/memories/remember/forget/suppress/propose_close/report，以及已配置组的 query。suppress 提交抑制草案，由 AI 审计员（`server/internal/suppressreview`）当场评审，批准才生效、拒绝附理由回给模型（审计员调不通时草案待评审、后台自动重试），见 [检测链路 · 抑制](detection.md#抑制serverinternalsuppress)。identify 把对某个监听服务的调查结论写回资产（来源 investigation，不覆盖人工标注），见 [资产图谱与攻击面](asset-map.md#服务说明与调查)；egress 同样写回对某个公网外联的调查结论（只收这台主机确实连过的公网地址）。
+Pi 不注册内置文件和 shell 工具，平台只暴露 exec/command_status/verify_command/track/ignore/identify/egress/memories/remember/forget/suppress/propose_close/report，以及已配置组的 query。suppress 提交抑制草案，由 AI 审计员（`server/internal/suppressreview`）当场评审，批准才生效、拒绝附理由回给模型（审计员调不通时草案待评审、后台自动重试），见 [检测链路 · 抑制](detection.md#抑制serverinternalsuppress)。identify 把对某个监听服务的调查结论写回资产（来源 investigation，不覆盖人工标注），见 [资产图谱与攻击面](asset-map.md#服务说明与调查)；egress 同样写回对某个公网外联的调查结论（只收这台主机确实连过的公网地址）。
 没有新增对外工具执行端口，身份、组和来源均由 Go 绑定，模型不能修改；命令一律真执行，没有演练模式。
 每轮上下文包含本组最多 200 台资产的 UUID、主机名和 OS；超出会标注截断。
 每轮最多「组内主机数 × 20 + 遗留待办数 + 32」次模型调用（32–256），预算写进系统提示让模型留出提交报告的余量，每次输出最多 8192 token。exec 送入模型的 stdout/stderr 各最多 16 KiB，截断标记为 `truncated=true`，Command 记录仍保留原始回执。GLM 显式关闭模板 thinking。未实现费用预算或自动历史压缩。
@@ -405,10 +405,11 @@ PDF 最多同时渲染 2 份，另容纳 8 个等待请求。队列满时返回�
 以上是单节点限制，多节点总容量随节点数增长。定时任务另有全集群并发上限 `SCHEDULE_MAX_RUNNING`
 （见「错峰与并发上限」），超出的目标排队等下一次检查，不为排队的组提前建运行记录或启动 goroutine。
 
-会话入库保存固定执行期限 `run_expires_at`：总超时包含排队时间，并额外留 1 分钟清理宽限。
-每分钟将超期且仍为 `running` 的会话和关联任务运行标记为失败，不重放任何命令；
-其他节点尚未到期的会话不受影响。升级前没有期限的旧记录，等待本节点一个完整运行上限
-及清理宽限后再恢复；升级时应使用一致的 `PI_TIMEOUT_SECONDS` 并完成所有节点替换。
+对话使用固定执行期限；定时任务的 `run_expires_at` 为 3 分钟短租约，每分钟由唯一 `run_owner` 续期，单次续期最多等待 10 秒。
+`run_deadline_at` 保留该会话的固定总期限和清理宽限，续租不延长它。每次调用工具与审批后执行前检查会话状态、取消及期限；旧执行者不能继续写入或覆盖接管后的任务。
+只有受信入口创建、硬期限未过且 `run_replay_safe=true` 的纯只读任务可在中断后安全重跑；任何可能有副作用的工具调用前先持久化置假，空 commands 表或看似只读的消息历史不能作为证明。旧记录默认不具备证明，unknown 指令不重放。
+恢复器每分钟清理过期会话，并仅将符合上述条件的任务交调度器重跑；取消、已有副作用意图及来源不明的旧任务保守记失败。
+升级前没有期限的旧记录等待本节点一个完整运行上限及清理宽限；升级时应使用一致的 `PI_TIMEOUT_SECONDS` 并完成所有节点替换。
 
 报告独立 HTML 自带 CSP，只允许内联样式及 data 图片；HTTP 页面额外启用 sandbox。
 PDF 的 Chromium 同时设置阻断代理（包括 loopback）与 DNS 规则，禁止报告里的 IP 或域名外链请求。
