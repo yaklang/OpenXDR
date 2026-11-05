@@ -3,6 +3,7 @@
 package agentchat
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -260,5 +261,312 @@ func TestEndpointEvidenceEndToEndWithTriageAndFailClosedBoundaries(t *testing.T)
 		Command:  "journalctl --no-pager --utc -n 40 --since '2026-11-05 05:45:00' --until '2026-11-05 06:15:00' -u ssh -u sshd -t sshd -t sudo -t su",
 	}); err == nil {
 		t.Fatal("资产转组后应拒绝读取回执")
+	}
+}
+
+func TestEndpointEvidencePackageAndContainerTemplatesAndFailClosedBoundaries(t *testing.T) {
+	ctx, db := testdb.New(t)
+	hub := response.NewHub(db, true)
+	gate := &commandgate.Gate{DB: db, Hub: hub, ApprovalTimeout: 2 * time.Second}
+	svc := &Service{DB: db, Gate: gate}
+
+	group := db.Group.Create().SetName("ev-template-group").SaveX(ctx)
+	if err := commandgate.SeedDefaults(ctx, db, group.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	agentID := uuid.New()
+	inbox := hub.Attach(agentID)
+	defer hub.Detach(agentID, inbox)
+
+	host := db.Asset.Create().SetHostname("pve1").SetGroupID(group.ID).SetOs("linux").SetAgentID(agentID).SaveX(ctx)
+	peerHost := db.Asset.Create().SetHostname("peer-linux").SetGroupID(group.ID).SetOs("linux").SetAgentID(uuid.New()).SaveX(ctx)
+
+	var reviewerCalls int
+	reviewSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model    string           `json:"model"`
+			Messages []triage.Message `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		reviewerCalls++
+		if body.Model != "qwen3-template-reviewer" {
+			http.Error(w, "wrong model", http.StatusBadRequest)
+			return
+		}
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"approve\":true,\"reason\":\"受控只读包管理与单容器Web日志模板核验通过\"}"}}]}`))
+	}))
+	defer reviewSrv.Close()
+
+	svc.AI = func() (string, string, string) {
+		return reviewSrv.URL, "test-key", "qwen3-template-reviewer"
+	}
+	gate.Reviewer = (&commandreview.Reviewer{
+		DB:       db,
+		Endpoint: func() (string, string) { return reviewSrv.URL, "test-key" },
+	}).Review
+	db.CommandPolicy.Create().SetGroupID(group.ID).SetOrigin(commandpolicy.OriginAi).SetMode(commandpolicy.ModeDeny).SetPattern(`\b(?:journalctl|docker)\b`).SaveX(ctx)
+
+	alertTs := time.Date(2026, 11, 5, 7, 0, 0, 0, time.UTC)
+
+	// 1. 容器模板负例：合成告警（无 event_id）、缺失原始事件、伪造 source（非 agent）、跨资产事件、混合多容器、容器+宿主机混合、注入 UID/VMID 全部 fail-closed
+	badCases := []struct {
+		name  string
+		setup func() uuid.UUID
+	}{
+		{
+			name: "synthetic_alert_without_event",
+			setup: func() uuid.UUID {
+				inc := db.Incident.Create().SetTitle("合成告警").SetStatus("open").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+				db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(host.ID).SetRuleID("synth.rule").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+				return inc.ID
+			},
+		},
+		{
+			name: "missing_raw_event_row",
+			setup: func() uuid.UUID {
+				inc := db.Incident.Create().SetTitle("缺失原始事件").SetStatus("open").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+				db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(host.ID).SetEventID(uuid.New()).SetRuleID("missing.ev").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+				return inc.ID
+			},
+		},
+		{
+			name: "forged_non_agent_source",
+			setup: func() uuid.UUID {
+				inc := db.Incident.Create().SetTitle("伪造syslog来源").SetStatus("open").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+				ev := db.Event.Create().SetAssetID(host.ID).SetSource("syslog").SetClassUID(4001).SetTs(alertTs).
+					SetRaw(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203","name":"gateway"}}`)).SaveX(ctx)
+				db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(host.ID).SetEventID(ev.ID).SetRuleID("forged.src").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+				return inc.ID
+			},
+		},
+		{
+			name: "cross_asset_event_mismatch",
+			setup: func() uuid.UUID {
+				inc := db.Incident.Create().SetTitle("跨资产事件").SetStatus("open").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+				ev := db.Event.Create().SetAssetID(peerHost.ID).SetSource("agent").SetClassUID(4001).SetTs(alertTs).
+					SetRaw(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203","name":"gateway"}}`)).SaveX(ctx)
+				db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(host.ID).SetEventID(ev.ID).SetRuleID("cross.asset").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+				return inc.ID
+			},
+		},
+		{
+			name: "mixed_two_docker_containers",
+			setup: func() uuid.UUID {
+				inc := db.Incident.Create().SetTitle("混合双容器歧义").SetStatus("open").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+				ev1 := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(1007).SetTs(alertTs).
+					SetRaw(json.RawMessage(`{"container":{"runtime":"docker","uid":"978b4e7c6f53","name":"ctf0-web"}}`)).SaveX(ctx)
+				ev2 := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(4001).SetTs(alertTs).
+					SetRaw(json.RawMessage(`{"container":{"runtime":"docker","uid":"fabb985cea91","name":"ctf0-player"}}`)).SaveX(ctx)
+				db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(host.ID).SetEventID(ev1.ID).SetRuleID("mix.1").SetSeverity(4).SetTs(alertTs).SaveX(ctx)
+				db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(host.ID).SetEventID(ev2.ID).SetRuleID("mix.2").SetSeverity(4).SetTs(alertTs).SaveX(ctx)
+				return inc.ID
+			},
+		},
+		{
+			name: "mixed_container_and_host_event",
+			setup: func() uuid.UUID {
+				inc := db.Incident.Create().SetTitle("容器与宿主机混合").SetStatus("open").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+				ev1 := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(1007).SetTs(alertTs).
+					SetRaw(json.RawMessage(`{"container":{"runtime":"docker","uid":"978b4e7c6f53","name":"ctf0-web"}}`)).SaveX(ctx)
+				ev2 := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(1007).SetTs(alertTs).
+					SetRaw(json.RawMessage(`{"process":{"name":"bash"}}`)).SaveX(ctx)
+				db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(host.ID).SetEventID(ev1.ID).SetRuleID("mix.c").SetSeverity(4).SetTs(alertTs).SaveX(ctx)
+				db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(host.ID).SetEventID(ev2.ID).SetRuleID("mix.h").SetSeverity(4).SetTs(alertTs).SaveX(ctx)
+				return inc.ID
+			},
+		},
+		{
+			name: "injected_container_uid",
+			setup: func() uuid.UUID {
+				inc := db.Incident.Create().SetTitle("注入容器ID").SetStatus("open").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+				ev := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(4001).SetTs(alertTs).
+					SetRaw(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203; id","name":"gateway"}}`)).SaveX(ctx)
+				db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(host.ID).SetEventID(ev.ID).SetRuleID("inj.uid").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+				return inc.ID
+			},
+		},
+	}
+
+	for _, tc := range badCases {
+		incID := tc.setup()
+		var gotToolResp map[string]any
+		turns := 0
+		llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Messages []triage.Message `json:"messages"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			turns++
+			if turns == 1 {
+				w.Write([]byte(fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call-bad","type":"function","function":{"name":"collect_endpoint_evidence","arguments":%q}}]}}]}`,
+					fmt.Sprintf(`{"asset_id":%q,"template":"linux_container_web_logs"}`, host.ID))))
+				return
+			}
+			for _, m := range req.Messages {
+				if m.Role == "tool" && m.ToolCallID == "call-bad" {
+					_ = json.Unmarshal([]byte(m.Content), &gotToolResp)
+				}
+			}
+			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"verdict\":\"suspicious\",\"confidence\":60,\"summary\":\"容器日志取证因边界不满足被拒绝\\n保留人工补证边界。\",\"kill_chain\":[],\"action_codes\":[\"collect_original_records\"],\"evidence_claims\":[{\"evidence_id\":\"query-1\",\"field\":\"status\",\"value\":\"error\"}]}"}}]}`))
+		}))
+		eng := &triage.Engine{
+			DB:               db,
+			LLM:              triage.NewLLM(llmSrv.URL, "triage-model", "", 5*time.Second),
+			Interval:         20 * time.Millisecond,
+			EndpointEvidence: svc.CollectEndpointEvidence,
+		}
+		runCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		done := make(chan struct{})
+		go func() { defer close(done); eng.Run(runCtx) }()
+		for {
+			if db.Incident.GetX(ctx, incID).Status == "triaged" {
+				break
+			}
+			select {
+			case <-runCtx.Done():
+				t.Fatalf("case %s timeout", tc.name)
+			case <-time.After(15 * time.Millisecond):
+			}
+		}
+		cancel()
+		<-done
+		llmSrv.Close()
+		if gotToolResp["status"] != "error" || len(inbox) != 0 || db.Command.Query().CountX(ctx) != 0 {
+			t.Fatalf("case %s 应 fail-closed 且零下发: resp=%+v commands=%d", tc.name, gotToolResp, db.Command.Query().CountX(ctx))
+		}
+	}
+
+	// 2. 正例 A：pve1 单 LXC 容器（同时含 1007 进程与 4001 网络事件，container={runtime:lxc,uid:203}）Web 日志模板
+	//    + 包管理模板 linux_package_history 返回非零退出码与 EPERM stderr（验证绝不吞掉 stderr 和退出码）
+	incOK := db.Incident.Create().SetTitle("pve1 LXC203 gateway 流量与包管理核实").SetStatus("open").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+	evLXC1 := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(1007).SetTs(alertTs).
+		SetRaw(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203","name":"gateway"},"process":{"executable":"/usr/bin/caddy"}}`)).SaveX(ctx)
+	evLXC2 := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(4001).SetTs(alertTs.Add(2 * time.Minute)).
+		SetRaw(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203","name":"gateway"}}`)).SaveX(ctx)
+	db.Alert.Create().SetIncidentID(incOK.ID).SetAssetID(host.ID).SetEventID(evLXC1.ID).SetRuleID("lxc.proc").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+	db.Alert.Create().SetIncidentID(incOK.ID).SetAssetID(host.ID).SetEventID(evLXC2.ID).SetRuleID("lxc.net").SetSeverity(3).SetTs(alertTs).SetLastTs(alertTs.Add(2 * time.Minute)).SaveX(ctx)
+
+	agentCtx, stopAgent := context.WithCancel(ctx)
+	agentDone := make(chan struct{})
+	var seenCmds []string
+	go func() {
+		defer close(agentDone)
+		for {
+			select {
+			case <-agentCtx.Done():
+				return
+			case cmd := <-inbox:
+				if cmd == nil {
+					continue
+				}
+				seenCmds = append(seenCmds, cmd.Cmd)
+				if strings.HasPrefix(cmd.Cmd, "pct exec 203 -- journalctl ") {
+					_ = hub.Complete(agentCtx, agentID, &pb.CommandResult{
+						CommandId: cmd.Id,
+						Status:    pb.CommandResult_SUCCEEDED,
+						ExitCode:  0,
+						Stdout:    "Nov 05 07:01:00 gateway caddy[101]: 27.18.40.154 GET / HTTP/3.0 200",
+					})
+				} else if strings.Contains(cmd.Cmd, "/var/log/dpkg.log") {
+					_ = hub.Complete(agentCtx, agentID, &pb.CommandResult{
+						CommandId: cmd.Id,
+						Status:    pb.CommandResult_FAILED,
+						ExitCode:  1,
+						Stdout:    "-- No entries --",
+						Stderr:    "tail: cannot open '/var/log/apt/history.log' for reading: Permission denied",
+					})
+				}
+			}
+		}
+	}()
+	defer func() { stopAgent(); <-agentDone }()
+
+	var webToolResp, pkgToolResp map[string]any
+	turns := 0
+	llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []triage.Message `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		turns++
+		if turns == 1 {
+			w.Write([]byte(fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[
+				{"id":"call-web","type":"function","function":{"name":"collect_endpoint_evidence","arguments":%q}},
+				{"id":"call-pkg","type":"function","function":{"name":"collect_endpoint_evidence","arguments":%q}}
+			]}}]}`,
+				fmt.Sprintf(`{"asset_id":%q,"template":"linux_container_web_logs"}`, host.ID),
+				fmt.Sprintf(`{"asset_id":%q,"template":"linux_package_history"}`, host.ID),
+			)))
+			return
+		}
+		for _, m := range req.Messages {
+			if m.Role == "tool" && m.ToolCallID == "call-web" {
+				_ = json.Unmarshal([]byte(m.Content), &webToolResp)
+			}
+			if m.Role == "tool" && m.ToolCallID == "call-pkg" {
+				_ = json.Unmarshal([]byte(m.Content), &pkgToolResp)
+			}
+		}
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"verdict\":\"suspicious\",\"confidence\":70,\"summary\":\"LXC203 读取到 Caddy 日志但包管理日志权限拒绝\\n容器日志不证明业务授权，包管理日志读取返回 Permission denied。\",\"kill_chain\":[],\"action_codes\":[\"collect_original_records\"],\"evidence_claims\":[{\"evidence_id\":\"query-1\",\"field\":\"status\",\"value\":\"succeeded\"},{\"evidence_id\":\"query-1\",\"field\":\"template\",\"value\":\"linux_container_web_logs\"},{\"evidence_id\":\"query-2\",\"field\":\"status\",\"value\":\"failed\"}]}"}}]}`))
+	}))
+	defer llmSrv.Close()
+
+	eng := &triage.Engine{
+		DB:               db,
+		LLM:              triage.NewLLM(llmSrv.URL, "triage-model", "", 5*time.Second),
+		Interval:         20 * time.Millisecond,
+		EndpointEvidence: svc.CollectEndpointEvidence,
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	done := make(chan struct{})
+	go func() { defer close(done); eng.Run(runCtx) }()
+	for {
+		if db.Incident.GetX(ctx, incOK.ID).Status == "triaged" {
+			break
+		}
+		select {
+		case <-runCtx.Done():
+			t.Fatal("LXC + package history 完整研判超时")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-done
+
+	if len(seenCmds) != 2 || reviewerCalls != 2 {
+		t.Fatalf("应恰好下发 2 条受控模板命令并经真实 Reviewer 审核 2 次: cmds=%v reviewerCalls=%d", seenCmds, reviewerCalls)
+	}
+	if webToolResp["status"] != "succeeded" || !strings.Contains(fmt.Sprint(webToolResp["stdout"]), "HTTP/3.0 200") ||
+		!strings.Contains(fmt.Sprint(webToolResp["coverage"]), "不证明业务授权") {
+		t.Fatalf("LXC 容器 Web 日志返回异常: %+v", webToolResp)
+	}
+	if pkgToolResp["status"] != "failed" || pkgToolResp["exit_code"] != float64(1) ||
+		!strings.Contains(fmt.Sprint(pkgToolResp["stderr"]), "Permission denied") ||
+		!strings.Contains(fmt.Sprint(pkgToolResp["coverage"]), "不等同完整事发时间窗口") {
+		t.Fatalf("包管理模板必须原样保留失败退出码与 stderr: %+v", pkgToolResp)
+	}
+
+	// 3. 正例 B：单 Docker 容器（1007+4001 同 uid 978b4e7c6f53）生成宿主机 docker logs --timestamps，且重复或 unknown 状态零重放
+	incDocker := db.Incident.Create().SetTitle("单Docker容器日志核实").SetStatus("open").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+	evD1 := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(1007).SetTs(alertTs).
+		SetRaw(json.RawMessage(`{"container":{"runtime":"docker","uid":"978b4e7c6f53","name":"ctf0-web"}}`)).SaveX(ctx)
+	evD2 := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(4001).SetTs(alertTs).
+		SetRaw(json.RawMessage(`{"container":{"runtime":"docker","uid":"978b4e7c6f53","name":"ctf0-web"}}`)).SaveX(ctx)
+	db.Alert.Create().SetIncidentID(incDocker.ID).SetAssetID(host.ID).SetEventID(evD1.ID).SetRuleID("dk.1").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+	db.Alert.Create().SetIncidentID(incDocker.ID).SetAssetID(host.ID).SetEventID(evD2.ID).SetRuleID("dk.2").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+
+	dockerKey := triage.IncidentEvidenceKey(incDocker)
+	dockerCmd := "docker logs --timestamps --since '2026-11-05T06:45:00Z' --until '2026-11-05T07:15:00Z' --tail 40 978b4e7c6f53"
+	dockerCmdID := triage.EndpointEvidenceCommandID(incDocker.ID, dockerKey, 0, host.ID, triage.TemplateLinuxContainerWebLogs)
+	db.Command.Create().SetID(dockerCmdID).SetAssetID(host.ID).SetIncidentID(incDocker.ID).
+		SetKind("exec").SetCmd(dockerCmd).SetStatus("unknown").SetIssuedBy("system").SaveX(ctx)
+
+	resDockerUnknown, err := svc.CollectEndpointEvidence(ctx, triage.EndpointEvidenceRequest{
+		IncidentID: incDocker.ID, EvidenceKey: dockerKey, GroupID: group.ID, AssetID: host.ID,
+		Template: triage.TemplateLinuxContainerWebLogs, Command: dockerCmd,
+	})
+	if err != nil || resDockerUnknown.Status != "unknown" || len(seenCmds) != 2 {
+		t.Fatalf("Docker 模板 unknown 状态必须零重放: res=%+v err=%v seenCmds=%d", resDockerUnknown, err, len(seenCmds))
 	}
 }

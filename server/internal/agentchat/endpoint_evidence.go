@@ -24,7 +24,7 @@ const (
 )
 
 // CollectEndpointEvidence 执行 triage 受控端点只读模板补证：
-//   - 强制校验 commandgate.ReadOnly、Linux 资产、agent 已绑定、事件与资产同组归属；
+//   - 强制校验模板枚举、commandgate.ReadOnly、Linux 资产、agent 已绑定、事件与资产同组归属；
 //   - 按 (incident_id, evidence_version, asset_id, template) 派生确定性 CommandID，
 //     对已有 pending/sent/unknown/终态指令仅查回执，绝不重复生成或重放命令；
 //   - 生成绑定 incident/组/短租约的 system 任务会话，经 Gate.Issue 走完整组权限、名单/AI 审计员、硬拒绝与审计链路。
@@ -34,6 +34,9 @@ func (s *Service) CollectEndpointEvidence(ctx context.Context, req triage.Endpoi
 	}
 	if req.IncidentID == uuid.Nil || req.GroupID == uuid.Nil || req.AssetID == uuid.Nil || req.Template == "" || strings.TrimSpace(req.Command) == "" {
 		return nil, errors.New("端点受控取证请求参数不完整")
+	}
+	if !triage.IsAllowedEndpointEvidenceTemplate(req.Template) {
+		return nil, fmt.Errorf("不支持的端点受控取证模板: %s", req.Template)
 	}
 	if !commandgate.ReadOnly(req.Command) {
 		return nil, errors.New("端点取证命令未通过只读安全校验")
@@ -262,7 +265,7 @@ func (s *Service) recordEndpointEvidenceSessionMessages(ctx context.Context, ses
 	}
 	taskText := fmt.Sprintf("【平台安全事件受控只读补证任务】\n"+
 		"事件 ID：%s\n资产组 ID：%s\n目标主机：%s (%s)\n受控只读模板：%s\n取证时间窗口：%s\n"+
-		"任务目的与边界：平台 AI 研判正在核实该安全事件的缺失遥测，仅限在目标受管 Linux 主机上执行服务端预置的固定只读模板命令以获取当前认证日志片段或进程快照。"+
+		"任务目的与边界：平台 AI 研判正在核实该安全事件的缺失遥测，仅限在目标受管 Linux 主机上执行服务端预置的固定只读模板命令以获取认证日志片段、当前进程快照、包管理历史日志或事件关联单容器的 Web 服务日志。"+
 		"本任务由服务端系统受控生成，不代表原事件操作已获人工批准或合法，严禁修改系统状态或读取密钥文件。",
 		req.IncidentID, req.GroupID, host.Hostname, host.ID, req.Template, windowDesc)
 	intentText := fmt.Sprintf("为补充安全事件 %s 在受管主机 %s (%s) 上的缺失调查上下文，现按固定只读模板 %s 执行只读取证命令（超时 5 秒，只读无副作用）：%s",

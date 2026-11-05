@@ -41,6 +41,9 @@ func TestReadOnlyAccepts(t *testing.T) {
 		`pct exec 203 -- sh -c 'du -sh /var/lib/docker/containers/*/ 2>/dev/null | sort -rh | head -5; docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | head -10' 2>/dev/null`,
 		`pct exec 203 -- cat /etc/caddy/Caddyfile | grep -c reverse_proxy`,
 		`docker exec authentik-server-1 ls /data; pct exec 203 -- docker exec authentik-server-1 cat /etc/hostname`,
+		`journalctl --no-pager --utc -n 25 --since '2026-11-05 05:45:00' --until '2026-11-05 06:15:00' -u apt-daily.service -u apt-daily-upgrade.service -u unattended-upgrades.service -u packagekit.service && tail -n 30 /var/log/dpkg.log /var/log/apt/history.log`,
+		`docker logs --timestamps --since '2026-11-05T05:45:00Z' --until '2026-11-05T06:15:00Z' --tail 40 978b4e7c6f53`,
+		`pct exec 203 -- journalctl --no-pager --utc -n 40 --since '2026-11-05 05:45:00' --until '2026-11-05 06:15:00' -u caddy -u nginx -u apache2 -u httpd`,
 	} {
 		if !ReadOnly(cmd) {
 			t.Errorf("应判为只读：%s", cmd)
