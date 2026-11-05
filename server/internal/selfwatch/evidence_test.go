@@ -95,3 +95,34 @@ func TestHBASummaryTruncationRetainsTailRisk(t *testing.T) {
 		t.Fatalf("截断隐藏了尾部风险：%+v", s)
 	}
 }
+
+func TestHBASummaryCanonicalNetworksAndMasks(t *testing.T) {
+	for _, tc := range []struct {
+		line, address   string
+		world, unparsed bool
+	}{
+		{"host all all 0.0.0.0 0.0.0.0 trust", "0.0.0.0/0", true, false},
+		{"host all all 0.0.0.0 255.255.255.255 trust", "0.0.0.0/32", false, false},
+		{"host all all 10.1.1.17 255.255.255.0 trust", "10.1.1.0/24", false, false},
+		{"host all all 10.1.1.17/0 trust", "0.0.0.0/0", true, false},
+		{"host all all 0:0:0:0:0:0:0:0/0 trust", "::/0", true, false},
+		{"host all all 2001:db8::1 :: trust", "::/0", true, false},
+		{"host all all 2001:db8::17 ffff:ffff:ffff:ffff:: trust", "2001:db8::/64", false, false},
+		{"host all all 127.0.0.1 trust", "127.0.0.1/32", false, false},
+		{"host all all 10.1.1.17 255.0.255.0 trust", "", false, true},
+		{"host all all 2001:db8::1 ffff:0:ffff:: trust", "", false, true},
+		{"host all all 0.0.0.0 :: trust", "", false, true},
+		{"host all all fe80::1%eth0 :: trust", "", false, true},
+	} {
+		t.Run(tc.line, func(t *testing.T) {
+			h := summarizeHBA(tc.line)
+			if (h.Type == "unparsed") != tc.unparsed || h.Address != tc.address {
+				t.Fatalf("错误的地址摘要：%+v", h)
+			}
+			s := summarize("postgresql.pg_hba", []any{tc.line}, true)
+			if (s.WorldRules == 1) != tc.world || (s.UnparsedRules == 1) != tc.unparsed {
+				t.Fatalf("错误的风险计数：%+v", s)
+			}
+		})
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/netip"
 	"sort"
 	"strings"
@@ -210,13 +211,24 @@ func summarizeHBA(line string) hbaSummary {
 		if len(fields) < 5 {
 			return unknown
 		}
-		if _, err := netip.ParsePrefix(fields[3]); err == nil {
-			s.Address = fields[3]
+		if prefix, err := netip.ParsePrefix(fields[3]); err == nil {
+			s.Address = prefix.Masked().String()
 		}
 		if ip, err := netip.ParseAddr(fields[3]); err == nil {
-			s.Address = ip.String()
+			if ip.Zone() != "" {
+				return unknown
+			}
+			s.Address = netip.PrefixFrom(ip, ip.BitLen()).String()
 			if len(fields) > 5 {
-				if _, err := netip.ParseAddr(fields[4]); err == nil {
+				if mask, err := netip.ParseAddr(fields[4]); err == nil {
+					if mask.Zone() != "" || mask.BitLen() != ip.BitLen() {
+						return unknown
+					}
+					ones, bits := net.IPMask(mask.AsSlice()).Size()
+					if bits != ip.BitLen() {
+						return unknown
+					}
+					s.Address = netip.PrefixFrom(ip, ones).Masked().String()
 					method = 5
 				}
 			}
