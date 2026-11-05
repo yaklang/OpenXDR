@@ -580,6 +580,11 @@ func TestEndpointEvidencePackageAndContainerTemplatesAndFailClosedBoundaries(t *
 	if len(seenCmds) != 2 || reviewerCalls != 2 {
 		t.Fatalf("应恰好下发 2 条受控模板命令并经真实 Reviewer 审核 2 次: cmds=%v reviewerCalls=%d", seenCmds, reviewerCalls)
 	}
+	for _, c := range seenCmds {
+		if !strings.Contains(c, " UTC' --until '") || !strings.Contains(c, " UTC'") {
+			t.Fatalf("journalctl 模板命令必须显式携带 UTC 输入后缀: %s", c)
+		}
+	}
 	if webToolResp["status"] != "succeeded" || !strings.Contains(fmt.Sprint(webToolResp["stdout"]), "HTTP/3.0 200") ||
 		!strings.Contains(fmt.Sprint(webToolResp["coverage"]), "不证明业务授权") {
 		t.Fatalf("LXC 容器 Web 日志返回异常: %+v", webToolResp)
@@ -601,7 +606,10 @@ func TestEndpointEvidencePackageAndContainerTemplatesAndFailClosedBoundaries(t *
 
 	dockerKey := triage.IncidentEvidenceKey(incDocker)
 	dockerCmd := "docker logs --timestamps --since '2026-11-05T06:45:00Z' --until '2026-11-05T07:15:00Z' --tail 40 978b4e7c6f53"
-	dockerCmdID := triage.EndpointEvidenceCommandID(incDocker.ID, dockerKey, 0, host.ID, triage.TemplateLinuxContainerWebLogs)
+	dockerCmdID := triage.EndpointEvidenceCommandID(incDocker.ID, dockerKey, 0, host.ID, triage.TemplateLinuxContainerWebLogs, dockerCmd)
+	if dockerCmdID != triage.LegacyEndpointEvidenceCommandID(incDocker.ID, dockerKey, 0, host.ID, triage.TemplateLinuxContainerWebLogs) {
+		t.Fatal("Docker 容器日志模板应保持原确定性 CommandID")
+	}
 	db.Command.Create().SetID(dockerCmdID).SetAssetID(host.ID).SetIncidentID(incDocker.ID).
 		SetKind("exec").SetCmd(dockerCmd).SetStatus("unknown").SetIssuedBy("system").SaveX(ctx)
 
@@ -611,5 +619,107 @@ func TestEndpointEvidencePackageAndContainerTemplatesAndFailClosedBoundaries(t *
 	})
 	if err != nil || resDockerUnknown.Status != "unknown" || len(seenCmds) != 2 {
 		t.Fatalf("Docker 模板 unknown 状态必须零重放: res=%+v err=%v seenCmds=%d", resDockerUnknown, err, len(seenCmds))
+	}
+}
+
+func TestEndpointEvidenceJournalUTCLegacyGuardAndOneTimeUpgrade(t *testing.T) {
+	ctx, db := testdb.New(t)
+	hub := response.NewHub(db, true)
+	gate := &commandgate.Gate{DB: db, Hub: hub, ApprovalTimeout: 2 * time.Second}
+	svc := &Service{
+		DB:   db,
+		Gate: gate,
+		AI:   func() (string, string, string) { return "http://127.0.0.1:9", "k", "qwen3-utc-guard" },
+	}
+
+	group := db.Group.Create().SetName("ev-utc-guard-group").SaveX(ctx)
+	if err := commandgate.SeedDefaults(ctx, db, group.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	agentID := uuid.New()
+	inbox := hub.Attach(agentID)
+	defer hub.Detach(agentID, inbox)
+	host := db.Asset.Create().SetHostname("pve1").SetGroupID(group.ID).SetOs("linux").SetAgentID(agentID).SaveX(ctx)
+
+	alertTs := time.Date(2026, 11, 1, 10, 14, 27, 0, time.UTC)
+	oldCmd := "pct exec 203 -- journalctl --no-pager --utc -n 40 --since '2026-11-01 09:59:27' --until '2026-11-01 11:44:31' -u caddy -u nginx -u apache2 -u httpd"
+	newCmd := "pct exec 203 -- journalctl --no-pager --utc -n 40 --since '2026-11-01 09:59:27 UTC' --until '2026-11-01 11:44:31 UTC' -u caddy -u nginx -u apache2 -u httpd"
+
+	// 1. 旧 legacy 指令处于 unknown / pending / sent 时，严禁自动创建新 @utc-v2 指令
+	for _, legacyStatus := range []string{"unknown", "pending", "sent"} {
+		incBlocked := db.Incident.Create().SetTitle("legacy-" + legacyStatus).SetStatus("triaged").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+		ev := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(4001).SetTs(alertTs).
+			SetRaw(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203","name":"gateway"}}`)).SaveX(ctx)
+		db.Alert.Create().SetIncidentID(incBlocked.ID).SetAssetID(host.ID).SetEventID(ev.ID).SetRuleID("lxc.caddy").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+
+		evKey := triage.IncidentEvidenceKey(incBlocked)
+		legID := triage.LegacyEndpointEvidenceCommandID(incBlocked.ID, evKey, 0, host.ID, triage.TemplateLinuxContainerWebLogs)
+		newID := triage.EndpointEvidenceCommandID(incBlocked.ID, evKey, 0, host.ID, triage.TemplateLinuxContainerWebLogs, newCmd)
+		if legID == newID {
+			t.Fatal("LXC Web journal 模板必须生成区别于 legacy 的新 ID")
+		}
+		db.Command.Create().SetID(legID).SetAssetID(host.ID).SetIncidentID(incBlocked.ID).
+			SetKind("exec").SetCmd(oldCmd).SetStatus(legacyStatus).SetIssuedBy("system").SaveX(ctx)
+
+		if _, err := svc.CollectEndpointEvidence(ctx, triage.EndpointEvidenceRequest{
+			IncidentID: incBlocked.ID, EvidenceKey: evKey, GroupID: group.ID, AssetID: host.ID,
+			Template: triage.TemplateLinuxContainerWebLogs, Command: newCmd,
+		}); err == nil || !strings.Contains(err.Error(), legacyStatus) {
+			t.Fatalf("legacy 状态 %s 必须阻断自动新建修正指令: err=%v", legacyStatus, err)
+		}
+		if _, err := db.Command.Get(ctx, newID); err == nil {
+			t.Fatalf("legacy 状态 %s 下不应创建新指令记录 %s", legacyStatus, newID)
+		}
+		if len(inbox) != 0 {
+			t.Fatalf("legacy 状态 %s 下不应向 Hub 发送任何指令", legacyStatus)
+		}
+	}
+
+	// 2. 旧 legacy 指令已 succeeded（错窗旧输出 Nov 01 02:08），允许使用 @utc-v2 新 ID 发起一次修正版查询；
+	//    重复调用 @utc-v2 只读回执，零重放。
+	incUpgrade := db.Incident.Create().SetTitle("legacy-succeeded-upgrade-once").SetStatus("triaged").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+	ev := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(4001).SetTs(alertTs).
+		SetRaw(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203","name":"gateway"}}`)).SaveX(ctx)
+	db.Alert.Create().SetIncidentID(incUpgrade.ID).SetAssetID(host.ID).SetEventID(ev.ID).SetRuleID("lxc.caddy").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+
+	evKey := triage.IncidentEvidenceKey(incUpgrade)
+	legID := triage.LegacyEndpointEvidenceCommandID(incUpgrade.ID, evKey, 0, host.ID, triage.TemplateLinuxContainerWebLogs)
+	newID := triage.EndpointEvidenceCommandID(incUpgrade.ID, evKey, 0, host.ID, triage.TemplateLinuxContainerWebLogs, newCmd)
+	wrongWindowOut := "Nov 01 02:08:11 gateway caddy[101]: wrong window CST interpreted as local"
+	db.Command.Create().SetID(legID).SetAssetID(host.ID).SetIncidentID(incUpgrade.ID).
+		SetKind("exec").SetCmd(oldCmd).SetStatus("succeeded").SetStdout(wrongWindowOut).SetIssuedBy("system").SaveX(ctx)
+
+	var delivered int
+	go func() {
+		cmd := <-inbox
+		delivered++
+		_ = hub.Complete(ctx, agentID, &pb.CommandResult{
+			CommandId: cmd.Id,
+			Status:    pb.CommandResult_SUCCEEDED,
+			ExitCode:  0,
+			Stdout:    "Nov 01 10:12:05 UTC gateway caddy[101]: 27.18.40.154 QUIC session ok",
+		})
+	}()
+
+	res1, err := svc.CollectEndpointEvidence(ctx, triage.EndpointEvidenceRequest{
+		IncidentID: incUpgrade.ID, EvidenceKey: evKey, GroupID: group.ID, AssetID: host.ID,
+		Template: triage.TemplateLinuxContainerWebLogs, Command: newCmd,
+		Since: alertTs.Add(-15 * time.Minute), Until: alertTs.Add(90 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("legacy succeeded 后应允许执行一次 @utc-v2 修正查询: %v", err)
+	}
+	if res1.CommandID != newID.String() || !strings.Contains(res1.Stdout, "10:12:05 UTC") || strings.Contains(res1.Stdout, "02:08:11") {
+		t.Fatalf("修正查询未返回新 @utc-v2 结果或误复用旧错窗输出: %+v", res1)
+	}
+
+	// 再次调用同一 @utc-v2：直接复用新回执，零重投
+	res2, err := svc.CollectEndpointEvidence(ctx, triage.EndpointEvidenceRequest{
+		IncidentID: incUpgrade.ID, EvidenceKey: evKey, GroupID: group.ID, AssetID: host.ID,
+		Template: triage.TemplateLinuxContainerWebLogs, Command: newCmd,
+	})
+	if err != nil || res2.CommandID != newID.String() || delivered != 1 || len(inbox) != 0 {
+		t.Fatalf("重复调用 @utc-v2 必须零重放: res2=%+v err=%v delivered=%d inbox=%d", res2, err, delivered, len(inbox))
 	}
 }

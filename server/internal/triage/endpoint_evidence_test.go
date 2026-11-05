@@ -2,8 +2,12 @@ package triage
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"openxdr/server/internal/commandgate"
@@ -45,9 +49,10 @@ func TestParseStrictAgentContainerAndReadOnlyTemplates(t *testing.T) {
 	}
 
 	for _, cmd := range []string{
-		"journalctl --no-pager --utc -n 25 --since '2026-11-05 05:45:00' --until '2026-11-05 06:15:00' -u apt-daily.service -u apt-daily-upgrade.service -u unattended-upgrades.service -u packagekit.service && tail -n 30 /var/log/dpkg.log /var/log/apt/history.log",
+		"journalctl --no-pager --utc -n 40 --since '2026-11-01 09:59:27 UTC' --until '2026-11-01 11:44:31 UTC' -u ssh -u sshd -t sshd -t sudo -t su",
+		"journalctl --no-pager --utc -n 25 --since '2026-11-05 05:45:00 UTC' --until '2026-11-05 06:15:00 UTC' -u apt-daily.service -u apt-daily-upgrade.service -u unattended-upgrades.service -u packagekit.service && tail -n 30 /var/log/dpkg.log /var/log/apt/history.log",
 		"docker logs --timestamps --since '2026-11-05T05:45:00Z' --until '2026-11-05T06:15:00Z' --tail 40 978b4e7c6f53",
-		"pct exec 203 -- journalctl --no-pager --utc -n 40 --since '2026-11-05 05:45:00' --until '2026-11-05 06:15:00' -u caddy -u nginx -u apache2 -u httpd",
+		"pct exec 203 -- journalctl --no-pager --utc -n 40 --since '2026-11-01 09:59:27 UTC' --until '2026-11-01 11:44:31 UTC' -u caddy -u nginx -u apache2 -u httpd",
 	} {
 		if !commandgate.ReadOnly(cmd) {
 			t.Fatalf("受控模板命令必须通过 commandgate.ReadOnly: %s", cmd)
@@ -63,5 +68,45 @@ func TestParseStrictAgentContainerAndReadOnlyTemplates(t *testing.T) {
 	idWeb := EndpointEvidenceCommandID(incID, "100", 1, assetID, TemplateLinuxContainerWebLogs)
 	if idPkg == idWeb {
 		t.Fatal("不同模板的确定性 CommandID 必须互不冲突")
+	}
+
+	// 验证 journal 模板派生 @utc-v2 新 ID，而 ps 快照与 Docker RFC3339Z 保持原 legacy ID
+	for _, tpl := range []string{TemplateLinuxAuthJournal, TemplateLinuxPackageHistory, TemplateLinuxContainerWebLogs} {
+		leg := LegacyEndpointEvidenceCommandID(incID, "100", 1, assetID, tpl)
+		cur := EndpointEvidenceCommandID(incID, "100", 1, assetID, tpl, "pct exec 203 -- journalctl --no-pager")
+		if leg == cur {
+			t.Fatalf("journal 模板 %s 必须派生区别于旧错窗指令的 @utc-v2 ID", tpl)
+		}
+	}
+	legPS := LegacyEndpointEvidenceCommandID(incID, "100", 1, assetID, TemplateLinuxProcessSnapshot)
+	curPS := EndpointEvidenceCommandID(incID, "100", 1, assetID, TemplateLinuxProcessSnapshot, "ps -eo pid,ppid,user,lstart,args --no-headers")
+	if legPS != curPS {
+		t.Fatal("ps 进程快照无时区窗口问题，CommandID 应保持不变")
+	}
+	legDocker := LegacyEndpointEvidenceCommandID(incID, "100", 1, assetID, TemplateLinuxContainerWebLogs)
+	curDocker := EndpointEvidenceCommandID(incID, "100", 1, assetID, TemplateLinuxContainerWebLogs, "docker logs --timestamps --since '2026-11-05T05:45:00Z' --until '2026-11-05T06:15:00Z' --tail 40 978b4e7c6f53")
+	if legDocker != curDocker {
+		t.Fatal("Docker logs 使用 RFC3339Z，CommandID 应保持不变")
+	}
+}
+
+func TestJournalUTCTimeLayoutParsedAsUTCInAsiaShanghai(t *testing.T) {
+	ts := time.Date(2026, 11, 1, 9, 59, 27, 0, time.UTC)
+	formatted := ts.UTC().Format(journalUTCTimeLayout)
+	if formatted != "2026-11-01 09:59:27 UTC" {
+		t.Fatalf("journalUTCTimeLayout 格式化错误: got=%q", formatted)
+	}
+	if _, err := exec.LookPath("systemd-analyze"); err != nil {
+		t.Skip("systemd-analyze 不可用")
+	}
+	cmd := exec.Command("systemd-analyze", "timestamp", formatted)
+	cmd.Env = append(os.Environ(), "TZ=Asia/Shanghai")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("systemd-analyze 解析失败: %v\n%s", err, string(out))
+	}
+	wantEpoch := fmt.Sprintf("UNIX seconds: @%d", ts.Unix())
+	if !strings.Contains(string(out), wantEpoch) || !strings.Contains(string(out), "(in UTC): Sun 2026-11-01 09:59:27 UTC") {
+		t.Fatalf("TZ=Asia/Shanghai 下未按 UTC 解析 journal 时间戳:\nwant: %s\ngot:\n%s", wantEpoch, string(out))
 	}
 }

@@ -50,7 +50,8 @@ func (s *Service) CollectEndpointEvidence(ctx context.Context, req triage.Endpoi
 		return nil, err
 	}
 
-	cmdID := triage.EndpointEvidenceCommandID(req.IncidentID, req.EvidenceKey, req.EvidenceVersion, req.AssetID, req.Template)
+	legacyID := triage.LegacyEndpointEvidenceCommandID(req.IncidentID, req.EvidenceKey, req.EvidenceVersion, req.AssetID, req.Template)
+	cmdID := triage.EndpointEvidenceCommandID(req.IncidentID, req.EvidenceKey, req.EvidenceVersion, req.AssetID, req.Template, req.Command)
 	existing, getErr := s.DB.Command.Get(ctx, cmdID)
 	if getErr != nil && !ent.IsNotFound(getErr) {
 		return nil, getErr
@@ -67,6 +68,20 @@ func (s *Service) CollectEndpointEvidence(ctx context.Context, req triage.Endpoi
 			return nil, err
 		}
 		return toEndpointEvidenceResult(existing, req), nil
+	}
+	if cmdID != legacyID {
+		legacy, legErr := s.DB.Command.Get(ctx, legacyID)
+		if legErr != nil && !ent.IsNotFound(legErr) {
+			return nil, legErr
+		}
+		if legacy != nil {
+			if legacy.AssetID != req.AssetID || legacy.Kind != "exec" || legacy.IncidentID == nil || *legacy.IncidentID != req.IncidentID {
+				return nil, errors.New("端点取证旧版指令身份冲突")
+			}
+			if legacy.Status != "succeeded" && legacy.Status != "failed" && legacy.Status != "unsupported" {
+				return nil, fmt.Errorf("存在状态为 %s 的旧版取证指令，严禁自动创建新取证指令或重放", legacy.Status)
+			}
+		}
 	}
 
 	if host.AgentID == nil || *host.AgentID == uuid.Nil {

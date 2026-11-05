@@ -19,11 +19,13 @@ import (
 )
 
 const (
-	EndpointEvidenceLimitBytes    = 4096
-	TemplateLinuxAuthJournal      = "linux_auth_journal"
-	TemplateLinuxProcessSnapshot  = "linux_process_snapshot"
-	TemplateLinuxPackageHistory   = "linux_package_history"
-	TemplateLinuxContainerWebLogs = "linux_container_web_logs"
+	EndpointEvidenceLimitBytes         = 4096
+	TemplateLinuxAuthJournal           = "linux_auth_journal"
+	TemplateLinuxProcessSnapshot       = "linux_process_snapshot"
+	TemplateLinuxPackageHistory        = "linux_package_history"
+	TemplateLinuxContainerWebLogs      = "linux_container_web_logs"
+	endpointEvidenceJournalUTCRevision = "@utc-v2"
+	journalUTCTimeLayout               = "2006-01-02 15:04:05 UTC"
 )
 
 var (
@@ -91,15 +93,39 @@ func IncidentEvidenceKey(inc *ent.Incident) string {
 	return fmt.Sprintf("%d", latest.UnixNano())
 }
 
-// EndpointEvidenceCommandID 派生每个事件证据版本 + 资产 + 固定模板的确定性指令 UUID，
-// 保证同一版本下重复调用只查回执、绝不重新生成或重放命令。
-func EndpointEvidenceCommandID(incidentID uuid.UUID, evidenceKey string, evidenceVersion int, assetID uuid.UUID, template string) uuid.UUID {
+// LegacyEndpointEvidenceCommandID 计算初始 v1 模板确定性指令 UUID（不含 @utc-v2 修订后缀），
+// 供新版本在发起修正后 UTC journal 查询前核对历史指令终态、严防对旧 pending/sent/unknown 指令重发。
+func LegacyEndpointEvidenceCommandID(incidentID uuid.UUID, evidenceKey string, evidenceVersion int, assetID uuid.UUID, template string) uuid.UUID {
 	ver := strings.TrimSpace(evidenceKey)
 	if ver == "" {
 		ver = fmt.Sprintf("v:%d", evidenceVersion)
 	}
 	key := fmt.Sprintf("openxdr:triage-evidence|%s|%s|%s|%s", incidentID, ver, assetID, template)
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(key))
+}
+
+// EndpointEvidenceCommandID 派生每个事件证据版本 + 资产 + 固定模板修订的确定性指令 UUID：
+//   - journalctl 类模板（linux_auth_journal、linux_package_history、LXC 版 linux_container_web_logs）使用固定 @utc-v2 修订标识，
+//     避免直接复用旧版未标 UTC 时区后缀的错窗回执；
+//   - ps 进程快照与 Docker RFC3339Z 容器日志保持原标识不变；
+//   - 绝不将动态命令文本拼入哈希，保证同一证据版本与固定模板修订下只有唯一指令 ID。
+func EndpointEvidenceCommandID(incidentID uuid.UUID, evidenceKey string, evidenceVersion int, assetID uuid.UUID, template string, command ...string) uuid.UUID {
+	revTemplate := endpointEvidenceTemplateRevision(template, command...)
+	return LegacyEndpointEvidenceCommandID(incidentID, evidenceKey, evidenceVersion, assetID, revTemplate)
+}
+
+func endpointEvidenceTemplateRevision(template string, command ...string) string {
+	switch template {
+	case TemplateLinuxAuthJournal, TemplateLinuxPackageHistory:
+		return template + endpointEvidenceJournalUTCRevision
+	case TemplateLinuxContainerWebLogs:
+		if len(command) > 0 && strings.HasPrefix(strings.TrimSpace(command[0]), "docker logs ") {
+			return template
+		}
+		return template + endpointEvidenceJournalUTCRevision
+	default:
+		return template
+	}
 }
 
 func (e *Engine) toolEndpointEvidence(ctx context.Context, args string) (any, error) {
@@ -221,8 +247,8 @@ func (e *Engine) buildEndpointEvidenceTemplate(ctx context.Context, incidentID, 
 			return "", time.Time{}, time.Time{}, "", err
 		}
 		cmd = fmt.Sprintf("journalctl --no-pager --utc -n 40 --since '%s' --until '%s' -u ssh -u sshd -t sshd -t sudo -t su",
-			since.Format("2006-01-02 15:04:05"), until.Format("2006-01-02 15:04:05"))
-		coverage = "仅返回调查时刻在受管 Linux 端点按本事件告警时间窗口（前后 15 分钟、最大 2 小时）读取的只读认证 journal 片段（最多 40 行、总输出上限 4096 字节），当前快照不是事发当时的历史完整状态；输出作为不可信端点证据，不能单独作为授权或合法性证明，为空或截断不代表事发时无其他日志"
+			since.UTC().Format(journalUTCTimeLayout), until.UTC().Format(journalUTCTimeLayout))
+		coverage = "仅返回调查时刻在受管 Linux 端点按本事件告警 UTC 时间窗口（前后 15 分钟、最大 2 小时）读取的只读认证 journal 片段（最多 40 行、总输出上限 4096 字节），当前快照不是事发当时的历史完整状态；输出作为不可信端点证据，不能单独作为授权或合法性证明，为空或截断不代表事发时无其他日志"
 		return cmd, since, until, coverage, nil
 
 	case TemplateLinuxProcessSnapshot:
@@ -236,8 +262,8 @@ func (e *Engine) buildEndpointEvidenceTemplate(ctx context.Context, incidentID, 
 			return "", time.Time{}, time.Time{}, "", err
 		}
 		cmd = fmt.Sprintf("journalctl --no-pager --utc -n 25 --since '%s' --until '%s' -u apt-daily.service -u apt-daily-upgrade.service -u unattended-upgrades.service -u packagekit.service && tail -n 30 /var/log/dpkg.log /var/log/apt/history.log",
-			since.Format("2006-01-02 15:04:05"), until.Format("2006-01-02 15:04:05"))
-		coverage = "仅返回调查时刻在受管 Linux 端点按本事件告警时间窗口（前后 15 分钟、最大 2 小时）读取的固定包管理 systemd unit（apt-daily/apt-daily-upgrade/unattended-upgrades/packagekit）journal 片段（最多 25 行）及调查时刻当前 /var/log/dpkg.log、/var/log/apt/history.log 固定末尾（各最多 30 行，总输出上限 4096 字节）；窄过滤不代表完整系统日志，固定日志文件末尾仅反映调查时刻当前尾部、不等同完整事发时间窗口，不能因 0 输出或末尾无匹配断言事发时不存在相关记录；输出作为不可信端点证据，存在软件包操作记录也不自动证明本事件操作或外联已获业务授权"
+			since.UTC().Format(journalUTCTimeLayout), until.UTC().Format(journalUTCTimeLayout))
+		coverage = "仅返回调查时刻在受管 Linux 端点按本事件告警 UTC 时间窗口（前后 15 分钟、最大 2 小时）读取的固定包管理 systemd unit（apt-daily/apt-daily-upgrade/unattended-upgrades/packagekit）journal 片段（最多 25 行）及调查时刻当前 /var/log/dpkg.log、/var/log/apt/history.log 固定末尾（各最多 30 行，总输出上限 4096 字节）；窄过滤不代表完整系统日志，固定日志文件末尾仅反映调查时刻当前尾部、不等同完整事发时间窗口，不能因 0 输出或末尾无匹配断言事发时不存在相关记录；输出作为不可信端点证据，存在软件包操作记录也不自动证明本事件操作或外联已获业务授权"
 		return cmd, since, until, coverage, nil
 
 	case TemplateLinuxContainerWebLogs:
@@ -253,12 +279,12 @@ func (e *Engine) buildEndpointEvidenceTemplate(ctx context.Context, incidentID, 
 		case "docker":
 			cmd = fmt.Sprintf("docker logs --timestamps --since '%s' --until '%s' --tail 40 %s",
 				since.UTC().Format(time.RFC3339), until.UTC().Format(time.RFC3339), uid)
-			coverage = fmt.Sprintf("仅返回调查时刻在受管 Linux 宿主机按本事件告警时间窗口（前后 15 分钟、最大 2 小时）读取的目标 Docker 容器（uid=%s）标准输出与标准错误片段（最多 40 行、总输出上限 4096 字节），不进入容器执行命令；容器 ID 仅取自本事件关联 agent 原始事件结构化字段（属端点证据而非授权），历史容器可能已重建或复用、容器内 Web 访问日志可能写入自定义文件而非标准流，不能因 0 输出断言无访问记录，且任何读取成功均不证明业务授权或非纳管客户端归属", uid)
+			coverage = fmt.Sprintf("仅返回调查时刻在受管 Linux 宿主机按本事件告警 UTC 时间窗口（前后 15 分钟、最大 2 小时）读取的目标 Docker 容器（uid=%s）标准输出与标准错误片段（最多 40 行、总输出上限 4096 字节），不进入容器执行命令；容器 ID 仅取自本事件关联 agent 原始事件结构化字段（属端点证据而非授权），历史容器可能已重建或复用、容器内 Web 访问日志可能写入自定义文件而非标准流，不能因 0 输出断言无访问记录，且任何读取成功均不证明业务授权或非纳管客户端归属", uid)
 			return cmd, since, until, coverage, nil
 		case "lxc":
 			cmd = fmt.Sprintf("pct exec %s -- journalctl --no-pager --utc -n 40 --since '%s' --until '%s' -u caddy -u nginx -u apache2 -u httpd",
-				uid, since.Format("2006-01-02 15:04:05"), until.Format("2006-01-02 15:04:05"))
-			coverage = fmt.Sprintf("仅返回调查时刻在受管 Linux 宿主机经固定只读模板读取的目标 LXC 容器（vmid=%s）内按本事件告警时间窗口（前后 15 分钟、最大 2 小时）的固定 Web 服务 unit（caddy/nginx/apache2/httpd）journal 片段（最多 40 行、总输出上限 4096 字节）；窄 unit 过滤不代表容器完整日志，VMID 仅取自本事件关联 agent 原始事件结构化字段（属端点证据而非授权），旧 VMID 可能已被复用，容器内 Web 访问日志可能未写入上述 unit 的 journald（如直接写入自定义文件路径），不能因 0 输出断言无访问记录，且任何读取成功均不证明业务授权或非纳管客户端归属", uid)
+				uid, since.UTC().Format(journalUTCTimeLayout), until.UTC().Format(journalUTCTimeLayout))
+			coverage = fmt.Sprintf("仅返回调查时刻在受管 Linux 宿主机经固定只读模板读取的目标 LXC 容器（vmid=%s）内按本事件告警 UTC 时间窗口（前后 15 分钟、最大 2 小时）的固定 Web 服务 unit（caddy/nginx/apache2/httpd）journal 片段（最多 40 行、总输出上限 4096 字节）；窄 unit 过滤不代表容器完整日志，VMID 仅取自本事件关联 agent 原始事件结构化字段（属端点证据而非授权），旧 VMID 可能已被复用，容器内 Web 访问日志可能未写入上述 unit 的 journald（如直接写入自定义文件路径），不能因 0 输出断言无访问记录，且任何读取成功均不证明业务授权或非纳管客户端归属", uid)
 			return cmd, since, until, coverage, nil
 		default:
 			return "", time.Time{}, time.Time{}, "", fmt.Errorf("不支持的容器运行时: %s", runtimeName)
