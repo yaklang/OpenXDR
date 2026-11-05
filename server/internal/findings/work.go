@@ -3,14 +3,18 @@ package findings
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
 	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 	"openxdr/server/ent"
+	"openxdr/server/ent/agentsession"
 	"openxdr/server/ent/asset"
 	"openxdr/server/ent/finding"
 	"openxdr/server/ent/predicate"
+	"openxdr/server/internal/audit"
 )
 
 const FollowupTask = "ops-followup"
@@ -70,6 +74,9 @@ func Claim(ctx context.Context, db *ent.Client, session *ent.AgentSession, now t
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := recoverEndedWork(ctx, tx, session.GroupID); err != nil {
+		return nil, err
+	}
 	rows, err := tx.Finding.Query().Where(
 		finding.GroupIDEQ(session.GroupID), finding.StatusEQ("open"),
 		finding.Or(finding.WorkOwnerEQ("ai"), finding.And(finding.WorkOwnerEQ("human"), func(s *sql.Selector) {
@@ -134,7 +141,7 @@ func Claim(ctx context.Context, db *ent.Client, session *ent.AgentSession, now t
 		claimed = append(claimed, f)
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("提交待办领取或孤儿租约对账结果未知，需只读核实，未重放指令: %w", err)
 	}
 	return claimed, nil
 }
@@ -149,7 +156,13 @@ func legacyPlan() predicate.Finding {
 
 // Release 无论模型成功、失败或超时都释放本次领取，不把未复查的待办标为修复。
 func Release(ctx context.Context, db *ent.Client, session uuid.UUID, now time.Time, failed ...bool) error {
-	rows, err := db.Finding.Query().Where(finding.WorkSessionIDEQ(session), finding.StatusEQ("open")).All(ctx)
+	tx, err := db.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Finding.Query().Where(finding.WorkSessionIDEQ(session), finding.StatusEQ("open")).
+		Where(func(s *sql.Selector) { s.ForUpdate() }).Order(ent.Asc(finding.FieldID)).All(ctx)
 	if err != nil {
 		return err
 	}
@@ -180,11 +193,56 @@ func Release(ctx context.Context, db *ent.Client, session uuid.UUID, now time.Ti
 		if w.Stage == "investigating" {
 			w.Stage = "waiting"
 		}
-		_, err = db.Finding.Update().Where(finding.IDEQ(f.ID), finding.StatusEQ("open"), finding.WorkSessionIDEQ(session), Snapshot(f)).
+		n, err := tx.Finding.Update().Where(finding.IDEQ(f.ID), finding.StatusEQ("open"), finding.WorkSessionIDEQ(session), Snapshot(f)).
 			SetWorkNextCheckAt(next).SetWork(EncodeWork(w)).ClearWorkSessionID().ClearWorkLeaseUntil().Save(ctx)
 		if err != nil {
 			return err
 		}
+		if n != 1 {
+			return errors.New("释放待办租约时记录已变化，整批未提交")
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("提交待办租约释放结果未知，需只读核实，未重放指令: %w", err)
+	}
+	return nil
+}
+
+// recoverEndedWork 仅对账已结束执行者的遗留元数据，不改计划、结论、计数或下次复查时间。
+func recoverEndedWork(ctx context.Context, tx *ent.Tx, group uuid.UUID) error {
+	rows, err := tx.Finding.Query().Where(finding.GroupIDEQ(group), finding.StatusEQ("open"), finding.WorkSessionIDNotNil()).
+		Where(func(s *sql.Selector) {
+			owned := sql.Table(asset.Table).As("orphan_work_asset")
+			s.Where(sql.Exists(sql.Select(owned.C(asset.FieldID)).From(owned).Where(sql.And(sql.ColumnsEQ(owned.C(asset.FieldID), s.C(finding.FieldAssetID)), sql.EQ(owned.C(asset.FieldGroupID), group)))))
+			ended := sql.Table(agentsession.Table).As("ended_work_session")
+			s.Where(sql.Exists(sql.Select(ended.C(agentsession.FieldID)).From(ended).Where(sql.And(sql.ColumnsEQ(ended.C(agentsession.FieldID), s.C(finding.FieldWorkSessionID)), sql.EQ(ended.C(agentsession.FieldGroupID), group), sql.In(ended.C(agentsession.FieldStatus), "succeeded", "failed")))))
+			s.ForUpdate(sql.WithLockAction(sql.SkipLocked))
+		}).All(ctx)
+	if err != nil {
+		return err
+	}
+	recovered := 0
+	for _, f := range rows {
+		// 同时锁定并复查旧执行者；不能把刚恢复活跃的会话误判为孤儿。
+		_, err := tx.AgentSession.Query().Where(agentsession.IDEQ(*f.WorkSessionID), agentsession.GroupIDEQ(group), agentsession.StatusIn("succeeded", "failed")).
+			Where(func(s *sql.Selector) { s.ForUpdate(sql.WithLockAction(sql.SkipLocked)) }).Only(ctx)
+		if ent.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		n, err := tx.Finding.Update().Where(finding.IDEQ(f.ID), finding.GroupIDEQ(group), finding.StatusEQ("open"), finding.WorkSessionIDEQ(*f.WorkSessionID), Snapshot(f)).ClearWorkSessionID().ClearWorkLeaseUntil().Save(ctx)
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return errors.New("孤儿租约对账时记录已变化，整批未提交")
+		}
+		recovered++
+	}
+	if recovered > 0 {
+		return audit.Checked(ctx, tx.AuditLog.Create(), "system", "server", "finding_work_orphan_recovered", group.String(), fmt.Sprintf("count=%d；仅清理已结束会话遗留的待办租约，计划、计数、结论与复查时间未改；未下发或重放指令", recovered))
 	}
 	return nil
 }

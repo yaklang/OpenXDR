@@ -35,7 +35,7 @@ func (s *Service) RunTask(ctx context.Context, job schedule.Job) (retErr error) 
 	}
 	defer func() {
 		stopLease()
-		finish, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		finish, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 		update := s.DB.AgentSession.Update().Where(agentsession.IDEQ(session.ID), agentsession.StatusEQ("running"), agentsession.RunOwnerEQ(owner)).ClearRunExpiresAt().SetStatus("succeeded").SetFinishedAt(time.Now())
 		if partial {
@@ -45,8 +45,8 @@ func (s *Service) RunTask(ctx context.Context, job schedule.Job) (retErr error) 
 			update.SetStatus("failed").SetError(retErr.Error())
 		}
 		n, err := update.Save(finish)
-		if err != nil && retErr == nil {
-			retErr = fmt.Errorf("保存会话终态失败: %w", err)
+		if err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("保存会话终态失败，提交结果需只读核实: %w", err))
 		} else if n != 1 && retErr == nil {
 			retErr = errTaskLeaseLost
 		}
@@ -60,11 +60,11 @@ func (s *Service) RunTask(ctx context.Context, job schedule.Job) (retErr error) 
 		defer finishFollowup()
 		ctx = followupCtx
 		defer func() {
-			done, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			done, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 			interrupted := errors.Is(retErr, context.Canceled) || errors.Is(retErr, context.DeadlineExceeded)
-			if err := findings.Release(done, s.DB, session.ID, time.Now(), interrupted); err != nil && retErr == nil {
-				retErr = err
+			if err := findings.Release(done, s.DB, session.ID, time.Now(), interrupted); err != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("释放待办租约失败: %w", err))
 			}
 		}()
 		if !hasWork {
