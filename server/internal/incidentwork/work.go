@@ -4,6 +4,7 @@ package incidentwork
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -179,11 +180,22 @@ func StaleProposal(inc *ent.Incident) bool {
 }
 
 func clearStaleProposal(ctx context.Context, db *ent.Client, inc *ent.Incident) error {
-	// 以完整建议 JSON 比较保护并发替换的新建议。
-	raw, err := json.Marshal(inc.ClosureProposal)
+	// 历史 JSON 没有新增 UUID 元字段；重编码结构体会补零值，不能拿它与原 JSON 直接比较。
+	values, err := db.Incident.Query().Where(incident.IDEQ(inc.ID), incident.StatusIn("open", "triaged"), incident.ClosureProposalNotNil()).Select(incident.FieldClosureProposal).Strings(ctx)
 	if err != nil {
 		return err
 	}
-	_, err = db.Incident.Update().Where(incident.IDEQ(inc.ID), incident.StatusIn("open", "triaged"), proposalEquals(string(raw))).ClearClosureProposal().Save(ctx)
+	if len(values) != 1 {
+		return nil
+	}
+	var current schema.ClosureProposal
+	if err := json.Unmarshal([]byte(values[0]), &current); err != nil {
+		return err
+	}
+	// 先确认仍是本快照中的建议，再以数据库原始 JSON 做完整 CAS，保护并发提交的新建议。
+	if !reflect.DeepEqual(&current, inc.ClosureProposal) {
+		return nil
+	}
+	_, err = db.Incident.Update().Where(incident.IDEQ(inc.ID), incident.StatusIn("open", "triaged"), proposalEquals(values[0])).ClearClosureProposal().Save(ctx)
 	return err
 }

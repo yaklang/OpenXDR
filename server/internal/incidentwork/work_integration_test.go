@@ -3,7 +3,10 @@
 package incidentwork
 
 import (
+	"database/sql"
 	"encoding/json"
+	"github.com/google/uuid"
+	"os"
 	"testing"
 	"time"
 
@@ -93,5 +96,34 @@ func TestRefreshCannotOverwriteManualTerminal(t *testing.T) {
 	}
 	if db.Incident.GetX(ctx, inc.ID).Work != nil {
 		t.Fatal("终态被接管")
+	}
+}
+
+func TestLegacyProposalJSONWithoutNewMetadataExpires(t *testing.T) {
+	ctx, db := testdb.New(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	inc := db.Incident.Create().SetStatus("triaged").SetGraph(json.RawMessage(`{}`)).SetTriagedAt(now).SetAiVerdict(json.RawMessage(`{"verdict":"benign","action_codes":["monitor"]}`)).SaveX(ctx)
+	// 真实旧版本只存这四项；通过原始 SQL 写入，避免当前结构体序列化补上新增的零 UUID。
+	raw, err := json.Marshal(map[string]any{"at": now.Add(-time.Hour), "status": "false_positive", "note": "旧版本建议", "sessionId": uuid.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := sql.Open("pgx", os.Getenv("INTEGRATION_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "UPDATE incidents SET closure_proposal=$1::jsonb WHERE id=$2", string(raw), inc.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Reconcile(ctx, db, now); err != nil {
+		t.Fatal(err)
+	}
+	got := db.Incident.GetX(ctx, inc.ID)
+	if got.ClosureProposal != nil {
+		t.Fatal("真实旧 JSON 的过期建议未清理")
+	}
+	if got.Status != "triaged" {
+		t.Fatal("清理建议改变了事件结论")
 	}
 }
