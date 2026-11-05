@@ -1,9 +1,11 @@
 package agentchat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"regexp"
 	"slices"
 	"strings"
@@ -13,16 +15,18 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
+	"openxdr/server/ent/command"
 	"openxdr/server/ent/finding"
+	"openxdr/server/internal/audit"
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
 )
 
-const trackDescription = "登记或复查一条运维待办。只登记需要人去处理的具体问题，一个问题一条；" +
+const trackDescription = "登记或复查一条运维待办。登记需要持续调查、修复或监测的具体问题，默认由平台负责，一个问题一条；" +
 	"正常项、正向确认、改进建议、对平台或对自己登记的说明都不登记，写进报告即可。" +
 	"同一主机同一问题每轮用同一个 key（小写字母、数字、. _ -），如 backup-service-failed。" +
-	"status=open 登记新问题或确认遗留问题仍在；resolved 表示复查确认已修复；withdrawn 撤回本轮登记错的条目。" +
+	"status=open 登记新问题或确认遗留问题仍在，并写 next_step；resolved 须附 evidence_commands 的本轮独立只读复查回执，不能仅凭修复命令成功或空日志关单；withdrawn 撤回本轮登记错的条目。blocker 只用于有真实失败回执的权限拒绝或端点不支持，普通缺证继续由平台负责。" +
 	"人工忽略的待办会返回 ignored，不要再登记，也不要列进报告的待处理事项。每轮最多新登记 10 条。"
 
 // maxNewFindings 一轮会话最多新登记的待办数：超出说明在把报告内容往待办里倒
@@ -34,7 +38,9 @@ var trackParameters = json.RawMessage(`{"type":"object","properties":{` +
 	`"title":{"type":"string","minLength":1,"maxLength":200},` +
 	`"detail":{"type":"string","minLength":1,"maxLength":4000},` +
 	`"severity":{"type":"string","enum":["low","medium","high"]},` +
-	`"status":{"type":"string","enum":["open","resolved","withdrawn"]}},` +
+	`"status":{"type":"string","enum":["open","resolved","withdrawn"]},` +
+	`"next_step":{"type":"string","maxLength":1000},"blocker":{"type":"string","enum":["permission","unsupported"]},` +
+	`"evidence_commands":{"type":"array","maxItems":5,"items":{"type":"string","format":"uuid"}}},` +
 	`"required":["host","key","title","detail","severity","status"],"additionalProperties":false}`)
 
 var findingKey = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
@@ -42,23 +48,32 @@ var findingKey = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 // track 按（组、主机、key）登记或复查待办。人工忽略的不动，原样告诉模型。
 func (s *Service) track(ctx context.Context, session *ent.AgentSession, args json.RawMessage) (string, error) {
 	var body struct {
-		Host     uuid.UUID `json:"host"`
-		Key      string    `json:"key"`
-		Title    string    `json:"title"`
-		Detail   string    `json:"detail"`
-		Severity string    `json:"severity"`
-		Status   string    `json:"status"`
+		Host             uuid.UUID   `json:"host"`
+		Key              string      `json:"key"`
+		Title            string      `json:"title"`
+		Detail           string      `json:"detail"`
+		Severity         string      `json:"severity"`
+		Status           string      `json:"status"`
+		NextStep         string      `json:"next_step"`
+		Blocker          string      `json:"blocker"`
+		EvidenceCommands []uuid.UUID `json:"evidence_commands"`
 	}
-	if err := json.Unmarshal(args, &body); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(args))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
 		return "", err
 	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return "", errors.New("track 参数包含额外内容")
+	}
+
 	switch {
 	case !findingKey.MatchString(body.Key):
 		return "", errors.New("key 只能是小写字母、数字与 . _ -，不超过 64 位")
 	case body.Title == "" || len(body.Title) > 200 || strings.TrimSpace(body.Detail) == "" || len(body.Detail) > 4000:
 		return "", errors.New("title 或 detail 长度无效，detail 要写清现象与证据")
 	case !slices.Contains([]string{"low", "medium", "high"}, body.Severity):
-		return "", errors.New("severity 必须是 low / medium / high；不需要人处理的不要登记")
+		return "", errors.New("severity 必须是 low / medium / high")
 	case !slices.Contains([]string{"open", "resolved", "withdrawn"}, body.Status):
 		return "", errors.New("status 必须是 open / resolved / withdrawn")
 	}
@@ -74,6 +89,13 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 		Only(ctx)
 	if err != nil && !ent.IsNotFound(err) {
 		return "", err
+	}
+	if bound, err := s.isFindingFollowup(ctx, session); err != nil {
+		return "", err
+	} else if bound {
+		if f == nil || f.WorkSessionID == nil || *f.WorkSessionID != session.ID || f.WorkLeaseUntil == nil || !f.WorkLeaseUntil.After(time.Now()) {
+			return "", errors.New("自主跟进任务只能更新本轮有效领取的待办")
+		}
 	}
 	now := time.Now()
 	switch {
@@ -97,19 +119,65 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 			return "", err
 		}
 		if fresh >= maxNewFindings {
-			return "", errors.New("本轮已新登记 10 条，只登记最需要人处理的，其余写进报告")
+			return "", errors.New("本轮已新登记 10 条，只登记最需要持续处理的，其余写进报告")
 		}
 		f, err = s.DB.Finding.Create().SetGroupID(session.GroupID).SetAssetID(body.Host).SetKey(body.Key).
-			SetTitle(body.Title).SetDetail(body.Detail).SetSeverity(body.Severity).SetSessionID(session.ID).Save(ctx)
+			SetTitle(body.Title).SetDetail(body.Detail).SetSeverity(body.Severity).SetSessionID(session.ID).
+			SetWorkOwner("ai").SetWorkNextCheckAt(now.Add(time.Hour)).SetWork(findings.EncodeWork(findings.Work{Stage: "waiting", Plan: "先只读复查现状与影响，授权内最小修复后独立验证", WakeOn: "new_observation_or_next_check"})).Save(ctx)
 		if err != nil {
+			return "", err
+		}
+		if err := s.saveFindingPlan(ctx, session, f, body.NextStep, body.Blocker, body.EvidenceCommands); err != nil {
 			return "", err
 		}
 		return marshal(map[string]any{"id": f.ID, "status": "open", "new": true})
 	case body.Status == "resolved":
+		reviewReason := ""
 		if f.Status == "open" {
-			err = f.Update().SetStatus("resolved").SetTitle(body.Title).SetDetail(body.Detail).
+			if err := s.findingEvidence(ctx, session, f, body.EvidenceCommands, true, ""); err != nil {
+				return "", err
+			}
+			if s.ReviewFinding == nil {
+				return "", errors.New("未配置独立运维效果复核，待办保持 open")
+			}
+			commands, err := s.DB.Command.Query().Where(command.IDIn(body.EvidenceCommands...)).All(ctx)
+			if err != nil {
+				return "", err
+			}
+			approved, reason, err := s.ReviewFinding(ctx, session, f, commands)
+			if err != nil {
+				return "", err
+			}
+			if !approved {
+				return "", errors.New("独立复核未确认修复，继续调查或监测：" + reason)
+			}
+			if _, err := s.guardTool(ctx, session, "track"); err != nil {
+				return "", err
+			}
+			if err := s.findingEvidence(ctx, session, f, body.EvidenceCommands, true, ""); err != nil {
+				return "", err
+			}
+			reviewReason = reason
+			now = time.Now()
+
+			tx, err := s.DB.Tx(ctx)
+			if err != nil {
+				return "", err
+			}
+			defer tx.Rollback()
+			err = tx.Finding.UpdateOneID(f.ID).Where(finding.StatusEQ("open"), finding.LastSeenEQ(f.LastSeen)).SetStatus("resolved").SetTitle(body.Title).SetDetail(body.Detail).
 				SetResolvedAt(now).SetResolvedBy(commandgate.SystemActor).
-				SetLastSeen(now).SetSessionID(session.ID).Exec(ctx)
+				SetLastSeen(now).SetSessionID(session.ID).ClearWorkSessionID().ClearWorkLeaseUntil().ClearWorkNextCheckAt().SetWork(findings.EncodeWork(findings.Work{Stage: "resolved", Plan: "独立复核通过：" + reviewReason, WakeOn: "recurrence", EvidenceCommands: body.EvidenceCommands})).Exec(ctx)
+			if err != nil {
+				return "", err
+			}
+			if err := audit.Checked(ctx, tx.AuditLog.Create(), commandgate.SystemActor, "server", "finding_ai_review", f.ID.String(), "独立复核通过，session="+session.ID.String()+" "+reviewReason); err != nil {
+				return "", err
+			}
+			if err := tx.Commit(); err != nil {
+				return "", err
+			}
+
 		}
 		if err != nil {
 			return "", err
@@ -118,9 +186,12 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 	default:
 		// 仍存在；之前被标成已修复的重新打开
 		reopened := f.Status == "resolved"
-		err = f.Update().SetStatus("open").SetTitle(body.Title).SetDetail(body.Detail).SetSeverity(body.Severity).
+		err = f.Update().Where(finding.StatusNEQ("ignored"), finding.LastSeenEQ(f.LastSeen)).SetStatus("open").SetTitle(body.Title).SetDetail(body.Detail).SetSeverity(body.Severity).
 			SetLastSeen(now).SetSessionID(session.ID).ClearResolvedAt().ClearResolvedBy().ClearNote().Exec(ctx)
 		if err != nil {
+			return "", err
+		}
+		if err := s.saveFindingPlan(ctx, session, f, body.NextStep, body.Blocker, body.EvidenceCommands); err != nil {
 			return "", err
 		}
 		return marshal(map[string]any{"id": f.ID, "status": "open", "reopened": reopened})
@@ -129,13 +200,16 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 
 // findingBrief 给模型看的待办摘要。
 type findingBrief struct {
-	Host      uuid.UUID `json:"host"`
-	Hostname  string    `json:"hostname"`
-	Key       string    `json:"key"`
-	Title     string    `json:"title"`
-	Severity  string    `json:"severity,omitempty"`
-	FirstSeen string    `json:"first_seen,omitempty"`
-	Note      *string   `json:"note,omitempty"`
+	Host      uuid.UUID  `json:"host"`
+	Hostname  string     `json:"hostname"`
+	Key       string     `json:"key"`
+	Title     string     `json:"title"`
+	Severity  string     `json:"severity,omitempty"`
+	FirstSeen string     `json:"first_seen,omitempty"`
+	WorkOwner string     `json:"work_owner,omitempty"`
+	NextCheck *time.Time `json:"next_check_at,omitempty"`
+	Work      any        `json:"work,omitempty"`
+	Note      *string    `json:"note,omitempty"`
 }
 
 // recentResolvedWindow 人工标为已处理并附说明的待办保留在上下文里的时长：
@@ -155,6 +229,7 @@ func (s *Service) findingsFor(ctx context.Context, group uuid.UUID, hostnames ma
 			b := findingBrief{Host: f.AssetID, Hostname: hostnames[f.AssetID], Key: f.Key, Title: f.Title}
 			if status == "open" {
 				b.Severity, b.FirstSeen = f.Severity, f.FirstSeen.Format(time.DateOnly)
+				b.WorkOwner, b.NextCheck, b.Work = f.WorkOwner, f.WorkNextCheckAt, findingWorkJSON(f)
 				open = append(open, b)
 			} else {
 				b.Note = f.Note

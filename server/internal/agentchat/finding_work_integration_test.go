@@ -1,0 +1,190 @@
+//go:build integration
+
+package agentchat
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"openxdr/server/ent"
+	"openxdr/server/internal/commandgate"
+	"openxdr/server/internal/findings"
+	"openxdr/server/internal/schedule"
+	"openxdr/server/internal/testdb"
+)
+
+func TestFindingAutonomyClaimsBudgetAndScope(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("g").SaveX(ctx)
+	other := db.Group.Create().SetName("other").SaveX(ctx)
+	a := db.Asset.Create().SetHostname("a").SetGroupID(g.ID).SaveX(ctx)
+	b := db.Asset.Create().SetHostname("b").SetGroupID(other.ID).SaveX(ctx)
+	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
+	task := db.Task.Create().SetID(findings.FollowupTask).SetName("followup").SetSchedule("*/30 * * * *").SetPrompt("p").SaveX(ctx)
+	db.TaskRun.Create().SetTaskID(task.ID).SetGroupID(g.ID).SetSessionID(session.ID).SetScheduledAt(time.Now()).SetStatus("running").SaveX(ctx)
+	for i := 0; i < 5; i++ {
+		db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey(fmt.Sprint(i)).SetTitle("capacity").SaveX(ctx)
+	}
+	db.Finding.Create().SetGroupID(g.ID).SetAssetID(b.ID).SetKey("moved").SetTitle("moved").SaveX(ctx)
+	svc := &Service{DB: db}
+	bound, has, err := svc.prepareFindingWork(ctx, session)
+	if err != nil || !bound || !has || len(session.Subjects) != 3 {
+		t.Fatalf("claim: %v %v %v %+v", bound, has, err, session.Subjects)
+	}
+	// 其他会话不能再次领取有效租约。
+	next := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
+	rows, err := findings.Claim(ctx, db, next, time.Now())
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("second claim %d %v", len(rows), err)
+	}
+	if err := svc.guardFindingExec(ctx, session, b.ID, "df -h"); err == nil {
+		t.Fatal("cross group host accepted")
+	}
+	if err := svc.guardFindingExec(ctx, session, a.ID, "df -h"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl reload test.service"); err == nil {
+		t.Fatal("write without trusted maintenance scope accepted")
+	}
+	called := 0
+	svc.AuthorizeFindingRepair = func(_ context.Context, gotSession *ent.AgentSession, got *ent.Finding, cmd string) error {
+		called++
+		if gotSession.ID != session.ID || got.AssetID != a.ID || cmd != "systemctl reload test.service" {
+			return fmt.Errorf("not in maintenance scope")
+		}
+		return nil
+	}
+	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl reload test.service"); err != nil || called != 1 {
+		t.Fatalf("trusted scope not consulted: %v %d", err, called)
+	}
+	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl restart production.service"); err == nil {
+		t.Fatal("out of scope write accepted")
+	}
+	// 未知写操作不能补发，独立只读观察仍可继续。
+	db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl restart app").SetStatus("unknown").SaveX(ctx)
+	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl restart app"); err == nil {
+		t.Fatal("unknown replay accepted")
+	}
+	if err := svc.guardFindingExec(ctx, session, a.ID, "df -h"); err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.MustParse(strings.TrimPrefix(session.Subjects[0], "finding:"))
+	f := db.Finding.GetX(ctx, id)
+	db.Finding.UpdateOneID(f.ID).SetWorkAttempts(4).ExecX(ctx)
+	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl restart app"); err == nil {
+		t.Fatal("budget ignored")
+	}
+	if err := findings.Release(ctx, db, session.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	f = db.Finding.GetX(ctx, id)
+	if f.WorkSessionID != nil || f.WorkLeaseUntil != nil || f.WorkNextCheckAt == nil || f.WorkNextCheckAt.Before(time.Now().Add(23*time.Hour)) {
+		t.Fatalf("not deferred: %+v", f)
+	}
+	if err := svc.guardFindingExec(ctx, session, a.ID, "df -h"); err == nil {
+		t.Fatal("released task may execute")
+	}
+}
+
+func TestFindingResolvedRequiresFreshIndependentEvidence(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("g").SaveX(ctx)
+	a := db.Asset.Create().SetHostname("a").SetGroupID(g.ID).SaveX(ctx)
+	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
+	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service").SetTitle("failed").SaveX(ctx)
+	svc := &Service{DB: db}
+	if err := svc.findingEvidence(ctx, session, f, nil, true, ""); err == nil {
+		t.Fatal("no evidence accepted")
+	}
+	mk := func(cmd, status, out string) *ent.Command {
+		return db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd(cmd).SetStatus(status).SetExitCode(0).SetStdout(out).SetCompletedAt(time.Now()).SaveX(ctx)
+	}
+	for _, c := range []*ent.Command{mk("systemctl restart app", "succeeded", "done"), mk("systemctl is-active app", "unknown", "active"), mk("journalctl -n 40", "succeeded", "")} {
+		if err := svc.findingEvidence(ctx, session, f, []uuid.UUID{c.ID}, true, ""); err == nil {
+			t.Fatalf("bad proof accepted: %+v", c)
+		}
+	}
+	proof := mk("systemctl is-active app", "succeeded", "active")
+	if err := svc.findingEvidence(ctx, session, f, []uuid.UUID{proof.ID}, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	proof.Update().SetTruncated(true).ExecX(ctx)
+	if err := svc.findingEvidence(ctx, session, f, []uuid.UUID{proof.ID}, true, ""); err == nil {
+		t.Fatal("truncated accepted")
+	}
+	proof.Update().SetTruncated(false).ExecX(ctx)
+	mk("systemctl restart app", "succeeded", "done")
+	if err := svc.findingEvidence(ctx, session, f, []uuid.UUID{proof.ID}, true, ""); err == nil {
+		t.Fatal("write after verification accepted")
+	}
+	fail := mk("journalctl -n 40", "failed", "")
+	fail.Update().SetStderr("permission denied").ExecX(ctx)
+	if err := svc.saveFindingPlan(ctx, session, f, "operator must grant log access", "permission", []uuid.UUID{fail.ID}); err != nil {
+		t.Fatal(err)
+	}
+	got := db.Finding.GetX(ctx, f.ID)
+	var work findings.Work
+	_ = json.Unmarshal(got.Work, &work)
+	if got.WorkOwner != "human" || work.Stage != "blocked" || got.Status != "open" {
+		t.Fatalf("human blocker missing: %+v %s", got, got.Work)
+	}
+	// 忽略后的原快照不能重新写计划或关单。
+	db.Finding.UpdateOneID(f.ID).SetStatus("ignored").ExecX(ctx)
+	args := []byte(`{"host":"` + a.ID.String() + `","key":"service","title":"resolved","detail":"active","severity":"low","status":"resolved"}`)
+	out, err := svc.tool(ctx, session, commandgate.Request{System: true}, "track", args)
+	if err != nil || !strings.Contains(out, "ignored") || db.Finding.GetX(ctx, f.ID).Status != "ignored" {
+		t.Fatalf("human ignore not preserved: %s %v", out, err)
+	}
+}
+
+func TestFindingIndependentReviewRequiredAndManualFence(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("g").SaveX(ctx)
+	a := db.Asset.Create().SetHostname("a").SetGroupID(g.ID).SaveX(ctx)
+	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
+	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service").SetTitle("service failed").SaveX(ctx)
+	c := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl show app.service -p ActiveState").SetStatus("succeeded").SetExitCode(0).SetStdout("ActiveState=active").SetCompletedAt(time.Now()).SaveX(ctx)
+	args := []byte(`{"host":"` + a.ID.String() + `","key":"service","title":"recovered","detail":"verified active","severity":"low","status":"resolved","evidence_commands":["` + c.ID.String() + `"]}`)
+	svc := &Service{DB: db}
+	call := func() error {
+		_, err := svc.tool(ctx, session, commandgate.Request{System: true}, "track", args)
+		return err
+	}
+	if err := call(); err == nil || db.Finding.GetX(ctx, f.ID).Status != "open" {
+		t.Fatal("missing independent reviewer closed finding")
+	}
+	svc.ReviewFinding = func(_ context.Context, _ *ent.AgentSession, _ *ent.Finding, _ []*ent.Command) (bool, string, error) {
+		return false, "evidence does not cover dependency", nil
+	}
+	if err := call(); err == nil || db.Finding.GetX(ctx, f.ID).Status != "open" {
+		t.Fatal("review rejection closed finding")
+	}
+	svc.ReviewFinding = func(_ context.Context, _ *ent.AgentSession, _ *ent.Finding, _ []*ent.Command) (bool, string, error) {
+		db.Finding.UpdateOneID(f.ID).SetStatus("ignored").SetNote("human ignored during review").ExecX(ctx)
+		return true, "active", nil
+	}
+	if err := call(); err == nil || db.Finding.GetX(ctx, f.ID).Status != "ignored" {
+		t.Fatal("review overwrote manual terminal")
+	}
+}
+
+func TestFindingFollowupNoDueSkipsModel(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("g").SaveX(ctx)
+	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
+	db.Task.Create().SetID(findings.FollowupTask).SetName("followup").SetSchedule("*/30 * * * *").SetPrompt("p").SaveX(ctx)
+	db.TaskRun.Create().SetTaskID(findings.FollowupTask).SetGroupID(g.ID).SetSessionID(session.ID).SetScheduledAt(time.Now()).SetStatus("running").SaveX(ctx)
+	// 未提供 Pi Runner 或模型端点：空队列不能调用模型，更不能编造报告/修复结果。
+	svc := &Service{DB: db}
+	if err := svc.RunTask(ctx, schedule.Job{Session: session, Prompt: "follow up"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := db.AgentSession.GetX(ctx, session.ID); got.Status != "succeeded" {
+		t.Fatalf("%+v", got)
+	}
+}

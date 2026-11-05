@@ -10,6 +10,7 @@ import (
 	"openxdr/server/ent/agentsession"
 	"openxdr/server/ent/report"
 	"openxdr/server/internal/commandgate"
+	"openxdr/server/internal/findings"
 	"openxdr/server/internal/schedule"
 )
 
@@ -50,6 +51,25 @@ func (s *Service) RunTask(ctx context.Context, job schedule.Job) (retErr error) 
 			retErr = errTaskLeaseLost
 		}
 	}()
+	isFollowup, hasWork, err := s.prepareFindingWork(ctx, session)
+	if err != nil {
+		return err
+	}
+	if isFollowup {
+		followupCtx, finishFollowup := context.WithTimeout(ctx, 30*time.Minute)
+		defer finishFollowup()
+		ctx = followupCtx
+		defer func() {
+			done, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			defer cancel()
+			if err := findings.Release(done, s.DB, session.ID, time.Now()); err != nil && retErr == nil {
+				retErr = err
+			}
+		}()
+		if !hasWork {
+			return nil
+		}
+	}
 	if err := s.checkBudget(ctx, session.GroupID); err != nil {
 		return err
 	}

@@ -52,12 +52,12 @@ func TestBundledTasks(t *testing.T) {
 	if len(specs) != len(files) {
 		t.Errorf("加载 %d 个，文件 %d 个", len(specs), len(files))
 	}
-	// 任务页靠这些字段展示；除每日巡检外，预设任务默认关闭，由管理员按组开启
+	// 每日巡检与有界自治跟进默认运行；其他专项预设由管理员按组开启。
 	for _, s := range specs {
 		if s.NameEN == "" || s.Description == "" || s.DescriptionEN == "" || s.Category == "" {
 			t.Errorf("%s 缺少 name_en / description / description_en / category", s.ID)
 		}
-		if s.ID != "daily-host-inspection" && (s.Enabled == nil || *s.Enabled) {
+		if s.ID != "daily-host-inspection" && s.ID != "ops-followup" && (s.Enabled == nil || *s.Enabled) {
 			t.Errorf("%s 应写 enabled: false", s.ID)
 		}
 	}

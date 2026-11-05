@@ -152,6 +152,7 @@ func (s *Service) findingSubject(ctx context.Context, id, group uuid.UUID, hostn
 	return map[string]any{
 		"kind": "finding", "id": f.ID, "host": f.AssetID, "hostname": hostnames[f.AssetID], "key": f.Key,
 		"title": f.Title, "detail": f.Detail, "severity": f.Severity, "status": f.Status, "note": f.Note,
+		"work_owner": f.WorkOwner, "work": findingWorkJSON(f), "next_check_at": f.WorkNextCheckAt, "work_attempts": f.WorkAttempts,
 	}, nil
 }
 

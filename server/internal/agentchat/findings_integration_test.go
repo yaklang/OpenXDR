@@ -27,7 +27,9 @@ func TestTrackFindings(t *testing.T) {
 	stranger := db.Asset.Create().SetHostname("x").SetGroupID(other.ID).SaveX(ctx)
 	session := db.AgentSession.Create().SetKind("task").SetGroupID(group.ID).SetInitiator(commandgate.SystemActor).
 		SetModel("m").SetStatus("running").SetTitle("巡检").SaveX(ctx)
-	s := &Service{DB: db}
+	s := &Service{DB: db, ReviewFinding: func(context.Context, *ent.AgentSession, *ent.Finding, []*ent.Command) (bool, string, error) {
+		return true, "服务 active，与原故障直接对应", nil
+	}}
 	track := func(host, status string) (string, error) {
 		return s.tool(ctx, session, commandgate.Request{System: true}, "track", []byte(
 			`{"host":"`+host+`","key":"backup-failed","title":"备份服务失败","detail":"termix-backup-pull failed","severity":"medium","status":"`+status+`"}`))
@@ -43,8 +45,9 @@ func TestTrackFindings(t *testing.T) {
 	if out, err := track(host.ID.String(), "open"); err != nil || !strings.Contains(out, `"reopened":false`) || db.Finding.Query().CountX(ctx) != 1 {
 		t.Fatalf("同一问题应去重更新：%s %v", out, err)
 	}
+	check := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("systemctl is-active termix-backup-pull").SetStatus("succeeded").SetExitCode(0).SetStdout("active").SetCompletedAt(time.Now()).SaveX(ctx)
 	if _, err := s.tool(ctx, session, commandgate.Request{System: true}, "track", []byte(
-		`{"host":"`+host.ID.String()+`","key":"backup-failed","title":"备份服务已恢复","detail":"复查：termix-backup-pull active","severity":"medium","status":"resolved"}`)); err != nil || get() != "resolved" {
+		`{"host":"`+host.ID.String()+`","key":"backup-failed","title":"备份服务已恢复","detail":"复查：termix-backup-pull active","severity":"medium","status":"resolved","evidence_commands":["`+check.ID.String()+`"]}`)); err != nil || get() != "resolved" {
 		t.Fatalf("复查修复应关闭：%v %s", err, get())
 	}
 	if f := db.Finding.Query().OnlyX(ctx); f.ResolvedBy == nil || *f.ResolvedBy != commandgate.SystemActor ||

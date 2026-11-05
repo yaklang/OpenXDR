@@ -36,9 +36,9 @@ func Set(ctx context.Context, db *ent.Client, f *ent.Finding, status, note, user
 	defer func() { _ = tx.Rollback() }()
 	u := tx.Finding.UpdateOneID(f.ID).SetStatus(status)
 	if status == "open" {
-		u.ClearResolvedAt().ClearResolvedBy().ClearNote()
+		u.ClearResolvedAt().ClearResolvedBy().ClearNote().SetWorkOwner("ai").SetWorkAttempts(0).SetWorkNextCheckAt(time.Now()).ClearWorkSessionID().ClearWorkLeaseUntil().SetWork(EncodeWork(Work{Stage: "waiting", Plan: "人工重新打开，重新评估现状", WakeOn: "next_check"}))
 	} else {
-		u.SetResolvedAt(time.Now()).SetResolvedBy(username).SetNote(note)
+		u.SetResolvedAt(time.Now()).SetResolvedBy(username).SetNote(note).ClearWorkSessionID().ClearWorkLeaseUntil().ClearWorkNextCheckAt().SetWork(EncodeWork(Work{Stage: status, Plan: note, WakeOn: "human_reopen"}))
 	}
 	if err := u.Exec(ctx); err != nil {
 		return err

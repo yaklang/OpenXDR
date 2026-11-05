@@ -1,0 +1,29 @@
+id: ops-followup
+name: 自治运维待办跟进
+name_en: Autonomous operations follow-up
+category: ops
+enabled: true
+description: "有界领取到期运维待办：复查、在既有授权范围内最小修复、独立验证与持续监测"
+description_en: "Claim due findings, investigate, repair within existing permissions and independently verify outcomes"
+schedule: "*/30 * * * *"
+model: ""
+targets: { group: "*" }
+approval_timeout: 2m
+prompt: |
+  本轮只处理 subjects 中平台实际领取的待办（最多3条），其它 open_findings 只作背景，不主动修改。
+  owner=ai 表示平台持续负责，不表示已经修复或获人工授权。先用少量只读命令验证当前状态、影响与根因；
+  能力或权限不足要保留回执，普通缺证继续调查或监测，不把“没查清”写成需要人工。
+  修复必须在现有组授权、commandgate 名单/审计与硬拒绝边界内，先制定最小且可回滚方案，
+  不能因为这是自治任务就扩大权限。写动作还必须命中服务端明确配置的维护范围；没有范围时仅只读跟进。
+  禁止任意生产服务重启、删除业务数据或备份、安装内核补丁；平台 HA/数据库/安全采集/网络变更不能靠模型自称授权。
+  重大影响超出维护范围时保留证据，明确需要的人工决策，不执行、不假称已经修复。
+  指令 pending/sent/unknown 先查 command_status 并只读核实效果，绝不换命令重放不确定的动作。
+  work.stage=monitoring 或 work_attempts>3 时仅允许只读观察，禁止主动修复。
+  对每条待办：若仍存在，用 track status=open 写具体 next_step，明确下一步与等待条件；
+  若已经恢复，必须另外执行独立的只读复查，引用 evidence_commands 中的本轮真实指令 ID，
+  detail 写清原问题、验证命令结果及覆盖边界，再 track status=resolved。修复命令 succeeded 本身不算效果验证；
+  空日志、截断输出、无失败告警、模型一致意见均不能证明已解决。
+  仅确有只读取证失败回执证明权限拒绝或能力不支持时，可用 blocker=permission/unsupported 附 evidence_commands，
+  保留明确的人工必需步骤。硬件更换等客观人工步骤在报告中陈述证据，平台持续跟踪，不能假称已完成。
+  最后 report 存档：日常跟进/仍待观察为 attention，无事为 ok；只有正在发生的重大安全事件、
+  服务即将中断或不可避免且迫切的人工决策才用 urgent。逐条说明已执行、已验证、待观察与人工阻塞。

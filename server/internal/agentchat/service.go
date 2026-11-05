@@ -56,6 +56,10 @@ type Service struct {
 	GroupDailyTokens int
 	// ReviewSuppression 抑制草案生成后当场交 AI 审计员评审，返回评审后的状态与理由；为空时草案留给人审
 	ReviewSuppression func(ctx context.Context, id uuid.UUID) (status, reason string, err error)
+	// ReviewFinding 独立复核运维修复效果；未注入时不自动关闭待办。
+	ReviewFinding func(context.Context, *ent.AgentSession, *ent.Finding, []*ent.Command) (bool, string, error)
+	// AuthorizeFindingRepair 仅由服务端可信维护范围授权最小写动作；为空时自治跟进只读。
+	AuthorizeFindingRepair func(context.Context, *ent.AgentSession, *ent.Finding, string) error
 	// FoldAbove 历史超过这么多字节时折叠较早的工具结果与思考过程再发给模型，0 不折叠
 	FoldAbove int
 	// running 后台运行中的对话：停机时等它们把终态写完再退出
@@ -519,9 +523,9 @@ func (s *Service) request(ctx context.Context, session *ent.AgentSession, prompt
 // 遗留待办仅供参考——否则模型会把巡检的活当成自己的，跑偏去处理别的待办。
 func focus(kind string, turns int) string {
 	if kind == "task" {
-		return "open_findings 是本组遗留的运维待办：复查其中与本任务主题相关的（按 key 与标题判断，任务说明要求全量复查时才全部复查），已修复用 track 标 resolved，仍存在用 track 标 open；新发现的问题也用 track 登记，key 按任务说明的前缀起名。" +
+		return "open_findings 是本组遗留的运维待办：复查其中与本任务主题相关的（按 key 与标题判断，任务说明要求全量复查时才全部复查），已修复须附本轮独立只读复查 evidence_commands，经独立复核通过后 track 标 resolved；仍存在用 track 标 open 并写 next_step；新发现的问题也用 track 登记，key 按任务说明的前缀起名。" +
 			"对比上一轮报告时只查 reports 的 created_at, level, summary，严禁读取历史报告的 markdown 正文（防止旧报告冗长篇幅传染本轮）。" +
-			"报告编写必须精炼、异常先行、凸显 AI 自治（全文尽量控制在 1,500–2,500 字以内）：把「## 已执行的操作」放在「## 结论」之后展示本轮已自主完成的待办同步、记忆更新或服务/外联标记；「## 需要人处理」每条限 1–2 行并配 🔴/🟡/✅ 标记；「## 证据」中无异常主机合并为一张紧凑表格或一句话，严禁逐台罗列「未见异常」流水账。" +
+			"报告编写必须精炼、异常先行、凸显 AI 自治（全文尽量控制在 1,500–2,500 字以内）：把「## 已执行的操作」放在「## 结论」之后展示本轮已自主完成的待办同步、记忆更新或服务/外联标记；「## 需要人处理」只列不可避免的人工阻塞；普通缺证与日常待办由平台负责并写明下一步，不堆进人工事项；「## 证据」中无异常主机合并为一张紧凑表格或一句话，严禁逐台罗列「未见异常」流水账。" +
 			"report 的 level 如实选择：没有需要人处理的事项写 ok，有日常待办写 attention（ok 与 attention 均只存档、不推送打扰人），疑似入侵或服务即将中断等需要人立即介入的大事写 urgent（推送通知）。" +
 			fmt.Sprintf("本轮最多 %d 次模型调用（每次可并行多个工具）：先做巡检与待办复查，再按余量深挖，务必在用完前提交 report。", turns)
 	}
@@ -722,6 +726,9 @@ func (s *Service) tool(ctx context.Context, session *ent.AgentSession, who comma
 		}
 		if body.Timeout > 300 {
 			return "", errors.New("timeout 超过 300 秒")
+		}
+		if err := s.guardFindingExec(ctx, session, body.Host, body.Cmd); err != nil {
+			return "", err
 		}
 		who.GroupID, who.SessionID, who.Origin = session.GroupID, &session.ID, "ai"
 		incidentID, err := s.commandIncident(ctx, session, body.Host)
