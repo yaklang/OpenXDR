@@ -50,19 +50,22 @@ func TestFindingAutonomyClaimsBudgetAndScope(t *testing.T) {
 	if err := svc.guardFindingExec(ctx, session, a.ID, "df -h"); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl reload test.service"); err == nil {
+	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl restart -- test.service"); err == nil {
 		t.Fatal("write without trusted maintenance scope accepted")
+	}
+	if _, err := svc.findingExecTarget(ctx, session, a.ID, "docker exec x ls", uuid.MustParse(strings.TrimPrefix(session.Subjects[0], "finding:"))); err == nil || !strings.Contains(err.Error(), "自治跟进只允许只读命令") {
+		t.Fatalf("unexpected denial: %v", err)
 	}
 	called := 0
 	svc.RevalidateFindingRepair = func(context.Context, *ent.AgentSession, *ent.Finding, string) error { return nil }
 	svc.AuthorizeFindingRepair = func(_ context.Context, gotSession *ent.AgentSession, got *ent.Finding, cmd string) error {
 		called++
-		if gotSession.ID != session.ID || got.AssetID != a.ID || cmd != "systemctl reload test.service" {
+		if gotSession.ID != session.ID || got.AssetID != a.ID || cmd != "systemctl restart -- test.service" {
 			return fmt.Errorf("not in maintenance scope")
 		}
 		return nil
 	}
-	if _, err := svc.findingExecTarget(ctx, session, a.ID, "systemctl reload test.service", uuid.MustParse(strings.TrimPrefix(session.Subjects[0], "finding:"))); err != nil || called != 1 {
+	if _, err := svc.findingExecTarget(ctx, session, a.ID, "systemctl restart -- test.service", uuid.MustParse(strings.TrimPrefix(session.Subjects[0], "finding:"))); err != nil || called != 1 {
 		t.Fatalf("trusted scope not consulted: %v %d", err, called)
 	}
 	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl restart production.service"); err == nil {

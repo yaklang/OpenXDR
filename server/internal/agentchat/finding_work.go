@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -103,6 +104,15 @@ func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSessi
 	}
 	if readOnly {
 		return nil, nil
+	}
+	if !findingRestart.MatchString(cmd) {
+		err := errors.New("自治跟进只允许只读命令：这条命令没有被认定为只读（含命令替换、cd、docker exec 等写入或无法确定的片段）。请拆成单条简单的只读命令；写操作只允许已授权的 systemctl restart -- <服务>。")
+		logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		if auditErr := audit.Checked(logCtx, s.DB.AuditLog.Create(), "system", "server", "repair_action_denied", session.ID.String(), err.Error()); auditErr != nil {
+			return nil, fmt.Errorf("%w；拒绝审计落库失败", err)
+		}
+		return nil, err
 	}
 	// 无法确认归属到某次待办的旧写操作也不能冒险重放；先只读查清或由人确认。
 	unknown, err := s.DB.Command.Query().Where(command.AssetIDEQ(host), command.StatusIn("pending", "sent", "unknown")).All(ctx)
@@ -370,3 +380,5 @@ func originalProblem(f *ent.Finding) string {
 	}
 	return f.Detail
 }
+
+var findingRestart = regexp.MustCompile(`^systemctl restart -- ([a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}\.service)$`)
