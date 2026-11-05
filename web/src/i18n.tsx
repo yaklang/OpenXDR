@@ -2,6 +2,21 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 
 // 全部界面文案。自制轻量字典：英文由 satisfies 约束，缺键编译不过
 const zh = {
+  findingWorkColumn: "负责人 / 跟进",
+  findingWorkAllOwners: "全部负责人",
+  findingWorkPlan: "跟进计划",
+  findingWorkBlocker: "人工阻塞原因",
+  findingWorkPermission: "权限受限",
+  findingWorkUnsupported: "端点不支持所需操作",
+  findingWorkWaiting: "等待下轮跟进",
+  findingWorkBlocked: "需人工解除阻塞",
+  findingWorkSession: "本轮跟进会话",
+  findingWorkEvidence: "复查指令证据",
+  findingWorkOriginal: "原始问题",
+  findingWorkObservation: "新观察或下次复查",
+  findingWorkRecurrence: "问题再次出现",
+  findingWorkHint: "跟进计划和指令回执用于核验，指令执行成功不等于问题已解决。",
+
   incidentWorkTitle: "自治跟进",
   incidentWorkOwner: "负责人",
   incidentWorkAI: "AI",
@@ -1975,6 +1990,21 @@ const zh = {
 export type MsgKey = keyof typeof zh
 
 const en = {
+  findingWorkColumn: "Owner / follow-up",
+  findingWorkAllOwners: "All owners",
+  findingWorkPlan: "Follow-up plan",
+  findingWorkBlocker: "Reason for human intervention",
+  findingWorkPermission: "Permission denied",
+  findingWorkUnsupported: "Required operation unsupported by endpoint",
+  findingWorkWaiting: "Awaiting follow-up",
+  findingWorkBlocked: "Human intervention required",
+  findingWorkSession: "Current follow-up session",
+  findingWorkEvidence: "Verification command evidence",
+  findingWorkOriginal: "Original issue",
+  findingWorkObservation: "New observation or next check",
+  findingWorkRecurrence: "Issue recurrence",
+  findingWorkHint: "Plans and command receipts support verification. A successful command alone does not establish resolution.",
+
   incidentWorkTitle: "Autonomous follow-up",
   incidentWorkOwner: "Owner",
   incidentWorkAI: "AI",

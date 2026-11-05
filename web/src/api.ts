@@ -246,6 +246,16 @@ export async function resolveIncidents(ids: string[], status: 'closed' | 'false_
 }
 
 // 运维待办：巡检 AI 登记与复查；人标已处理或忽略（须写原因，忽略原因会告诉 AI）
+export interface FindingWork {
+  stage?: string
+  plan?: string
+  wake_on?: string
+  blocker?: string
+  evidence_commands?: string[]
+  original_title?: string
+  original_problem?: string
+}
+
 export interface FindingRow {
   id: string
   groupId: string
@@ -258,6 +268,12 @@ export interface FindingRow {
   status: 'open' | 'resolved' | 'ignored'
   firstSeen: string
   lastSeen: string
+  workOwner?: string
+  workNextCheckAt?: string
+  workAttempts?: number
+  workSessionId?: string
+  workLeaseUntil?: string
+  work?: FindingWork | null
   sessionId: string | null
   resolvedAt: string | null
   resolvedBy: string | null
@@ -265,7 +281,7 @@ export interface FindingRow {
 }
 
 export const fetchFindingsByID = (ids: string[]) => get<FindingRow[]>(`/api/findings?${new URLSearchParams({ ids: ids.join(',') })}`)
-export const fetchFindingsPage = (params: { status?: string; assetId?: string; ids?: string; limit?: number; offset?: number } = {}) => {
+export const fetchFindingsPage = (params: { status?: string; workOwner?: 'ai' | 'human'; assetId?: string; ids?: string; limit?: number; offset?: number } = {}) => {
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) if (value !== undefined) query.set(key, String(value))
   return list<FindingRow>(`/api/findings?${query}`)
