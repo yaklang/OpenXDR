@@ -97,6 +97,9 @@ type Engine struct {
 
 // Run 常驻运行：模型可以在控制台随时配上或撤掉，没配置的轮次直接跳过
 func (e *Engine) Run(ctx context.Context) {
+	if err := incidentwork.Reconcile(ctx, e.DB, time.Now()); err != nil {
+		slog.Error("初始化自治计划失败", "err", err)
+	}
 	ticker := time.NewTicker(e.Interval)
 	defer ticker.Stop()
 	for {

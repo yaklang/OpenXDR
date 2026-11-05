@@ -63,6 +63,7 @@ import (
 	"openxdr/server/internal/piruntime"
 	"openxdr/server/internal/queryrole"
 	"openxdr/server/internal/realip"
+	"openxdr/server/internal/repairpolicy"
 	"openxdr/server/internal/report"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/schedule"
@@ -156,11 +157,15 @@ func main() {
 	chat := startChat(ctx, db, client, rules, hub, webhook, conf, queryRoles, suppressionReviewer)
 	triageEngine.EndpointEvidence = chat.CollectEndpointEvidence
 	chat.ReviewFinding = (&findingreview.Reviewer{Endpoint: chat.Endpoint, OnUsage: aiconf.Recorder(client, "finding_review")}).Review
+	repair := &repairpolicy.Store{DB: client}
+	chat.AuthorizeFindingRepair = repair.Authorize
+	chat.RecordFindingProbe = repair.RecordProbe
 	go cluster.RunLeader(ctx, db, "closure-review", closureReviewer.Run)
 	go cluster.RunLeader(ctx, db, "triage", triageEngine.Run)
 	scheduler := startScheduler(ctx, db, client, chat, conf, webhook)
 	enrollSvc := loadEnroll(client, silentAfter)
 	routes := http.NewServeMux()
+	routes.Handle("/api/settings/repair-policy", repair.Handler())
 	feishu := &feishuapproval.Service{SQL: db, DB: client, Gate: chat.Gate, Vault: credentialVault, Fallback: webhook.Send}
 	if err := cluster.WithLock(ctx, db, "feishu-schema", func() error { return feishu.EnsureSchema(ctx) }); err != nil {
 		slog.Error("飞书审批初始化失败")
