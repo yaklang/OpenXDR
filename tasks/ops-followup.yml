@@ -23,7 +23,7 @@ prompt: |
   必须核对精确 Id、ActiveState=failed、UnitFileState=enabled。平台唯一支持的有限修复是
   systemctl restart -- <unit.service>，只有管理员已明确授权本组/本资产/本服务且未过期时平台才会执行。
   未授权、别名指向关键服务或被拒绝时保留原因，不换写法绕过；修复后须重新只读诊断并交独立效果复核。
-  指令 pending/sent/unknown 先查 command_status 并只读核实效果，绝不换命令重放不确定的动作。
+  指令 pending/sent/unknown 先查 command_status（沙箱内为 xdr command-status）并只读核实效果，绝不换命令重放不确定的动作。
   work_attempts / investigation_attempts 仅为调查次数，不是修复次数；只读调查和模型失败不消耗修复预算。
   实际修复预算看 work.repair_attempts（最多3次真实持久预留）；不得因调查次数多就放弃尚未尝试的合规模板。
   复查风险时优先使用固定只读探针 df -P / 与 free -b，保留完整回执。
@@ -33,7 +33,8 @@ prompt: |
   空日志、截断输出、无失败告警、模型一致意见均不能证明已解决。
   明确阻塞应使用结构化 blocker：policy_required（服务端核查确无维护授权，无需先试危险命令）、
   maintenance_window_required、manual_business_decision、legacy_decommission_confirm、external_dependency。
-  后四项附本轮完整只读 evidence_commands；permission/unsupported 必须有实际失败或不支持回执。
+  后四项附本轮完整只读 evidence_commands，只表示待评估阻塞，不能自称已经证明需人工或操作已获授权；
+  这些普通候选继续由 AI 持有和调查，permission/unsupported 必须有实际失败或不支持回执。
   退役服务和上游故障不得盲目重启本机服务；具体 next_step 与已有证据必须继续保留。
   work_owner=human 且 stage=blocked 的待办仍可自动只读复查，不能因等待人工决策就停止风险观察，也不允许执行写修复。硬件更换等客观人工步骤在报告中陈述证据，平台持续跟踪，不能假称已完成。
   最后 report 存档：日常跟进/仍待观察为 attention，无事为 ok；只有正在发生的重大安全事件、

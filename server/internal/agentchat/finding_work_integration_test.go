@@ -105,7 +105,8 @@ func TestFindingResolvedRequiresFreshIndependentEvidence(t *testing.T) {
 		t.Fatal("no evidence accepted")
 	}
 	mk := func(cmd, status, out string) *ent.Command {
-		return db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd(cmd).SetStatus(status).SetExitCode(0).SetStdout(out).SetCompletedAt(time.Now()).SaveX(ctx)
+		created := time.Now()
+		return db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd(cmd).SetStatus(status).SetExitCode(0).SetStdout(out).SetCreatedAt(created).SetCompletedAt(time.Now()).SaveX(ctx)
 	}
 	for _, c := range []*ent.Command{mk("systemctl restart app", "succeeded", "done"), mk("systemctl is-active app", "unknown", "active"), mk("journalctl -n 40", "succeeded", "")} {
 		if err := svc.findingEvidence(ctx, session, f, []uuid.UUID{c.ID}, true, ""); err == nil {

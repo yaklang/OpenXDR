@@ -49,6 +49,8 @@ func (s *Service) updateFindingRisk(ctx context.Context, session *ent.AgentSessi
 		w.RiskKind = ""
 		w.RiskSince = nil
 		w.RiskObservedAt = &observed
+		w.EscalatedAt = nil
+		w.EscalationNotifiedAt = nil
 		return false, nil
 	}
 	if w.RiskSince == nil || w.RiskKind != kind || w.RiskObservedAt == nil || observed.Sub(*w.RiskObservedAt) > 2*time.Hour {

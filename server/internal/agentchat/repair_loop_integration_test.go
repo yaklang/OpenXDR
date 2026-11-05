@@ -80,8 +80,8 @@ func TestBusinessBlockerNeedsFreshActualDiagnostic(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := db.Finding.GetX(ctx, f.ID)
-	if got.WorkOwner != "human" {
-		t.Fatal("unavoidable business decision not represented")
+	if got.WorkOwner != "ai" {
+		t.Fatal("candidate business blocker unnecessarily handed to human")
 	}
 	db.Command.UpdateOneID(c.ID).SetCmd("date").SetStdout("2026-11-06 UTC").ExecX(ctx)
 	if err := svc.saveFindingPlan(ctx, session, got, "confirm", "manual_business_decision", []uuid.UUID{c.ID}); err == nil {

@@ -45,7 +45,7 @@ func TestTrackFindings(t *testing.T) {
 	if out, err := track(host.ID.String(), "open"); err != nil || !strings.Contains(out, `"reopened":false`) || db.Finding.Query().CountX(ctx) != 1 {
 		t.Fatalf("同一问题应去重更新：%s %v", out, err)
 	}
-	check := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("systemctl is-active termix-backup-pull").SetStatus("succeeded").SetExitCode(0).SetStdout("active").SetCompletedAt(time.Now()).SaveX(ctx)
+	check := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("systemctl is-active termix-backup-pull").SetStatus("succeeded").SetExitCode(0).SetStdout("active").SetCreatedAt(session.CreatedAt).SetCompletedAt(time.Now()).SaveX(ctx)
 	if _, err := s.tool(ctx, session, commandgate.Request{System: true}, "track", []byte(
 		`{"host":"`+host.ID.String()+`","key":"backup-failed","title":"备份服务已恢复","detail":"复查：termix-backup-pull active","severity":"medium","status":"resolved","evidence_commands":["`+check.ID.String()+`"]}`)); err != nil || get() != "resolved" {
 		t.Fatalf("复查修复应关闭：%v %s", err, get())

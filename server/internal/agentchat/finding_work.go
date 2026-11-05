@@ -250,7 +250,7 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 		default:
 			return errors.New("不支持的结构化阻塞原因")
 		}
-		if blocker == "permission" || blocker == "unsupported" || blocker == "manual_business_decision" || blocker == "legacy_decommission_confirm" {
+		if blocker == "permission" || blocker == "unsupported" {
 			owner = "human"
 		} else {
 			owner = "ai"
@@ -317,6 +317,11 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 	}
 	if escalated {
 		if err := audit.Checked(ctx, tx.AuditLog.Create(), "system", "server", "finding_risk_escalated", f.ID.String(), "risk="+prior.RiskKind+" session="+session.ID.String()+" evidence="+fmt.Sprint(ids)); err != nil {
+			return err
+		}
+	}
+	if old := readFindingWork(f); old.EscalatedAt != nil && prior.EscalatedAt == nil {
+		if err := audit.Checked(ctx, tx.AuditLog.Create(), "system", "server", "finding_risk_recovered", f.ID.String(), "独立只读探针确认当前资源风险恢复，session="+session.ID.String()+" evidence="+fmt.Sprint(ids)); err != nil {
 			return err
 		}
 	}
