@@ -28,13 +28,21 @@ pub fn verified(pid: u32, guid: &str) -> Result<Target, String> {
     if ids.get(&pid) != Some(&(expected, birth)) {
         return Err("进程身份不匹配或已过期，拒绝结束进程".into());
     }
+    #[cfg(target_os = "linux")]
+    {
+        let mut target = target;
+        target.verified_birth = Some(birth);
+        Ok(target)
+    }
+    #[cfg(not(target_os = "linux"))]
     Ok(target)
 }
 
 #[cfg(target_os = "linux")]
 pub struct Target {
     pid: u32,
-    fd: std::os::fd::OwnedFd,
+    fd: Option<std::os::fd::OwnedFd>,
+    verified_birth: Option<u64>,
 }
 
 #[cfg(target_os = "linux")]
@@ -44,7 +52,7 @@ impl Target {
         // pidfd 固定进程实例，校验之后 PID 再被复用也不会误杀。
         // SAFETY: pidfd_open 只接收整数参数（pid 与 flags 0），不涉及指针；返回值在下面检查 < 0。
         let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
-        if fd < 0 {
+        if fd < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::ENOSYS) {
             return Err(format!(
                 "进程不存在或无法打开 pidfd: {}",
                 std::io::Error::last_os_error()
@@ -54,7 +62,8 @@ impl Target {
             pid,
             // SAFETY: fd ≥ 0 是 pidfd_open 刚返回的新描述符，此处之外无人持有，交给 OwnedFd 独占并负责关闭；
             // fd 值不超过 RLIMIT_NOFILE，转 i32 不截断。
-            fd: unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as i32) },
+            fd: (fd >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as i32) }),
+            verified_birth: None,
         })
     }
     fn birth(&self) -> Result<u64, String> {
@@ -67,18 +76,31 @@ impl Target {
     }
     pub fn terminate(&self) -> Result<(), String> {
         use std::os::fd::AsRawFd;
-        // SAFETY: self.fd 是 Target 持有的有效 pidfd，生命周期覆盖本次调用；info 传空指针是 pidfd_send_signal
-        // 允许的用法（等同 kill 的默认 siginfo），flags 为 0。
-        let rc = unsafe {
-            libc::syscall(
-                libc::SYS_pidfd_send_signal,
-                self.fd.as_raw_fd(),
-                libc::SIGKILL,
-                std::ptr::null::<libc::siginfo_t>(),
-                0,
-            )
-        };
-        if rc < 0 {
+        if let Some(fd) = &self.fd {
+            // SAFETY: fd 由 Target 持有；空 info 与 flags 0 是合法参数。
+            let rc = unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    fd.as_raw_fd(),
+                    libc::SIGKILL,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                )
+            };
+            if rc >= 0 {
+                return Ok(());
+            }
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::ENOSYS) {
+                return Err(err.to_string());
+            }
+        }
+        // 旧内核不支持 pidfd 时，发送信号前再次核对已验证的创建时间。
+        if Some(self.birth()?) != self.verified_birth {
+            return Err("进程身份已变化，拒绝结束进程".into());
+        }
+        // SAFETY: PID 来自已验证的目标，且刚刚重新核对了创建时间。
+        if unsafe { libc::kill(self.pid as libc::pid_t, libc::SIGKILL) } < 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
         Ok(())
@@ -162,6 +184,29 @@ impl Target {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    #[test]
+    fn terminate_without_pidfd_checks_birth() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let mut target = Target {
+            pid: child.id(),
+            fd: None,
+            verified_birth: Some(0),
+        };
+        let refused = target.terminate();
+        target.verified_birth = Some(target.birth().unwrap());
+        let killed = target.terminate();
+        // 即使断言失败也先回收子进程。
+        let _ = child.kill();
+        let status = child.wait().unwrap();
+        assert_eq!(refused.unwrap_err(), "进程身份已变化，拒绝结束进程");
+        assert!(killed.is_ok());
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+    }
+
     #[test]
     fn stale_guid_and_birth_are_rejected() {
         // 用自己的进程做只读校验，绝不调用 terminate。
