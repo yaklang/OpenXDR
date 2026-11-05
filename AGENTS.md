@@ -131,6 +131,7 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
 - `assetmap`：资产图谱与攻击面——设备清单物化、依赖边聚合、区域与暴露判定、AI 标注（单活增量扫描事件）
 - `cmdorigin`：核对事件上的平台指令标记（agent 给指令拉起的进程树打标），通过的告警挂到指令上、不进关联与研判
 - `automation`：已知自动化（原可信自动化来源）——按 agent 打的 SSH 登录归属（公钥指纹、来源、用户）认出运维自动化：后台单活任务按登录规律与告警结论自动识别、续期、按结论停用，组管理员可调整或手动添加；告警挂到条目上、不进关联与研判，高危例外（凭据窃取、清痕迹、关防护、破坏、情报命中）照常研判
+- `closurereview`：独立复核良性误报与严格门禁的已遏制威胁结案；人工接管或锁定禁止自动结案，新证据重开，处置租约独立运行
 - `review`：需人工复核的统一口径（通知、总览计数、列表筛选与自动结案共用）
 - `testdb`：集成测试共享的 Postgres 连接与清表（仅 `integration` tag 编译）
 - `cmd/`：`detectcheck`（检测对拍）、`sigmacheck`（规则兼容检查）、`backtest`（用真实事件回测规则命中量）、`gencerts`（证书工具）、`sandboxd`（Pi 沙箱守护进程，见 `deploy/pi-sandbox`）、`eventpartition`（老库 events 在线迁移成分区表，见 `docs/event-partitioning.md`）
@@ -152,7 +153,7 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
   抑制与情报都可撤销、有有效期、持续累计命中计数；所有登录与处置操作落审计日志。
 - **AI 边界**：旧 triage 仍使用受限调查工具与最多 6 轮研判；Pi 会话使用
   `agentchat` / `commandgate`：exec 绑定组、名单与审批，query 仅使用组专属只读视图身份，
-  report、track（运维待办）、identify（服务调查结论）与 remember / forget（组内长期记忆，人工优先、AI 只能删自己写的）绑定会话归组；suppress 只提交抑制草案，AI 审计员（`suppressreview`）评审通过才生效，仍待批准的组管理员也可手动审批；propose_close 写入绑定当前证据版本的结案建议；人可采纳，证据充分的低风险良性建议也可由独立 closurereview 审计后结案（ai_review 来源，不计独立人工统计）。缺证或审计失败不得结案。Pi 不注册本机 shell/文件工具，模型不能改写身份或来源。
+  report、track（运维待办）、identify（服务调查结论）与 remember / forget（组内长期记忆，人工优先、AI 只能删自己写的）绑定会话归组；suppress 只提交抑制草案，AI 审计员（`suppressreview`）评审通过才生效，仍待批准的组管理员也可手动审批；propose_close 写入绑定当前证据版本的结案建议；人可采纳，证据充分的低风险良性建议也可由独立 closurereview 审计后结案（ai_review 来源，不计独立人工统计）。已遏制的可疑或恶意事件满足全部告警处置成功、无核心资产、六小时安静窗口且无人接管或锁定时，也可独立复核后按 closed 结案；新证据重开，处置租约独立运行。缺证或审计失败不得结案。Pi 不注册本机 shell/文件工具，模型不能改写身份或来源。
   AI 发起、命中名单的命令不等人：由 AI 审计员（`commandreview`）当场评审，批准或拒绝都留审批记录与审计，评审出错按拒绝；
   停 agent、关机重启、清日志审计、清防火墙、格式化磁盘在硬拒绝清单里，AI 发起的一律不执行、不送评审。
   定时任务里经 `commandgate.ReadOnly` 判定为只读的 Linux 命令仍直接自动批准，省一次模型调用。

@@ -80,7 +80,10 @@ func (Incident) Edges() []ent.Edge {
 
 // IncidentWork 服务端持有的自治计划；不接受模型或 API 直接改写负责人和预算。
 type IncidentWork struct {
-	Version     int           `json:"version"`
+	Version int `json:"version"`
+	// ManualOwner 与 ManualLock 只表示明确人工接管，系统自动升级不设置。
+	ManualOwner string        `json:"manual_owner,omitempty"`
+	ManualLock  bool          `json:"manual_lock,omitempty"`
 	Owner       string        `json:"owner"`
 	Stage       string        `json:"stage"`
 	EvidenceKey string        `json:"evidence_key"`

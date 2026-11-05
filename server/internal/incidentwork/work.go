@@ -69,7 +69,16 @@ func Plan(inc *ent.Incident, severity int, decoy bool, now time.Time) (*schema.I
 			}
 		}
 	}
+	if inc.Work != nil {
+		w.ManualOwner = inc.Work.ManualOwner
+		w.ManualLock = inc.Work.ManualLock
+	}
 	switch {
+	case inc.Work != nil && (inc.Work.ManualLock || inc.Work.ManualOwner != "") && inc.Status != "closed" && inc.Status != "false_positive":
+		w.Owner = "human"
+		w.Stage = "escalated"
+		w.Reason = "人工接管或锁定，保留人工决定权"
+		return w, nil
 	case inc.Status == "closed" || inc.Status == "false_positive":
 		w.Stage = "completed"
 		w.Reason = "事件已结案"

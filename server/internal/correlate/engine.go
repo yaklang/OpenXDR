@@ -21,6 +21,7 @@ import (
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
 	"openxdr/server/internal/automation"
+	"openxdr/server/internal/closurereview"
 	"openxdr/server/internal/incidentstate"
 	"openxdr/server/internal/sigma"
 )
@@ -76,6 +77,9 @@ func (e *Engine) batch(ctx context.Context) error {
 }
 
 func (e *Engine) batchTx(ctx context.Context, tx *ent.Tx) error {
+	if err := closurereview.ReopenContained(ctx, tx); err != nil {
+		return err
+	}
 	// 平台指令触发的告警挂在指令上，不组成事件：来源已知，发起与审批都有记录。
 	// 登记的可信自动化来源同理，只有高危例外照常进关联
 	pending, err := e.DB.Alert.Query().
