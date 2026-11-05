@@ -514,7 +514,7 @@ func (s *Scheduler) attempt(ctx context.Context, t *ent.Task, g *ent.Group, run 
 	})
 
 	// 节点失去租约时 ctx 已取消，终态仍要落库
-	done, cancelDone := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	done, cancelDone := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancelDone()
 	update := s.DB.TaskRun.Update().Where(taskrun.IDEQ(run.ID), taskrun.StatusEQ("running"), taskrun.SessionIDEQ(session.ID)).SetFinishedAt(time.Now()).SetStatus("succeeded")
 	if err != nil {
@@ -526,8 +526,8 @@ func (s *Scheduler) attempt(ctx context.Context, t *ent.Task, g *ent.Group, run 
 	}
 	n, uerr := update.Save(done)
 	if uerr != nil {
-		slog.Error("保存任务运行终态失败", "run", run.ID, "err", uerr)
-		return uerr
+		slog.Error("保存任务运行终态失败", "stage", "task_run_finalize", "run", run.ID, "session", session.ID, "execution_err", err, "err", uerr)
+		return fmt.Errorf("保存任务运行终态失败（task_run_finalize）: %w", uerr)
 	}
 	if n != 1 {
 		return errRunSuperseded
