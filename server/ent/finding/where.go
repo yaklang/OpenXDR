@@ -90,6 +90,31 @@ func Status(v string) predicate.Finding {
 	return predicate.Finding(sql.FieldEQ(FieldStatus, v))
 }
 
+// WorkOwner applies equality check predicate on the "work_owner" field. It's identical to WorkOwnerEQ.
+func WorkOwner(v string) predicate.Finding {
+	return predicate.Finding(sql.FieldEQ(FieldWorkOwner, v))
+}
+
+// WorkNextCheckAt applies equality check predicate on the "work_next_check_at" field. It's identical to WorkNextCheckAtEQ.
+func WorkNextCheckAt(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldEQ(FieldWorkNextCheckAt, v))
+}
+
+// WorkAttempts applies equality check predicate on the "work_attempts" field. It's identical to WorkAttemptsEQ.
+func WorkAttempts(v int) predicate.Finding {
+	return predicate.Finding(sql.FieldEQ(FieldWorkAttempts, v))
+}
+
+// WorkSessionID applies equality check predicate on the "work_session_id" field. It's identical to WorkSessionIDEQ.
+func WorkSessionID(v uuid.UUID) predicate.Finding {
+	return predicate.Finding(sql.FieldEQ(FieldWorkSessionID, v))
+}
+
+// WorkLeaseUntil applies equality check predicate on the "work_lease_until" field. It's identical to WorkLeaseUntilEQ.
+func WorkLeaseUntil(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldEQ(FieldWorkLeaseUntil, v))
+}
+
 // FirstSeen applies equality check predicate on the "first_seen" field. It's identical to FirstSeenEQ.
 func FirstSeen(v time.Time) predicate.Finding {
 	return predicate.Finding(sql.FieldEQ(FieldFirstSeen, v))
@@ -523,6 +548,271 @@ func StatusEqualFold(v string) predicate.Finding {
 // StatusContainsFold applies the ContainsFold predicate on the "status" field.
 func StatusContainsFold(v string) predicate.Finding {
 	return predicate.Finding(sql.FieldContainsFold(FieldStatus, v))
+}
+
+// WorkOwnerEQ applies the EQ predicate on the "work_owner" field.
+func WorkOwnerEQ(v string) predicate.Finding {
+	return predicate.Finding(sql.FieldEQ(FieldWorkOwner, v))
+}
+
+// WorkOwnerNEQ applies the NEQ predicate on the "work_owner" field.
+func WorkOwnerNEQ(v string) predicate.Finding {
+	return predicate.Finding(sql.FieldNEQ(FieldWorkOwner, v))
+}
+
+// WorkOwnerIn applies the In predicate on the "work_owner" field.
+func WorkOwnerIn(vs ...string) predicate.Finding {
+	return predicate.Finding(sql.FieldIn(FieldWorkOwner, vs...))
+}
+
+// WorkOwnerNotIn applies the NotIn predicate on the "work_owner" field.
+func WorkOwnerNotIn(vs ...string) predicate.Finding {
+	return predicate.Finding(sql.FieldNotIn(FieldWorkOwner, vs...))
+}
+
+// WorkOwnerGT applies the GT predicate on the "work_owner" field.
+func WorkOwnerGT(v string) predicate.Finding {
+	return predicate.Finding(sql.FieldGT(FieldWorkOwner, v))
+}
+
+// WorkOwnerGTE applies the GTE predicate on the "work_owner" field.
+func WorkOwnerGTE(v string) predicate.Finding {
+	return predicate.Finding(sql.FieldGTE(FieldWorkOwner, v))
+}
+
+// WorkOwnerLT applies the LT predicate on the "work_owner" field.
+func WorkOwnerLT(v string) predicate.Finding {
+	return predicate.Finding(sql.FieldLT(FieldWorkOwner, v))
+}
+
+// WorkOwnerLTE applies the LTE predicate on the "work_owner" field.
+func WorkOwnerLTE(v string) predicate.Finding {
+	return predicate.Finding(sql.FieldLTE(FieldWorkOwner, v))
+}
+
+// WorkOwnerContains applies the Contains predicate on the "work_owner" field.
+func WorkOwnerContains(v string) predicate.Finding {
+	return predicate.Finding(sql.FieldContains(FieldWorkOwner, v))
+}
+
+// WorkOwnerHasPrefix applies the HasPrefix predicate on the "work_owner" field.
+func WorkOwnerHasPrefix(v string) predicate.Finding {
+	return predicate.Finding(sql.FieldHasPrefix(FieldWorkOwner, v))
+}
+
+// WorkOwnerHasSuffix applies the HasSuffix predicate on the "work_owner" field.
+func WorkOwnerHasSuffix(v string) predicate.Finding {
+	return predicate.Finding(sql.FieldHasSuffix(FieldWorkOwner, v))
+}
+
+// WorkOwnerEqualFold applies the EqualFold predicate on the "work_owner" field.
+func WorkOwnerEqualFold(v string) predicate.Finding {
+	return predicate.Finding(sql.FieldEqualFold(FieldWorkOwner, v))
+}
+
+// WorkOwnerContainsFold applies the ContainsFold predicate on the "work_owner" field.
+func WorkOwnerContainsFold(v string) predicate.Finding {
+	return predicate.Finding(sql.FieldContainsFold(FieldWorkOwner, v))
+}
+
+// WorkNextCheckAtEQ applies the EQ predicate on the "work_next_check_at" field.
+func WorkNextCheckAtEQ(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldEQ(FieldWorkNextCheckAt, v))
+}
+
+// WorkNextCheckAtNEQ applies the NEQ predicate on the "work_next_check_at" field.
+func WorkNextCheckAtNEQ(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldNEQ(FieldWorkNextCheckAt, v))
+}
+
+// WorkNextCheckAtIn applies the In predicate on the "work_next_check_at" field.
+func WorkNextCheckAtIn(vs ...time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldIn(FieldWorkNextCheckAt, vs...))
+}
+
+// WorkNextCheckAtNotIn applies the NotIn predicate on the "work_next_check_at" field.
+func WorkNextCheckAtNotIn(vs ...time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldNotIn(FieldWorkNextCheckAt, vs...))
+}
+
+// WorkNextCheckAtGT applies the GT predicate on the "work_next_check_at" field.
+func WorkNextCheckAtGT(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldGT(FieldWorkNextCheckAt, v))
+}
+
+// WorkNextCheckAtGTE applies the GTE predicate on the "work_next_check_at" field.
+func WorkNextCheckAtGTE(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldGTE(FieldWorkNextCheckAt, v))
+}
+
+// WorkNextCheckAtLT applies the LT predicate on the "work_next_check_at" field.
+func WorkNextCheckAtLT(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldLT(FieldWorkNextCheckAt, v))
+}
+
+// WorkNextCheckAtLTE applies the LTE predicate on the "work_next_check_at" field.
+func WorkNextCheckAtLTE(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldLTE(FieldWorkNextCheckAt, v))
+}
+
+// WorkNextCheckAtIsNil applies the IsNil predicate on the "work_next_check_at" field.
+func WorkNextCheckAtIsNil() predicate.Finding {
+	return predicate.Finding(sql.FieldIsNull(FieldWorkNextCheckAt))
+}
+
+// WorkNextCheckAtNotNil applies the NotNil predicate on the "work_next_check_at" field.
+func WorkNextCheckAtNotNil() predicate.Finding {
+	return predicate.Finding(sql.FieldNotNull(FieldWorkNextCheckAt))
+}
+
+// WorkAttemptsEQ applies the EQ predicate on the "work_attempts" field.
+func WorkAttemptsEQ(v int) predicate.Finding {
+	return predicate.Finding(sql.FieldEQ(FieldWorkAttempts, v))
+}
+
+// WorkAttemptsNEQ applies the NEQ predicate on the "work_attempts" field.
+func WorkAttemptsNEQ(v int) predicate.Finding {
+	return predicate.Finding(sql.FieldNEQ(FieldWorkAttempts, v))
+}
+
+// WorkAttemptsIn applies the In predicate on the "work_attempts" field.
+func WorkAttemptsIn(vs ...int) predicate.Finding {
+	return predicate.Finding(sql.FieldIn(FieldWorkAttempts, vs...))
+}
+
+// WorkAttemptsNotIn applies the NotIn predicate on the "work_attempts" field.
+func WorkAttemptsNotIn(vs ...int) predicate.Finding {
+	return predicate.Finding(sql.FieldNotIn(FieldWorkAttempts, vs...))
+}
+
+// WorkAttemptsGT applies the GT predicate on the "work_attempts" field.
+func WorkAttemptsGT(v int) predicate.Finding {
+	return predicate.Finding(sql.FieldGT(FieldWorkAttempts, v))
+}
+
+// WorkAttemptsGTE applies the GTE predicate on the "work_attempts" field.
+func WorkAttemptsGTE(v int) predicate.Finding {
+	return predicate.Finding(sql.FieldGTE(FieldWorkAttempts, v))
+}
+
+// WorkAttemptsLT applies the LT predicate on the "work_attempts" field.
+func WorkAttemptsLT(v int) predicate.Finding {
+	return predicate.Finding(sql.FieldLT(FieldWorkAttempts, v))
+}
+
+// WorkAttemptsLTE applies the LTE predicate on the "work_attempts" field.
+func WorkAttemptsLTE(v int) predicate.Finding {
+	return predicate.Finding(sql.FieldLTE(FieldWorkAttempts, v))
+}
+
+// WorkSessionIDEQ applies the EQ predicate on the "work_session_id" field.
+func WorkSessionIDEQ(v uuid.UUID) predicate.Finding {
+	return predicate.Finding(sql.FieldEQ(FieldWorkSessionID, v))
+}
+
+// WorkSessionIDNEQ applies the NEQ predicate on the "work_session_id" field.
+func WorkSessionIDNEQ(v uuid.UUID) predicate.Finding {
+	return predicate.Finding(sql.FieldNEQ(FieldWorkSessionID, v))
+}
+
+// WorkSessionIDIn applies the In predicate on the "work_session_id" field.
+func WorkSessionIDIn(vs ...uuid.UUID) predicate.Finding {
+	return predicate.Finding(sql.FieldIn(FieldWorkSessionID, vs...))
+}
+
+// WorkSessionIDNotIn applies the NotIn predicate on the "work_session_id" field.
+func WorkSessionIDNotIn(vs ...uuid.UUID) predicate.Finding {
+	return predicate.Finding(sql.FieldNotIn(FieldWorkSessionID, vs...))
+}
+
+// WorkSessionIDGT applies the GT predicate on the "work_session_id" field.
+func WorkSessionIDGT(v uuid.UUID) predicate.Finding {
+	return predicate.Finding(sql.FieldGT(FieldWorkSessionID, v))
+}
+
+// WorkSessionIDGTE applies the GTE predicate on the "work_session_id" field.
+func WorkSessionIDGTE(v uuid.UUID) predicate.Finding {
+	return predicate.Finding(sql.FieldGTE(FieldWorkSessionID, v))
+}
+
+// WorkSessionIDLT applies the LT predicate on the "work_session_id" field.
+func WorkSessionIDLT(v uuid.UUID) predicate.Finding {
+	return predicate.Finding(sql.FieldLT(FieldWorkSessionID, v))
+}
+
+// WorkSessionIDLTE applies the LTE predicate on the "work_session_id" field.
+func WorkSessionIDLTE(v uuid.UUID) predicate.Finding {
+	return predicate.Finding(sql.FieldLTE(FieldWorkSessionID, v))
+}
+
+// WorkSessionIDIsNil applies the IsNil predicate on the "work_session_id" field.
+func WorkSessionIDIsNil() predicate.Finding {
+	return predicate.Finding(sql.FieldIsNull(FieldWorkSessionID))
+}
+
+// WorkSessionIDNotNil applies the NotNil predicate on the "work_session_id" field.
+func WorkSessionIDNotNil() predicate.Finding {
+	return predicate.Finding(sql.FieldNotNull(FieldWorkSessionID))
+}
+
+// WorkLeaseUntilEQ applies the EQ predicate on the "work_lease_until" field.
+func WorkLeaseUntilEQ(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldEQ(FieldWorkLeaseUntil, v))
+}
+
+// WorkLeaseUntilNEQ applies the NEQ predicate on the "work_lease_until" field.
+func WorkLeaseUntilNEQ(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldNEQ(FieldWorkLeaseUntil, v))
+}
+
+// WorkLeaseUntilIn applies the In predicate on the "work_lease_until" field.
+func WorkLeaseUntilIn(vs ...time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldIn(FieldWorkLeaseUntil, vs...))
+}
+
+// WorkLeaseUntilNotIn applies the NotIn predicate on the "work_lease_until" field.
+func WorkLeaseUntilNotIn(vs ...time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldNotIn(FieldWorkLeaseUntil, vs...))
+}
+
+// WorkLeaseUntilGT applies the GT predicate on the "work_lease_until" field.
+func WorkLeaseUntilGT(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldGT(FieldWorkLeaseUntil, v))
+}
+
+// WorkLeaseUntilGTE applies the GTE predicate on the "work_lease_until" field.
+func WorkLeaseUntilGTE(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldGTE(FieldWorkLeaseUntil, v))
+}
+
+// WorkLeaseUntilLT applies the LT predicate on the "work_lease_until" field.
+func WorkLeaseUntilLT(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldLT(FieldWorkLeaseUntil, v))
+}
+
+// WorkLeaseUntilLTE applies the LTE predicate on the "work_lease_until" field.
+func WorkLeaseUntilLTE(v time.Time) predicate.Finding {
+	return predicate.Finding(sql.FieldLTE(FieldWorkLeaseUntil, v))
+}
+
+// WorkLeaseUntilIsNil applies the IsNil predicate on the "work_lease_until" field.
+func WorkLeaseUntilIsNil() predicate.Finding {
+	return predicate.Finding(sql.FieldIsNull(FieldWorkLeaseUntil))
+}
+
+// WorkLeaseUntilNotNil applies the NotNil predicate on the "work_lease_until" field.
+func WorkLeaseUntilNotNil() predicate.Finding {
+	return predicate.Finding(sql.FieldNotNull(FieldWorkLeaseUntil))
+}
+
+// WorkIsNil applies the IsNil predicate on the "work" field.
+func WorkIsNil() predicate.Finding {
+	return predicate.Finding(sql.FieldIsNull(FieldWork))
+}
+
+// WorkNotNil applies the NotNil predicate on the "work" field.
+func WorkNotNil() predicate.Finding {
+	return predicate.Finding(sql.FieldNotNull(FieldWork))
 }
 
 // FirstSeenEQ applies the EQ predicate on the "first_seen" field.

@@ -9,6 +9,8 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/triagerun"
+	"openxdr/server/internal/incidentwork"
+	"openxdr/server/internal/review"
 )
 
 type timingKey struct{}
@@ -55,6 +57,9 @@ func (e *Engine) runTrigger(inc *ent.Incident) (string, *time.Time) {
 		ready := inc.TriagedAt.Add(e.Cooldown)
 		return capabilityTrigger, &ready
 	}
+	if workFollowup(inc, time.Now()) {
+		return "autonomy_followup", inc.WorkNextCheckAt
+	}
 	ready := inc.EvidenceAt
 	if ready != nil && inc.TriagedAt != nil {
 		end := inc.TriagedAt.Add(e.Cooldown)
@@ -75,6 +80,9 @@ func (e *Engine) beginRun(ctx context.Context, inc *ent.Incident, started time.T
 	claim := tx.Incident.Update().Where(incident.IDEQ(inc.ID), incident.StatusIn("open", "triaged"),
 		incident.Or(incident.TriageStartedAtIsNil(), incident.TriageHeartbeatAtIsNil(), incident.TriageHeartbeatAtLTE(started.Add(-RunningTTL)))).
 		SetTriageStartedAt(started).SetTriageHeartbeatAt(started)
+	if workFollowup(inc, started) {
+		claim.Where(incidentwork.Due(started))
+	}
 	if needsCapabilityUpgrade(inc) {
 		claim.Where(capabilityDue(started, e.Cooldown))
 	}
@@ -93,6 +101,13 @@ func (e *Engine) beginRun(ctx context.Context, inc *ent.Incident, started time.T
 	reason, ready := e.runTrigger(current)
 	if current.TriageRetryAt != nil && ready != nil && current.TriageRetryAt.After(*ready) {
 		ready = current.TriageRetryAt
+	}
+	if reason == "autonomy_followup" && current.Work != nil {
+		work := *current.Work
+		work.Attempts++
+		if err := tx.Incident.UpdateOneID(inc.ID).SetWork(&work).Exec(ctx); err != nil {
+			return nil, err
+		}
 	}
 	row, err := tx.TriageRun.Create().SetIncidentID(inc.ID).SetStartedAt(started).SetNillableReadyAt(ready).SetTrigger(reason).SetModel(model).Save(ctx)
 	if err != nil {
@@ -125,4 +140,8 @@ func (e *Engine) failRun(row *ent.TriageRun, timing *runTiming, stage string, ca
 	if err := runUpdate(e.DB, row, timing, time.Now()).SetStatus(status).SetErrorCode(stage).Exec(ctx); err != nil && !ent.IsNotFound(err) {
 		slog.Error("保存研判尝试失败", "run", row.ID, "err", err)
 	}
+}
+
+func workFollowup(inc *ent.Incident, now time.Time) bool {
+	return inc.Status == "triaged" && !review.IsRetriage(inc) && !review.IsUrgent(inc) && !needsCapabilityUpgrade(inc) && inc.Work != nil && inc.Work.Owner == "ai" && inc.Work.Stage == "followup" && inc.Work.Attempts < incidentwork.MaxAttempts && inc.WorkNextCheckAt != nil && !inc.WorkNextCheckAt.After(now)
 }

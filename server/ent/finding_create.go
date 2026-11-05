@@ -4,6 +4,7 @@ package ent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"openxdr/server/ent/finding"
@@ -84,6 +85,82 @@ func (_c *FindingCreate) SetNillableStatus(v *string) *FindingCreate {
 	if v != nil {
 		_c.SetStatus(*v)
 	}
+	return _c
+}
+
+// SetWorkOwner sets the "work_owner" field.
+func (_c *FindingCreate) SetWorkOwner(v string) *FindingCreate {
+	_c.mutation.SetWorkOwner(v)
+	return _c
+}
+
+// SetNillableWorkOwner sets the "work_owner" field if the given value is not nil.
+func (_c *FindingCreate) SetNillableWorkOwner(v *string) *FindingCreate {
+	if v != nil {
+		_c.SetWorkOwner(*v)
+	}
+	return _c
+}
+
+// SetWorkNextCheckAt sets the "work_next_check_at" field.
+func (_c *FindingCreate) SetWorkNextCheckAt(v time.Time) *FindingCreate {
+	_c.mutation.SetWorkNextCheckAt(v)
+	return _c
+}
+
+// SetNillableWorkNextCheckAt sets the "work_next_check_at" field if the given value is not nil.
+func (_c *FindingCreate) SetNillableWorkNextCheckAt(v *time.Time) *FindingCreate {
+	if v != nil {
+		_c.SetWorkNextCheckAt(*v)
+	}
+	return _c
+}
+
+// SetWorkAttempts sets the "work_attempts" field.
+func (_c *FindingCreate) SetWorkAttempts(v int) *FindingCreate {
+	_c.mutation.SetWorkAttempts(v)
+	return _c
+}
+
+// SetNillableWorkAttempts sets the "work_attempts" field if the given value is not nil.
+func (_c *FindingCreate) SetNillableWorkAttempts(v *int) *FindingCreate {
+	if v != nil {
+		_c.SetWorkAttempts(*v)
+	}
+	return _c
+}
+
+// SetWorkSessionID sets the "work_session_id" field.
+func (_c *FindingCreate) SetWorkSessionID(v uuid.UUID) *FindingCreate {
+	_c.mutation.SetWorkSessionID(v)
+	return _c
+}
+
+// SetNillableWorkSessionID sets the "work_session_id" field if the given value is not nil.
+func (_c *FindingCreate) SetNillableWorkSessionID(v *uuid.UUID) *FindingCreate {
+	if v != nil {
+		_c.SetWorkSessionID(*v)
+	}
+	return _c
+}
+
+// SetWorkLeaseUntil sets the "work_lease_until" field.
+func (_c *FindingCreate) SetWorkLeaseUntil(v time.Time) *FindingCreate {
+	_c.mutation.SetWorkLeaseUntil(v)
+	return _c
+}
+
+// SetNillableWorkLeaseUntil sets the "work_lease_until" field if the given value is not nil.
+func (_c *FindingCreate) SetNillableWorkLeaseUntil(v *time.Time) *FindingCreate {
+	if v != nil {
+		_c.SetWorkLeaseUntil(*v)
+	}
+	return _c
+}
+
+// SetWork sets the "work" field.
+func (_c *FindingCreate) SetWork(v json.RawMessage) *FindingCreate {
+	_c.mutation.SetWork(v)
 	return _c
 }
 
@@ -232,6 +309,14 @@ func (_c *FindingCreate) defaults() {
 		v := finding.DefaultStatus
 		_c.mutation.SetStatus(v)
 	}
+	if _, ok := _c.mutation.WorkOwner(); !ok {
+		v := finding.DefaultWorkOwner
+		_c.mutation.SetWorkOwner(v)
+	}
+	if _, ok := _c.mutation.WorkAttempts(); !ok {
+		v := finding.DefaultWorkAttempts
+		_c.mutation.SetWorkAttempts(v)
+	}
 	if _, ok := _c.mutation.FirstSeen(); !ok {
 		v := finding.DefaultFirstSeen()
 		_c.mutation.SetFirstSeen(v)
@@ -278,6 +363,12 @@ func (_c *FindingCreate) check() error {
 	}
 	if _, ok := _c.mutation.Status(); !ok {
 		return &ValidationError{Name: "status", err: errors.New(`ent: missing required field "Finding.status"`)}
+	}
+	if _, ok := _c.mutation.WorkOwner(); !ok {
+		return &ValidationError{Name: "work_owner", err: errors.New(`ent: missing required field "Finding.work_owner"`)}
+	}
+	if _, ok := _c.mutation.WorkAttempts(); !ok {
+		return &ValidationError{Name: "work_attempts", err: errors.New(`ent: missing required field "Finding.work_attempts"`)}
 	}
 	if _, ok := _c.mutation.FirstSeen(); !ok {
 		return &ValidationError{Name: "first_seen", err: errors.New(`ent: missing required field "Finding.first_seen"`)}
@@ -347,6 +438,30 @@ func (_c *FindingCreate) createSpec() (*Finding, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(finding.FieldStatus, field.TypeString, value)
 		_node.Status = value
+	}
+	if value, ok := _c.mutation.WorkOwner(); ok {
+		_spec.SetField(finding.FieldWorkOwner, field.TypeString, value)
+		_node.WorkOwner = value
+	}
+	if value, ok := _c.mutation.WorkNextCheckAt(); ok {
+		_spec.SetField(finding.FieldWorkNextCheckAt, field.TypeTime, value)
+		_node.WorkNextCheckAt = &value
+	}
+	if value, ok := _c.mutation.WorkAttempts(); ok {
+		_spec.SetField(finding.FieldWorkAttempts, field.TypeInt, value)
+		_node.WorkAttempts = value
+	}
+	if value, ok := _c.mutation.WorkSessionID(); ok {
+		_spec.SetField(finding.FieldWorkSessionID, field.TypeUUID, value)
+		_node.WorkSessionID = &value
+	}
+	if value, ok := _c.mutation.WorkLeaseUntil(); ok {
+		_spec.SetField(finding.FieldWorkLeaseUntil, field.TypeTime, value)
+		_node.WorkLeaseUntil = &value
+	}
+	if value, ok := _c.mutation.Work(); ok {
+		_spec.SetField(finding.FieldWork, field.TypeJSON, value)
+		_node.Work = value
 	}
 	if value, ok := _c.mutation.FirstSeen(); ok {
 		_spec.SetField(finding.FieldFirstSeen, field.TypeTime, value)

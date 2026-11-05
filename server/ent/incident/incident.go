@@ -55,6 +55,10 @@ const (
 	FieldTriageRetryAt = "triage_retry_at"
 	// FieldClosureProposal holds the string denoting the closure_proposal field in the database.
 	FieldClosureProposal = "closure_proposal"
+	// FieldWork holds the string denoting the work field in the database.
+	FieldWork = "work"
+	// FieldWorkNextCheckAt holds the string denoting the work_next_check_at field in the database.
+	FieldWorkNextCheckAt = "work_next_check_at"
 	// EdgeAlerts holds the string denoting the alerts edge name in mutations.
 	EdgeAlerts = "alerts"
 	// Table holds the table name of the incident in the database.
@@ -91,6 +95,8 @@ var Columns = []string{
 	FieldTriageFailures,
 	FieldTriageRetryAt,
 	FieldClosureProposal,
+	FieldWork,
+	FieldWorkNextCheckAt,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -209,6 +215,11 @@ func ByTriageFailures(opts ...sql.OrderTermOption) OrderOption {
 // ByTriageRetryAt orders the results by the triage_retry_at field.
 func ByTriageRetryAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTriageRetryAt, opts...).ToFunc()
+}
+
+// ByWorkNextCheckAt orders the results by the work_next_check_at field.
+func ByWorkNextCheckAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWorkNextCheckAt, opts...).ToFunc()
 }
 
 // ByAlertsCount orders the results by alerts count.

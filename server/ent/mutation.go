@@ -21397,26 +21397,34 @@ func (m *ExternalTicketMutation) ResetEdge(name string) error {
 // FindingMutation represents an operation that mutates the Finding nodes in the graph.
 type FindingMutation struct {
 	config
-	op            Op
-	typ           string
-	id            *uuid.UUID
-	group_id      *uuid.UUID
-	asset_id      *uuid.UUID
-	key           *string
-	title         *string
-	detail        *string
-	severity      *string
-	status        *string
-	first_seen    *time.Time
-	last_seen     *time.Time
-	session_id    *uuid.UUID
-	resolved_at   *time.Time
-	resolved_by   *string
-	note          *string
-	clearedFields map[string]struct{}
-	done          bool
-	oldValue      func(context.Context) (*Finding, error)
-	predicates    []predicate.Finding
+	op                 Op
+	typ                string
+	id                 *uuid.UUID
+	group_id           *uuid.UUID
+	asset_id           *uuid.UUID
+	key                *string
+	title              *string
+	detail             *string
+	severity           *string
+	status             *string
+	work_owner         *string
+	work_next_check_at *time.Time
+	work_attempts      *int
+	addwork_attempts   *int
+	work_session_id    *uuid.UUID
+	work_lease_until   *time.Time
+	work               *json.RawMessage
+	appendwork         json.RawMessage
+	first_seen         *time.Time
+	last_seen          *time.Time
+	session_id         *uuid.UUID
+	resolved_at        *time.Time
+	resolved_by        *string
+	note               *string
+	clearedFields      map[string]struct{}
+	done               bool
+	oldValue           func(context.Context) (*Finding, error)
+	predicates         []predicate.Finding
 }
 
 var _ ent.Mutation = (*FindingMutation)(nil)
@@ -21775,6 +21783,310 @@ func (m *FindingMutation) ResetStatus() {
 	m.status = nil
 }
 
+// SetWorkOwner sets the "work_owner" field.
+func (m *FindingMutation) SetWorkOwner(s string) {
+	m.work_owner = &s
+}
+
+// WorkOwner returns the value of the "work_owner" field in the mutation.
+func (m *FindingMutation) WorkOwner() (r string, exists bool) {
+	v := m.work_owner
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWorkOwner returns the old "work_owner" field's value of the Finding entity.
+// If the Finding object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FindingMutation) OldWorkOwner(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWorkOwner is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWorkOwner requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWorkOwner: %w", err)
+	}
+	return oldValue.WorkOwner, nil
+}
+
+// ResetWorkOwner resets all changes to the "work_owner" field.
+func (m *FindingMutation) ResetWorkOwner() {
+	m.work_owner = nil
+}
+
+// SetWorkNextCheckAt sets the "work_next_check_at" field.
+func (m *FindingMutation) SetWorkNextCheckAt(t time.Time) {
+	m.work_next_check_at = &t
+}
+
+// WorkNextCheckAt returns the value of the "work_next_check_at" field in the mutation.
+func (m *FindingMutation) WorkNextCheckAt() (r time.Time, exists bool) {
+	v := m.work_next_check_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWorkNextCheckAt returns the old "work_next_check_at" field's value of the Finding entity.
+// If the Finding object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FindingMutation) OldWorkNextCheckAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWorkNextCheckAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWorkNextCheckAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWorkNextCheckAt: %w", err)
+	}
+	return oldValue.WorkNextCheckAt, nil
+}
+
+// ClearWorkNextCheckAt clears the value of the "work_next_check_at" field.
+func (m *FindingMutation) ClearWorkNextCheckAt() {
+	m.work_next_check_at = nil
+	m.clearedFields[finding.FieldWorkNextCheckAt] = struct{}{}
+}
+
+// WorkNextCheckAtCleared returns if the "work_next_check_at" field was cleared in this mutation.
+func (m *FindingMutation) WorkNextCheckAtCleared() bool {
+	_, ok := m.clearedFields[finding.FieldWorkNextCheckAt]
+	return ok
+}
+
+// ResetWorkNextCheckAt resets all changes to the "work_next_check_at" field.
+func (m *FindingMutation) ResetWorkNextCheckAt() {
+	m.work_next_check_at = nil
+	delete(m.clearedFields, finding.FieldWorkNextCheckAt)
+}
+
+// SetWorkAttempts sets the "work_attempts" field.
+func (m *FindingMutation) SetWorkAttempts(i int) {
+	m.work_attempts = &i
+	m.addwork_attempts = nil
+}
+
+// WorkAttempts returns the value of the "work_attempts" field in the mutation.
+func (m *FindingMutation) WorkAttempts() (r int, exists bool) {
+	v := m.work_attempts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWorkAttempts returns the old "work_attempts" field's value of the Finding entity.
+// If the Finding object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FindingMutation) OldWorkAttempts(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWorkAttempts is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWorkAttempts requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWorkAttempts: %w", err)
+	}
+	return oldValue.WorkAttempts, nil
+}
+
+// AddWorkAttempts adds i to the "work_attempts" field.
+func (m *FindingMutation) AddWorkAttempts(i int) {
+	if m.addwork_attempts != nil {
+		*m.addwork_attempts += i
+	} else {
+		m.addwork_attempts = &i
+	}
+}
+
+// AddedWorkAttempts returns the value that was added to the "work_attempts" field in this mutation.
+func (m *FindingMutation) AddedWorkAttempts() (r int, exists bool) {
+	v := m.addwork_attempts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetWorkAttempts resets all changes to the "work_attempts" field.
+func (m *FindingMutation) ResetWorkAttempts() {
+	m.work_attempts = nil
+	m.addwork_attempts = nil
+}
+
+// SetWorkSessionID sets the "work_session_id" field.
+func (m *FindingMutation) SetWorkSessionID(u uuid.UUID) {
+	m.work_session_id = &u
+}
+
+// WorkSessionID returns the value of the "work_session_id" field in the mutation.
+func (m *FindingMutation) WorkSessionID() (r uuid.UUID, exists bool) {
+	v := m.work_session_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWorkSessionID returns the old "work_session_id" field's value of the Finding entity.
+// If the Finding object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FindingMutation) OldWorkSessionID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWorkSessionID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWorkSessionID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWorkSessionID: %w", err)
+	}
+	return oldValue.WorkSessionID, nil
+}
+
+// ClearWorkSessionID clears the value of the "work_session_id" field.
+func (m *FindingMutation) ClearWorkSessionID() {
+	m.work_session_id = nil
+	m.clearedFields[finding.FieldWorkSessionID] = struct{}{}
+}
+
+// WorkSessionIDCleared returns if the "work_session_id" field was cleared in this mutation.
+func (m *FindingMutation) WorkSessionIDCleared() bool {
+	_, ok := m.clearedFields[finding.FieldWorkSessionID]
+	return ok
+}
+
+// ResetWorkSessionID resets all changes to the "work_session_id" field.
+func (m *FindingMutation) ResetWorkSessionID() {
+	m.work_session_id = nil
+	delete(m.clearedFields, finding.FieldWorkSessionID)
+}
+
+// SetWorkLeaseUntil sets the "work_lease_until" field.
+func (m *FindingMutation) SetWorkLeaseUntil(t time.Time) {
+	m.work_lease_until = &t
+}
+
+// WorkLeaseUntil returns the value of the "work_lease_until" field in the mutation.
+func (m *FindingMutation) WorkLeaseUntil() (r time.Time, exists bool) {
+	v := m.work_lease_until
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWorkLeaseUntil returns the old "work_lease_until" field's value of the Finding entity.
+// If the Finding object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FindingMutation) OldWorkLeaseUntil(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWorkLeaseUntil is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWorkLeaseUntil requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWorkLeaseUntil: %w", err)
+	}
+	return oldValue.WorkLeaseUntil, nil
+}
+
+// ClearWorkLeaseUntil clears the value of the "work_lease_until" field.
+func (m *FindingMutation) ClearWorkLeaseUntil() {
+	m.work_lease_until = nil
+	m.clearedFields[finding.FieldWorkLeaseUntil] = struct{}{}
+}
+
+// WorkLeaseUntilCleared returns if the "work_lease_until" field was cleared in this mutation.
+func (m *FindingMutation) WorkLeaseUntilCleared() bool {
+	_, ok := m.clearedFields[finding.FieldWorkLeaseUntil]
+	return ok
+}
+
+// ResetWorkLeaseUntil resets all changes to the "work_lease_until" field.
+func (m *FindingMutation) ResetWorkLeaseUntil() {
+	m.work_lease_until = nil
+	delete(m.clearedFields, finding.FieldWorkLeaseUntil)
+}
+
+// SetWork sets the "work" field.
+func (m *FindingMutation) SetWork(jm json.RawMessage) {
+	m.work = &jm
+	m.appendwork = nil
+}
+
+// Work returns the value of the "work" field in the mutation.
+func (m *FindingMutation) Work() (r json.RawMessage, exists bool) {
+	v := m.work
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWork returns the old "work" field's value of the Finding entity.
+// If the Finding object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FindingMutation) OldWork(ctx context.Context) (v json.RawMessage, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWork is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWork requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWork: %w", err)
+	}
+	return oldValue.Work, nil
+}
+
+// AppendWork adds jm to the "work" field.
+func (m *FindingMutation) AppendWork(jm json.RawMessage) {
+	m.appendwork = append(m.appendwork, jm...)
+}
+
+// AppendedWork returns the list of values that were appended to the "work" field in this mutation.
+func (m *FindingMutation) AppendedWork() (json.RawMessage, bool) {
+	if len(m.appendwork) == 0 {
+		return nil, false
+	}
+	return m.appendwork, true
+}
+
+// ClearWork clears the value of the "work" field.
+func (m *FindingMutation) ClearWork() {
+	m.work = nil
+	m.appendwork = nil
+	m.clearedFields[finding.FieldWork] = struct{}{}
+}
+
+// WorkCleared returns if the "work" field was cleared in this mutation.
+func (m *FindingMutation) WorkCleared() bool {
+	_, ok := m.clearedFields[finding.FieldWork]
+	return ok
+}
+
+// ResetWork resets all changes to the "work" field.
+func (m *FindingMutation) ResetWork() {
+	m.work = nil
+	m.appendwork = nil
+	delete(m.clearedFields, finding.FieldWork)
+}
+
 // SetFirstSeen sets the "first_seen" field.
 func (m *FindingMutation) SetFirstSeen(t time.Time) {
 	m.first_seen = &t
@@ -22077,7 +22389,7 @@ func (m *FindingMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *FindingMutation) Fields() []string {
-	fields := make([]string, 0, 13)
+	fields := make([]string, 0, 19)
 	if m.group_id != nil {
 		fields = append(fields, finding.FieldGroupID)
 	}
@@ -22098,6 +22410,24 @@ func (m *FindingMutation) Fields() []string {
 	}
 	if m.status != nil {
 		fields = append(fields, finding.FieldStatus)
+	}
+	if m.work_owner != nil {
+		fields = append(fields, finding.FieldWorkOwner)
+	}
+	if m.work_next_check_at != nil {
+		fields = append(fields, finding.FieldWorkNextCheckAt)
+	}
+	if m.work_attempts != nil {
+		fields = append(fields, finding.FieldWorkAttempts)
+	}
+	if m.work_session_id != nil {
+		fields = append(fields, finding.FieldWorkSessionID)
+	}
+	if m.work_lease_until != nil {
+		fields = append(fields, finding.FieldWorkLeaseUntil)
+	}
+	if m.work != nil {
+		fields = append(fields, finding.FieldWork)
 	}
 	if m.first_seen != nil {
 		fields = append(fields, finding.FieldFirstSeen)
@@ -22139,6 +22469,18 @@ func (m *FindingMutation) Field(name string) (ent.Value, bool) {
 		return m.Severity()
 	case finding.FieldStatus:
 		return m.Status()
+	case finding.FieldWorkOwner:
+		return m.WorkOwner()
+	case finding.FieldWorkNextCheckAt:
+		return m.WorkNextCheckAt()
+	case finding.FieldWorkAttempts:
+		return m.WorkAttempts()
+	case finding.FieldWorkSessionID:
+		return m.WorkSessionID()
+	case finding.FieldWorkLeaseUntil:
+		return m.WorkLeaseUntil()
+	case finding.FieldWork:
+		return m.Work()
 	case finding.FieldFirstSeen:
 		return m.FirstSeen()
 	case finding.FieldLastSeen:
@@ -22174,6 +22516,18 @@ func (m *FindingMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldSeverity(ctx)
 	case finding.FieldStatus:
 		return m.OldStatus(ctx)
+	case finding.FieldWorkOwner:
+		return m.OldWorkOwner(ctx)
+	case finding.FieldWorkNextCheckAt:
+		return m.OldWorkNextCheckAt(ctx)
+	case finding.FieldWorkAttempts:
+		return m.OldWorkAttempts(ctx)
+	case finding.FieldWorkSessionID:
+		return m.OldWorkSessionID(ctx)
+	case finding.FieldWorkLeaseUntil:
+		return m.OldWorkLeaseUntil(ctx)
+	case finding.FieldWork:
+		return m.OldWork(ctx)
 	case finding.FieldFirstSeen:
 		return m.OldFirstSeen(ctx)
 	case finding.FieldLastSeen:
@@ -22244,6 +22598,48 @@ func (m *FindingMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetStatus(v)
 		return nil
+	case finding.FieldWorkOwner:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWorkOwner(v)
+		return nil
+	case finding.FieldWorkNextCheckAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWorkNextCheckAt(v)
+		return nil
+	case finding.FieldWorkAttempts:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWorkAttempts(v)
+		return nil
+	case finding.FieldWorkSessionID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWorkSessionID(v)
+		return nil
+	case finding.FieldWorkLeaseUntil:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWorkLeaseUntil(v)
+		return nil
+	case finding.FieldWork:
+		v, ok := value.(json.RawMessage)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWork(v)
+		return nil
 	case finding.FieldFirstSeen:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -22293,13 +22689,21 @@ func (m *FindingMutation) SetField(name string, value ent.Value) error {
 // AddedFields returns all numeric fields that were incremented/decremented during
 // this mutation.
 func (m *FindingMutation) AddedFields() []string {
-	return nil
+	var fields []string
+	if m.addwork_attempts != nil {
+		fields = append(fields, finding.FieldWorkAttempts)
+	}
+	return fields
 }
 
 // AddedField returns the numeric value that was incremented/decremented on a field
 // with the given name. The second boolean return value indicates that this field
 // was not set, or was not defined in the schema.
 func (m *FindingMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case finding.FieldWorkAttempts:
+		return m.AddedWorkAttempts()
+	}
 	return nil, false
 }
 
@@ -22308,6 +22712,13 @@ func (m *FindingMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *FindingMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case finding.FieldWorkAttempts:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddWorkAttempts(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Finding numeric field %s", name)
 }
@@ -22316,6 +22727,18 @@ func (m *FindingMutation) AddField(name string, value ent.Value) error {
 // mutation.
 func (m *FindingMutation) ClearedFields() []string {
 	var fields []string
+	if m.FieldCleared(finding.FieldWorkNextCheckAt) {
+		fields = append(fields, finding.FieldWorkNextCheckAt)
+	}
+	if m.FieldCleared(finding.FieldWorkSessionID) {
+		fields = append(fields, finding.FieldWorkSessionID)
+	}
+	if m.FieldCleared(finding.FieldWorkLeaseUntil) {
+		fields = append(fields, finding.FieldWorkLeaseUntil)
+	}
+	if m.FieldCleared(finding.FieldWork) {
+		fields = append(fields, finding.FieldWork)
+	}
 	if m.FieldCleared(finding.FieldSessionID) {
 		fields = append(fields, finding.FieldSessionID)
 	}
@@ -22342,6 +22765,18 @@ func (m *FindingMutation) FieldCleared(name string) bool {
 // error if the field is not defined in the schema.
 func (m *FindingMutation) ClearField(name string) error {
 	switch name {
+	case finding.FieldWorkNextCheckAt:
+		m.ClearWorkNextCheckAt()
+		return nil
+	case finding.FieldWorkSessionID:
+		m.ClearWorkSessionID()
+		return nil
+	case finding.FieldWorkLeaseUntil:
+		m.ClearWorkLeaseUntil()
+		return nil
+	case finding.FieldWork:
+		m.ClearWork()
+		return nil
 	case finding.FieldSessionID:
 		m.ClearSessionID()
 		return nil
@@ -22382,6 +22817,24 @@ func (m *FindingMutation) ResetField(name string) error {
 		return nil
 	case finding.FieldStatus:
 		m.ResetStatus()
+		return nil
+	case finding.FieldWorkOwner:
+		m.ResetWorkOwner()
+		return nil
+	case finding.FieldWorkNextCheckAt:
+		m.ResetWorkNextCheckAt()
+		return nil
+	case finding.FieldWorkAttempts:
+		m.ResetWorkAttempts()
+		return nil
+	case finding.FieldWorkSessionID:
+		m.ResetWorkSessionID()
+		return nil
+	case finding.FieldWorkLeaseUntil:
+		m.ResetWorkLeaseUntil()
+		return nil
+	case finding.FieldWork:
+		m.ResetWork()
 		return nil
 	case finding.FieldFirstSeen:
 		m.ResetFirstSeen()
@@ -25505,6 +25958,8 @@ type IncidentMutation struct {
 	addtriage_failures      *int
 	triage_retry_at         *time.Time
 	closure_proposal        **schema.ClosureProposal
+	work                    **schema.IncidentWork
+	work_next_check_at      *time.Time
 	clearedFields           map[string]struct{}
 	alerts                  map[uuid.UUID]struct{}
 	removedalerts           map[uuid.UUID]struct{}
@@ -26611,6 +27066,104 @@ func (m *IncidentMutation) ResetClosureProposal() {
 	delete(m.clearedFields, incident.FieldClosureProposal)
 }
 
+// SetWork sets the "work" field.
+func (m *IncidentMutation) SetWork(sw *schema.IncidentWork) {
+	m.work = &sw
+}
+
+// Work returns the value of the "work" field in the mutation.
+func (m *IncidentMutation) Work() (r *schema.IncidentWork, exists bool) {
+	v := m.work
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWork returns the old "work" field's value of the Incident entity.
+// If the Incident object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *IncidentMutation) OldWork(ctx context.Context) (v *schema.IncidentWork, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWork is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWork requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWork: %w", err)
+	}
+	return oldValue.Work, nil
+}
+
+// ClearWork clears the value of the "work" field.
+func (m *IncidentMutation) ClearWork() {
+	m.work = nil
+	m.clearedFields[incident.FieldWork] = struct{}{}
+}
+
+// WorkCleared returns if the "work" field was cleared in this mutation.
+func (m *IncidentMutation) WorkCleared() bool {
+	_, ok := m.clearedFields[incident.FieldWork]
+	return ok
+}
+
+// ResetWork resets all changes to the "work" field.
+func (m *IncidentMutation) ResetWork() {
+	m.work = nil
+	delete(m.clearedFields, incident.FieldWork)
+}
+
+// SetWorkNextCheckAt sets the "work_next_check_at" field.
+func (m *IncidentMutation) SetWorkNextCheckAt(t time.Time) {
+	m.work_next_check_at = &t
+}
+
+// WorkNextCheckAt returns the value of the "work_next_check_at" field in the mutation.
+func (m *IncidentMutation) WorkNextCheckAt() (r time.Time, exists bool) {
+	v := m.work_next_check_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWorkNextCheckAt returns the old "work_next_check_at" field's value of the Incident entity.
+// If the Incident object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *IncidentMutation) OldWorkNextCheckAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWorkNextCheckAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWorkNextCheckAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWorkNextCheckAt: %w", err)
+	}
+	return oldValue.WorkNextCheckAt, nil
+}
+
+// ClearWorkNextCheckAt clears the value of the "work_next_check_at" field.
+func (m *IncidentMutation) ClearWorkNextCheckAt() {
+	m.work_next_check_at = nil
+	m.clearedFields[incident.FieldWorkNextCheckAt] = struct{}{}
+}
+
+// WorkNextCheckAtCleared returns if the "work_next_check_at" field was cleared in this mutation.
+func (m *IncidentMutation) WorkNextCheckAtCleared() bool {
+	_, ok := m.clearedFields[incident.FieldWorkNextCheckAt]
+	return ok
+}
+
+// ResetWorkNextCheckAt resets all changes to the "work_next_check_at" field.
+func (m *IncidentMutation) ResetWorkNextCheckAt() {
+	m.work_next_check_at = nil
+	delete(m.clearedFields, incident.FieldWorkNextCheckAt)
+}
+
 // AddAlertIDs adds the "alerts" edge to the Alert entity by ids.
 func (m *IncidentMutation) AddAlertIDs(ids ...uuid.UUID) {
 	if m.alerts == nil {
@@ -26699,7 +27252,7 @@ func (m *IncidentMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *IncidentMutation) Fields() []string {
-	fields := make([]string, 0, 20)
+	fields := make([]string, 0, 22)
 	if m.created_at != nil {
 		fields = append(fields, incident.FieldCreatedAt)
 	}
@@ -26760,6 +27313,12 @@ func (m *IncidentMutation) Fields() []string {
 	if m.closure_proposal != nil {
 		fields = append(fields, incident.FieldClosureProposal)
 	}
+	if m.work != nil {
+		fields = append(fields, incident.FieldWork)
+	}
+	if m.work_next_check_at != nil {
+		fields = append(fields, incident.FieldWorkNextCheckAt)
+	}
 	return fields
 }
 
@@ -26808,6 +27367,10 @@ func (m *IncidentMutation) Field(name string) (ent.Value, bool) {
 		return m.TriageRetryAt()
 	case incident.FieldClosureProposal:
 		return m.ClosureProposal()
+	case incident.FieldWork:
+		return m.Work()
+	case incident.FieldWorkNextCheckAt:
+		return m.WorkNextCheckAt()
 	}
 	return nil, false
 }
@@ -26857,6 +27420,10 @@ func (m *IncidentMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldTriageRetryAt(ctx)
 	case incident.FieldClosureProposal:
 		return m.OldClosureProposal(ctx)
+	case incident.FieldWork:
+		return m.OldWork(ctx)
+	case incident.FieldWorkNextCheckAt:
+		return m.OldWorkNextCheckAt(ctx)
 	}
 	return nil, fmt.Errorf("unknown Incident field %s", name)
 }
@@ -27006,6 +27573,20 @@ func (m *IncidentMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetClosureProposal(v)
 		return nil
+	case incident.FieldWork:
+		v, ok := value.(*schema.IncidentWork)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWork(v)
+		return nil
+	case incident.FieldWorkNextCheckAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWorkNextCheckAt(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Incident field %s", name)
 }
@@ -27117,6 +27698,12 @@ func (m *IncidentMutation) ClearedFields() []string {
 	if m.FieldCleared(incident.FieldClosureProposal) {
 		fields = append(fields, incident.FieldClosureProposal)
 	}
+	if m.FieldCleared(incident.FieldWork) {
+		fields = append(fields, incident.FieldWork)
+	}
+	if m.FieldCleared(incident.FieldWorkNextCheckAt) {
+		fields = append(fields, incident.FieldWorkNextCheckAt)
+	}
 	return fields
 }
 
@@ -27172,6 +27759,12 @@ func (m *IncidentMutation) ClearField(name string) error {
 		return nil
 	case incident.FieldClosureProposal:
 		m.ClearClosureProposal()
+		return nil
+	case incident.FieldWork:
+		m.ClearWork()
+		return nil
+	case incident.FieldWorkNextCheckAt:
+		m.ClearWorkNextCheckAt()
 		return nil
 	}
 	return fmt.Errorf("unknown Incident nullable field %s", name)
@@ -27240,6 +27833,12 @@ func (m *IncidentMutation) ResetField(name string) error {
 		return nil
 	case incident.FieldClosureProposal:
 		m.ResetClosureProposal()
+		return nil
+	case incident.FieldWork:
+		m.ResetWork()
+		return nil
+	case incident.FieldWorkNextCheckAt:
+		m.ResetWorkNextCheckAt()
 		return nil
 	}
 	return fmt.Errorf("unknown Incident field %s", name)

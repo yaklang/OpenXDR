@@ -406,6 +406,38 @@ func (_u *IncidentUpdate) ClearClosureProposal() *IncidentUpdate {
 	return _u
 }
 
+// SetWork sets the "work" field.
+func (_u *IncidentUpdate) SetWork(v *schema.IncidentWork) *IncidentUpdate {
+	_u.mutation.SetWork(v)
+	return _u
+}
+
+// ClearWork clears the value of the "work" field.
+func (_u *IncidentUpdate) ClearWork() *IncidentUpdate {
+	_u.mutation.ClearWork()
+	return _u
+}
+
+// SetWorkNextCheckAt sets the "work_next_check_at" field.
+func (_u *IncidentUpdate) SetWorkNextCheckAt(v time.Time) *IncidentUpdate {
+	_u.mutation.SetWorkNextCheckAt(v)
+	return _u
+}
+
+// SetNillableWorkNextCheckAt sets the "work_next_check_at" field if the given value is not nil.
+func (_u *IncidentUpdate) SetNillableWorkNextCheckAt(v *time.Time) *IncidentUpdate {
+	if v != nil {
+		_u.SetWorkNextCheckAt(*v)
+	}
+	return _u
+}
+
+// ClearWorkNextCheckAt clears the value of the "work_next_check_at" field.
+func (_u *IncidentUpdate) ClearWorkNextCheckAt() *IncidentUpdate {
+	_u.mutation.ClearWorkNextCheckAt()
+	return _u
+}
+
 // AddAlertIDs adds the "alerts" edge to the Alert entity by IDs.
 func (_u *IncidentUpdate) AddAlertIDs(ids ...uuid.UUID) *IncidentUpdate {
 	_u.mutation.AddAlertIDs(ids...)
@@ -603,6 +635,18 @@ func (_u *IncidentUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.ClosureProposalCleared() {
 		_spec.ClearField(incident.FieldClosureProposal, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.Work(); ok {
+		_spec.SetField(incident.FieldWork, field.TypeJSON, value)
+	}
+	if _u.mutation.WorkCleared() {
+		_spec.ClearField(incident.FieldWork, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.WorkNextCheckAt(); ok {
+		_spec.SetField(incident.FieldWorkNextCheckAt, field.TypeTime, value)
+	}
+	if _u.mutation.WorkNextCheckAtCleared() {
+		_spec.ClearField(incident.FieldWorkNextCheckAt, field.TypeTime)
 	}
 	if _u.mutation.AlertsCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1042,6 +1086,38 @@ func (_u *IncidentUpdateOne) ClearClosureProposal() *IncidentUpdateOne {
 	return _u
 }
 
+// SetWork sets the "work" field.
+func (_u *IncidentUpdateOne) SetWork(v *schema.IncidentWork) *IncidentUpdateOne {
+	_u.mutation.SetWork(v)
+	return _u
+}
+
+// ClearWork clears the value of the "work" field.
+func (_u *IncidentUpdateOne) ClearWork() *IncidentUpdateOne {
+	_u.mutation.ClearWork()
+	return _u
+}
+
+// SetWorkNextCheckAt sets the "work_next_check_at" field.
+func (_u *IncidentUpdateOne) SetWorkNextCheckAt(v time.Time) *IncidentUpdateOne {
+	_u.mutation.SetWorkNextCheckAt(v)
+	return _u
+}
+
+// SetNillableWorkNextCheckAt sets the "work_next_check_at" field if the given value is not nil.
+func (_u *IncidentUpdateOne) SetNillableWorkNextCheckAt(v *time.Time) *IncidentUpdateOne {
+	if v != nil {
+		_u.SetWorkNextCheckAt(*v)
+	}
+	return _u
+}
+
+// ClearWorkNextCheckAt clears the value of the "work_next_check_at" field.
+func (_u *IncidentUpdateOne) ClearWorkNextCheckAt() *IncidentUpdateOne {
+	_u.mutation.ClearWorkNextCheckAt()
+	return _u
+}
+
 // AddAlertIDs adds the "alerts" edge to the Alert entity by IDs.
 func (_u *IncidentUpdateOne) AddAlertIDs(ids ...uuid.UUID) *IncidentUpdateOne {
 	_u.mutation.AddAlertIDs(ids...)
@@ -1269,6 +1345,18 @@ func (_u *IncidentUpdateOne) sqlSave(ctx context.Context) (_node *Incident, err 
 	}
 	if _u.mutation.ClosureProposalCleared() {
 		_spec.ClearField(incident.FieldClosureProposal, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.Work(); ok {
+		_spec.SetField(incident.FieldWork, field.TypeJSON, value)
+	}
+	if _u.mutation.WorkCleared() {
+		_spec.ClearField(incident.FieldWork, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.WorkNextCheckAt(); ok {
+		_spec.SetField(incident.FieldWorkNextCheckAt, field.TypeTime, value)
+	}
+	if _u.mutation.WorkNextCheckAtCleared() {
+		_spec.ClearField(incident.FieldWorkNextCheckAt, field.TypeTime)
 	}
 	if _u.mutation.AlertsCleared() {
 		edge := &sqlgraph.EdgeSpec{

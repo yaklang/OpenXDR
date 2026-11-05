@@ -99,6 +99,18 @@ func (n *Notifier) sweep(ctx context.Context) error {
 			return err
 		}
 		send, why := n.decide(inc, msg.Severity)
+		// 通知和待复核列表使用同一持久工作责任口径。
+		if usable(inc) && !inc.CreatedAt.Before(n.start) && inc.Status != "closed" && inc.Status != "false_positive" {
+			needed, err := n.DB.Incident.Query().Where(incident.IDEQ(inc.ID), review.Needed()).Exist(ctx)
+			if err != nil {
+				return err
+			}
+			send = needed
+			if !needed {
+				send = false
+				why = "AI 已接管持续跟进"
+			}
+		}
 		if why == "wait" {
 			continue // 等研判，先不落标记
 		}

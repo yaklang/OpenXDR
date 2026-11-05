@@ -42,7 +42,7 @@ func humanEscalation() predicate.Incident {
 	return func(s *sql.Selector) {
 		col := s.C(incident.FieldAiVerdict)
 		s.Where(sql.ExprP(fmt.Sprintf(
-			"(COALESCE(%[1]s->>'response_tier', '') IN ('contain', 'isolate') OR COALESCE(%[1]s, 'null'::jsonb) @> '{\"action_codes\":[\"review_response\"]}'::jsonb OR COALESCE(%[1]s, 'null'::jsonb) @> '{\"action_codes\":[\"collect_original_records\"]}'::jsonb)",
+			"(COALESCE(%[1]s->>'response_tier', '') IN ('contain', 'isolate') OR COALESCE(%[1]s, 'null'::jsonb) @> '{\"action_codes\":[\"review_response\"]}'::jsonb)",
 			col,
 		)))
 	}
@@ -72,6 +72,7 @@ func quiet() predicate.Incident {
 		incident.Not(Urgent()),
 		incident.Not(decoyReview()),
 		incident.Not(humanEscalation()),
+		managedWork(),
 		incident.Or(
 			benign(),
 			incident.And(
@@ -96,8 +97,23 @@ func StaleBenign(before time.Time) predicate.Incident {
 		incident.Not(Urgent()),
 		incident.Not(newer(incident.FieldEvidenceAt)),
 		benign(),
+		incident.Not(hasEvidenceGap()),
+		managedWork(),
 		incident.Not(humanEscalation()),
 		incident.Not(decoyReview()),
 		incident.CreatedAtLT(before),
 	)
+}
+
+// hasEvidenceGap 客观缺证阻断误报结案，不直接等同人工阻塞。
+func hasEvidenceGap() predicate.Incident {
+	return func(s *sql.Selector) {
+		s.Where(sql.ExprP(fmt.Sprintf("COALESCE(%s, '{}'::jsonb) @> '{\"action_codes\":[\"collect_original_records\"]}'::jsonb", s.C(incident.FieldAiVerdict))))
+	}
+}
+
+func managedWork() predicate.Incident {
+	return func(s *sql.Selector) {
+		s.Where(sql.ExprP(fmt.Sprintf(`COALESCE((%[1]s->>'owner' = 'ai' AND %[1]s->>'stage' IN ('followup','monitoring') AND %[1]s->>'version' = '1' AND (%[1]s->>'verdict_at')::timestamptz = %[2]s AND (%[1]s->>'evidence_key')::timestamptz = GREATEST(%[3]s,%[4]s,%[5]s) AND (%[1]s->>'stage' = 'monitoring' OR %[6]s IS NOT NULL)), false)`, s.C(incident.FieldWork), s.C(incident.FieldTriagedAt), s.C(incident.FieldCreatedAt), s.C(incident.FieldEvidenceAt), s.C(incident.FieldUrgentAt), s.C(incident.FieldWorkNextCheckAt))))
+	}
 }

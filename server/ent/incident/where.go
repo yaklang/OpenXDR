@@ -141,6 +141,11 @@ func TriageRetryAt(v time.Time) predicate.Incident {
 	return predicate.Incident(sql.FieldEQ(FieldTriageRetryAt, v))
 }
 
+// WorkNextCheckAt applies equality check predicate on the "work_next_check_at" field. It's identical to WorkNextCheckAtEQ.
+func WorkNextCheckAt(v time.Time) predicate.Incident {
+	return predicate.Incident(sql.FieldEQ(FieldWorkNextCheckAt, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.Incident {
 	return predicate.Incident(sql.FieldEQ(FieldCreatedAt, v))
@@ -1084,6 +1089,66 @@ func ClosureProposalIsNil() predicate.Incident {
 // ClosureProposalNotNil applies the NotNil predicate on the "closure_proposal" field.
 func ClosureProposalNotNil() predicate.Incident {
 	return predicate.Incident(sql.FieldNotNull(FieldClosureProposal))
+}
+
+// WorkIsNil applies the IsNil predicate on the "work" field.
+func WorkIsNil() predicate.Incident {
+	return predicate.Incident(sql.FieldIsNull(FieldWork))
+}
+
+// WorkNotNil applies the NotNil predicate on the "work" field.
+func WorkNotNil() predicate.Incident {
+	return predicate.Incident(sql.FieldNotNull(FieldWork))
+}
+
+// WorkNextCheckAtEQ applies the EQ predicate on the "work_next_check_at" field.
+func WorkNextCheckAtEQ(v time.Time) predicate.Incident {
+	return predicate.Incident(sql.FieldEQ(FieldWorkNextCheckAt, v))
+}
+
+// WorkNextCheckAtNEQ applies the NEQ predicate on the "work_next_check_at" field.
+func WorkNextCheckAtNEQ(v time.Time) predicate.Incident {
+	return predicate.Incident(sql.FieldNEQ(FieldWorkNextCheckAt, v))
+}
+
+// WorkNextCheckAtIn applies the In predicate on the "work_next_check_at" field.
+func WorkNextCheckAtIn(vs ...time.Time) predicate.Incident {
+	return predicate.Incident(sql.FieldIn(FieldWorkNextCheckAt, vs...))
+}
+
+// WorkNextCheckAtNotIn applies the NotIn predicate on the "work_next_check_at" field.
+func WorkNextCheckAtNotIn(vs ...time.Time) predicate.Incident {
+	return predicate.Incident(sql.FieldNotIn(FieldWorkNextCheckAt, vs...))
+}
+
+// WorkNextCheckAtGT applies the GT predicate on the "work_next_check_at" field.
+func WorkNextCheckAtGT(v time.Time) predicate.Incident {
+	return predicate.Incident(sql.FieldGT(FieldWorkNextCheckAt, v))
+}
+
+// WorkNextCheckAtGTE applies the GTE predicate on the "work_next_check_at" field.
+func WorkNextCheckAtGTE(v time.Time) predicate.Incident {
+	return predicate.Incident(sql.FieldGTE(FieldWorkNextCheckAt, v))
+}
+
+// WorkNextCheckAtLT applies the LT predicate on the "work_next_check_at" field.
+func WorkNextCheckAtLT(v time.Time) predicate.Incident {
+	return predicate.Incident(sql.FieldLT(FieldWorkNextCheckAt, v))
+}
+
+// WorkNextCheckAtLTE applies the LTE predicate on the "work_next_check_at" field.
+func WorkNextCheckAtLTE(v time.Time) predicate.Incident {
+	return predicate.Incident(sql.FieldLTE(FieldWorkNextCheckAt, v))
+}
+
+// WorkNextCheckAtIsNil applies the IsNil predicate on the "work_next_check_at" field.
+func WorkNextCheckAtIsNil() predicate.Incident {
+	return predicate.Incident(sql.FieldIsNull(FieldWorkNextCheckAt))
+}
+
+// WorkNextCheckAtNotNil applies the NotNil predicate on the "work_next_check_at" field.
+func WorkNextCheckAtNotNil() predicate.Incident {
+	return predicate.Incident(sql.FieldNotNull(FieldWorkNextCheckAt))
 }
 
 // HasAlerts applies the HasEdge predicate on the "alerts" edge.

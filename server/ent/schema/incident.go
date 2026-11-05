@@ -7,6 +7,7 @@ import (
 	"entgo.io/ent"
 	"entgo.io/ent/schema/edge"
 	"entgo.io/ent/schema/field"
+	"entgo.io/ent/schema/index"
 	"github.com/google/uuid"
 )
 
@@ -52,6 +53,8 @@ func (Incident) Fields() []ent.Field {
 		// AI 的结案建议：人在事件页一键采纳（结案仍记在人名下、照常作为人工案例回喂研判）或忽略。
 		// 任何状态变更都会清掉它
 		field.JSON("closure_proposal", &ClosureProposal{}).Optional(),
+		field.JSON("work", &IncidentWork{}).Optional(),
+		field.Time("work_next_check_at").Optional().Nillable(),
 	}
 }
 
@@ -69,4 +72,29 @@ func (Incident) Edges() []ent.Edge {
 	return []ent.Edge{
 		edge.To("alerts", Alert.Type),
 	}
+}
+
+// IncidentWork 服务端持有的自治计划；不接受模型或 API 直接改写负责人和预算。
+type IncidentWork struct {
+	Version     int           `json:"version"`
+	Owner       string        `json:"owner"`
+	Stage       string        `json:"stage"`
+	EvidenceKey string        `json:"evidence_key"`
+	VerdictAt   time.Time     `json:"verdict_at"`
+	GapKind     string        `json:"gap_kind,omitempty"`
+	Attempts    int           `json:"attempts"`
+	Receipts    []WorkReceipt `json:"receipts,omitempty"`
+	WakeOn      []string      `json:"wake_on"`
+	Reason      string        `json:"reason"`
+}
+
+func (Incident) Indexes() []ent.Index {
+	return []ent.Index{index.Fields("status", "work_next_check_at")}
+}
+
+// WorkReceipt 受控调查工具的服务端回执引用，保留失败状态供下一轮避免盲目重发。
+type WorkReceipt struct {
+	CommandID string `json:"command_id,omitempty"`
+	Template  string `json:"template,omitempty"`
+	Status    string `json:"status,omitempty"`
 }

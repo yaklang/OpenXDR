@@ -427,12 +427,20 @@ func init() {
 	findingDescStatus := findingFields[7].Descriptor()
 	// finding.DefaultStatus holds the default value on creation for the status field.
 	finding.DefaultStatus = findingDescStatus.Default.(string)
+	// findingDescWorkOwner is the schema descriptor for work_owner field.
+	findingDescWorkOwner := findingFields[8].Descriptor()
+	// finding.DefaultWorkOwner holds the default value on creation for the work_owner field.
+	finding.DefaultWorkOwner = findingDescWorkOwner.Default.(string)
+	// findingDescWorkAttempts is the schema descriptor for work_attempts field.
+	findingDescWorkAttempts := findingFields[10].Descriptor()
+	// finding.DefaultWorkAttempts holds the default value on creation for the work_attempts field.
+	finding.DefaultWorkAttempts = findingDescWorkAttempts.Default.(int)
 	// findingDescFirstSeen is the schema descriptor for first_seen field.
-	findingDescFirstSeen := findingFields[8].Descriptor()
+	findingDescFirstSeen := findingFields[14].Descriptor()
 	// finding.DefaultFirstSeen holds the default value on creation for the first_seen field.
 	finding.DefaultFirstSeen = findingDescFirstSeen.Default.(func() time.Time)
 	// findingDescLastSeen is the schema descriptor for last_seen field.
-	findingDescLastSeen := findingFields[9].Descriptor()
+	findingDescLastSeen := findingFields[15].Descriptor()
 	// finding.DefaultLastSeen holds the default value on creation for the last_seen field.
 	finding.DefaultLastSeen = findingDescLastSeen.Default.(func() time.Time)
 	// findingDescID is the schema descriptor for id field.

@@ -83,6 +83,8 @@ type incidentSummary struct {
 	ResolvedAt *time.Time `json:"resolvedAt"`
 	// ClosureProposal AI 的结案建议，人采纳或忽略
 	ClosureProposal *schema.ClosureProposal `json:"closureProposal"`
+	Work            *schema.IncidentWork    `json:"work,omitempty"`
+	WorkNextCheckAt *time.Time              `json:"workNextCheckAt,omitempty"`
 	// 研判节奏：上次研判时刻与累计次数；Retriage 为 pending（有新证据，冷却到期重研判）或 urgent（升级类，立即重研判），空为无
 	TriagedAt       *time.Time `json:"triagedAt"`
 	TriageCount     int        `json:"triageCount"`
@@ -490,8 +492,8 @@ func summarize(inc *ent.Incident, alertCount int, severity int16) incidentSummar
 		ID: inc.ID, CreatedAt: inc.CreatedAt, Status: inc.Status,
 		Title: inc.Title, AiVerdict: inc.AiVerdict, AlertCount: alertCount,
 		Severity: severity, Resolution: inc.Resolution, ResolvedBy: inc.ResolvedBy, ResolvedAt: inc.ResolvedAt,
-		ClosureProposal: inc.ClosureProposal,
-		TriagedAt:       inc.TriagedAt, TriageCount: inc.TriageCount, Retriage: retriageOf(inc),
+		ClosureProposal: inc.ClosureProposal, Work: inc.Work, WorkNextCheckAt: inc.WorkNextCheckAt,
+		TriagedAt: inc.TriagedAt, TriageCount: inc.TriageCount, Retriage: retriageOf(inc),
 		TriageFailures: inc.TriageFailures, TriageRetryAt: inc.TriageRetryAt,
 		TriageStartedAt: triage.RunningStartedAt(inc, time.Now()),
 	}

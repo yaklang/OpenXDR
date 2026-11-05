@@ -280,6 +280,26 @@ func (_c *IncidentCreate) SetClosureProposal(v *schema.ClosureProposal) *Inciden
 	return _c
 }
 
+// SetWork sets the "work" field.
+func (_c *IncidentCreate) SetWork(v *schema.IncidentWork) *IncidentCreate {
+	_c.mutation.SetWork(v)
+	return _c
+}
+
+// SetWorkNextCheckAt sets the "work_next_check_at" field.
+func (_c *IncidentCreate) SetWorkNextCheckAt(v time.Time) *IncidentCreate {
+	_c.mutation.SetWorkNextCheckAt(v)
+	return _c
+}
+
+// SetNillableWorkNextCheckAt sets the "work_next_check_at" field if the given value is not nil.
+func (_c *IncidentCreate) SetNillableWorkNextCheckAt(v *time.Time) *IncidentCreate {
+	if v != nil {
+		_c.SetWorkNextCheckAt(*v)
+	}
+	return _c
+}
+
 // SetID sets the "id" field.
 func (_c *IncidentCreate) SetID(v uuid.UUID) *IncidentCreate {
 	_c.mutation.SetID(v)
@@ -504,6 +524,14 @@ func (_c *IncidentCreate) createSpec() (*Incident, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ClosureProposal(); ok {
 		_spec.SetField(incident.FieldClosureProposal, field.TypeJSON, value)
 		_node.ClosureProposal = value
+	}
+	if value, ok := _c.mutation.Work(); ok {
+		_spec.SetField(incident.FieldWork, field.TypeJSON, value)
+		_node.Work = value
+	}
+	if value, ok := _c.mutation.WorkNextCheckAt(); ok {
+		_spec.SetField(incident.FieldWorkNextCheckAt, field.TypeTime, value)
+		_node.WorkNextCheckAt = &value
 	}
 	if nodes := _c.mutation.AlertsIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{

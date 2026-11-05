@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"openxdr/server/ent/finding"
 	"strings"
@@ -32,6 +33,18 @@ type Finding struct {
 	Severity string `json:"severity,omitempty"`
 	// Status holds the value of the "status" field.
 	Status string `json:"status,omitempty"`
+	// WorkOwner holds the value of the "work_owner" field.
+	WorkOwner string `json:"work_owner,omitempty"`
+	// WorkNextCheckAt holds the value of the "work_next_check_at" field.
+	WorkNextCheckAt *time.Time `json:"work_next_check_at,omitempty"`
+	// WorkAttempts holds the value of the "work_attempts" field.
+	WorkAttempts int `json:"work_attempts,omitempty"`
+	// WorkSessionID holds the value of the "work_session_id" field.
+	WorkSessionID *uuid.UUID `json:"work_session_id,omitempty"`
+	// WorkLeaseUntil holds the value of the "work_lease_until" field.
+	WorkLeaseUntil *time.Time `json:"work_lease_until,omitempty"`
+	// Work holds the value of the "work" field.
+	Work json.RawMessage `json:"work,omitempty"`
 	// FirstSeen holds the value of the "first_seen" field.
 	FirstSeen time.Time `json:"first_seen,omitempty"`
 	// LastSeen holds the value of the "last_seen" field.
@@ -52,11 +65,15 @@ func (*Finding) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case finding.FieldSessionID:
+		case finding.FieldWorkSessionID, finding.FieldSessionID:
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
-		case finding.FieldKey, finding.FieldTitle, finding.FieldDetail, finding.FieldSeverity, finding.FieldStatus, finding.FieldResolvedBy, finding.FieldNote:
+		case finding.FieldWork:
+			values[i] = new([]byte)
+		case finding.FieldWorkAttempts:
+			values[i] = new(sql.NullInt64)
+		case finding.FieldKey, finding.FieldTitle, finding.FieldDetail, finding.FieldSeverity, finding.FieldStatus, finding.FieldWorkOwner, finding.FieldResolvedBy, finding.FieldNote:
 			values[i] = new(sql.NullString)
-		case finding.FieldFirstSeen, finding.FieldLastSeen, finding.FieldResolvedAt:
+		case finding.FieldWorkNextCheckAt, finding.FieldWorkLeaseUntil, finding.FieldFirstSeen, finding.FieldLastSeen, finding.FieldResolvedAt:
 			values[i] = new(sql.NullTime)
 		case finding.FieldID, finding.FieldGroupID, finding.FieldAssetID:
 			values[i] = new(uuid.UUID)
@@ -122,6 +139,47 @@ func (_m *Finding) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field status", values[i])
 			} else if value.Valid {
 				_m.Status = value.String
+			}
+		case finding.FieldWorkOwner:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field work_owner", values[i])
+			} else if value.Valid {
+				_m.WorkOwner = value.String
+			}
+		case finding.FieldWorkNextCheckAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field work_next_check_at", values[i])
+			} else if value.Valid {
+				_m.WorkNextCheckAt = new(time.Time)
+				*_m.WorkNextCheckAt = value.Time
+			}
+		case finding.FieldWorkAttempts:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field work_attempts", values[i])
+			} else if value.Valid {
+				_m.WorkAttempts = int(value.Int64)
+			}
+		case finding.FieldWorkSessionID:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field work_session_id", values[i])
+			} else if value.Valid {
+				_m.WorkSessionID = new(uuid.UUID)
+				*_m.WorkSessionID = *value.S.(*uuid.UUID)
+			}
+		case finding.FieldWorkLeaseUntil:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field work_lease_until", values[i])
+			} else if value.Valid {
+				_m.WorkLeaseUntil = new(time.Time)
+				*_m.WorkLeaseUntil = value.Time
+			}
+		case finding.FieldWork:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field work", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.Work); err != nil {
+					return fmt.Errorf("unmarshal field work: %w", err)
+				}
 			}
 		case finding.FieldFirstSeen:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -219,6 +277,30 @@ func (_m *Finding) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("status=")
 	builder.WriteString(_m.Status)
+	builder.WriteString(", ")
+	builder.WriteString("work_owner=")
+	builder.WriteString(_m.WorkOwner)
+	builder.WriteString(", ")
+	if v := _m.WorkNextCheckAt; v != nil {
+		builder.WriteString("work_next_check_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("work_attempts=")
+	builder.WriteString(fmt.Sprintf("%v", _m.WorkAttempts))
+	builder.WriteString(", ")
+	if v := _m.WorkSessionID; v != nil {
+		builder.WriteString("work_session_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.WorkLeaseUntil; v != nil {
+		builder.WriteString("work_lease_until=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("work=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Work))
 	builder.WriteString(", ")
 	builder.WriteString("first_seen=")
 	builder.WriteString(_m.FirstSeen.Format(time.ANSIC))

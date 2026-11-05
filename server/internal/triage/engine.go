@@ -27,6 +27,7 @@ import (
 	"openxdr/server/ent/predicate"
 	"openxdr/server/ent/triagerun"
 	"openxdr/server/internal/incidentstate"
+	"openxdr/server/internal/incidentwork"
 	"openxdr/server/internal/review"
 )
 
@@ -47,12 +48,14 @@ const systemPrompt = `你是资深安全分析师，负责研判 XDR 平台聚�
 三档结论的边界：
 - malicious：有明确攻击链证据，如持久化加回连、凭据读取加外传。
 - suspicious：中危及以上的攻击手法（反弹 shell、持久化落盘、读凭据、清痕迹等），
-  但拿不到合法来源的正面证据。需要人去核实的，都归这一档。
+  但拿不到合法来源的正面证据。仍有实质疑点或证据缺口时归这一档。证据缺口由平台自治跟进，不自动等同必须人工介入。
 - benign：有正面证据表明合法，如已知运维任务、与分析师判过的误报同一模式、进程血缘与来源都正常；
   或者只有单条低危告警（端口探测、侦察命令之类），也没有任何后续动作。
 中危及以上的告警，"像测试或演练"本身不是 benign 的理由，查不到对应记录就按 suspicious；
 summary 里写了"需确认来源"的，verdict 也不能是 benign。
 证据来源与覆盖约束：
+- 告警 event_id=null 可能是平台合成告警，不等于原始记录丢失。此时读取合成告警结构化 detail、平台审计和真实配置证据，不编造 event_id 或查询结果。
+- collect_endpoint_evidence 可选 event_id 仅能锚定本事件、本资产真实 agent 告警原始事件；认证日志应锚定认证告警，避免被长时间健康检查拖偏。单一 LXC 内登录使用对应容器日志，宿主机空日志不证明容器无登录。
 - 所有肯定和否定的个案事实都必须来自输入。否定句必须保留原始证据的对象与范围：输入仅确认“没有工单”时，只能复述没有工单，不能并列补写“没有可核验授权记录”“没有人工确认”或“未经批准”。这些是不同来源；如果没有提供它们，只能写“本次证据未提供其他授权或人工确认信息”，不能断言不存在。工单缺失也不能单独证明操作未获授权。
 - source=ai 的长期记忆是未经人工核实的线索，不能当作人工确认、白名单或良性结论的依据。不得把 AI 自己的历史判断循环引用为证明。
 - 只有明确标记为 human 的具体记录才能称为人工记录；人工记录也只能覆盖它实际确认的主机、时间与行为，不能外推至整个域名族或未来活动。
@@ -101,6 +104,10 @@ func (e *Engine) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if err := incidentwork.Reconcile(ctx, e.DB, time.Now()); err != nil {
+				slog.Error("自治工作接管失败", "err", err)
+				continue
+			}
 			if !e.LLM.Enabled() {
 				continue
 			}
@@ -194,7 +201,25 @@ func (e *Engine) queue(ctx context.Context, now time.Time) ([]*ent.Incident, err
 	if err != nil {
 		return nil, err
 	}
-	return append(queued, upgrade...), nil
+	queued = append(queued, upgrade...)
+	if len(queued) < batchSize {
+		followup, err := e.DB.Incident.Query().Where(ready, incidentwork.Due(now)).Order(ent.Asc(incident.FieldWorkNextCheckAt)).Limit(1).All(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, inc := range followup {
+			duplicate := false
+			for _, prior := range queued {
+				if prior.ID == inc.ID {
+					duplicate = true
+				}
+			}
+			if !duplicate {
+				queued = append(queued, inc)
+			}
+		}
+	}
+	return queued, nil
 }
 
 // lastLooked 按上次研判时刻（没研判过按创建时刻）排：刚看过的排后面，等得最久的先轮到
@@ -205,7 +230,14 @@ func lastLooked(s *sql.Selector) {
 // backoff 记一次失败：下次研判推迟，上下文按失败次数缩小（见 buildContext）
 func (e *Engine) backoff(ctx context.Context, inc *ent.Incident, now time.Time) error {
 	wait := min(backoffBase<<min(inc.TriageFailures, 10), backoffMax)
-	return e.DB.Incident.UpdateOneID(inc.ID).AddTriageFailures(1).SetTriageRetryAt(now.Add(wait)).Exec(ctx)
+	if err := e.DB.Incident.UpdateOneID(inc.ID).AddTriageFailures(1).SetTriageRetryAt(now.Add(wait)).Exec(ctx); err != nil {
+		return err
+	}
+	current, err := e.DB.Incident.Get(ctx, inc.ID)
+	if err != nil {
+		return err
+	}
+	return incidentwork.Refresh(ctx, e.DB, current, now)
 }
 
 // triageOne 研判一个 incident 并落库。取上下文的时刻记为 triaged_at：研判期间并进来的证据晚于它，仍算待重研判
@@ -284,6 +316,18 @@ func (e *Engine) triageOne(ctx context.Context, inc *ent.Incident) (runErr error
 	if err := tx.Incident.Update().Where(incident.IDEQ(inc.ID), incident.StatusEQ("open")).
 		SetStatus("triaged").Exec(ctx); err != nil {
 		return err
+	}
+	current, err := tx.Incident.Get(ctx, inc.ID)
+	if err != nil {
+		return err
+	}
+	if err := incidentwork.Refresh(ctx, tx.Client(), current, started); err != nil {
+		return err
+	}
+	if incidentwork.StaleProposal(current) {
+		if err := tx.Incident.UpdateOneID(inc.ID).ClearClosureProposal().Exec(ctx); err != nil {
+			return err
+		}
 	}
 	if err := incidentstate.Record(ctx, tx, inc.ID, incidentstate.Triaged, incidentstate.Origin{Kind: "system"}, ""); err != nil {
 		return err

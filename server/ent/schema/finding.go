@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"time"
 
 	"entgo.io/ent"
@@ -22,10 +23,18 @@ func (Finding) Fields() []ent.Field {
 		field.String("key").MaxLen(64),
 		field.String("title").MaxLen(200),
 		field.Text("detail").Default(""),
-		// low / medium / high；不需要人处理的不登记
+		// low / medium / high；包括由平台持续跟进的问题
 		field.String("severity").Default("low"),
 		// open / resolved / ignored
 		field.String("status").Default("open"),
+		// 归属不代表已执行；只有 work_session_id 与有效租约同时存在才正在跟进。
+		field.String("work_owner").Default("ai"),
+		field.Time("work_next_check_at").Optional().Nillable(),
+		field.Int("work_attempts").Default(0),
+		field.UUID("work_session_id", uuid.UUID{}).Optional().Nillable(),
+		field.Time("work_lease_until").Optional().Nillable(),
+		// 服务端保存计划、阻塞依据、回执与唤醒条件；不作为人工判断回喂。
+		field.JSON("work", json.RawMessage{}).Optional(),
 		field.Time("first_seen").Default(time.Now),
 		field.Time("last_seen").Default(time.Now),
 		// 最近一次登记或复查它的会话
@@ -41,5 +50,6 @@ func (Finding) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("group_id", "asset_id", "key").Unique(),
 		index.Fields("group_id", "status"),
+		index.Fields("work_owner", "status", "work_next_check_at"),
 	}
 }

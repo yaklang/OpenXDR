@@ -758,6 +758,12 @@ var (
 		{Name: "detail", Type: field.TypeString, Size: 2147483647, Default: ""},
 		{Name: "severity", Type: field.TypeString, Default: "low"},
 		{Name: "status", Type: field.TypeString, Default: "open"},
+		{Name: "work_owner", Type: field.TypeString, Default: "ai"},
+		{Name: "work_next_check_at", Type: field.TypeTime, Nullable: true},
+		{Name: "work_attempts", Type: field.TypeInt, Default: 0},
+		{Name: "work_session_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "work_lease_until", Type: field.TypeTime, Nullable: true},
+		{Name: "work", Type: field.TypeJSON, Nullable: true},
 		{Name: "first_seen", Type: field.TypeTime},
 		{Name: "last_seen", Type: field.TypeTime},
 		{Name: "session_id", Type: field.TypeUUID, Nullable: true},
@@ -780,6 +786,11 @@ var (
 				Name:    "finding_group_id_status",
 				Unique:  false,
 				Columns: []*schema.Column{FindingsColumns[1], FindingsColumns[7]},
+			},
+			{
+				Name:    "finding_work_owner_status_work_next_check_at",
+				Unique:  false,
+				Columns: []*schema.Column{FindingsColumns[8], FindingsColumns[7], FindingsColumns[9]},
 			},
 		},
 	}
@@ -902,12 +913,21 @@ var (
 		{Name: "triage_failures", Type: field.TypeInt, Default: 0},
 		{Name: "triage_retry_at", Type: field.TypeTime, Nullable: true},
 		{Name: "closure_proposal", Type: field.TypeJSON, Nullable: true},
+		{Name: "work", Type: field.TypeJSON, Nullable: true},
+		{Name: "work_next_check_at", Type: field.TypeTime, Nullable: true},
 	}
 	// IncidentsTable holds the schema information for the "incidents" table.
 	IncidentsTable = &schema.Table{
 		Name:       "incidents",
 		Columns:    IncidentsColumns,
 		PrimaryKey: []*schema.Column{IncidentsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "incident_status_work_next_check_at",
+				Unique:  false,
+				Columns: []*schema.Column{IncidentsColumns[2], IncidentsColumns[22]},
+			},
+		},
 	}
 	// IntegrationsColumns holds the columns for the "integrations" table.
 	IntegrationsColumns = []*schema.Column{

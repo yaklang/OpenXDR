@@ -14,8 +14,8 @@ import (
 )
 
 // 只有调查能力变化才提升版本；仍缺证的成功结论不会反复占用队列。
-const evidenceCapabilityVersion = 2
-const capabilityTrigger = "capability_upgrade_v2"
+const evidenceCapabilityVersion = 3
+const capabilityTrigger = "capability_upgrade_v3"
 const capabilityMaxAttempts = 3
 
 func needsCapabilityUpgrade(inc *ent.Incident) bool {

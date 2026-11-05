@@ -4,6 +4,7 @@ package ent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"openxdr/server/ent/finding"
@@ -12,6 +13,7 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 	"github.com/google/uuid"
 )
@@ -124,6 +126,119 @@ func (_u *FindingUpdate) SetNillableStatus(v *string) *FindingUpdate {
 	if v != nil {
 		_u.SetStatus(*v)
 	}
+	return _u
+}
+
+// SetWorkOwner sets the "work_owner" field.
+func (_u *FindingUpdate) SetWorkOwner(v string) *FindingUpdate {
+	_u.mutation.SetWorkOwner(v)
+	return _u
+}
+
+// SetNillableWorkOwner sets the "work_owner" field if the given value is not nil.
+func (_u *FindingUpdate) SetNillableWorkOwner(v *string) *FindingUpdate {
+	if v != nil {
+		_u.SetWorkOwner(*v)
+	}
+	return _u
+}
+
+// SetWorkNextCheckAt sets the "work_next_check_at" field.
+func (_u *FindingUpdate) SetWorkNextCheckAt(v time.Time) *FindingUpdate {
+	_u.mutation.SetWorkNextCheckAt(v)
+	return _u
+}
+
+// SetNillableWorkNextCheckAt sets the "work_next_check_at" field if the given value is not nil.
+func (_u *FindingUpdate) SetNillableWorkNextCheckAt(v *time.Time) *FindingUpdate {
+	if v != nil {
+		_u.SetWorkNextCheckAt(*v)
+	}
+	return _u
+}
+
+// ClearWorkNextCheckAt clears the value of the "work_next_check_at" field.
+func (_u *FindingUpdate) ClearWorkNextCheckAt() *FindingUpdate {
+	_u.mutation.ClearWorkNextCheckAt()
+	return _u
+}
+
+// SetWorkAttempts sets the "work_attempts" field.
+func (_u *FindingUpdate) SetWorkAttempts(v int) *FindingUpdate {
+	_u.mutation.ResetWorkAttempts()
+	_u.mutation.SetWorkAttempts(v)
+	return _u
+}
+
+// SetNillableWorkAttempts sets the "work_attempts" field if the given value is not nil.
+func (_u *FindingUpdate) SetNillableWorkAttempts(v *int) *FindingUpdate {
+	if v != nil {
+		_u.SetWorkAttempts(*v)
+	}
+	return _u
+}
+
+// AddWorkAttempts adds value to the "work_attempts" field.
+func (_u *FindingUpdate) AddWorkAttempts(v int) *FindingUpdate {
+	_u.mutation.AddWorkAttempts(v)
+	return _u
+}
+
+// SetWorkSessionID sets the "work_session_id" field.
+func (_u *FindingUpdate) SetWorkSessionID(v uuid.UUID) *FindingUpdate {
+	_u.mutation.SetWorkSessionID(v)
+	return _u
+}
+
+// SetNillableWorkSessionID sets the "work_session_id" field if the given value is not nil.
+func (_u *FindingUpdate) SetNillableWorkSessionID(v *uuid.UUID) *FindingUpdate {
+	if v != nil {
+		_u.SetWorkSessionID(*v)
+	}
+	return _u
+}
+
+// ClearWorkSessionID clears the value of the "work_session_id" field.
+func (_u *FindingUpdate) ClearWorkSessionID() *FindingUpdate {
+	_u.mutation.ClearWorkSessionID()
+	return _u
+}
+
+// SetWorkLeaseUntil sets the "work_lease_until" field.
+func (_u *FindingUpdate) SetWorkLeaseUntil(v time.Time) *FindingUpdate {
+	_u.mutation.SetWorkLeaseUntil(v)
+	return _u
+}
+
+// SetNillableWorkLeaseUntil sets the "work_lease_until" field if the given value is not nil.
+func (_u *FindingUpdate) SetNillableWorkLeaseUntil(v *time.Time) *FindingUpdate {
+	if v != nil {
+		_u.SetWorkLeaseUntil(*v)
+	}
+	return _u
+}
+
+// ClearWorkLeaseUntil clears the value of the "work_lease_until" field.
+func (_u *FindingUpdate) ClearWorkLeaseUntil() *FindingUpdate {
+	_u.mutation.ClearWorkLeaseUntil()
+	return _u
+}
+
+// SetWork sets the "work" field.
+func (_u *FindingUpdate) SetWork(v json.RawMessage) *FindingUpdate {
+	_u.mutation.SetWork(v)
+	return _u
+}
+
+// AppendWork appends value to the "work" field.
+func (_u *FindingUpdate) AppendWork(v json.RawMessage) *FindingUpdate {
+	_u.mutation.AppendWork(v)
+	return _u
+}
+
+// ClearWork clears the value of the "work" field.
+func (_u *FindingUpdate) ClearWork() *FindingUpdate {
+	_u.mutation.ClearWork()
 	return _u
 }
 
@@ -315,6 +430,44 @@ func (_u *FindingUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(finding.FieldStatus, field.TypeString, value)
 	}
+	if value, ok := _u.mutation.WorkOwner(); ok {
+		_spec.SetField(finding.FieldWorkOwner, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.WorkNextCheckAt(); ok {
+		_spec.SetField(finding.FieldWorkNextCheckAt, field.TypeTime, value)
+	}
+	if _u.mutation.WorkNextCheckAtCleared() {
+		_spec.ClearField(finding.FieldWorkNextCheckAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.WorkAttempts(); ok {
+		_spec.SetField(finding.FieldWorkAttempts, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedWorkAttempts(); ok {
+		_spec.AddField(finding.FieldWorkAttempts, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.WorkSessionID(); ok {
+		_spec.SetField(finding.FieldWorkSessionID, field.TypeUUID, value)
+	}
+	if _u.mutation.WorkSessionIDCleared() {
+		_spec.ClearField(finding.FieldWorkSessionID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.WorkLeaseUntil(); ok {
+		_spec.SetField(finding.FieldWorkLeaseUntil, field.TypeTime, value)
+	}
+	if _u.mutation.WorkLeaseUntilCleared() {
+		_spec.ClearField(finding.FieldWorkLeaseUntil, field.TypeTime)
+	}
+	if value, ok := _u.mutation.Work(); ok {
+		_spec.SetField(finding.FieldWork, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedWork(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, finding.FieldWork, value)
+		})
+	}
+	if _u.mutation.WorkCleared() {
+		_spec.ClearField(finding.FieldWork, field.TypeJSON)
+	}
 	if value, ok := _u.mutation.FirstSeen(); ok {
 		_spec.SetField(finding.FieldFirstSeen, field.TypeTime, value)
 	}
@@ -460,6 +613,119 @@ func (_u *FindingUpdateOne) SetNillableStatus(v *string) *FindingUpdateOne {
 	if v != nil {
 		_u.SetStatus(*v)
 	}
+	return _u
+}
+
+// SetWorkOwner sets the "work_owner" field.
+func (_u *FindingUpdateOne) SetWorkOwner(v string) *FindingUpdateOne {
+	_u.mutation.SetWorkOwner(v)
+	return _u
+}
+
+// SetNillableWorkOwner sets the "work_owner" field if the given value is not nil.
+func (_u *FindingUpdateOne) SetNillableWorkOwner(v *string) *FindingUpdateOne {
+	if v != nil {
+		_u.SetWorkOwner(*v)
+	}
+	return _u
+}
+
+// SetWorkNextCheckAt sets the "work_next_check_at" field.
+func (_u *FindingUpdateOne) SetWorkNextCheckAt(v time.Time) *FindingUpdateOne {
+	_u.mutation.SetWorkNextCheckAt(v)
+	return _u
+}
+
+// SetNillableWorkNextCheckAt sets the "work_next_check_at" field if the given value is not nil.
+func (_u *FindingUpdateOne) SetNillableWorkNextCheckAt(v *time.Time) *FindingUpdateOne {
+	if v != nil {
+		_u.SetWorkNextCheckAt(*v)
+	}
+	return _u
+}
+
+// ClearWorkNextCheckAt clears the value of the "work_next_check_at" field.
+func (_u *FindingUpdateOne) ClearWorkNextCheckAt() *FindingUpdateOne {
+	_u.mutation.ClearWorkNextCheckAt()
+	return _u
+}
+
+// SetWorkAttempts sets the "work_attempts" field.
+func (_u *FindingUpdateOne) SetWorkAttempts(v int) *FindingUpdateOne {
+	_u.mutation.ResetWorkAttempts()
+	_u.mutation.SetWorkAttempts(v)
+	return _u
+}
+
+// SetNillableWorkAttempts sets the "work_attempts" field if the given value is not nil.
+func (_u *FindingUpdateOne) SetNillableWorkAttempts(v *int) *FindingUpdateOne {
+	if v != nil {
+		_u.SetWorkAttempts(*v)
+	}
+	return _u
+}
+
+// AddWorkAttempts adds value to the "work_attempts" field.
+func (_u *FindingUpdateOne) AddWorkAttempts(v int) *FindingUpdateOne {
+	_u.mutation.AddWorkAttempts(v)
+	return _u
+}
+
+// SetWorkSessionID sets the "work_session_id" field.
+func (_u *FindingUpdateOne) SetWorkSessionID(v uuid.UUID) *FindingUpdateOne {
+	_u.mutation.SetWorkSessionID(v)
+	return _u
+}
+
+// SetNillableWorkSessionID sets the "work_session_id" field if the given value is not nil.
+func (_u *FindingUpdateOne) SetNillableWorkSessionID(v *uuid.UUID) *FindingUpdateOne {
+	if v != nil {
+		_u.SetWorkSessionID(*v)
+	}
+	return _u
+}
+
+// ClearWorkSessionID clears the value of the "work_session_id" field.
+func (_u *FindingUpdateOne) ClearWorkSessionID() *FindingUpdateOne {
+	_u.mutation.ClearWorkSessionID()
+	return _u
+}
+
+// SetWorkLeaseUntil sets the "work_lease_until" field.
+func (_u *FindingUpdateOne) SetWorkLeaseUntil(v time.Time) *FindingUpdateOne {
+	_u.mutation.SetWorkLeaseUntil(v)
+	return _u
+}
+
+// SetNillableWorkLeaseUntil sets the "work_lease_until" field if the given value is not nil.
+func (_u *FindingUpdateOne) SetNillableWorkLeaseUntil(v *time.Time) *FindingUpdateOne {
+	if v != nil {
+		_u.SetWorkLeaseUntil(*v)
+	}
+	return _u
+}
+
+// ClearWorkLeaseUntil clears the value of the "work_lease_until" field.
+func (_u *FindingUpdateOne) ClearWorkLeaseUntil() *FindingUpdateOne {
+	_u.mutation.ClearWorkLeaseUntil()
+	return _u
+}
+
+// SetWork sets the "work" field.
+func (_u *FindingUpdateOne) SetWork(v json.RawMessage) *FindingUpdateOne {
+	_u.mutation.SetWork(v)
+	return _u
+}
+
+// AppendWork appends value to the "work" field.
+func (_u *FindingUpdateOne) AppendWork(v json.RawMessage) *FindingUpdateOne {
+	_u.mutation.AppendWork(v)
+	return _u
+}
+
+// ClearWork clears the value of the "work" field.
+func (_u *FindingUpdateOne) ClearWork() *FindingUpdateOne {
+	_u.mutation.ClearWork()
 	return _u
 }
 
@@ -680,6 +946,44 @@ func (_u *FindingUpdateOne) sqlSave(ctx context.Context) (_node *Finding, err er
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(finding.FieldStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.WorkOwner(); ok {
+		_spec.SetField(finding.FieldWorkOwner, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.WorkNextCheckAt(); ok {
+		_spec.SetField(finding.FieldWorkNextCheckAt, field.TypeTime, value)
+	}
+	if _u.mutation.WorkNextCheckAtCleared() {
+		_spec.ClearField(finding.FieldWorkNextCheckAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.WorkAttempts(); ok {
+		_spec.SetField(finding.FieldWorkAttempts, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedWorkAttempts(); ok {
+		_spec.AddField(finding.FieldWorkAttempts, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.WorkSessionID(); ok {
+		_spec.SetField(finding.FieldWorkSessionID, field.TypeUUID, value)
+	}
+	if _u.mutation.WorkSessionIDCleared() {
+		_spec.ClearField(finding.FieldWorkSessionID, field.TypeUUID)
+	}
+	if value, ok := _u.mutation.WorkLeaseUntil(); ok {
+		_spec.SetField(finding.FieldWorkLeaseUntil, field.TypeTime, value)
+	}
+	if _u.mutation.WorkLeaseUntilCleared() {
+		_spec.ClearField(finding.FieldWorkLeaseUntil, field.TypeTime)
+	}
+	if value, ok := _u.mutation.Work(); ok {
+		_spec.SetField(finding.FieldWork, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedWork(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, finding.FieldWork, value)
+		})
+	}
+	if _u.mutation.WorkCleared() {
+		_spec.ClearField(finding.FieldWork, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.FirstSeen(); ok {
 		_spec.SetField(finding.FieldFirstSeen, field.TypeTime, value)

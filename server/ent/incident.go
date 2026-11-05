@@ -60,6 +60,10 @@ type Incident struct {
 	TriageRetryAt *time.Time `json:"triage_retry_at,omitempty"`
 	// ClosureProposal holds the value of the "closure_proposal" field.
 	ClosureProposal *schema.ClosureProposal `json:"closure_proposal,omitempty"`
+	// Work holds the value of the "work" field.
+	Work *schema.IncidentWork `json:"work,omitempty"`
+	// WorkNextCheckAt holds the value of the "work_next_check_at" field.
+	WorkNextCheckAt *time.Time `json:"work_next_check_at,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the IncidentQuery when eager-loading is set.
 	Edges        IncidentEdges `json:"edges"`
@@ -89,13 +93,13 @@ func (*Incident) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case incident.FieldGraph, incident.FieldAiVerdict, incident.FieldClosureProposal:
+		case incident.FieldGraph, incident.FieldAiVerdict, incident.FieldClosureProposal, incident.FieldWork:
 			values[i] = new([]byte)
 		case incident.FieldIntegrationRevision, incident.FieldTriageCount, incident.FieldTriageFailures:
 			values[i] = new(sql.NullInt64)
 		case incident.FieldStatus, incident.FieldTitle, incident.FieldResolution, incident.FieldResolvedBy, incident.FieldResolutionSource:
 			values[i] = new(sql.NullString)
-		case incident.FieldCreatedAt, incident.FieldNotifiedAt, incident.FieldResolvedAt, incident.FieldTriagedAt, incident.FieldTriageStartedAt, incident.FieldTriageHeartbeatAt, incident.FieldEvidenceAt, incident.FieldUrgentAt, incident.FieldTriageRetryAt:
+		case incident.FieldCreatedAt, incident.FieldNotifiedAt, incident.FieldResolvedAt, incident.FieldTriagedAt, incident.FieldTriageStartedAt, incident.FieldTriageHeartbeatAt, incident.FieldEvidenceAt, incident.FieldUrgentAt, incident.FieldTriageRetryAt, incident.FieldWorkNextCheckAt:
 			values[i] = new(sql.NullTime)
 		case incident.FieldID:
 			values[i] = new(uuid.UUID)
@@ -258,6 +262,21 @@ func (_m *Incident) assignValues(columns []string, values []any) error {
 					return fmt.Errorf("unmarshal field closure_proposal: %w", err)
 				}
 			}
+		case incident.FieldWork:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field work", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.Work); err != nil {
+					return fmt.Errorf("unmarshal field work: %w", err)
+				}
+			}
+		case incident.FieldWorkNextCheckAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field work_next_check_at", values[i])
+			} else if value.Valid {
+				_m.WorkNextCheckAt = new(time.Time)
+				*_m.WorkNextCheckAt = value.Time
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -382,6 +401,14 @@ func (_m *Incident) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("closure_proposal=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ClosureProposal))
+	builder.WriteString(", ")
+	builder.WriteString("work=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Work))
+	builder.WriteString(", ")
+	if v := _m.WorkNextCheckAt; v != nil {
+		builder.WriteString("work_next_check_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
 	builder.WriteByte(')')
 	return builder.String()
 }

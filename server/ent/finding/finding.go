@@ -28,6 +28,18 @@ const (
 	FieldSeverity = "severity"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
+	// FieldWorkOwner holds the string denoting the work_owner field in the database.
+	FieldWorkOwner = "work_owner"
+	// FieldWorkNextCheckAt holds the string denoting the work_next_check_at field in the database.
+	FieldWorkNextCheckAt = "work_next_check_at"
+	// FieldWorkAttempts holds the string denoting the work_attempts field in the database.
+	FieldWorkAttempts = "work_attempts"
+	// FieldWorkSessionID holds the string denoting the work_session_id field in the database.
+	FieldWorkSessionID = "work_session_id"
+	// FieldWorkLeaseUntil holds the string denoting the work_lease_until field in the database.
+	FieldWorkLeaseUntil = "work_lease_until"
+	// FieldWork holds the string denoting the work field in the database.
+	FieldWork = "work"
 	// FieldFirstSeen holds the string denoting the first_seen field in the database.
 	FieldFirstSeen = "first_seen"
 	// FieldLastSeen holds the string denoting the last_seen field in the database.
@@ -54,6 +66,12 @@ var Columns = []string{
 	FieldDetail,
 	FieldSeverity,
 	FieldStatus,
+	FieldWorkOwner,
+	FieldWorkNextCheckAt,
+	FieldWorkAttempts,
+	FieldWorkSessionID,
+	FieldWorkLeaseUntil,
+	FieldWork,
 	FieldFirstSeen,
 	FieldLastSeen,
 	FieldSessionID,
@@ -83,6 +101,10 @@ var (
 	DefaultSeverity string
 	// DefaultStatus holds the default value on creation for the "status" field.
 	DefaultStatus string
+	// DefaultWorkOwner holds the default value on creation for the "work_owner" field.
+	DefaultWorkOwner string
+	// DefaultWorkAttempts holds the default value on creation for the "work_attempts" field.
+	DefaultWorkAttempts int
 	// DefaultFirstSeen holds the default value on creation for the "first_seen" field.
 	DefaultFirstSeen func() time.Time
 	// DefaultLastSeen holds the default value on creation for the "last_seen" field.
@@ -132,6 +154,31 @@ func BySeverity(opts ...sql.OrderTermOption) OrderOption {
 // ByStatus orders the results by the status field.
 func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldStatus, opts...).ToFunc()
+}
+
+// ByWorkOwner orders the results by the work_owner field.
+func ByWorkOwner(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWorkOwner, opts...).ToFunc()
+}
+
+// ByWorkNextCheckAt orders the results by the work_next_check_at field.
+func ByWorkNextCheckAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWorkNextCheckAt, opts...).ToFunc()
+}
+
+// ByWorkAttempts orders the results by the work_attempts field.
+func ByWorkAttempts(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWorkAttempts, opts...).ToFunc()
+}
+
+// ByWorkSessionID orders the results by the work_session_id field.
+func ByWorkSessionID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWorkSessionID, opts...).ToFunc()
+}
+
+// ByWorkLeaseUntil orders the results by the work_lease_until field.
+func ByWorkLeaseUntil(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWorkLeaseUntil, opts...).ToFunc()
 }
 
 // ByFirstSeen orders the results by the first_seen field.
