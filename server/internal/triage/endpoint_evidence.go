@@ -27,7 +27,7 @@ const (
 )
 
 var (
-	dockerContainerUIDPattern = regexp.MustCompile(`^[0-9a-f]{12,64}$`)
+	dockerContainerUIDPattern = regexp.MustCompile(`^(?:[0-9a-f]{12}|[0-9a-f]{64})$`)
 	lxcContainerVMIDPattern   = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 )
 
@@ -335,12 +335,15 @@ func (e *Engine) resolveIncidentAssetContainer(ctx context.Context, incidentID, 
 	if err != nil {
 		return "", "", err
 	}
-	if len(events) != len(eventIDs) {
-		return "", "", errors.New("当前事件关联的原始事件记录缺失或已不在热表，拒绝猜测容器身份")
-	}
 	eventsByID := make(map[uuid.UUID]*ent.Event, len(events))
 	for _, ev := range events {
+		if _, dup := eventsByID[ev.ID]; dup {
+			return "", "", errors.New("关联原始事件 ID 存在多条不同时间戳记录，拒绝猜测容器身份")
+		}
 		eventsByID[ev.ID] = ev
+	}
+	if len(eventsByID) != len(eventIDs) {
+		return "", "", errors.New("当前事件关联的原始事件记录缺失或已不在热表，拒绝猜测容器身份")
 	}
 
 	for _, al := range alerts {
@@ -351,18 +354,11 @@ func (e *Engine) resolveIncidentAssetContainer(ctx context.Context, incidentID, 
 		if ev.AssetID == nil || *ev.AssetID != assetID {
 			return "", "", errors.New("关联原始事件的资产归属与目标主机不一致，拒绝容器日志取证")
 		}
-		if strings.TrimSpace(ev.Source) != "agent" {
+		if ev.Source != "agent" {
 			return "", "", errors.New("关联原始事件非受管 agent 采集来源，拒绝作为容器取证依据")
 		}
-		alStart := al.Ts.UTC().Add(-time.Minute)
-		alEnd := al.Ts.UTC()
-		if al.LastTs != nil && al.LastTs.UTC().After(alEnd) {
-			alEnd = al.LastTs.UTC()
-		}
-		alEnd = alEnd.Add(time.Minute)
-		evTs := ev.Ts.UTC()
-		if evTs.Before(alStart) || evTs.After(alEnd) {
-			return "", "", errors.New("关联原始事件时间与告警窗口不一致，拒绝作为容器取证依据")
+		if !ev.Ts.UTC().Equal(al.Ts.UTC()) {
+			return "", "", errors.New("关联原始事件时间与告警首次时间戳不一致，拒绝作为容器取证依据")
 		}
 
 		rt, id, err := parseStrictAgentContainer(ev.Raw)

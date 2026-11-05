@@ -12,7 +12,12 @@ import (
 func TestParseStrictAgentContainerAndReadOnlyTemplates(t *testing.T) {
 	rt, uid, err := parseStrictAgentContainer(json.RawMessage(`{"container":{"runtime":"docker","uid":"978b4e7c6f53","name":"ctf0-web"}}`))
 	if err != nil || rt != "docker" || uid != "978b4e7c6f53" {
-		t.Fatalf("合法 docker 容器解析失败: rt=%q uid=%q err=%v", rt, uid, err)
+		t.Fatalf("合法 12 位 docker 容器解析失败: rt=%q uid=%q err=%v", rt, uid, err)
+	}
+	fullHex := strings.Repeat("a1b2c3d4", 8)
+	rt, uid, err = parseStrictAgentContainer(json.RawMessage(`{"container":{"runtime":"docker","uid":"` + fullHex + `"}}`))
+	if err != nil || rt != "docker" || uid != fullHex {
+		t.Fatalf("合法 64 位 docker 容器解析失败: rt=%q uid=%q err=%v", rt, uid, err)
 	}
 	rt, uid, err = parseStrictAgentContainer(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203","name":"gateway"}}`))
 	if err != nil || rt != "lxc" || uid != "203" {
@@ -30,6 +35,7 @@ func TestParseStrictAgentContainerAndReadOnlyTemplates(t *testing.T) {
 		`{"container":{"runtime":"docker","uid":"ctf0-web"}}`,
 		`{"container":{"runtime":"docker","uid":"978B4E7C6F53"}}`,
 		`{"container":{"runtime":"docker","uid":"978b4e7c"}}`,
+		`{"container":{"runtime":"docker","uid":"978b4e7c6f53a"}}`,
 		`{"container":{"runtime":"docker","uid":"978b4e7c6f53 --privileged"}}`,
 		`{"container":{"runtime":"qemu","uid":"108"}}`,
 	} {

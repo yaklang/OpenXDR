@@ -386,6 +386,49 @@ func TestEndpointEvidencePackageAndContainerTemplatesAndFailClosedBoundaries(t *
 				return inc.ID
 			},
 		},
+		{
+			name: "docker_13_char_uid_rejected",
+			setup: func() uuid.UUID {
+				inc := db.Incident.Create().SetTitle("13位DockerID").SetStatus("open").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+				ev := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(4001).SetTs(alertTs).
+					SetRaw(json.RawMessage(`{"container":{"runtime":"docker","uid":"978b4e7c6f53a","name":"ctf0-web"}}`)).SaveX(ctx)
+				db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(host.ID).SetEventID(ev.ID).SetRuleID("bad.13hex").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+				return inc.ID
+			},
+		},
+		{
+			name: "whitespace_padded_agent_source_rejected",
+			setup: func() uuid.UUID {
+				inc := db.Incident.Create().SetTitle("空白填充agent来源").SetStatus("open").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+				ev := db.Event.Create().SetAssetID(host.ID).SetSource(" agent ").SetClassUID(4001).SetTs(alertTs).
+					SetRaw(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203","name":"gateway"}}`)).SaveX(ctx)
+				db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(host.ID).SetEventID(ev.ID).SetRuleID("bad.ws.src").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+				return inc.ID
+			},
+		},
+		{
+			name: "event_ts_offset_30s_from_alert_ts_rejected",
+			setup: func() uuid.UUID {
+				inc := db.Incident.Create().SetTitle("事件与告警时间偏移30s").SetStatus("open").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+				ev := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(4001).SetTs(alertTs.Add(30 * time.Second)).
+					SetRaw(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203","name":"gateway"}}`)).SaveX(ctx)
+				db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(host.ID).SetEventID(ev.ID).SetRuleID("bad.ts.offset").SetSeverity(3).SetTs(alertTs).SetLastTs(alertTs.Add(time.Minute)).SaveX(ctx)
+				return inc.ID
+			},
+		},
+		{
+			name: "duplicate_event_id_across_different_ts_rejected",
+			setup: func() uuid.UUID {
+				inc := db.Incident.Create().SetTitle("相同eventID不同ts").SetStatus("open").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+				dupID := uuid.New()
+				db.Event.Create().SetID(dupID).SetAssetID(host.ID).SetSource("agent").SetClassUID(4001).SetTs(alertTs).
+					SetRaw(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203","name":"gateway"}}`)).SaveX(ctx)
+				db.Event.Create().SetID(dupID).SetAssetID(host.ID).SetSource("agent").SetClassUID(4001).SetTs(alertTs.Add(24 * time.Hour)).
+					SetRaw(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203","name":"gateway"}}`)).SaveX(ctx)
+				db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(host.ID).SetEventID(dupID).SetRuleID("bad.dup.ev").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+				return inc.ID
+			},
+		},
 	}
 
 	for _, tc := range badCases {
@@ -445,7 +488,7 @@ func TestEndpointEvidencePackageAndContainerTemplatesAndFailClosedBoundaries(t *
 	evLXC2 := db.Event.Create().SetAssetID(host.ID).SetSource("agent").SetClassUID(4001).SetTs(alertTs.Add(2 * time.Minute)).
 		SetRaw(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203","name":"gateway"}}`)).SaveX(ctx)
 	db.Alert.Create().SetIncidentID(incOK.ID).SetAssetID(host.ID).SetEventID(evLXC1.ID).SetRuleID("lxc.proc").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
-	db.Alert.Create().SetIncidentID(incOK.ID).SetAssetID(host.ID).SetEventID(evLXC2.ID).SetRuleID("lxc.net").SetSeverity(3).SetTs(alertTs).SetLastTs(alertTs.Add(2 * time.Minute)).SaveX(ctx)
+	db.Alert.Create().SetIncidentID(incOK.ID).SetAssetID(host.ID).SetEventID(evLXC2.ID).SetRuleID("lxc.net").SetSeverity(3).SetTs(alertTs.Add(2 * time.Minute)).SetLastTs(alertTs.Add(5 * time.Minute)).SaveX(ctx)
 
 	agentCtx, stopAgent := context.WithCancel(ctx)
 	agentDone := make(chan struct{})
