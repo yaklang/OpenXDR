@@ -42,6 +42,7 @@ An open-source autonomous XDR: EDR + SIEM + network traffic analysis.
 - **Scheduled inspections**: preset tasks run AI inspections across a group on a cron schedule and produce HTML / PDF reports.
 - **AI auditor**: high-risk commands and suppression drafts initiated by the AI are reviewed on the spot by an AI auditor instead of waiting all night for a click;
   stopping the agent, wiping logs, flushing firewalls and formatting disks are on a hard-deny list the AI can never execute.
+- **Independent closure auditor**: low-risk benign closure proposals are reviewed by an independent AI closure auditor and auto-closed as false positive only when positive evidence explains every alert in the incident (marked `ai_review`, reopenable by people); missing evidence, uncertainty or an invalid reply keeps the incident open, and it never creates long-lived allow-lists.
 
 ### Autonomous response
 
@@ -218,7 +219,7 @@ with autonomous response, self-monitoring and the audit chain enabled in product
 - **Windows**: ETW process, network, DNS and security-log collection is verified item by item on real Windows 10 machines (see [real-machine replay](validation/replay/README.md)); coverage is still narrower than on Linux.
 - **Autonomous response**: off by default. The engine acts only on deterministic synthetic detections and high-severity intel, never directly on an AI verdict (the AI only assigns tiers and reviews expiring leases); start with lab-tier hosts.
 - **AI**: quality depends on the tool-calling ability of the model you connect; weaker models drift with long context. The platform guarantees the AI cannot cross permission, allow-list and hard-deny boundaries,
-  not that its conclusions are right — verdicts are advisory and incidents are still closed by people.
+  not that its conclusions are right — low-risk benign incidents can be auto-closed by the closure auditor with positive evidence, while everything else stays for people.
 
 See the [roadmap](docs/roadmap.md) for known gaps and the [CHANGELOG](CHANGELOG.md) for every release's changes and upgrade notes.
 
