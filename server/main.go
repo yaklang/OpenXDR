@@ -151,6 +151,8 @@ func main() {
 	slog.Info("HTTP 启动", "addr", httpAddr)
 	queryRoles := startQueryRoles(ctx, db, client, dsn)
 	chat := startChat(ctx, db, client, rules, hub, webhook, conf, queryRoles, suppressionReviewer)
+	triageEngine.EndpointEvidence = chat.CollectEndpointEvidence
+	go cluster.RunLeader(ctx, db, "triage", triageEngine.Run)
 	scheduler := startScheduler(ctx, db, client, chat, conf, webhook)
 	enrollSvc := loadEnroll(client, silentAfter)
 	routes := http.NewServeMux()
@@ -420,8 +422,6 @@ func startTriage(ctx context.Context, db *sql.DB, client *ent.Client, rules sigm
 			AllowEndpoints: allowlist,
 		}).React
 	}
-	// 常驻：模型在控制台配上就开始研判，撤掉就停
-	go cluster.RunLeader(ctx, db, "triage", triageEngine.Run)
 	return triageEngine
 }
 

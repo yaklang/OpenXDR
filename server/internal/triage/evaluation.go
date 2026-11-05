@@ -79,7 +79,7 @@ func ValidateEvidenceSnapshots(snapshots []EvidenceSnapshot) error {
 		return fmt.Errorf("离线工具快照过多")
 	}
 	for _, snapshot := range snapshots {
-		if !slices.Contains([]string{"query_events", "query_event_raw", "process_lineage", "host_alerts", "process_baseline"}, snapshot.Tool) {
+		if !slices.Contains([]string{"query_events", "query_event_raw", "collect_endpoint_evidence", "process_lineage", "host_alerts", "process_baseline"}, snapshot.Tool) {
 			return fmt.Errorf("未知离线工具")
 		}
 		var result map[string]any

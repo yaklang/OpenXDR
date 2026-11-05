@@ -38,6 +38,8 @@ type Request struct {
 	Command   response.Request
 	// 非零时覆盖 Gate.ApprovalTimeout，定时任务按任务配置
 	ApprovalTimeout time.Duration
+	// PreferReviewer 为 true 时，若命令命中高风险管控名单，优先交 AI 审计员评审，未配置审计员则直接拒绝，不走系统自动放行或人工长等待
+	PreferReviewer bool
 }
 
 // SystemActor 系统身份的发起人名，也是定时任务会话的 initiator。用户名不允许取这个值。
@@ -173,6 +175,11 @@ func (g *Gate) Issue(ctx context.Context, req Request) (out *ent.Command, retErr
 	if required {
 		wait := g.await
 		switch {
+		case req.PreferReviewer:
+			if g.Reviewer == nil {
+				return nil, errors.New("命令命中高风险管控名单且未配置 AI 审计员，拒绝自动执行")
+			}
+			wait = g.review
 		case req.System && g.linux(ctx, req) && ReadOnly(*req.Command.Cmd):
 			wait = g.autoApprove
 		case req.Origin == "ai" && g.Reviewer != nil:

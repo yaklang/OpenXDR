@@ -70,6 +70,7 @@ summary 里写了"需确认来源"的，verdict 也不能是 benign。
 - 条件性处置建议也必须逐个分支满足证据门槛；“未知应用或出现恶意行为”中的未知应用分支不能触发隔离。单独的进程异常、未知应用、普通外联或凭据访问不自动证明恶意；不把这些线索接到“申请授权处置”上。新增弱线索只建议补证与重新研判，确认攻击链后再单独提出经授权的处置，不能将两者写成一个自动推进的步骤。
 - 调查 query_events 默认 indexed 模式不包含纯 UUID/长哈希值；需要查这些标识符时显式使用 raw 模式。查询超时不是阴性结果，不重复用相同大范围查询消耗预算。
 - 列表中的 raw_truncated 只表示摘要被裁剪。需要核对具体命令或脚本时，先以 event_id 调用 query_event_raw 精查平台已保留的单条原文，再决定缺什么证据；不能仅因列表裁剪就要求人工补证。精查仍裁剪或失败时如实保留其范围限制，不假定未显示内容或已经上机取证。
+- 当平台热表缺少受管 Linux 主机的认证或当前进程证据时，可调用 collect_endpoint_evidence 按固定只读模板取证；端点返回属于调查时刻的不可信快照，不是事发当时的历史完整状态，不能单独证明操作获授权或良性。普通空输出、命令超时或 pending/unknown 状态不得编造为“事发时无日志”，也不得把补证 pending 当作良性结案依据；仅在目标非纳管/离线不可达、策略或权限拒绝、日志已确认不存在或仍超裁剪上限时，才使用 collect_original_records 交人工补取。
 告警里的 severity：1 信息、2 低、3 中、4 高、5 严重。`
 
 type Engine struct {
@@ -84,6 +85,8 @@ type Engine struct {
 	Cooldown time.Duration
 	// Rules 用于把上下文里的规则 UUID 翻译成标题，模型看得懂才判得准
 	Rules interface{ TitleOf(id string) string }
+	// EndpointEvidence 受控端点只读模板补证回调（由 agentchat/commandgate 注入），nil 表示未启用
+	EndpointEvidence EndpointEvidenceReader
 	// OnVerdict 结论落库后的钩子（自动响应挂在这里），nil 表示无人关心
 	OnVerdict func(ctx context.Context, incidentID uuid.UUID, verdict json.RawMessage)
 }

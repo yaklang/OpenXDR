@@ -46,6 +46,8 @@ func evidenceObservations(claims any) []evidenceObservation {
 			text = fmt.Sprintf("这条归一化事件记录的父进程 GUID 为 %s；仅对应此记录，不证明更长的进程链或操作授权。", value)
 		case "missing_ancestor":
 			text = fmt.Sprintf("本次血缘查询的祖先缺失标记为 %s；缺失不等于没有父进程或行为正常。", value)
+		case "template", "command_id", "observed_at":
+			text = fmt.Sprintf("本次受控端点只读补证的 %s 记录为 %s；仅代表调查时刻在受管端点读取的固定模板快照，不是事发当时的历史状态，不能单独证明操作获授权。", field, value)
 		}
 		observations = append(observations, evidenceObservation{EvidenceID: id, Field: field, Text: text})
 	}

@@ -48,7 +48,7 @@ func recordEvidenceFrom(queryID string, result map[string]any) []recordEvidence 
 	return records
 }
 
-var evidenceFields = []string{"status", "returned", "limit", "truncated", "ancestors_truncated", "children_truncated", "missing_ancestor", "coverage", "mode", "raw_mode_scope", "raw_excerpt_limit_bytes", "from", "to", "asset_id", "collection_status", "collection_received_at", "collection_states", "collection_paths", "collection_scope", "baseline_status", "baseline_id", "exe_path", "baseline_path", "baseline_first_recorded_at", "baseline_scope"}
+var evidenceFields = []string{"status", "returned", "limit", "truncated", "ancestors_truncated", "children_truncated", "missing_ancestor", "coverage", "mode", "raw_mode_scope", "raw_excerpt_limit_bytes", "from", "to", "asset_id", "collection_status", "collection_received_at", "collection_states", "collection_paths", "collection_scope", "baseline_status", "baseline_id", "exe_path", "baseline_path", "baseline_first_recorded_at", "baseline_scope", "command_id", "template", "exit_code", "observed_at"}
 
 func queryEvidenceFrom(messages []Message) []queryEvidence {
 	evidence := make([]queryEvidence, 0)
