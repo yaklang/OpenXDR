@@ -36,8 +36,9 @@ type Spec struct {
 	Targets  struct {
 		Group string `yaml:"group"`
 	} `yaml:"targets"`
-	ApprovalTimeout string `yaml:"approval_timeout"`
-	Prompt          string `yaml:"prompt"`
+	ApprovalTimeout   string `yaml:"approval_timeout"`
+	Prompt            string `yaml:"prompt"`
+	RuntimeCapability string `yaml:"runtime_capability"`
 
 	approvalTimeout time.Duration
 }
@@ -51,6 +52,16 @@ func parseSpec(data []byte) (Spec, error) {
 	dec.KnownFields(true) // 拼错的字段直接拒绝，不能静默变成默认值
 	if err := dec.Decode(&s); err != nil {
 		return s, err
+	}
+	// 新任务在旧节点 KnownFields 校验时整项拒绝，避免滚动升级期间落到无自治闸门的执行器。
+	if s.RuntimeCapability != "" && s.RuntimeCapability != "finding_work_v1" {
+		return s, errors.New("不支持的任务运行时能力")
+	}
+	if s.ID == "ops-followup" && s.RuntimeCapability != "finding_work_v1" {
+		return s, errors.New("自治跟进任务必须声明 finding_work_v1 运行时能力")
+	}
+	if s.RuntimeCapability == "finding_work_v1" && s.ID != "ops-followup" {
+		return s, errors.New("运行时能力与任务身份不匹配")
 	}
 	switch {
 	case s.ID == "":

@@ -1,4 +1,5 @@
 id: ops-followup
+runtime_capability: finding_work_v1
 name: 自治运维待办跟进
 name_en: Autonomous operations follow-up
 category: ops
