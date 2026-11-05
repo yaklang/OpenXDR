@@ -393,7 +393,7 @@ func setIncidentStatus(db *ent.Client) http.HandlerFunc {
 		// 人改了状态，AI 的结案建议就作废了（采纳也走这里）
 		u := tx.Incident.UpdateOneID(id).SetStatus(body.Status).ClearClosureProposal()
 		if body.Status == "open" {
-			u.ClearResolution().ClearResolvedBy().ClearResolvedAt().ClearResolutionSource()
+			u.ClearResolution().ClearResolvedBy().ClearResolvedAt().ClearResolutionSource().ClearWork().ClearWorkNextCheckAt().ClearTriageStartedAt().ClearTriageHeartbeatAt()
 		} else {
 			resolution, source, ok := resolutionOf(inc, body.Status, note)
 			if !ok {

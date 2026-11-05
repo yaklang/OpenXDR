@@ -47,6 +47,7 @@ import (
 	"openxdr/server/internal/eventpart"
 	"openxdr/server/internal/eventsearch"
 	"openxdr/server/internal/feishuapproval"
+	"openxdr/server/internal/findingreview"
 	"openxdr/server/internal/fpstats"
 	"openxdr/server/internal/grpcsvc"
 	"openxdr/server/internal/hostimport"
@@ -154,6 +155,7 @@ func main() {
 	queryRoles := startQueryRoles(ctx, db, client, dsn)
 	chat := startChat(ctx, db, client, rules, hub, webhook, conf, queryRoles, suppressionReviewer)
 	triageEngine.EndpointEvidence = chat.CollectEndpointEvidence
+	chat.ReviewFinding = (&findingreview.Reviewer{Endpoint: chat.Endpoint, OnUsage: aiconf.Recorder(client, "finding_review")}).Review
 	go cluster.RunLeader(ctx, db, "closure-review", closureReviewer.Run)
 	go cluster.RunLeader(ctx, db, "triage", triageEngine.Run)
 	scheduler := startScheduler(ctx, db, client, chat, conf, webhook)

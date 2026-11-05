@@ -25,14 +25,14 @@ func EvidenceKey(inc *ent.Incident) string {
 			t = *at
 		}
 	}
-	return t.UTC().Format(time.RFC3339Nano)
+	return t.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
 }
 
 // Plan 只根据服务端已落库的结论及告警级别决定责任，不接受模型自报 owner。
 func Plan(inc *ent.Incident, severity int, decoy bool, now time.Time) (*schema.IncidentWork, *time.Time) {
 	w := &schema.IncidentWork{Version: 1, Owner: "ai", Stage: "monitoring", EvidenceKey: EvidenceKey(inc), WakeOn: []string{"new_evidence", "capability_upgrade"}, Reason: "持续监测；新证据到达后重研判"}
 	if inc.TriagedAt != nil {
-		w.VerdictAt = *inc.TriagedAt
+		w.VerdictAt = inc.TriagedAt.UTC().Truncate(time.Microsecond)
 	}
 	var v struct {
 		Verdict string   `json:"verdict"`

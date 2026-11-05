@@ -17,6 +17,7 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/internal/auth"
+	"openxdr/server/internal/incidentwork"
 	"openxdr/server/internal/intel"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
@@ -222,12 +223,18 @@ func TestAPIIncidentsReview(t *testing.T) {
 	want := map[uuid.UUID]bool{}
 	for _, c := range cases {
 		create := client.Incident.Create().SetStatus(c.status).SetGraph(json.RawMessage(`{}`))
+		if c.status == "triaged" {
+			create.SetTriagedAt(time.Now())
+		}
 		if c.verdict != "" {
 			create.SetAiVerdict(json.RawMessage(c.verdict))
 		}
 		inc := create.SaveX(ctx)
 		client.Alert.Create().SetTs(time.Now()).SetRuleID("r").SetSeverity(1).SetIncidentID(inc.ID).SaveX(ctx)
 		client.Alert.Create().SetTs(time.Now()).SetRuleID("r").SetSeverity(c.severity).SetIncidentID(inc.ID).SaveX(ctx)
+		if err := incidentwork.Refresh(ctx, client, inc, time.Now()); err != nil {
+			t.Fatal(err)
+		}
 		if c.review {
 			want[inc.ID] = true
 		}

@@ -18,21 +18,27 @@ import (
 )
 
 type findingRow struct {
-	ID         uuid.UUID  `json:"id"`
-	GroupID    uuid.UUID  `json:"groupId"`
-	AssetID    uuid.UUID  `json:"assetId"`
-	Hostname   string     `json:"hostname"`
-	Key        string     `json:"key"`
-	Title      string     `json:"title"`
-	Detail     string     `json:"detail"`
-	Severity   string     `json:"severity"`
-	Status     string     `json:"status"`
-	FirstSeen  time.Time  `json:"firstSeen"`
-	LastSeen   time.Time  `json:"lastSeen"`
-	SessionID  *uuid.UUID `json:"sessionId"`
-	ResolvedAt *time.Time `json:"resolvedAt"`
-	ResolvedBy *string    `json:"resolvedBy"`
-	Note       *string    `json:"note"`
+	ID              uuid.UUID       `json:"id"`
+	GroupID         uuid.UUID       `json:"groupId"`
+	AssetID         uuid.UUID       `json:"assetId"`
+	Hostname        string          `json:"hostname"`
+	Key             string          `json:"key"`
+	Title           string          `json:"title"`
+	Detail          string          `json:"detail"`
+	Severity        string          `json:"severity"`
+	Status          string          `json:"status"`
+	FirstSeen       time.Time       `json:"firstSeen"`
+	LastSeen        time.Time       `json:"lastSeen"`
+	SessionID       *uuid.UUID      `json:"sessionId"`
+	ResolvedAt      *time.Time      `json:"resolvedAt"`
+	ResolvedBy      *string         `json:"resolvedBy"`
+	Note            *string         `json:"note"`
+	WorkOwner       string          `json:"workOwner"`
+	WorkNextCheckAt *time.Time      `json:"workNextCheckAt,omitempty"`
+	WorkAttempts    int             `json:"workAttempts"`
+	WorkSessionID   *uuid.UUID      `json:"workSessionId,omitempty"`
+	WorkLeaseUntil  *time.Time      `json:"workLeaseUntil,omitempty"`
+	Work            json.RawMessage `json:"work,omitempty"`
 }
 
 // mapFindings 运维待办：巡检 AI 登记与复查，人在这里标记已处理或忽略。忽略的 AI 不再登记。
@@ -56,6 +62,13 @@ func mapFindings(mux *http.ServeMux, db *ent.Client) {
 		}
 		if status := r.URL.Query().Get("status"); status != "" {
 			q = q.Where(finding.StatusEQ(status))
+		}
+		if owner := r.URL.Query().Get("workOwner"); owner != "" {
+			if owner != "ai" && owner != "human" {
+				http.Error(w, "无效的 workOwner", http.StatusBadRequest)
+				return
+			}
+			q = q.Where(finding.WorkOwnerEQ(owner))
 		}
 		if values, present := r.URL.Query()["ids"]; present {
 			parts := strings.Split(strings.Join(values, ","), ",")
@@ -107,7 +120,7 @@ func mapFindings(mux *http.ServeMux, db *ent.Client) {
 		out := make([]findingRow, len(rows))
 		for i, f := range rows {
 			out[i] = findingRow{f.ID, f.GroupID, f.AssetID, names[f.AssetID], f.Key, f.Title, f.Detail, f.Severity,
-				f.Status, f.FirstSeen, f.LastSeen, f.SessionID, f.ResolvedAt, f.ResolvedBy, f.Note}
+				f.Status, f.FirstSeen, f.LastSeen, f.SessionID, f.ResolvedAt, f.ResolvedBy, f.Note, f.WorkOwner, f.WorkNextCheckAt, f.WorkAttempts, f.WorkSessionID, f.WorkLeaseUntil, f.Work}
 		}
 		w.Header().Set("X-Total-Count", strconv.Itoa(total))
 		if len(rows) < total-offset {
