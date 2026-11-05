@@ -183,7 +183,17 @@ func (e *Engine) queue(ctx context.Context, now time.Time) ([]*ent.Incident, err
 	}
 	again := append(urgent, due...)
 	again = again[:min(len(again), max(retriageSlots, batchSize-len(fresh)))]
-	return append(fresh[:min(len(fresh), batchSize-len(again))], again...), nil
+	queued := append(fresh[:min(len(fresh), batchSize-len(again))], again...)
+	if len(queued) == batchSize {
+		return queued, nil
+	}
+	// 能力升级只使用空余名额，每批最多一条，不挤占新事件和新增证据。
+	upgrade, err := e.DB.Incident.Query().Where(capabilityDue(now, e.Cooldown)).
+		Order(lastLooked).Limit(1).All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return append(queued, upgrade...), nil
 }
 
 // lastLooked 按上次研判时刻（没研判过按创建时刻）排：刚看过的排后面，等得最久的先轮到
@@ -245,7 +255,7 @@ func (e *Engine) triageOne(ctx context.Context, inc *ent.Incident) (runErr error
 	if err != nil {
 		return err
 	}
-	verdict := withModel(parseVerdict(inc.ID.String(), answer), model)
+	verdict := withEvidenceCapability(withModel(parseVerdict(inc.ID.String(), answer), model))
 	stage = "persist"
 	tx, err := e.DB.Tx(ctx)
 	if err != nil {
@@ -656,6 +666,10 @@ func (e *Engine) appendRetriage(ctx context.Context, sb *strings.Builder, inc *e
 		when = "于 " + inc.TriagedAt.Format(time.RFC3339)
 	}
 	fmt.Fprintf(sb, "上次研判%s，结论 %s（置信度 %d）：%s\n", when, cmp.Or(last.Verdict, "无法解析"), last.Confidence, excerpt(last.Summary, 300))
+	if needsCapabilityUpgrade(inc) {
+		sb.WriteString("本次由调查能力升级触发，没有宣称新增告警或新增攻击证据。请先用 query_event_raw 精查此前被裁剪的相关事件；认证链缺证可用 linux_auth_journal，当前进程核对可用 linux_process_snapshot，其他问题只选择当前工具实际支持的模板。原文完整或快照正常不证明操作获得授权；只有仍存在具体且无法自主补齐的缺口时保留 collect_original_records，并明确缺的是哪种记录及工具无法取得的原因。上次摘要是模型判断，不能作为独立证据、人工确认或授权。仍输出完整 JSON 结论。\n")
+		return nil
+	}
 	sb.WriteString("上次摘要是模型判断，不是独立证据或人工确认；不得仅凭上次摘要认定授权、排除攻击或补写缺失事实。引用匹配也不证明摘要成立，须回到实际事件与来源核实。上次结论没看过下面的新增告警；判断它们是否改变结论，仍输出完整的 JSON 结论。\n")
 	if inc.TriagedAt == nil {
 		return nil

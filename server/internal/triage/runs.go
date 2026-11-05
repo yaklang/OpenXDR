@@ -48,6 +48,13 @@ func (e *Engine) runTrigger(inc *ent.Incident) (string, *time.Time) {
 	if inc.UrgentAt != nil && (inc.TriagedAt == nil || inc.UrgentAt.After(*inc.TriagedAt)) {
 		return "urgent", inc.UrgentAt
 	}
+	if needsCapabilityUpgrade(inc) {
+		if inc.TriagedAt == nil {
+			return capabilityTrigger, nil
+		}
+		ready := inc.TriagedAt.Add(e.Cooldown)
+		return capabilityTrigger, &ready
+	}
 	ready := inc.EvidenceAt
 	if ready != nil && inc.TriagedAt != nil {
 		end := inc.TriagedAt.Add(e.Cooldown)
@@ -65,9 +72,13 @@ func (e *Engine) beginRun(ctx context.Context, inc *ent.Incident, started time.T
 		return nil, err
 	}
 	defer tx.Rollback()
-	n, err := tx.Incident.Update().Where(incident.IDEQ(inc.ID), incident.StatusIn("open", "triaged"),
+	claim := tx.Incident.Update().Where(incident.IDEQ(inc.ID), incident.StatusIn("open", "triaged"),
 		incident.Or(incident.TriageStartedAtIsNil(), incident.TriageHeartbeatAtIsNil(), incident.TriageHeartbeatAtLTE(started.Add(-RunningTTL)))).
-		SetTriageStartedAt(started).SetTriageHeartbeatAt(started).Save(ctx)
+		SetTriageStartedAt(started).SetTriageHeartbeatAt(started)
+	if needsCapabilityUpgrade(inc) {
+		claim.Where(capabilityDue(started, e.Cooldown))
+	}
+	n, err := claim.Save(ctx)
 	if err != nil || n == 0 {
 		return nil, err
 	}
