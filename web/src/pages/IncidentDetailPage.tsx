@@ -1,3 +1,4 @@
+import { IncidentWorkCard } from '../components/IncidentWorkCard'
 import { TriageHistory } from '../components/TriageHistory'
 import { ArrowLeftOutlined, DownOutlined, DownloadOutlined, EllipsisOutlined, RobotOutlined, UpOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -252,6 +253,7 @@ export function IncidentDetailPage() {
         <Col xs={24} xl={8}>
           <Space orientation="vertical" size={20} style={{ width: '100%' }}>
             {queue.total > 1 && queue.index >= 0 && <QueueCard items={queue.items} index={queue.index} />}
+            {!done && inc.work && <IncidentWorkCard work={inc.work} nextCheckAt={inc.workNextCheckAt} />}
             <Card title={t('basicInfo')}>
               <Descriptions column={1} size="small">
                 <Descriptions.Item label="ID"><Typography.Text className="mono" copyable ellipsis style={{ maxWidth: 220 }}>{inc.id}</Typography.Text></Descriptions.Item>

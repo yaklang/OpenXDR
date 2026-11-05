@@ -41,6 +41,18 @@ export interface Graph {
   overflow: number
 }
 
+export interface IncidentWork {
+  version: number
+  owner: 'ai' | 'human'
+  stage: string
+  evidence_key: string
+  verdict_at: string
+  gap_kind?: string
+  attempts: number
+  wake_on: string[]
+  reason: string
+}
+
 export interface IncidentSummary {
   id: string
   createdAt: string
@@ -65,6 +77,8 @@ export interface IncidentSummary {
   // 研判连续失败次数与下次重试时刻
   triageFailures?: number
   triageRetryAt?: string
+  work?: IncidentWork | null
+  workNextCheckAt?: string
 }
 
 export interface ClosureProposal {

@@ -13,7 +13,7 @@ export function TriageHistory({ id }: { id: string }) {
   const query = useQuery({ queryKey: ['triage-runs', id, page], queryFn: () => fetchTriageRuns(id, page), enabled: open, refetchInterval: open ? 10000 : false })
   const seconds = (ms = 0) => `${(ms / 1000).toFixed(1)} s`
   const statuses = { running: 'triageRunRunning', succeeded: 'triageRunSucceeded', failed: 'triageRunFailed', interrupted: 'triageRunInterrupted' } as const
-  const triggers = { initial: 'triageRunInitial', reopened: 'triageRunReopened', urgent: 'triageRunUrgent', evidence: 'triageRunEvidence' } as const
+  const triggers = { initial: 'triageRunInitial', reopened: 'triageRunReopened', urgent: 'triageRunUrgent', evidence: 'triageRunEvidence', autonomy_followup: 'triageRunAutonomy' } as const
   return <Card title={t('triageRunHistory')} extra={<Button type="link" onClick={() => setOpen(!open)}>{t(open ? 'triageRunHide' : 'triageRunShow')}</Button>}>
     <Typography.Text type="secondary">{t('triageRunHint')}</Typography.Text>
     {open && <div style={{ marginTop: 14 }}>
