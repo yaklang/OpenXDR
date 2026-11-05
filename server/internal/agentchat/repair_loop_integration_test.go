@@ -88,3 +88,28 @@ func TestBusinessBlockerNeedsFreshActualDiagnostic(t *testing.T) {
 		t.Fatal("basic host data treated as business blocker proof")
 	}
 }
+
+func TestOpenPlanRetainsUnknownReceiptWithoutCallingItRecovery(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("g").SaveX(ctx)
+	a := db.Asset.Create().SetHostname("a").SetGroupID(g.ID).SaveX(ctx)
+	session := db.AgentSession.Create().SetKind("chat").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
+	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service").SetTitle("service").SaveX(ctx)
+	c := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl restart -- app.service").SetStatus("unknown").SaveX(ctx)
+	svc := &Service{DB: db}
+	if err := svc.saveFindingPlan(ctx, session, f, "query original receipt; never replay", "", []uuid.UUID{c.ID}); err != nil {
+		t.Fatal(err)
+	}
+	got := db.Finding.GetX(ctx, f.ID)
+	var w findings.Work
+	_ = json.Unmarshal(got.Work, &w)
+	if got.Status != "open" || len(w.EvidenceCommands) != 1 || w.EvidenceCommands[0] != c.ID || w.Plan != "query original receipt; never replay" {
+		t.Fatalf("lost uncertain action: %+v", w)
+	}
+	if err := svc.findingEvidence(ctx, session, got, []uuid.UUID{c.ID}, true, ""); err == nil {
+		t.Fatal("unknown receipt treated as verified recovery")
+	}
+	if w.EscalatedAt != nil {
+		t.Fatal("unknown receipt manufactured a verified emergency")
+	}
+}

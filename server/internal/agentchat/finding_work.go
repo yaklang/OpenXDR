@@ -209,7 +209,6 @@ func (s *Service) findingEvidence(ctx context.Context, session *ent.AgentSession
 }
 
 func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession, f *ent.Finding, plan, blocker string, ids []uuid.UUID) error {
-	newBlocker := blocker != ""
 	if len(ids) > 5 {
 		return errors.New("最多关联五条本轮证据指令")
 	}
@@ -260,11 +259,6 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 		blocker = prior.Blocker
 	}
 	if len(ids) > 0 {
-		if !newBlocker || blocker == "policy_required" {
-			if err := s.findingEvidence(ctx, session, f, ids, true, ""); err != nil {
-				return err
-			}
-		}
 		prior.EvidenceCommands = ids
 		now := time.Now()
 		prior.EvidenceAt, prior.EvidenceStale = &now, false
@@ -289,9 +283,16 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 	prior.Version = 2
 	prior.Plan, prior.Blocker, prior.Stage = plan, blocker, stage
 	prior.WakeOn = "new_observation_or_next_check"
-	escalated, err := s.updateFindingRisk(ctx, session, f, &prior, ids)
+	complete, err := s.findingReferences(ctx, session, f, ids)
 	if err != nil {
 		return err
+	}
+	escalated := false
+	if complete {
+		escalated, err = s.updateFindingRisk(ctx, session, f, &prior, ids)
+		if err != nil {
+			return err
+		}
 	}
 	if prior.RiskSince != nil && prior.EscalatedAt == nil {
 		next = time.Now().Add(15 * time.Minute)
@@ -326,6 +327,29 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 		}
 	}
 	return tx.Commit()
+}
+
+// 未结案计划可以保存失败或未知回执作为后续调查线索，不能把这些引用当作恢复证明。
+func (s *Service) findingReferences(ctx context.Context, session *ent.AgentSession, f *ent.Finding, ids []uuid.UUID) (bool, error) {
+	complete := len(ids) > 0
+	seen := map[uuid.UUID]bool{}
+	for _, id := range ids {
+		if id == uuid.Nil || seen[id] {
+			return false, errors.New("线索指令ID为空或重复")
+		}
+		seen[id] = true
+		c, err := s.DB.Command.Query().Where(command.IDEQ(id), command.AssetIDEQ(f.AssetID), command.CreatedAtGTE(session.CreatedAt)).Only(ctx)
+		if err != nil {
+			return false, errors.New("线索指令不属本轮当前资产")
+		}
+		if c.CreatedAt.After(time.Now()) {
+			return false, errors.New("线索指令时间无效")
+		}
+		if c.Kind != "exec" || c.Cmd == nil || !commandgate.ReadOnly(*c.Cmd) || c.Status != "succeeded" || c.ExitCode == nil || *c.ExitCode != 0 || c.CompletedAt == nil || c.Truncated {
+			complete = false
+		}
+	}
+	return complete, nil
 }
 
 func findingWorkJSON(f *ent.Finding) any { var w any; _ = json.Unmarshal(f.Work, &w); return w }
