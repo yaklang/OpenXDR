@@ -94,6 +94,19 @@ func (s *Service) findingRisk(ctx context.Context, session *ent.AgentSession, f 
 			kind, observed = measured, *c.CompletedAt
 		}
 	}
+	// 不允许只挑旧危急样本，忽略平台已知的更新探针或仍未确认的探测。
+	if !observed.IsZero() {
+		newer, err := s.DB.Command.Query().Where(
+			command.AssetIDEQ(f.AssetID), command.KindEQ("exec"), command.CmdEQ(probe), command.IDNotIn(ids...),
+			command.Or(command.CompletedAtGT(observed), command.And(command.StatusIn("pending", "sent", "unknown"), command.CreatedAtGT(observed))),
+		).Exist(ctx)
+		if err != nil {
+			return "", time.Time{}, err
+		}
+		if newer {
+			return "", time.Time{}, errors.New("存在未引用的更新风险探针，旧样本不能代表当前状态")
+		}
+	}
 	// 查询期间转组的旧回执不能用于新的风险判断。
 	current, err = s.DB.Asset.Query().Where(asset.IDEQ(f.AssetID), asset.GroupIDEQ(session.GroupID)).Exist(ctx)
 	if err != nil {

@@ -182,3 +182,41 @@ func TestFindingRiskNewestUnavailableDoesNotRestore(t *testing.T) {
 		}
 	}
 }
+
+func TestFindingRiskCannotCherryPickOldCriticalProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, cmd string
+		complete          bool
+		bad               bool
+	}{
+		{"newer_healthy", "succeeded", "df -P /", true, true},
+		{"newer_failed", "failed", "df -P /", true, true},
+		{"newer_unknown", "unknown", "df -P /", false, true},
+		{"newer_pending", "pending", "df -P /", false, true},
+		{"newer_sent", "sent", "df -P /", false, true},
+		{"other_probe_not_equivalent", "succeeded", "df -P /var", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, db := testdb.New(t)
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			g := db.Group.Create().SetName("risk").SaveX(ctx)
+			a := db.Asset.Create().SetHostname("disk-host").SetGroupID(g.ID).SaveX(ctx)
+			session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetModel("test").SetGroupID(g.ID).SetCreatedAt(now.Add(-5 * time.Minute)).SaveX(ctx)
+			f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("disk").SetTitle("磁盘").SetWork(json.RawMessage(`{"risk_target":{"kind":"disk_root","mount":"/","asset_id":"` + a.ID.String() + `"}}`)).SaveX(ctx)
+			old := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("df -P /").SetStatus("succeeded").SetExitCode(0).SetCreatedAt(now.Add(-2 * time.Minute)).SetCompletedAt(now.Add(-time.Minute)).SetStdout(findingDiskHeader + "/dev/root 1000 950 50 95% /\n").SaveX(ctx)
+			next := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd(tc.cmd).SetStatus(tc.status).SetCreatedAt(now.Add(-45 * time.Second))
+			if tc.complete {
+				next.SetCompletedAt(now.Add(-30 * time.Second)).SetExitCode(0).SetStdout(findingDiskHeader + "/dev/root 1000 500 500 50% /\n")
+			}
+			next.ExecX(ctx)
+			kind, at, err := (&Service{DB: db}).findingRisk(ctx, session, f, []uuid.UUID{old.ID})
+			if tc.bad {
+				if err == nil || kind != "" || !at.IsZero() {
+					t.Fatalf("不可选择旧危急回执制造紧急：kind=%q at=%v err=%v", kind, at, err)
+				}
+			} else if err != nil || kind != "disk_pressure" || !at.Equal(*old.CompletedAt) {
+				t.Fatalf("无关探针不得影响目标：kind=%q at=%v err=%v", kind, at, err)
+			}
+		})
+	}
+}
