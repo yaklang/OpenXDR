@@ -60,6 +60,8 @@ type Service struct {
 	ReviewFinding func(context.Context, *ent.AgentSession, *ent.Finding, []*ent.Command) (bool, string, error)
 	// AuthorizeFindingRepair 仅由服务端可信维护范围授权最小写动作；为空时自治跟进只读。
 	AuthorizeFindingRepair func(context.Context, *ent.AgentSession, *ent.Finding, string) error
+	// RevalidateFindingRepair 审批等待后、真正下发前重新核验同一份维护预留。
+	RevalidateFindingRepair func(context.Context, *ent.AgentSession, *ent.Finding, string) error
 	// RecordFindingProbe 将实际下发的固定只读诊断绑定到服务端会话，模型不能伪造此关联。
 	RecordFindingProbe func(context.Context, *ent.AgentSession, *ent.Command) error
 	// FoldAbove 历史超过这么多字节时折叠较早的工具结果与思考过程再发给模型，0 不折叠
@@ -729,8 +731,17 @@ func (s *Service) tool(ctx context.Context, session *ent.AgentSession, who comma
 		if body.Timeout > 300 {
 			return "", errors.New("timeout 超过 300 秒")
 		}
-		if err := s.guardFindingExec(ctx, session, body.Host, body.Cmd); err != nil {
+		repairTarget, err := s.findingExecTarget(ctx, session, body.Host, body.Cmd)
+		if err != nil {
 			return "", err
+		}
+		if repairTarget != nil {
+			who.BeforeIssue = func(issueCtx context.Context) error {
+				if s.RevalidateFindingRepair == nil {
+					return errors.New("未配置维护范围的下发前复核")
+				}
+				return s.RevalidateFindingRepair(issueCtx, session, repairTarget, body.Cmd)
+			}
 		}
 		who.GroupID, who.SessionID, who.Origin = session.GroupID, &session.ID, "ai"
 		incidentID, err := s.commandIncident(ctx, session, body.Host)

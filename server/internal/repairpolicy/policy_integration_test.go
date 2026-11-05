@@ -16,8 +16,12 @@ import (
 	"github.com/google/uuid"
 	"openxdr/server/ent"
 	"openxdr/server/ent/auditlog"
+	"openxdr/server/ent/command"
+	"openxdr/server/ent/commandpolicy"
 	"openxdr/server/internal/auth"
+	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
+	"openxdr/server/internal/response"
 	"openxdr/server/internal/testdb"
 )
 
@@ -240,5 +244,80 @@ func TestRepairPolicyHandlerAndCoreUnits(t *testing.T) {
 	x.store.Handler().ServeHTTP(w, request)
 	if w.Code != http.StatusBadRequest {
 		t.Fatal("unknown field accepted", w.Code)
+	}
+}
+
+func TestRepairRevalidatedAfterReviewerWaitBeforeHub(t *testing.T) {
+	for _, mode := range []string{"revoked", "expired", "moved", "new-unknown", "probe-expired", "finding-closed", "approved"} {
+		t.Run(mode, func(t *testing.T) {
+			x := setup(t)
+			if mode == "expired" {
+				x.grant.ExpiresAt = time.Now().Add(500 * time.Millisecond)
+			}
+			x.save(t)
+			x.bind(t)
+			if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err != nil {
+				t.Fatal(err)
+			}
+			agent := uuid.New()
+			x.db.Asset.UpdateOneID(x.f.AssetID).SetAgentID(agent).SetOs("linux").ExecX(x.ctx)
+			hub := response.NewHub(x.db, true)
+			inbox := hub.Attach(agent)
+			defer hub.Detach(agent, inbox)
+			x.db.CommandPolicy.Create().SetGroupID(x.session.GroupID).SetOrigin(commandpolicy.OriginAi).SetMode(commandpolicy.ModeDeny).SetPattern(`^systemctl restart -- `).SaveX(x.ctx)
+			gate := &commandgate.Gate{DB: x.db, Hub: hub, Reviewer: func(_ context.Context, _ commandgate.Request) (bool, string, error) {
+				switch mode {
+				case "revoked":
+					if err := x.store.Save(auth.WithUser(x.ctx, x.admin), Policy{Grants: []Grant{}}, "review-wait"); err != nil {
+						t.Fatal(err)
+					}
+				case "expired":
+					time.Sleep(600 * time.Millisecond)
+				case "moved":
+					g := x.db.Group.Create().SetName("moved-during-review").SaveX(x.ctx)
+					x.db.Asset.UpdateOneID(x.f.AssetID).SetGroupID(g.ID).ExecX(x.ctx)
+				case "new-unknown":
+					x.db.Command.Create().SetAssetID(x.f.AssetID).SetKind("exec").SetCmd("systemctl restart legacy.service").SetStatus("unknown").SaveX(x.ctx)
+				case "probe-expired":
+					x.probe.Update().SetCompletedAt(time.Now().Add(-11 * time.Minute)).ExecX(x.ctx)
+				case "finding-closed":
+					x.f.Update().SetStatus("resolved").ClearWorkSessionID().ExecX(x.ctx)
+				}
+				return true, "review completed", nil
+			}}
+			before := 0
+			req := commandgate.Request{System: true, GroupID: x.session.GroupID, SessionID: &x.session.ID, Origin: "ai", Command: response.Request{Kind: "exec", AssetID: x.f.AssetID, Cmd: &x.cmd}, BeforeIssue: func(ctx context.Context) error { before++; return x.store.Revalidate(ctx, x.session, x.f, x.cmd) }}
+			_, err := gate.Issue(x.ctx, req)
+			if mode == "approved" {
+				if err != nil || before != 1 {
+					t.Fatalf("positive path rejected: before=%d err=%v", before, err)
+				}
+				select {
+				case got := <-inbox:
+					if got.Cmd != x.cmd {
+						t.Fatal(got.Cmd)
+					}
+				default:
+					t.Fatal("approved repair not issued")
+				}
+				if _, err := gate.Issue(x.ctx, req); err == nil {
+					t.Fatal("consumed reservation allowed a second issue")
+				}
+			} else if err == nil {
+				t.Fatal("review delay invalidation still issued repair")
+			}
+			select {
+			case got := <-inbox:
+				t.Fatalf("unexpected extra/invalid Hub issue: %+v", got)
+			default:
+			}
+			expected := 0
+			if mode == "approved" {
+				expected = 1
+			}
+			if n := x.db.Command.Query().Where(command.CmdEQ(x.cmd)).CountX(x.ctx); n != expected {
+				t.Fatalf("commands created %d want %d", n, expected)
+			}
+		})
 	}
 }

@@ -52,17 +52,22 @@ func (s *Service) isFindingFollowup(ctx context.Context, session *ent.AgentSessi
 }
 
 func (s *Service) guardFindingExec(ctx context.Context, session *ent.AgentSession, host uuid.UUID, cmd string) error {
+	_, err := s.findingExecTarget(ctx, session, host, cmd)
+	return err
+}
+
+func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSession, host uuid.UUID, cmd string) (*ent.Finding, error) {
 	bound, err := s.isFindingFollowup(ctx, session)
 	if err != nil || !bound {
-		return err
+		return nil, err
 	}
 
 	rows, err := s.DB.Finding.Query().Where(finding.WorkSessionIDEQ(session.ID), finding.StatusEQ("open"), finding.GroupIDEQ(session.GroupID), finding.WorkLeaseUntilGT(time.Now())).All(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(rows) == 0 {
-		return errors.New("本轮已无有效领取的待办，禁止继续执行")
+		return nil, errors.New("本轮已无有效领取的待办，禁止继续执行")
 	}
 	allowed := false
 	var target *ent.Finding
@@ -71,30 +76,33 @@ func (s *Service) guardFindingExec(ctx context.Context, session *ent.AgentSessio
 			allowed = true
 			target = f
 			if f.WorkAttempts > findings.RepairBudget && !commandgate.ReadOnly(cmd) {
-				return errors.New("主动修复预算已用尽，本轮只允许只读观察")
+				return nil, errors.New("主动修复预算已用尽，本轮只允许只读观察")
 			}
 		}
 	}
 	if !allowed {
-		return errors.New("自主待办会话只能操作本轮领取的主机")
+		return nil, errors.New("自主待办会话只能操作本轮领取的主机")
 	}
 	if commandgate.ReadOnly(cmd) {
-		return nil
+		return nil, nil
 	}
 	// 无法确认归属到某次待办的旧写操作也不能冒险重放；先只读查清或由人确认。
 	unknown, err := s.DB.Command.Query().Where(command.AssetIDEQ(host), command.StatusIn("pending", "sent", "unknown")).All(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, c := range unknown {
 		if c.Kind != "exec" || c.Cmd == nil || !commandgate.ReadOnly(*c.Cmd) {
-			return errors.New("主机存在未确认的写操作，禁止自动新增修复指令；先查回执与只读效果")
+			return nil, errors.New("主机存在未确认的写操作，禁止自动新增修复指令；先查回执与只读效果")
 		}
 	}
-	if s.AuthorizeFindingRepair == nil {
-		return errors.New("未配置明确的自主修复维护范围，本任务只读跟进；不能自行重启生产服务、删除数据、安装补丁或修改 HA/数据库/安全采集/网络")
+	if s.AuthorizeFindingRepair == nil || s.RevalidateFindingRepair == nil {
+		return nil, errors.New("未配置明确的自主修复维护范围，本任务只读跟进；不能自行重启生产服务、删除数据、安装补丁或修改 HA/数据库/安全采集/网络")
 	}
-	return s.AuthorizeFindingRepair(ctx, session, target, cmd)
+	if err := s.AuthorizeFindingRepair(ctx, session, target, cmd); err != nil {
+		return nil, err
+	}
+	return target, nil
 }
 
 // findingEvidence 以新鲜、同资产的真实只读回执支撑复查，不接受单凭执行成功宣称问题已解决。

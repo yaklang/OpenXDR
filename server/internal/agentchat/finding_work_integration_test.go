@@ -12,8 +12,10 @@ import (
 
 	"github.com/google/uuid"
 	"openxdr/server/ent"
+	"openxdr/server/ent/commandpolicy"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
+	"openxdr/server/internal/response"
 	"openxdr/server/internal/schedule"
 	"openxdr/server/internal/testdb"
 )
@@ -52,6 +54,7 @@ func TestFindingAutonomyClaimsBudgetAndScope(t *testing.T) {
 		t.Fatal("write without trusted maintenance scope accepted")
 	}
 	called := 0
+	svc.RevalidateFindingRepair = func(context.Context, *ent.AgentSession, *ent.Finding, string) error { return nil }
 	svc.AuthorizeFindingRepair = func(_ context.Context, gotSession *ent.AgentSession, got *ent.Finding, cmd string) error {
 		called++
 		if gotSession.ID != session.ID || got.AssetID != a.ID || cmd != "systemctl reload test.service" {
@@ -186,5 +189,51 @@ func TestFindingFollowupNoDueSkipsModel(t *testing.T) {
 	}
 	if got := db.AgentSession.GetX(ctx, session.ID); got.Status != "succeeded" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestFindingRepairBindsFinalGateRevalidation(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("g").SaveX(ctx)
+	agent := uuid.New()
+	a := db.Asset.Create().SetHostname("a").SetGroupID(g.ID).SetAgentID(agent).SetOs("linux").SaveX(ctx)
+	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
+	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service").SetTitle("failed").SetWorkSessionID(session.ID).SetWorkLeaseUntil(time.Now().Add(time.Minute)).SetWorkAttempts(1).SaveX(ctx)
+	db.Task.Create().SetID(findings.FollowupTask).SetName("followup").SetSchedule("*/30 * * * *").SetPrompt("p").SaveX(ctx)
+	db.TaskRun.Create().SetTaskID(findings.FollowupTask).SetGroupID(g.ID).SetSessionID(session.ID).SetScheduledAt(time.Now()).SetStatus("running").SaveX(ctx)
+	db.CommandPolicy.Create().SetGroupID(g.ID).SetOrigin(commandpolicy.OriginAi).SetMode(commandpolicy.ModeDeny).SetPattern(`systemctl restart`).SaveX(ctx)
+	hub := response.NewHub(db, true)
+	inbox := hub.Attach(agent)
+	defer hub.Detach(agent, inbox)
+	reviews, finalChecks, authorizations := 0, 0, 0
+	gate := &commandgate.Gate{DB: db, Hub: hub, Reviewer: func(context.Context, commandgate.Request) (bool, string, error) {
+		reviews++
+		return true, "approved", nil
+	}}
+	svc := &Service{DB: db, Gate: gate, AuthorizeFindingRepair: func(context.Context, *ent.AgentSession, *ent.Finding, string) error { authorizations++; return nil }}
+	args := []byte(`{"host":"` + a.ID.String() + `","cmd":"systemctl restart -- worker-app.service"}`)
+	if _, err := svc.tool(ctx, session, commandgate.Request{System: true}, "exec", args); err == nil || authorizations != 0 {
+		t.Fatal("missing final revalidation should fail before reserving action")
+	}
+	svc.RevalidateFindingRepair = func(_ context.Context, gotSession *ent.AgentSession, got *ent.Finding, cmd string) error {
+		finalChecks++
+		if gotSession.ID != session.ID || got.ID != f.ID || cmd != "systemctl restart -- worker-app.service" {
+			t.Fatal("final hook lost original scope")
+		}
+		return fmt.Errorf("grant revoked during review")
+	}
+	if _, err := svc.tool(ctx, session, commandgate.Request{System: true}, "exec", args); err == nil {
+		t.Fatal("service dropped final hook")
+	}
+	if reviews != 1 || finalChecks != 1 || authorizations != 1 {
+		t.Fatalf("incorrect call chain: initial=%d reviewer=%d final=%d", authorizations, reviews, finalChecks)
+	}
+	select {
+	case c := <-inbox:
+		t.Fatalf("revoked action reached Hub: %+v", c)
+	default:
+	}
+	if db.Command.Query().CountX(ctx) != 0 {
+		t.Fatal("revoked action persisted a command")
 	}
 }

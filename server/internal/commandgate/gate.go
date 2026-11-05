@@ -40,6 +40,8 @@ type Request struct {
 	ApprovalTimeout time.Duration
 	// PreferReviewer 为 true 时，若命令命中高风险管控名单，优先交 AI 审计员评审，未配置审计员则直接拒绝，不走系统自动放行或人工长等待
 	PreferReviewer bool
+	// BeforeIssue 仅供服务端在审批等待后重新核验动作范围，不接受外部参数。
+	BeforeIssue func(context.Context) error `json:"-"`
 }
 
 // SystemActor 系统身份的发起人名，也是定时任务会话的 initiator。用户名不允许取这个值。
@@ -195,6 +197,11 @@ func (g *Gate) Issue(ctx context.Context, req Request) (out *ent.Command, retErr
 		return nil, err
 	}
 	req.Command.IssuedBy = actor
+	if req.BeforeIssue != nil {
+		if err := req.BeforeIssue(ctx); err != nil {
+			return nil, err
+		}
+	}
 	return g.Hub.IssueExec(ctx, req.Command)
 }
 

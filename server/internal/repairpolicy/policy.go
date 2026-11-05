@@ -53,12 +53,14 @@ type probeRef struct {
 	Unit      string    `json:"unit"`
 }
 type use struct {
-	SessionID     uuid.UUID `json:"session_id"`
-	GrantID       uuid.UUID `json:"grant_id"`
-	ReservationID uuid.UUID `json:"reservation_id"`
-	ReservedAt    time.Time `json:"reserved_at"`
-	NextAllowedAt time.Time `json:"next_allowed_at"`
-	ProbeID       uuid.UUID `json:"probe_id"`
+	FindingID     uuid.UUID  `json:"finding_id"`
+	FinalizedAt   *time.Time `json:"finalized_at,omitempty"`
+	SessionID     uuid.UUID  `json:"session_id"`
+	GrantID       uuid.UUID  `json:"grant_id"`
+	ReservationID uuid.UUID  `json:"reservation_id"`
+	ReservedAt    time.Time  `json:"reserved_at"`
+	NextAllowedAt time.Time  `json:"next_allowed_at"`
+	ProbeID       uuid.UUID  `json:"probe_id"`
 }
 
 var unitName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}\.service$`)
@@ -225,15 +227,19 @@ func (s *Store) Handler() http.Handler {
 }
 
 func (s *Store) claimed(ctx context.Context, session *ent.AgentSession, id uuid.UUID) (*ent.AgentSession, *ent.Finding, error) {
+	return claimedWithClient(ctx, s.DB, session, id)
+}
+
+func claimedWithClient(ctx context.Context, db *ent.Client, session *ent.AgentSession, id uuid.UUID) (*ent.AgentSession, *ent.Finding, error) {
 	if session == nil {
 		return nil, nil, errors.New("缺少真实任务会话")
 	}
 	now := time.Now()
-	current, err := s.DB.AgentSession.Get(ctx, session.ID)
+	current, err := db.AgentSession.Get(ctx, session.ID)
 	if err != nil || current.Kind != "task" || current.Initiator != "system" || current.Status != "running" || current.CancelRequestedAt != nil || current.GroupID != session.GroupID || current.RunOwner == nil || current.RunExpiresAt == nil || !current.RunExpiresAt.After(now) || current.RunDeadlineAt == nil || !current.RunDeadlineAt.After(now) {
 		return nil, nil, errors.New("任务会话或租约失效")
 	}
-	bound, err := s.DB.TaskRun.Query().Where(taskrun.TaskIDEQ(findings.FollowupTask), taskrun.SessionIDEQ(current.ID), taskrun.GroupIDEQ(current.GroupID), taskrun.StatusEQ("running")).Exist(ctx)
+	bound, err := db.TaskRun.Query().Where(taskrun.TaskIDEQ(findings.FollowupTask), taskrun.SessionIDEQ(current.ID), taskrun.GroupIDEQ(current.GroupID), taskrun.StatusEQ("running")).Exist(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -244,7 +250,7 @@ func (s *Store) claimed(ctx context.Context, session *ent.AgentSession, id uuid.
 	if id != uuid.Nil {
 		filters = append(filters, finding.IDEQ(id))
 	}
-	rows, err := s.DB.Finding.Query().Where(filters...).All(ctx)
+	rows, err := db.Finding.Query().Where(filters...).All(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -252,7 +258,7 @@ func (s *Store) claimed(ctx context.Context, session *ent.AgentSession, id uuid.
 		if !slices.Contains(current.Subjects, "finding:"+f.ID.String()) || f.WorkAttempts > findings.RepairBudget {
 			continue
 		}
-		ok, err := s.DB.Asset.Query().Where(asset.IDEQ(f.AssetID), asset.GroupIDEQ(current.GroupID)).Exist(ctx)
+		ok, err := db.Asset.Query().Where(asset.IDEQ(f.AssetID), asset.GroupIDEQ(current.GroupID)).Exist(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -336,7 +342,16 @@ func probeKey(asset uuid.UUID, unit string) string {
 func useKey(asset uuid.UUID, unit string) string { return "repair-use/" + asset.String() + "/" + unit }
 
 // Authorize 只预留一次精确动作；预留后 Gate 拒绝/超时也不重发，避免“没回执就再试”。
-func (s *Store) Authorize(ctx context.Context, session *ent.AgentSession, f *ent.Finding, cmd string) (retErr error) {
+func (s *Store) Authorize(ctx context.Context, session *ent.AgentSession, f *ent.Finding, cmd string) error {
+	return s.authorize(ctx, session, f, cmd, false)
+}
+
+// Revalidate 不新建预留，在审批后重新检查并一次性消费原预留；消费后投递失败也不重放。
+func (s *Store) Revalidate(ctx context.Context, session *ent.AgentSession, f *ent.Finding, cmd string) error {
+	return s.authorize(ctx, session, f, cmd, true)
+}
+
+func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent.Finding, cmd string, finalize bool) (retErr error) {
 	defer func() {
 		if retErr == nil {
 			return
@@ -377,6 +392,25 @@ func (s *Store) Authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	if err != nil {
 		return errors.New("未配置可信维护范围，仅只读跟进")
 	}
+	// 行锁可能等待；锁定后重取租约、归组与时间，不能使用等待前的旧授权快照。
+	current, actual, err = claimedWithClient(ctx, tx.Client(), session, f.ID)
+	if err != nil {
+		return err
+	}
+	now = time.Now()
+	var prior use
+	if finalize {
+		used, err := tx.Setting.Get(ctx, useKey(actual.AssetID, unit))
+		if err != nil {
+			return errors.New("没有可复核的原维护预留")
+		}
+		if err := strict(used.Value, &prior); err != nil {
+			return err
+		}
+		if prior.FindingID != actual.ID || prior.SessionID != current.ID || prior.FinalizedAt != nil {
+			return errors.New("维护预留不匹配或已消费，禁止再次下发")
+		}
+	}
 	var p Policy
 	if err := strict(row.Value, &p); err != nil {
 		return err
@@ -384,7 +418,7 @@ func (s *Store) Authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	var grant *Grant
 	for i := range p.Grants {
 		g := &p.Grants[i]
-		if g.ID != uuid.Nil && g.CooldownMinutes <= 10080 && !g.ExpiresAt.After(now.Add(30*24*time.Hour)) && g.Action == RestartFailedService && g.GroupID == current.GroupID && g.ExpiresAt.After(now) && g.CooldownMinutes >= 60 && slices.Contains(g.AssetIDs, actual.AssetID) && slices.Contains(g.Units, unit) {
+		if (!finalize || g.ID == prior.GrantID) && g.ID != uuid.Nil && g.CooldownMinutes <= 10080 && !g.ExpiresAt.After(now.Add(30*24*time.Hour)) && g.Action == RestartFailedService && g.GroupID == current.GroupID && g.ExpiresAt.After(now) && g.CooldownMinutes >= 60 && slices.Contains(g.AssetIDs, actual.AssetID) && slices.Contains(g.Units, unit) {
 			grant = g
 			break
 		}
@@ -434,6 +468,25 @@ func (s *Store) Authorize(ctx context.Context, session *ent.AgentSession, f *ent
 		}
 	}
 	key := useKey(actual.AssetID, unit)
+	if finalize {
+		reservation := uuid.NewSHA1(uuid.NameSpaceOID, []byte("openxdr:repair|"+grant.ID.String()+"|"+current.ID.String()+"|"+actual.ID.String()+"|"+actual.AssetID.String()+"|"+unit))
+		if prior.ProbeID != probe.ID || prior.ReservationID != reservation || prior.ReservedAt.Before(*probe.CompletedAt) {
+			return errors.New("原维护预留的诊断或动作身份不匹配")
+		}
+		finalNow := time.Now()
+		if !grant.ExpiresAt.After(finalNow) || probe.CompletedAt.Before(finalNow.Add(-10*time.Minute)) || !current.RunExpiresAt.After(finalNow) || !current.RunDeadlineAt.After(finalNow) || actual.WorkLeaseUntil == nil || !actual.WorkLeaseUntil.After(finalNow) {
+			return errors.New("维护范围、诊断或执行租约已过期")
+		}
+		prior.FinalizedAt = &finalNow
+		raw, _ := json.Marshal(prior)
+		if err := tx.Setting.UpdateOneID(key).SetValue(raw).Exec(ctx); err != nil {
+			return err
+		}
+		if err := audit.Checked(ctx, tx.AuditLog.Create(), "system", "server", "repair_action_revalidated", actual.ID.String(), "reservation="+reservation.String()+" session="+current.ID.String()); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
 	old, err := tx.Setting.Get(ctx, key)
 	if err != nil && !ent.IsNotFound(err) {
 		return err
@@ -447,7 +500,7 @@ func (s *Store) Authorize(ctx context.Context, session *ent.AgentSession, f *ent
 			return errors.New("相同会话已预留动作或仍处于资产服务冷却期")
 		}
 	}
-	reserved := use{SessionID: current.ID, GrantID: grant.ID, ReservationID: uuid.NewSHA1(uuid.NameSpaceOID, []byte("openxdr:repair|"+grant.ID.String()+"|"+current.ID.String()+"|"+actual.AssetID.String()+"|"+unit)), ReservedAt: now, NextAllowedAt: now.Add(time.Duration(grant.CooldownMinutes) * time.Minute), ProbeID: probe.ID}
+	reserved := use{FindingID: actual.ID, SessionID: current.ID, GrantID: grant.ID, ReservationID: uuid.NewSHA1(uuid.NameSpaceOID, []byte("openxdr:repair|"+grant.ID.String()+"|"+current.ID.String()+"|"+actual.ID.String()+"|"+actual.AssetID.String()+"|"+unit)), ReservedAt: now, NextAllowedAt: now.Add(time.Duration(grant.CooldownMinutes) * time.Minute), ProbeID: probe.ID}
 	raw, _ := json.Marshal(reserved)
 	if old == nil {
 		err = tx.Setting.Create().SetID(key).SetValue(raw).Exec(ctx)

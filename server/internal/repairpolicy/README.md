@@ -14,6 +14,7 @@
 ```go
 store := &repairpolicy.Store{DB: db}
 pi.AuthorizeFindingRepair = store.Authorize
+pi.RevalidateFindingRepair = store.Revalidate
 pi.RecordFindingProbe = store.RecordProbe
 mux.Handle("/api/settings/repair-policy", store.Handler())
 ```
@@ -26,7 +27,9 @@ mux.Handle("/api/settings/repair-policy", store.Handler())
 3. 最近10分钟的完整成功回执：`Id=worker-app.service`、`ActiveState=failed`、`UnitFileState=enabled`，
    字段缺失/重复、别名指向关键服务、截断、失败或未知回执均拒绝；
 4. 当前资产没有尚未确认的写动作，当前策略未过期且未处于服务冷却期；
-5. 事务锁定策略并持久预留动作，随后仍走现有 commandgate 权限、名单、审计与全局响应开关。
+5. 事务锁定策略并持久预留动作，随后仍走现有 commandgate 权限、名单、审计与全局响应开关；
+6. 审批等待结束后、Hub真正下发前通过内部 BeforeIssue 再验当前授权、租约、原诊断和原预留；
+   撤销/到期/转组/新未知动作均阻断下发，原预留只消费一次，不因再次检查而重新预留。
 
 预留不代表已执行。Gate拒绝、进程退出或投递未知都不能删除预留后重发；后续只读检查和回执查询仍可继续。
 同会话不重复预留，同资产/精确服务的冷却不因更新策略而消失。诊断绑定只保留每资产/服务的最近记录，
