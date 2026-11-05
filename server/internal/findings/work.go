@@ -75,7 +75,7 @@ func Claim(ctx context.Context, db *ent.Client, session *ent.AgentSession, now t
 		finding.Or(finding.WorkOwnerEQ("ai"), finding.And(finding.WorkOwnerEQ("human"), func(s *sql.Selector) {
 			s.Where(sql.ExprP(s.C(finding.FieldWork) + "->>'stage' = 'blocked'"))
 		})),
-		finding.Or(finding.WorkNextCheckAtIsNil(), finding.WorkNextCheckAtLTE(now)),
+		finding.Or(finding.WorkNextCheckAtIsNil(), finding.WorkNextCheckAtLTE(now), legacyPlan()),
 		finding.Or(finding.WorkLeaseUntilIsNil(), finding.WorkLeaseUntilLTE(now)),
 	).Where(func(s *sql.Selector) {
 		owned := sql.Table(asset.Table).As("work_asset")
@@ -137,6 +137,14 @@ func Claim(ctx context.Context, db *ent.Client, session *ent.AgentSession, now t
 		return nil, err
 	}
 	return claimed, nil
+}
+
+// legacyPlan 让误耗尽旧调查预算的计划有界补查一次，不重置计数、不伪造新证据。
+func legacyPlan() predicate.Finding {
+	return func(s *sql.Selector) {
+		col := s.C(finding.FieldWork)
+		s.Where(sql.ExprP("(" + col + " IS NULL OR " + col + "->>'version' IS NULL OR " + col + "->>'version' IN ('0','1'))"))
+	}
 }
 
 // Release 无论模型成功、失败或超时都释放本次领取，不把未复查的待办标为修复。

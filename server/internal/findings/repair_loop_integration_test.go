@@ -56,3 +56,29 @@ func TestOldWorkSnapshotCannotEraseRepairReservation(t *testing.T) {
 		t.Fatalf("stale plan overwrote reservation: %d %v", n, err)
 	}
 }
+
+func TestLegacyFalseExhaustionGetsOneBoundedReassessment(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("g").SaveX(ctx)
+	a := db.Asset.Create().SetHostname("host").SetGroupID(g.ID).SaveX(ctx)
+	now := time.Now()
+	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("capacity").SetTitle("capacity").SetWorkAttempts(3).SetWorkNextCheckAt(now.Add(24 * time.Hour)).SetWork(EncodeWork(Work{Stage: "monitoring", Plan: "inspect retained evidence"})).SaveX(ctx)
+	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
+	rows, err := Claim(ctx, db, session, now)
+	if err != nil || len(rows) != 1 || rows[0].ID != f.ID {
+		t.Fatalf("legacy plan not reassessed: %d %v", len(rows), err)
+	}
+	var w Work
+	_ = json.Unmarshal(rows[0].Work, &w)
+	if w.Version != 2 || w.RepairAttempts != 0 || rows[0].WorkAttempts != 4 || w.Plan != "inspect retained evidence" {
+		t.Fatalf("upgrade erased facts or restored fake repair budget: %+v", w)
+	}
+	if err := Release(ctx, db, session.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	second := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
+	rows, err = Claim(ctx, db, second, now.Add(time.Minute))
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("upgrade repeated before cooldown: %d %v", len(rows), err)
+	}
+}
