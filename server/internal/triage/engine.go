@@ -166,6 +166,9 @@ func (e *Engine) batch(ctx context.Context) error {
 //     两类都按上次研判时刻排（刚研判过的排后面），升级类在前，至少留 retriageSlots 个名额，新事件不满时补满；
 //   - 失败退避中的都不取。
 func (e *Engine) queue(ctx context.Context, now time.Time) ([]*ent.Incident, error) {
+	if err := e.pauseExhaustedCapabilityWork(ctx, now); err != nil {
+		return nil, err
+	}
 	ready := incident.Or(incident.TriageRetryAtIsNil(), incident.TriageRetryAtLTE(now))
 	fresh, err := e.DB.Incident.Query().
 		Where(incident.StatusEQ("open"), ready).
@@ -206,7 +209,7 @@ func (e *Engine) queue(ctx context.Context, now time.Time) ([]*ent.Incident, err
 	}
 	queued = append(queued, upgrade...)
 	if len(queued) < batchSize {
-		followup, err := e.DB.Incident.Query().Where(ready, incidentwork.Due(now)).Order(ent.Asc(incident.FieldWorkNextCheckAt)).Limit(1).All(ctx)
+		followup, err := e.DB.Incident.Query().Where(ready, incidentwork.Due(now), incident.Not(capabilityPending())).Order(ent.Asc(incident.FieldWorkNextCheckAt)).Limit(1).All(ctx)
 		if err != nil {
 			return nil, err
 		}
