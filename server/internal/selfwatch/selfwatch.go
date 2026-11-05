@@ -20,11 +20,13 @@ import (
 	"strings"
 	"time"
 
+	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/alert"
 	entasset "openxdr/server/ent/asset"
+	"openxdr/server/ent/setting"
 	"openxdr/server/internal/sigma"
 )
 
@@ -76,16 +78,32 @@ func (w *Watch) Tick(ctx context.Context) error {
 
 // patroni 动态配置与基线比对；第一次只记基线
 func (w *Watch) patroni(ctx context.Context) error {
+	tx, err := w.DB.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	row, err := tx.Setting.Query().Where(setting.IDEQ(baselineKey)).Where(func(s *sql.Selector) { s.ForUpdate() }).Only(ctx)
+	missing := ent.IsNotFound(err)
+	if err != nil && !missing {
+		return err
+	}
+	// 在已持有基线行锁后读取，避免较早的网络响应覆盖另一轮已推进的新基线。
 	current, err := fetch(ctx, w.PatroniURL)
 	if err != nil {
 		return err
 	}
-	row, err := w.DB.Setting.Get(ctx, baselineKey)
-	if ent.IsNotFound(err) {
-		return w.DB.Setting.Create().SetID(baselineKey).SetValue(current).Exec(ctx)
-	}
-	if err != nil {
-		return err
+	if missing {
+		if err := tx.Setting.Create().SetID(baselineKey).SetValue(current).Exec(ctx); err != nil {
+			if ent.IsConstraintError(err) {
+				_ = tx.Rollback()
+				if _, getErr := w.DB.Setting.Get(ctx, baselineKey); getErr == nil {
+					return nil
+				}
+			}
+			return err
+		}
+		return tx.Commit()
 	}
 	changed := diff(row.Value, current)
 	if len(changed) == 0 {
@@ -99,14 +117,25 @@ func (w *Watch) patroni(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	detail := "Patroni 动态配置（DCS）被改：" + strings.Join(changed, "、") + "。只有 REST 写接口或直连 etcd 能改它，确认是否是运维操作"
 	now := w.now()
-	if err := w.DB.Alert.Create().SetTs(now).SetLastTs(now).SetRuleID(sigma.RuleControlPlaneChange).SetSeverity(severity).
+	evidence := changeEvidence(row.Value, current, now)
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		return err
+	}
+	detail := "Patroni 动态配置（DCS）被改；以下为平台轮询保存的脱敏差异证据（合成告警，无端点原始事件，不能据此认定维护授权）：\n" + string(encoded)
+	if err := tx.Alert.Create().SetTs(now).SetLastTs(now).SetRuleID(sigma.RuleControlPlaneChange).SetSeverity(severity).
 		SetNillableAssetID(host).SetDetail(detail).Exec(ctx); err != nil {
 		return err
 	}
-	slog.Warn("Patroni 动态配置被改", "changed", changed, "severity", severity)
-	return w.DB.Setting.UpdateOneID(baselineKey).SetValue(current).Exec(ctx)
+	if err := tx.Setting.UpdateOneID(baselineKey).SetValue(current).Exec(ctx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	slog.Warn("Patroni 动态配置被改", "changes", len(changed), "severity", severity)
+	return nil
 }
 
 // dangerous 能开门或执行命令的配置项：访问控制、在服务端执行命令、加载库、关加密
@@ -206,13 +235,21 @@ func diff(old, cur json.RawMessage) []string {
 func walk(path string, a, b any, out *[]string) {
 	am, aok := a.(map[string]any)
 	bm, bok := b.(map[string]any)
-	if aok && bok {
+	if aok || bok {
 		keys := map[string]bool{}
 		for k := range am {
 			keys[k] = true
 		}
 		for k := range bm {
 			keys[k] = true
+		}
+		if len(keys) == 0 {
+			ja, _ := json.Marshal(a)
+			jb, _ := json.Marshal(b)
+			if string(ja) != string(jb) {
+				*out = append(*out, path)
+			}
+			return
 		}
 		for k := range keys {
 			p := k

@@ -3,7 +3,9 @@
 package selfwatch
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"openxdr/server/ent"
 	"openxdr/server/ent/alert"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/testdb"
@@ -79,5 +82,73 @@ func TestCoreAgentSilent(t *testing.T) {
 	got := client.Alert.Query().Where(alert.RuleIDEQ(sigma.RuleCoreAgentSilent)).AllX(ctx)
 	if len(got) != 1 || *got[0].AssetID != silent.ID || got[0].Severity != 4 || !strings.Contains(*got[0].Detail, "20 分钟") {
 		t.Fatalf("只报掉线的核心节点一次：%+v", got)
+	}
+}
+
+func TestPatroniEvidenceConcurrentAndAtomic(t *testing.T) {
+	ctx, client := testdb.New(t)
+	var mu sync.Mutex
+	config := `{"ttl":30,"postgresql":{"pg_hba":["host all all 10.1.1.197/32 scram-sha-256"]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		_, _ = w.Write([]byte(config))
+	}))
+	defer srv.Close()
+	w := &Watch{DB: client, PatroniURL: srv.URL}
+	concurrent := func() {
+		t.Helper()
+		var wg sync.WaitGroup
+		errs := make(chan error, 6)
+		for range 6 {
+			wg.Go(func() { errs <- w.patroni(ctx) })
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	concurrent()
+	if n := client.Alert.Query().CountX(ctx); n != 0 {
+		t.Fatalf("并发首启不应制造变更：%d", n)
+	}
+	baseline := client.Setting.GetX(ctx, baselineKey)
+	mu.Lock()
+	config = `{"ttl":30,"postgresql":{"pg_hba":["host all all 0.0.0.0/0 trust ldapbindpasswd=PRIVATE-TOKEN"]}}`
+	mu.Unlock()
+	fail := true
+	client.Setting.Use(func(next ent.Mutator) ent.Mutator {
+		return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+			if fail && m.Op().Is(ent.OpUpdateOne) {
+				return nil, errors.New("injected baseline failure")
+			}
+			return next.Mutate(ctx, m)
+		})
+	})
+	if err := w.patroni(ctx); err == nil {
+		t.Fatal("预期基线写入失败")
+	}
+	if n := client.Alert.Query().CountX(ctx); n != 0 {
+		t.Fatalf("基线失败后告警未回滚：%d", n)
+	}
+	if got := client.Setting.GetX(ctx, baselineKey); string(got.Value) != string(baseline.Value) {
+		t.Fatal("失败事务推进了基线")
+	}
+	fail = false
+	concurrent()
+	a := client.Alert.Query().OnlyX(ctx)
+	if a.EventID != nil || a.Severity != 5 || strings.Contains(*a.Detail, "PRIVATE-TOKEN") {
+		t.Fatalf("合成证据身份或脱敏错误：%+v", a)
+	}
+	_, raw, ok := strings.Cut(*a.Detail, "\n")
+	var e configEvidence
+	if !ok || json.Unmarshal([]byte(raw), &e) != nil || e.Version != 1 || e.Actor != "unknown" || e.Changes[0].After.HBA[0].Method != "trust" {
+		t.Fatalf("结构化差异缺失：%s", *a.Detail)
+	}
+	if now := client.Setting.GetX(ctx, baselineKey); string(now.Value) == string(baseline.Value) {
+		t.Fatal("成功后未推进基线")
 	}
 }
