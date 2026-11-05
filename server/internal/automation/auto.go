@@ -138,7 +138,7 @@ func classify(a *ent.Alert, maxSev map[uuid.UUID]int16) conclusion {
 		return bad
 	case "false_positive":
 		// 系统自动结案、人直接采纳 AI 结论的都不是人的独立判断
-		if (inc.ResolvedBy != nil && *inc.ResolvedBy == review.ClosedBy) || (inc.ResolutionSource != nil && *inc.ResolutionSource != "") {
+		if (inc.ResolvedBy != nil && *inc.ResolvedBy == review.ClosedBy) || inc.ResolutionSource != nil {
 			return aiBenign
 		}
 		return humanBenign

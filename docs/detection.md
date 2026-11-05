@@ -227,10 +227,9 @@ go -C server test -tags integration -p 1 ./internal/intel ./internal/api -run 'T
   仍待批准的草案主机所在组的管理员照常可在抑制页批准或拒绝，与命令审批同一档权限，写审计；生效的抑制照常可撤销
 - **误报统计 → 抑制草案**（`server/internal/fpstats`，单活租约 `fp-stats`，默认每 6 小时一轮）：把人反复下的「误报」结论回喂到规则层。
   - 统计口径：近 `FP_SUPPRESS_WINDOW_DAYS`（30）天有告警（平台指令触发的除外）的 incident，按（规则、主机）计数，主机决定所属组；
-    一个 incident 含多条规则时对每条规则各算一次。**计入**的误报是人下的结论——有结案人、不是系统自动结案、
-    不是原样采纳 AI 结案建议（`resolution_source=ai_proposal`）；人选了误报、说明沿用 AI 研判的（`ai_verdict`）计入，
-    结论是人下的，接口只在与 AI 研判一致时才允许不写理由。`ai_proposal` 与系统自动结案（`resolved_by=system`）结论和理由都出自 AI，
-    计入就成了 AI 提议结案 → 统计 → 提议抑制的自我强化，单独计数写进依据、不进分子也不进分母；早期没记结案人的不算。
+    一个 incident 含多条规则时对每条规则各算一次。**计入**的误报仅限独立人工结论：`resolution_source IS NULL`，且结案人精确匹配 `users` 表中角色为 admin/analyst 的真实账号。
+    任意非 NULL 来源（包括空串、`ai_verdict`、`ai_proposal`、`ai_review`、`external_integration`）、系统结案和未知账号均不计人工误报。
+    人一键采纳 AI 仍是人的真实操作，但不是独立人工判断；不得推动 AI 结案 → 误报统计 → 自动抑制的自我强化。早期没记结案人的也不算。
   - 门槛：计入的误报 ≥ `FP_SUPPRESS_MIN_COUNT`（5），误报率 = 误报 /（误报 + 属实 + 未结案）≥ `FP_SUPPRESS_MIN_RATIO`（90%），
     窗口内**没有任何**属实结论（`closed`，不论谁判的）。未结案的进分母：大部分还没人看过时不出草案。
     命中级别达到高危（≥4）的（规则、主机）不出草案：与研判复核同一口径，高危被统计吞掉代价太大，要压由人手写条件。
