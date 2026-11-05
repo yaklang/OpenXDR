@@ -47,14 +47,11 @@ func ReadOnly(cmd string) bool {
 	return true
 }
 
-// containerExec 拆出 pct exec <ID> -- 命令、docker exec <容器> 命令里在容器内执行的参数表；
-// docker exec 带任何选项（-u、-e、--privileged 这类）都不认
+// containerExec 仅拆出 pct exec <ID> -- 命令。
 func containerExec(program string, args []string) ([]string, bool) {
 	switch {
 	case program == "pct" && len(args) >= 4 && args[0] == "exec" && vmid.MatchString(args[1]) && args[2] == "--":
 		return args[3:], true
-	case program == "docker" && len(args) >= 3 && args[0] == "exec" && !strings.HasPrefix(args[1], "-"):
-		return args[2:], true
 	}
 	return nil, false
 }
@@ -363,7 +360,7 @@ var readOnlyPrograms = map[string]func(args []string) bool{
 	"systemctl":   subcommand(true, "status", "show", "cat", "list-units", "list-unit-files", "list-timers", "list-sockets", "list-jobs", "list-paths", "list-dependencies", "is-active", "is-enabled", "is-failed", "is-system-running"),
 	"timedatectl": subcommand(true, "status", "show", "timesync-status", "show-timesync"),
 	"hostnamectl": subcommand(true, "status"),
-	"docker":      subcommand(false, "ps", "images", "inspect", "logs", "stats", "version", "info", "top", "port", "diff"),
+	"docker":      dockerReadOnly,
 	"dpkg":        onlyFlagPrefix("-l", "-L", "-s", "-S", "--list", "--listfiles", "--status", "--search", "--print-architecture"),
 	"dpkg-query":  nil,
 	"rpm":         firstFlagPrefix("-q"),
@@ -705,4 +702,19 @@ func raidShow(args []string) bool {
 // arcconfGet arcconf 只认 GET 开头的查询子命令
 func arcconfGet(args []string) bool {
 	return len(args) > 0 && strings.HasPrefix(strings.ToUpper(args[0]), "GET")
+}
+
+// dockerReadOnly 只接受查询子命令；stats 必须明确关闭持续采样。
+func dockerReadOnly(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "system":
+		return len(args) == 2 && args[1] == "df"
+	case "stats":
+		return len(args) == 2 && (args[1] == "--no-stream" || args[1] == "--no-stream=true")
+	default:
+		return subcommand(false, "ps", "images", "inspect", "logs", "version", "info", "top", "port", "diff")(args)
+	}
 }
