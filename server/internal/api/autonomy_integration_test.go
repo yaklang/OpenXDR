@@ -19,7 +19,7 @@ import (
 func TestManualReopenInvalidatesWorkAndRunningLease(t *testing.T) {
 	ctx, db := testdb.New(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	inc := db.Incident.Create().SetGraph(json.RawMessage(`{}`)).SetStatus("triaged").SetTriagedAt(now).SetAiVerdict(json.RawMessage(`{"verdict":"benign"}`)).SetWork(&schema.IncidentWork{Version: 1, Owner: "ai", Stage: "followup", VerdictAt: now}).SetWorkNextCheckAt(now.Add(time.Hour)).SetTriageStartedAt(now).SetTriageHeartbeatAt(now).SaveX(ctx)
+	inc := db.Incident.Create().SetGraph(json.RawMessage(`{}`)).SetStatus("triaged").SetTriagedAt(now).SetAiVerdict(json.RawMessage(`{"verdict":"benign"}`)).SetWork(&schema.IncidentWork{Version: 1, Owner: "ai", Stage: "followup", VerdictAt: now}).SetWorkNextCheckAt(now.Add(time.Hour)).SetTriageStartedAt(now).SetTriageHeartbeatAt(now).SetTriageFailures(5).SetTriageRetryAt(now.Add(time.Hour)).SaveX(ctx)
 	ts := httptest.NewServer(asAdmin(Handler(db, nil, loadRules(t), response.NewHub(db, false), suppress.New(db, time.Hour), intel.New(db, time.Hour), nil)))
 	defer ts.Close()
 	r, err := postJSON(ts, "/api/incidents/"+inc.ID.String()+"/status", `{"status":"open"}`)
@@ -31,7 +31,7 @@ func TestManualReopenInvalidatesWorkAndRunningLease(t *testing.T) {
 		t.Fatal(r.StatusCode)
 	}
 	got := db.Incident.GetX(ctx, inc.ID)
-	if got.Status != "open" || got.Work != nil || got.WorkNextCheckAt != nil || got.TriageStartedAt != nil || got.TriageHeartbeatAt != nil {
+	if got.Status != "open" || got.Work != nil || got.WorkNextCheckAt != nil || got.TriageStartedAt != nil || got.TriageHeartbeatAt != nil || got.TriageFailures != 0 || got.TriageRetryAt != nil {
 		t.Fatal("人工重开仍保留旧计划或执行租约")
 	}
 }
