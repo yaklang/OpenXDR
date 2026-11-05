@@ -4,6 +4,8 @@ package repairpolicy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,6 +55,8 @@ type probeRef struct {
 	Unit      string    `json:"unit"`
 }
 type use struct {
+	ProblemHash   string     `json:"problem_hash"`
+	GrantVersion  string     `json:"grant_version"`
 	FindingID     uuid.UUID  `json:"finding_id"`
 	FinalizedAt   *time.Time `json:"finalized_at,omitempty"`
 	SessionID     uuid.UUID  `json:"session_id"`
@@ -255,7 +259,7 @@ func claimedWithClient(ctx context.Context, db *ent.Client, session *ent.AgentSe
 		return nil, nil, err
 	}
 	for _, f := range rows {
-		if !slices.Contains(current.Subjects, "finding:"+f.ID.String()) || f.WorkAttempts > findings.RepairBudget {
+		if !slices.Contains(current.Subjects, "finding:"+f.ID.String()) {
 			continue
 		}
 		ok, err := db.Asset.Query().Where(asset.IDEQ(f.AssetID), asset.GroupIDEQ(current.GroupID), asset.OsEQ("linux")).Exist(ctx)
@@ -266,7 +270,7 @@ func claimedWithClient(ctx context.Context, db *ent.Client, session *ent.AgentSe
 			return current, f, nil
 		}
 	}
-	return nil, nil, errors.New("待办未被本轮有效领取或修复预算已耗尽")
+	return nil, nil, errors.New("待办未被本轮有效领取")
 }
 
 // RecordProbe 在 exec 真实下发后由服务端调用；模型不能通过工具参数伪造会话与指令的关联。
@@ -392,12 +396,20 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	if err != nil {
 		return errors.New("未配置可信维护范围，仅只读跟进")
 	}
+	if _, err := tx.Finding.Query().Where(finding.IDEQ(f.ID)).Where(func(q *sql.Selector) { q.ForUpdate() }).Only(ctx); err != nil {
+		return err
+	}
 	// 行锁可能等待；锁定后重取租约、归组与时间，不能使用等待前的旧授权快照。
 	current, actual, err = claimedWithClient(ctx, tx.Client(), session, f.ID)
 	if err != nil {
 		return err
 	}
 	now = time.Now()
+	work, err := repairWork(actual, finalize)
+	if err != nil {
+		return err
+	}
+	problem := problemHash(actual, work)
 	var prior use
 	if finalize {
 		used, err := tx.Setting.Get(ctx, useKey(actual.AssetID, unit))
@@ -418,7 +430,7 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	var grant *Grant
 	for i := range p.Grants {
 		g := &p.Grants[i]
-		if (!finalize || g.ID == prior.GrantID) && g.ID != uuid.Nil && g.CooldownMinutes <= 10080 && !g.ExpiresAt.After(now.Add(30*24*time.Hour)) && g.Action == RestartFailedService && g.GroupID == current.GroupID && g.ExpiresAt.After(now) && g.CooldownMinutes >= 60 && slices.Contains(g.AssetIDs, actual.AssetID) && slices.Contains(g.Units, unit) {
+		if (!finalize || g.ID == prior.GrantID) && grantApplies(*g, current.GroupID, actual.AssetID, now) && slices.Contains(g.Units, unit) {
 			grant = g
 			break
 		}
@@ -426,6 +438,11 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	if grant == nil {
 		return errors.New("动作、资产或服务不在当前有效维护范围")
 	}
+	version := grantVersion(*grant)
+	if finalize && (prior.ProblemHash != problem || prior.GrantVersion != version) {
+		return errors.New("原问题或维护授权版本已变化，原预留不再适用")
+	}
+
 	proofRow, err := tx.Setting.Get(ctx, probeKey(actual.AssetID, unit))
 	if err != nil {
 		return errors.New("缺少本会话实际下发的固定只读诊断")
@@ -469,7 +486,7 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	}
 	key := useKey(actual.AssetID, unit)
 	if finalize {
-		reservation := uuid.NewSHA1(uuid.NameSpaceOID, []byte("openxdr:repair|"+grant.ID.String()+"|"+current.ID.String()+"|"+actual.ID.String()+"|"+actual.AssetID.String()+"|"+unit))
+		reservation := reservationID(*grant, current.ID, actual, unit, problem, version)
 		if prior.ProbeID != probe.ID || prior.ReservationID != reservation || prior.ReservedAt.Before(*probe.CompletedAt) {
 			return errors.New("原维护预留的诊断或动作身份不匹配")
 		}
@@ -500,7 +517,7 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 			return errors.New("相同会话已预留动作或仍处于资产服务冷却期")
 		}
 	}
-	reserved := use{FindingID: actual.ID, SessionID: current.ID, GrantID: grant.ID, ReservationID: uuid.NewSHA1(uuid.NameSpaceOID, []byte("openxdr:repair|"+grant.ID.String()+"|"+current.ID.String()+"|"+actual.ID.String()+"|"+actual.AssetID.String()+"|"+unit)), ReservedAt: now, NextAllowedAt: now.Add(time.Duration(grant.CooldownMinutes) * time.Minute), ProbeID: probe.ID}
+	reserved := use{ProblemHash: problem, GrantVersion: version, FindingID: actual.ID, SessionID: current.ID, GrantID: grant.ID, ReservationID: reservationID(*grant, current.ID, actual, unit, problem, version), ReservedAt: now, NextAllowedAt: now.Add(time.Duration(grant.CooldownMinutes) * time.Minute), ProbeID: probe.ID}
 	raw, _ := json.Marshal(reserved)
 	if old == nil {
 		err = tx.Setting.Create().SetID(key).SetValue(raw).Exec(ctx)
@@ -510,8 +527,126 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	if err != nil {
 		return err
 	}
+	var rawWork map[string]json.RawMessage
+	if len(actual.Work) != 0 {
+		if err := json.Unmarshal(actual.Work, &rawWork); err != nil {
+			return err
+		}
+	}
+	if rawWork == nil {
+		rawWork = make(map[string]json.RawMessage)
+	}
+	count, _ := json.Marshal(work.RepairAttempts + 1)
+	rawWork["repair_attempts"] = count
+	if work.Version < 2 {
+		rawWork["version"] = json.RawMessage(`2`)
+	}
+	updatedWork, err := json.Marshal(rawWork)
+	if err != nil {
+		return err
+	}
+	if err := tx.Finding.UpdateOneID(actual.ID).Where(findings.Snapshot(actual)).SetWork(updatedWork).Exec(ctx); err != nil {
+		return err
+	}
 	if err := audit.Checked(ctx, tx.AuditLog.Create(), "system", "server", "repair_action_reserved", actual.ID.String(), fmt.Sprintf("grant=%s session=%s asset=%s unit=%s probe=%s reservation=%s expires=%s", grant.ID, current.ID, actual.AssetID, unit, probe.ID, reserved.ReservationID, grant.ExpiresAt.UTC().Format(time.RFC3339))); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// HasGrant 仅查询服务端实际保存的精确授权，不把模型声明或相似服务名视为委托。
+func (s *Store) HasGrant(ctx context.Context, groupID, assetID uuid.UUID, action, unit string) (bool, error) {
+	if groupID == uuid.Nil || assetID == uuid.Nil || action != RestartFailedService || !validUnit(unit) {
+		return false, errors.New("维护范围查询必须指定真实组、资产、精确动作和规范服务")
+	}
+	owned, err := s.DB.Asset.Query().Where(asset.IDEQ(assetID), asset.GroupIDEQ(groupID), asset.OsEQ("linux")).Exist(ctx)
+	if err != nil || !owned {
+		return false, err
+	}
+	policy, err := s.Load(ctx)
+	if err != nil {
+		return false, err
+	}
+	now := time.Now()
+	for _, grant := range policy.Grants {
+		if grantApplies(grant, groupID, assetID, now) && slices.Contains(grant.Units, unit) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func repairWork(f *ent.Finding, finalize bool) (findings.Work, error) {
+	var work findings.Work
+	if len(f.Work) != 0 {
+		if err := json.Unmarshal(f.Work, &work); err != nil {
+			return work, errors.New("维护预算状态损坏，禁止修复")
+		}
+	}
+	if work.RepairAttempts < 0 || work.RepairAttempts > findings.RepairBudget || (!finalize && work.RepairAttempts == findings.RepairBudget) {
+		return work, errors.New("实际修复预算已耗尽或状态无效")
+	}
+	switch work.Blocker {
+	case "legacy_decommission_confirm", "manual_business_decision", "external_dependency":
+		return work, errors.New("待办存在退役确认、业务决策或外部依赖阻塞，不自动重启")
+	}
+	return work, nil
+}
+
+func digest(value any) string {
+	raw, _ := json.Marshal(value)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+func problemHash(f *ent.Finding, work findings.Work) string {
+	title, problem := work.OriginalTitle, work.OriginalProblem
+	if title == "" {
+		title = f.Title
+	}
+	if problem == "" {
+		problem = f.Detail
+	}
+	return digest([]string{f.ID.String(), f.GroupID.String(), f.AssetID.String(), f.Key, f.FirstSeen.UTC().Format(time.RFC3339Nano), title, problem})
+}
+func grantVersion(grant Grant) string {
+	grant.AssetIDs = slices.Clone(grant.AssetIDs)
+	slices.SortFunc(grant.AssetIDs, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	grant.Units = slices.Clone(grant.Units)
+	slices.Sort(grant.Units)
+	grant.ExpiresAt = grant.ExpiresAt.UTC()
+	return digest(grant)
+}
+func reservationID(grant Grant, session uuid.UUID, f *ent.Finding, unit, problem, version string) uuid.UUID {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("openxdr:repair|"+grant.ID.String()+"|"+session.String()+"|"+f.ID.String()+"|"+f.AssetID.String()+"|"+unit+"|"+problem+"|"+version))
+}
+
+// HasAssetGrant 只用于判断真实资产是否具有任何有效支持的委托，不由模型声明权限缺失。
+func (s *Store) HasAssetGrant(ctx context.Context, groupID, assetID uuid.UUID) (bool, error) {
+	if groupID == uuid.Nil || assetID == uuid.Nil {
+		return false, errors.New("维护范围查询须指定真实组和资产")
+	}
+	owned, err := s.DB.Asset.Query().Where(asset.IDEQ(assetID), asset.GroupIDEQ(groupID), asset.OsEQ("linux")).Exist(ctx)
+	if err != nil || !owned {
+		return false, err
+	}
+	policy, err := s.Load(ctx)
+	if err != nil {
+		return false, err
+	}
+	now := time.Now()
+	for _, g := range policy.Grants {
+		if !grantApplies(g, groupID, assetID, now) {
+			continue
+		}
+		for _, unit := range g.Units {
+			if validUnit(unit) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func grantApplies(g Grant, groupID, assetID uuid.UUID, now time.Time) bool {
+	return g.ID != uuid.Nil && g.Action == RestartFailedService && g.GroupID == groupID && g.ExpiresAt.After(now) && !g.ExpiresAt.After(now.Add(30*24*time.Hour)) && g.CooldownMinutes >= 60 && g.CooldownMinutes <= 10080 && slices.Contains(g.AssetIDs, assetID)
 }

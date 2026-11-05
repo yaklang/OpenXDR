@@ -5,9 +5,11 @@ package repairpolicy
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/commandpolicy"
+	"openxdr/server/ent/setting"
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
@@ -150,7 +153,11 @@ func TestRepairPolicyExactScopeAndProbe(t *testing.T) {
 			x.bind(t)
 			x.db.Command.Create().SetKind("exec").SetAssetID(x.f.AssetID).SetCmd("systemctl restart legacy.service").SetStatus("unknown").SaveX(x.ctx)
 		}},
-		{"budget", func(t *testing.T, x *fixture) { x.save(t); x.bind(t); x.f.Update().SetWorkAttempts(4).ExecX(x.ctx) }},
+		{"budget", func(t *testing.T, x *fixture) {
+			x.save(t)
+			x.bind(t)
+			x.f.Update().SetWork(findings.EncodeWork(findings.Work{Version: 2, RepairAttempts: 4})).ExecX(x.ctx)
+		}},
 		{"moved-asset", func(t *testing.T, x *fixture) {
 			x.save(t)
 			x.bind(t)
@@ -334,5 +341,222 @@ func TestNonLinuxRepairScopeRejected(t *testing.T) {
 	x.db.Asset.UpdateOneID(x.f.AssetID).SetOs("windows").ExecX(x.ctx)
 	if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err == nil {
 		t.Fatal("系统类型改变仍允许Linux动作")
+	}
+}
+
+func repairCount(t *testing.T, x *fixture) findings.Work {
+	t.Helper()
+	f := x.db.Finding.GetX(x.ctx, x.f.ID)
+	var work findings.Work
+	if len(f.Work) > 0 {
+		if err := json.Unmarshal(f.Work, &work); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return work
+}
+
+func TestRepairBudgetCountsOnlyCommittedReservations(t *testing.T) {
+	x := setup(t)
+	x.f.Update().SetWorkAttempts(50).SetWork(findings.EncodeWork(findings.Work{Version: 2, InvestigationAttempts: 50, VerificationAttempts: 9, TransportFailures: 4})).ExecX(x.ctx)
+	if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err == nil {
+		t.Fatal("missing grant accepted")
+	}
+	if got := repairCount(t, x); got.RepairAttempts != 0 {
+		t.Fatal("denial consumed repair budget", got)
+	}
+	x.save(t)
+	x.bind(t)
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if x.store.Authorize(x.ctx, x.session, x.f, x.cmd) == nil {
+				wins.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if wins.Load() != 1 {
+		t.Fatal("reservation winners", wins.Load())
+	}
+	got := repairCount(t, x)
+	if got.RepairAttempts != 1 || got.InvestigationAttempts != 50 || got.VerificationAttempts != 9 || got.TransportFailures != 4 {
+		t.Fatalf("incorrect counters %+v", got)
+	}
+	if err := x.store.Revalidate(x.ctx, x.session, x.f, x.cmd); err != nil {
+		t.Fatal(err)
+	}
+	if got := repairCount(t, x); got.RepairAttempts != 1 {
+		t.Fatal("finalize consumed another attempt", got)
+	}
+	if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err == nil {
+		t.Fatal("duplicate reservation accepted")
+	}
+	if got := repairCount(t, x); got.RepairAttempts != 1 {
+		t.Fatal("duplicate consumed repair budget", got)
+	}
+}
+
+func TestRepairLastBudgetReservationCanFinalize(t *testing.T) {
+	x := setup(t)
+	x.save(t)
+	x.bind(t)
+	x.f.Update().SetWorkAttempts(99).SetWork(findings.EncodeWork(findings.Work{RepairAttempts: 2})).ExecX(x.ctx)
+	if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err != nil {
+		t.Fatal(err)
+	}
+	if got := repairCount(t, x); got.RepairAttempts != 3 || got.Version != 2 {
+		t.Fatalf("third reservation missing %+v", got)
+	}
+	if err := x.store.Revalidate(x.ctx, x.session, x.f, x.cmd); err != nil {
+		t.Fatal("own last reservation was refused", err)
+	}
+	if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err == nil {
+		t.Fatal("new action exceeded repair budget")
+	}
+	if got := repairCount(t, x); got.RepairAttempts != 3 {
+		t.Fatal("exhausted denial changed counter", got)
+	}
+	x.f.Update().SetWork(findings.EncodeWork(findings.Work{Version: 2, RepairAttempts: 4})).ExecX(x.ctx)
+	if err := x.store.Revalidate(x.ctx, x.session, x.f, x.cmd); err == nil {
+		t.Fatal("corrupted budget accepted")
+	}
+}
+
+func TestRepairPersistedBusinessBlockerPreventsRestart(t *testing.T) {
+	for _, blocker := range []string{"legacy_decommission_confirm", "manual_business_decision", "external_dependency"} {
+		t.Run(blocker, func(t *testing.T) {
+			x := setup(t)
+			x.save(t)
+			x.bind(t)
+			x.f.Update().SetWork(findings.EncodeWork(findings.Work{Version: 2, Blocker: blocker})).ExecX(x.ctx)
+			if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err == nil {
+				t.Fatal("business blocker authorized restart")
+			}
+			if repairCount(t, x).RepairAttempts != 0 {
+				t.Fatal("blocked action consumed budget")
+			}
+		})
+	}
+	x := setup(t)
+	x.save(t)
+	x.bind(t)
+	x.f.Update().SetTitle("legacy retired please do not restart").ExecX(x.ctx)
+	// 文本本身不是可信退役状态；不得仅按标题关键词扩大或收窄维护授权。
+	if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err != nil {
+		t.Fatal("title text was treated as trusted business state", err)
+	}
+	work := repairCount(t, x)
+	work.Blocker = "manual_business_decision"
+	x.f.Update().SetWork(findings.EncodeWork(work)).ExecX(x.ctx)
+	if err := x.store.Revalidate(x.ctx, x.session, x.f, x.cmd); err == nil {
+		t.Fatal("new business blocker ignored after review")
+	}
+}
+
+func TestRepairReservationBindsOriginalProblemAndGrantVersion(t *testing.T) {
+	for _, mode := range []string{"problem", "grant", "unrelated-grant"} {
+		t.Run(mode, func(t *testing.T) {
+			x := setup(t)
+			x.save(t)
+			x.bind(t)
+			x.f.Update().SetWork(findings.EncodeWork(findings.Work{Version: 2, OriginalTitle: "worker failed", OriginalProblem: "repeated crash"})).ExecX(x.ctx)
+			if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "problem":
+				work := repairCount(t, x)
+				work.OriginalProblem = "different business problem"
+				x.f.Update().SetWork(findings.EncodeWork(work)).ExecX(x.ctx)
+			case "grant":
+				x.grant.ExpiresAt = x.grant.ExpiresAt.Add(time.Hour)
+				x.save(t)
+			case "unrelated-grant":
+				other := x.grant
+				other.ID = uuid.New()
+				other.Units = []string{"another-worker.service"}
+				if err := x.store.Save(auth.WithUser(x.ctx, x.admin), Policy{Grants: []Grant{x.grant, other}}, "test"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := x.store.Revalidate(x.ctx, x.session, x.f, x.cmd)
+			if mode == "unrelated-grant" {
+				if err != nil {
+					t.Fatal("unrelated grant update invalidated reservation", err)
+				}
+			} else if err == nil {
+				t.Fatal("changed problem/grant reused old reservation")
+			}
+			if got := repairCount(t, x); got.RepairAttempts != 1 {
+				t.Fatal("revalidation changed budget", got)
+			}
+		})
+	}
+}
+
+func TestRepairGrantLookupIsExactAndReadOnly(t *testing.T) {
+	x := setup(t)
+	check := func(want bool) {
+		t.Helper()
+		got, err := x.store.HasGrant(x.ctx, x.session.GroupID, x.f.AssetID, RestartFailedService, x.grant.Units[0])
+		if err != nil || got != want {
+			t.Fatal(got, err)
+		}
+		all, err := x.store.HasAssetGrant(x.ctx, x.session.GroupID, x.f.AssetID)
+		if err != nil || all != want {
+			t.Fatal("asset scope", all, err)
+		}
+	}
+	check(false)
+	x.save(t)
+	check(true)
+	if got, err := x.store.HasGrant(x.ctx, x.session.GroupID, x.f.AssetID, RestartFailedService, "another-worker.service"); err != nil || got {
+		t.Fatal("similar unit considered delegated", got, err)
+	}
+	if got, err := x.store.HasGrant(x.ctx, x.session.GroupID, x.f.AssetID, RestartFailedService, "sshd.service"); err == nil || got {
+		t.Fatal("core unit accepted")
+	}
+	g := x.db.Group.Create().SetName("other").SaveX(x.ctx)
+	if got, err := x.store.HasAssetGrant(x.ctx, g.ID, x.f.AssetID); err != nil || got {
+		t.Fatal("wrong group accepted", got, err)
+	}
+	x.db.Setting.DeleteOneID(SettingKey).ExecX(x.ctx)
+	check(false)
+	if n := x.db.Setting.Query().CountX(x.ctx); n != 0 {
+		t.Fatal("read-only helper wrote settings", n)
+	}
+	if got := repairCount(t, x); got.RepairAttempts != 0 {
+		t.Fatal("read-only helper consumed repair budget", got)
+	}
+}
+
+func TestRepairReservationAuditFailureRollsBackBudget(t *testing.T) {
+	x := setup(t)
+	x.save(t)
+	x.bind(t)
+	raw, err := sql.Open("pgx", os.Getenv("INTEGRATION_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = raw.ExecContext(context.Background(), `DROP TRIGGER IF EXISTS reject_repair_reservation ON audit_logs; DROP FUNCTION IF EXISTS reject_repair_reservation()`)
+		_ = raw.Close()
+	})
+	_, err = raw.ExecContext(x.ctx, `CREATE FUNCTION reject_repair_reservation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action = 'repair_action_reserved' THEN RAISE EXCEPTION 'test audit fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_repair_reservation BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION reject_repair_reservation()`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err == nil {
+		t.Fatal("audit failure committed reservation")
+	}
+	if got := repairCount(t, x); got.RepairAttempts != 0 {
+		t.Fatal("rolled-back reservation consumed budget", got)
+	}
+	if exists, err := x.db.Setting.Query().Where(setting.IDEQ(useKey(x.f.AssetID, x.grant.Units[0]))).Exist(x.ctx); err != nil || exists {
+		t.Fatal("rolled-back reservation survived", exists, err)
 	}
 }
