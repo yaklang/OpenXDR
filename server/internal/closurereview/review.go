@@ -28,6 +28,7 @@ import (
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/decoy"
 	"openxdr/server/internal/incidentstate"
+	"openxdr/server/internal/incidentwork"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/triage"
 )
@@ -376,11 +377,23 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 		if err != nil || n != 1 {
 			return false, err
 		}
+		completed, err := tx.Incident.Get(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		if err = incidentwork.Refresh(ctx, tx.Client(), completed, time.Now()); err != nil {
+			return false, err
+		}
 		if err = incidentstate.Record(ctx, tx, id, incidentstate.StatusChanged, incidentstate.Origin{Kind: "ai_review", ID: Actor}, "triaged"); err != nil {
 			return false, err
 		}
 	}
-	decision, _ := json.Marshal(d)
+	auditDecision := d
+	auditDecision.Claims = append([]Claim(nil), d.Claims...)
+	for i := range auditDecision.Claims {
+		auditDecision.Claims[i].Value = "sha256:" + digest([]byte(auditDecision.Claims[i].Value))
+	}
+	decision, _ := json.Marshal(auditDecision)
 	detail := prefix + fmt.Sprintf("approved=%t model=%s decision=%s", approved, model, decision)
 	if err = audit.Checked(ctx, tx.AuditLog.Create(), Actor, "server", "incident_closure_ai_reviewed", id.String(), detail); err != nil {
 		return false, err

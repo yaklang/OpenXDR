@@ -611,7 +611,9 @@ temperature 0.1，超时 `AI_TIMEOUT_SECONDS` 默认 120s
 
 ### 人工结案与批量结案（`server/internal/api`）
 
-- 需人工复核的口径统一在 `server/internal/review`（`Needed`）：未研判、升级待重研判、恶意、高危可疑、明确人工响应/原始记录补证，或人工诱饵观察保留复核；无强制人工动作的良性事件（不分规则级别）与低于高危的可疑事件静默。静默不等于误报：仅无新证据、无强制人工动作且非诱饵的良性事件，放满 `AUTO_CLOSE_BENIGN_DAYS`（默认 7）天后由 janitor 自动结案（`resolved_by=system`）；可疑事件不自动按误报结案。
+- 需人工复核的口径统一在 `server/internal/review`（`Needed`）：未研判、升级待重研判、恶意、高危可疑、响应决策或人工诱饵观察仍保留复核。已由服务端持久自治计划接管、且与当前证据和结论快照一致的良性和低危可疑事件静默；缺证由 AI 有界调查，预算耗尽后保留事实缺口、等待新证据或调查能力变化，不假结案。
+- `Incident.work` 保存负责人、阶段、证据版本、调查次数、模板与回执引用、唤醒条件及原因，`work_next_check_at` 驱动有界跟进队列。每个证据版本最多三次低优先级跟进，不改写 `evidence_at` 或重放未知指令；节点退出后复用已有研判租约接管。控制台展示实际计划，没有计划不显示已接管。
+- 静默不等于误报。缺证事件永不进入 `StaleBenign`。良性事件到期仅触发独立结案审计，不能靠时间到期或两个模型意见一致直接结案。`closurereview` 首批仅接受低风险、全部原始告警具备真实完整 agent 原文、当前报告与提案绑定正确且独立审计有正面证据的 benign；高危、恶意、缺证、未知处置和跨组材料均拒绝。结案为 `resolved_by=system`、`resolution_source=ai_review`，保留独立审计和终态 CAS；任何自动或采纳模型结论都不计作独立人工误报统计。
 - 单个结案（`POST /api/incidents/{id}/status`）与批量结案（`POST /api/incidents/batch-status`）共用
   `resolutionOf`：结论与 AI 研判一致时理由可空（说明取研判摘要，记 `resolution_source=ai_verdict`），
   相反或没研判必须写；结案记结案人与时间、清掉 AI 结案建议、逐条写 `incident_status` 审计。
@@ -825,3 +827,9 @@ DNS 事件摘要额外提供 query、requester、answers、进程与端点等结
 2048 字节时省略并列在 `dns_omitted`，原文截断另标记 `raw_truncated`。
 共享 CDN/IP、低频 DNS、固定前缀和长 TTL 不能替代应用归属证据，也不能据此建议
 放行整个网段、域名族或抑制告警。需核实客户端归属的中高危事件应保留可疑结论。
+
+### 自治能力版本 3 与证据边界
+
+`collect_endpoint_evidence(asset_id, template, event_id?)` 可选锚定本事件该资产的真实 agent 原始告警。服务端核验事件 ID、精确时间戳、资产与来源后固定取 UTC 前后 15 分钟，不接受任意时间窗、命令或容器参数。单一 LXC 内认证日志在对应容器中读取；混合主机/容器或多容器必须明确锚点，不能把宿主机日志阴性结果外推到容器。
+
+平台配置监控仍产生 `event_id=null` 的合成告警：这不表示丢失了原始进程事件。告警保留结构化脱敏前后变化、配置哈希、观察时刻及轮询覆盖限制；未知操作者始终记为未知。变化证据并非维护授权证明，同一 SSH 公钥也不证明所有命令已获批准。

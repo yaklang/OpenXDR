@@ -35,6 +35,7 @@ import (
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/automation"
 	"openxdr/server/internal/beacon"
+	"openxdr/server/internal/closurereview"
 	"openxdr/server/internal/cluster"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/commandreview"
@@ -108,7 +109,8 @@ func main() {
 		})
 	}
 	suppressionReviewer := startSuppressionReview(ctx, db, client, suppressions, rules, conf)
-	startAnalytics(ctx, db, client, rules, suppressions, suppressionReviewer)
+	closureReviewer := closurereview.New(client, func() (string, string) { c := conf(); return c.BaseURL, c.APIKey }, func() string { return conf().Model }, aiconf.Recorder(client, "closure_review"))
+	startAnalytics(ctx, db, client, rules, suppressions, suppressionReviewer, closureReviewer.Review)
 
 	// 研判与资产标注共用一个端点与模型，每次调用按当时的配置，用量按用途分开记
 	llmFor := func(feature string) *triage.LLM { return newLLM(client, conf, feature) }
@@ -152,6 +154,7 @@ func main() {
 	queryRoles := startQueryRoles(ctx, db, client, dsn)
 	chat := startChat(ctx, db, client, rules, hub, webhook, conf, queryRoles, suppressionReviewer)
 	triageEngine.EndpointEvidence = chat.CollectEndpointEvidence
+	go cluster.RunLeader(ctx, db, "closure-review", closureReviewer.Run)
 	go cluster.RunLeader(ctx, db, "triage", triageEngine.Run)
 	scheduler := startScheduler(ctx, db, client, chat, conf, webhook)
 	enrollSvc := loadEnroll(client, silentAfter)
@@ -272,7 +275,7 @@ func startIntel(ctx context.Context, db *sql.DB, client *ent.Client, authKey fun
 }
 
 // startAnalytics 关联、UEBA、外联心跳、保留期清理与自动结案等单活后台任务。
-func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules sigma.Catalog, suppressions *suppress.Store, reviewer *suppressreview.Reviewer) {
+func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules sigma.Catalog, suppressions *suppress.Store, reviewer *suppressreview.Reviewer, closureReview func(context.Context, uuid.UUID) (bool, error)) {
 	correlator := &correlate.Engine{
 		DB:            client,
 		Rules:         rules,
@@ -316,9 +319,9 @@ func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules s
 	// 事件日分区预建与保留期退役无关：RETENTION_DAYS=0 也要按天建分区
 	partitions := &eventpart.Maintainer{DB: db, Interval: time.Hour}
 	go cluster.RunLeader(ctx, db, "event-partitions", partitions.Run)
-	// 低危良性事件放久了自动按误报结案；0 关闭。Run 返回会被租约循环立刻重拉，关闭时干脆不启动
+	// 良性事件到期仅进入独立结案复核；没有当前证据提案或审计拒绝时继续保留。0 关闭到期扫描。
 	if days := getenvInt("AUTO_CLOSE_BENIGN_DAYS", 7); days > 0 {
-		autoClose := &janitor.AutoClose{DB: client, Days: days, Interval: time.Hour}
+		autoClose := &janitor.AutoClose{DB: client, Days: days, Interval: time.Hour, Review: closureReview}
 		go cluster.RunLeader(ctx, db, "auto-close-benign", autoClose.Run)
 	}
 	// 同一规则在同一主机上被人反复判误报，生成抑制草案交 AI 审计员评审；0 关闭

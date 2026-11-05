@@ -146,8 +146,8 @@ func TestCapabilityUpgradeSuccessDoesNotInventEvidenceOrClose(t *testing.T) {
 	if !strings.Contains(prompt, "没有宣称新增告警或新增攻击证据") {
 		t.Fatal("未向模型区分能力升级与新增攻击证据", prompt)
 	}
-	if !db.Incident.Query().Where(incident.IDEQ(inc.ID), review.Needed()).ExistX(ctx) {
-		t.Fatal("补证不足仍须保留人工边界")
+	if db.Incident.Query().Where(incident.IDEQ(inc.ID), review.Needed()).ExistX(ctx) || got.Work == nil || got.Work.Owner != "ai" || got.WorkNextCheckAt == nil {
+		t.Fatal("缺证必须保留自治负责人及跟进计划")
 	}
 	queued, err := e.queue(ctx, time.Now().Add(time.Hour))
 	if err != nil || len(queued) != 0 {
