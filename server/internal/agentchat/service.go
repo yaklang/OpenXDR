@@ -64,6 +64,8 @@ type Service struct {
 	RevalidateFindingRepair func(context.Context, *ent.AgentSession, *ent.Finding, string) error
 	// RecordFindingProbe 将实际下发的固定只读诊断绑定到服务端会话，模型不能伪造此关联。
 	RecordFindingProbe func(context.Context, *ent.AgentSession, *ent.Command) error
+	// FindingRepairAvailable 只读核对当前资产是否存在真实有效的维护授权。
+	FindingRepairAvailable func(context.Context, *ent.AgentSession, *ent.Finding) (bool, error)
 	// FoldAbove 历史超过这么多字节时折叠较早的工具结果与思考过程再发给模型，0 不折叠
 	FoldAbove int
 	// running 后台运行中的对话：停机时等它们把终态写完再退出
@@ -688,7 +690,7 @@ func (s *Service) tools(ctx context.Context, group uuid.UUID) []piruntime.Tool {
 	tools := []piruntime.Tool{
 		commandStatusTool,
 		verifyCommandTool,
-		{Name: "exec", Description: "对组内资产执行命令，命中高风险名单的由 AI 审计员当场评审，拒绝时附理由。host 为资产 UUID。", Parameters: json.RawMessage(`{"type":"object","properties":{"host":{"type":"string"},"cmd":{"type":"string","minLength":1,"maxLength":32768},"timeout":{"type":"integer","minimum":1,"maximum":300}},"required":["host","cmd"],"additionalProperties":false}`)},
+		{Name: "exec", Description: "对组内资产执行命令，命中高风险名单的由 AI 审计员当场评审，拒绝时附理由。host 为资产 UUID；同一主机领取多个待办时，写操作必须用 finding_id 指定本轮待办 UUID。", Parameters: json.RawMessage(`{"type":"object","properties":{"host":{"type":"string"},"cmd":{"type":"string","minLength":1,"maxLength":32768},"timeout":{"type":"integer","minimum":1,"maximum":300},"finding_id":{"type":"string","format":"uuid"}},"required":["host","cmd"],"additionalProperties":false}`)},
 		{Name: "track", Description: trackDescription, Parameters: trackParameters},
 		{Name: "identify", Description: identifyDescription, Parameters: identifyParameters},
 		{Name: "egress", Description: egressDescription, Parameters: egressParameters},
@@ -721,9 +723,10 @@ func (s *Service) tool(ctx context.Context, session *ent.AgentSession, who comma
 		return s.verifyCommand(ctx, session, args)
 	case "exec":
 		var body struct {
-			Host    uuid.UUID `json:"host"`
-			Cmd     string    `json:"cmd"`
-			Timeout uint32    `json:"timeout"`
+			Host      uuid.UUID `json:"host"`
+			Cmd       string    `json:"cmd"`
+			Timeout   uint32    `json:"timeout"`
+			FindingID uuid.UUID `json:"finding_id"`
 		}
 		if err := json.Unmarshal(args, &body); err != nil {
 			return "", err
@@ -731,7 +734,7 @@ func (s *Service) tool(ctx context.Context, session *ent.AgentSession, who comma
 		if body.Timeout > 300 {
 			return "", errors.New("timeout 超过 300 秒")
 		}
-		repairTarget, err := s.findingExecTarget(ctx, session, body.Host, body.Cmd)
+		repairTarget, err := s.findingExecTarget(ctx, session, body.Host, body.Cmd, body.FindingID)
 		if err != nil {
 			return "", err
 		}

@@ -38,3 +38,13 @@ mux.Handle("/api/settings/repair-policy", store.Handler())
 修复指令 `succeeded` 也不会直接关闭 Finding；执行者必须另取独立只读效果证据，交 `findingreview` 复核，
 通过后再以原状态/观察时间 CAS 结案并记录 `finding_ai_review` 审计。未配置复核、无模型、无直接正面证据
 或复核期间出现新的写动作，均保留 open，由平台继续跟进。
+
+调查与修复分开计数：`work_attempts` / `work.investigation_attempts` 是领取轮次，不是修复预算。
+`work.repair_attempts` 仅在写动作预留与审计同事务成功时增加；拒绝、冷却、重复与事务失败不增加。
+第三次已预留动作仍可完成审批后复核，但不能再创建第四次预留。预留绑定原始问题摘要与精确授权版本，
+其它授权的修改不改变本动作身份。`legacy_decommission_confirm`、`manual_business_decision`、
+`external_dependency` 阻止自动重启；不能把旧失败服务当作仍需运行的服务。
+
+`HasGrant` / `HasAssetGrant` 仅查询实际持久策略与当前资产归组，不签发授权。未配置有效维护范围时，
+平台可记录 `policy_required` 并继续 AI 跟进；不会为取得失败证据先执行危险命令。
+本版本仍不支持泛化清理、删除镜像/卷/备份、安装补丁或重启主机；候选方案不等于授权。

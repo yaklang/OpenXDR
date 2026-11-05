@@ -161,6 +161,9 @@ func main() {
 	chat.AuthorizeFindingRepair = repair.Authorize
 	chat.RevalidateFindingRepair = repair.Revalidate
 	chat.RecordFindingProbe = repair.RecordProbe
+	chat.FindingRepairAvailable = func(ctx context.Context, session *ent.AgentSession, f *ent.Finding) (bool, error) {
+		return repair.HasAssetGrant(ctx, session.GroupID, f.AssetID)
+	}
 	go cluster.RunLeader(ctx, db, "closure-review", closureReviewer.Run)
 	go cluster.RunLeader(ctx, db, "triage", triageEngine.Run)
 	scheduler := startScheduler(ctx, db, client, chat, conf, webhook)

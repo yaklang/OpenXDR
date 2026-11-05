@@ -58,6 +58,9 @@ func (n *Notifier) Run(ctx context.Context) {
 			if err := n.sweep(ctx); err != nil {
 				slog.Error("通知批次失败", "err", err)
 			}
+			if err := n.sweepFindings(ctx); err != nil {
+				slog.Error("运维紧急风险通知失败", "err", err)
+			}
 			n.watch(ctx)
 		}
 	}

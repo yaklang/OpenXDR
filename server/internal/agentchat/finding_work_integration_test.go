@@ -62,7 +62,7 @@ func TestFindingAutonomyClaimsBudgetAndScope(t *testing.T) {
 		}
 		return nil
 	}
-	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl reload test.service"); err != nil || called != 1 {
+	if _, err := svc.findingExecTarget(ctx, session, a.ID, "systemctl reload test.service", uuid.MustParse(strings.TrimPrefix(session.Subjects[0], "finding:"))); err != nil || called != 1 {
 		t.Fatalf("trusted scope not consulted: %v %d", err, called)
 	}
 	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl restart production.service"); err == nil {
@@ -151,7 +151,7 @@ func TestFindingIndependentReviewRequiredAndManualFence(t *testing.T) {
 	a := db.Asset.Create().SetHostname("a").SetGroupID(g.ID).SaveX(ctx)
 	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
 	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service").SetTitle("service failed").SaveX(ctx)
-	c := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl show app.service -p ActiveState").SetStatus("succeeded").SetExitCode(0).SetStdout("ActiveState=active").SetCompletedAt(time.Now()).SaveX(ctx)
+	c := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl show app.service -p ActiveState").SetCreatedAt(session.CreatedAt).SetStatus("succeeded").SetExitCode(0).SetStdout("ActiveState=active").SetCompletedAt(time.Now()).SaveX(ctx)
 	args := []byte(`{"host":"` + a.ID.String() + `","key":"service","title":"recovered","detail":"verified active","severity":"low","status":"resolved","evidence_commands":["` + c.ID.String() + `"]}`)
 	svc := &Service{DB: db}
 	call := func() error {

@@ -26,7 +26,7 @@ import (
 const trackDescription = "登记或复查一条运维待办。登记需要持续调查、修复或监测的具体问题，默认由平台负责，一个问题一条；" +
 	"正常项、正向确认、改进建议、对平台或对自己登记的说明都不登记，写进报告即可。" +
 	"同一主机同一问题每轮用同一个 key（小写字母、数字、. _ -），如 backup-service-failed。" +
-	"status=open 登记新问题或确认遗留问题仍在，并写 next_step；resolved 须附 evidence_commands 的本轮独立只读复查回执，不能仅凭修复命令成功或空日志关单；withdrawn 撤回本轮登记错的条目。blocker 只用于有真实失败回执的权限拒绝或端点不支持，普通缺证继续由平台负责。" +
+	"status=open 写具体 next_step；resolved 须附 evidence_commands 的本轮独立只读复查回执，不能仅凭修复回执或空日志关单；withdrawn 撤回本轮登记错的条目。blocker 区分缺策略、维护窗口、业务决定、退役确认、上游依赖、权限拒绝与能力不支持。policy_required由服务端查询真实授权；其他阻塞须引用本轮真实只读证据，不能猜测。" +
 	"人工忽略的待办会返回 ignored，不要再登记，也不要列进报告的待处理事项。每轮最多新登记 10 条。"
 
 // maxNewFindings 一轮会话最多新登记的待办数：超出说明在把报告内容往待办里倒
@@ -39,7 +39,7 @@ var trackParameters = json.RawMessage(`{"type":"object","properties":{` +
 	`"detail":{"type":"string","minLength":1,"maxLength":4000},` +
 	`"severity":{"type":"string","enum":["low","medium","high"]},` +
 	`"status":{"type":"string","enum":["open","resolved","withdrawn"]},` +
-	`"next_step":{"type":"string","maxLength":1000},"blocker":{"type":"string","enum":["permission","unsupported"]},` +
+	`"next_step":{"type":"string","maxLength":1000},"blocker":{"type":"string","enum":["policy_required","maintenance_window_required","manual_business_decision","legacy_decommission_confirm","external_dependency","permission","unsupported"]},` +
 	`"evidence_commands":{"type":"array","maxItems":5,"items":{"type":"string","format":"uuid"}}},` +
 	`"required":["host","key","title","detail","severity","status"],"additionalProperties":false}`)
 
@@ -140,6 +140,14 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 			if s.ReviewFinding == nil {
 				return "", errors.New("未配置独立运维效果复核，待办保持 open")
 			}
+			var work findings.Work
+			_ = json.Unmarshal(f.Work, &work)
+			work.Version = 2
+			work.VerificationAttempts++
+			f, err = s.DB.Finding.UpdateOneID(f.ID).Where(finding.StatusEQ("open"), findings.Snapshot(f)).SetWork(findings.EncodeWork(work)).Save(ctx)
+			if err != nil {
+				return "", err
+			}
 			commands, err := s.DB.Command.Query().Where(command.IDIn(body.EvidenceCommands...)).All(ctx)
 			if err != nil {
 				return "", err
@@ -165,9 +173,12 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 				return "", err
 			}
 			defer tx.Rollback()
-			err = tx.Finding.UpdateOneID(f.ID).Where(finding.StatusEQ("open"), finding.LastSeenEQ(f.LastSeen)).SetStatus("resolved").SetTitle(body.Title).SetDetail(body.Detail).
+			work.Stage, work.Plan, work.WakeOn = "resolved", "独立复核通过："+reviewReason, "recurrence"
+			work.Blocker = ""
+			work.EvidenceCommands, work.EvidenceAt, work.EvidenceStale = body.EvidenceCommands, &now, false
+			err = tx.Finding.UpdateOneID(f.ID).Where(finding.StatusEQ("open"), finding.LastSeenEQ(f.LastSeen), findings.Snapshot(f)).SetStatus("resolved").SetTitle(body.Title).SetDetail(body.Detail).
 				SetResolvedAt(now).SetResolvedBy(commandgate.SystemActor).
-				SetLastSeen(now).SetSessionID(session.ID).ClearWorkSessionID().ClearWorkLeaseUntil().ClearWorkNextCheckAt().SetWork(findings.EncodeWork(findings.Work{OriginalTitle: originalTitle(f), OriginalProblem: originalProblem(f), Stage: "resolved", Plan: "独立复核通过：" + reviewReason, WakeOn: "recurrence", EvidenceCommands: body.EvidenceCommands})).Exec(ctx)
+				SetLastSeen(now).SetSessionID(session.ID).ClearWorkSessionID().ClearWorkLeaseUntil().ClearWorkNextCheckAt().SetWork(findings.EncodeWork(work)).Exec(ctx)
 			if err != nil {
 				return "", err
 			}
@@ -186,7 +197,7 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 	default:
 		// 仍存在；之前被标成已修复的重新打开
 		reopened := f.Status == "resolved"
-		err = f.Update().Where(finding.StatusNEQ("ignored"), finding.LastSeenEQ(f.LastSeen)).SetStatus("open").SetTitle(body.Title).SetDetail(body.Detail).SetSeverity(body.Severity).
+		err = f.Update().Where(finding.StatusEQ(f.Status), finding.LastSeenEQ(f.LastSeen), findings.Snapshot(f)).SetStatus("open").SetTitle(body.Title).SetDetail(body.Detail).SetSeverity(body.Severity).
 			SetLastSeen(now).SetSessionID(session.ID).ClearResolvedAt().ClearResolvedBy().ClearNote().Exec(ctx)
 		if err != nil {
 			return "", err

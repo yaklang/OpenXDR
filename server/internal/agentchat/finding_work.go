@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/finding"
 	"openxdr/server/ent/taskrun"
+	"openxdr/server/internal/audit"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
 )
@@ -56,7 +59,7 @@ func (s *Service) guardFindingExec(ctx context.Context, session *ent.AgentSessio
 	return err
 }
 
-func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSession, host uuid.UUID, cmd string) (*ent.Finding, error) {
+func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSession, host uuid.UUID, cmd string, requested ...uuid.UUID) (*ent.Finding, error) {
 	bound, err := s.isFindingFollowup(ctx, session)
 	if err != nil || !bound {
 		return nil, err
@@ -69,13 +72,28 @@ func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSessi
 	if len(rows) == 0 {
 		return nil, errors.New("本轮已无有效领取的待办，禁止继续执行")
 	}
+	readOnly := commandgate.ReadOnly(cmd)
+	selected := uuid.Nil
+	if len(requested) > 0 {
+		selected = requested[0]
+	}
 	allowed := false
 	var target *ent.Finding
 	for _, f := range rows {
-		if f.AssetID == host {
+		if f.AssetID == host && (selected == uuid.Nil || f.ID == selected) {
 			allowed = true
+			if !readOnly && f.WorkOwner != "ai" {
+				return nil, errors.New("人工决策阻塞中的待办仅允许自动只读复查")
+			}
+			if !readOnly && target != nil {
+				return nil, errors.New("同主机有多个领取的待办，写动作必须指定 finding_id")
+			}
 			target = f
-			if f.WorkAttempts > findings.RepairBudget && !commandgate.ReadOnly(cmd) {
+			var work findings.Work
+			if err := json.Unmarshal(f.Work, &work); err != nil && len(f.Work) > 0 {
+				return nil, errors.New("待办计划损坏，拒绝自动修复")
+			}
+			if work.RepairAttempts >= findings.RepairBudget && !readOnly {
 				return nil, errors.New("主动修复预算已用尽，本轮只允许只读观察")
 			}
 		}
@@ -83,7 +101,7 @@ func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSessi
 	if !allowed {
 		return nil, errors.New("自主待办会话只能操作本轮领取的主机")
 	}
-	if commandgate.ReadOnly(cmd) {
+	if readOnly {
 		return nil, nil
 	}
 	// 无法确认归属到某次待办的旧写操作也不能冒险重放；先只读查清或由人确认。
@@ -128,7 +146,12 @@ func (s *Service) findingEvidence(ctx context.Context, session *ent.AgentSession
 			}
 		}
 	}
+	seen := map[uuid.UUID]bool{}
 	for _, id := range ids {
+		if seen[id] || id == uuid.Nil {
+			return errors.New("复查指令ID为空或重复")
+		}
+		seen[id] = true
 		c, err := s.DB.Command.Query().Where(command.IDEQ(id), command.AssetIDEQ(f.AssetID), command.CreatedAtGTE(session.CreatedAt)).Only(ctx)
 		if err != nil {
 			return errors.New("复查指令不存在、早于本轮或不属该主机")
@@ -137,7 +160,7 @@ func (s *Service) findingEvidence(ctx context.Context, session *ent.AgentSession
 			return errors.New("须引用独立只读复查，不能用修复动作成功代替效果验证")
 		}
 		if resolved {
-			if c.Status != "succeeded" || c.ExitCode == nil || *c.ExitCode != 0 || c.CompletedAt == nil || c.Truncated || c.Stdout == nil || strings.TrimSpace(*c.Stdout) == "" {
+			if c.Status != "succeeded" || c.ExitCode == nil || *c.ExitCode != 0 || c.CompletedAt == nil || c.CompletedAt.Before(time.Now().Add(-10*time.Minute)) || c.CompletedAt.After(time.Now()) || c.CreatedAt.After(*c.CompletedAt) || c.Truncated || c.Stdout == nil || strings.TrimSpace(*c.Stdout) == "" {
 				return errors.New("复查须成功返回非空且未截断的证据；空日志或未知回执不能证明已修复")
 			}
 			later, err := s.DB.Command.Query().Where(command.AssetIDEQ(f.AssetID), command.CreatedAtGTE(*c.CompletedAt)).All(ctx)
@@ -150,8 +173,22 @@ func (s *Service) findingEvidence(ctx context.Context, session *ent.AgentSession
 				}
 			}
 		} else {
+			if blocker != "permission" && blocker != "unsupported" {
+				if c.Status != "succeeded" || c.ExitCode == nil || *c.ExitCode != 0 || c.CompletedAt == nil || c.CompletedAt.Before(time.Now().Add(-10*time.Minute)) || c.Truncated || c.Stdout == nil || strings.TrimSpace(*c.Stdout) == "" {
+					return errors.New("阻塞条件须引用新鲜完整且有输出的只读探针")
+				}
+				words := strings.Fields(*c.Cmd)
+				if len(words) == 0 {
+					return errors.New("阻塞证据命令为空")
+				}
+				switch filepath.Base(words[0]) {
+				case "date", "hostname", "uname", "echo", "printf", "true", "pwd", "whoami", "id":
+					return errors.New("主机基本信息不足以证明需业务决策或维护窗口")
+				}
+				continue
+			}
 			if c.Status != "failed" && c.Status != "unsupported" {
-				return errors.New("人工阻塞须有真实失败或不支持回执，不能仅因缺证交人")
+				return errors.New("权限或能力阻塞须有真实失败或不支持回执")
 			}
 			detail := ""
 			if c.Detail != nil {
@@ -172,36 +209,73 @@ func (s *Service) findingEvidence(ctx context.Context, session *ent.AgentSession
 }
 
 func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession, f *ent.Finding, plan, blocker string, ids []uuid.UUID) error {
-	if plan == "" {
-		plan = "按计划只读复查；新证据唤醒，未知回执不重放"
+	newBlocker := blocker != ""
+	if len(ids) > 5 {
+		return errors.New("最多关联五条本轮证据指令")
 	}
 	if len(plan) > 1000 {
 		return errors.New("next_step 不能超过 1000 字节")
 	}
-	owner, stage := "ai", "waiting"
+	owner, stage := f.WorkOwner, "waiting"
+	if owner == "" {
+		owner = "ai"
+	}
 	var prior findings.Work
-	_ = json.Unmarshal(f.Work, &prior)
-	if blocker == "" && f.WorkOwner == "human" {
-		if len(ids) == 0 {
-			owner, stage, blocker, ids = "human", "blocked", prior.Blocker, prior.EvidenceCommands
-		} else if err := s.findingEvidence(ctx, session, f, ids, true, ""); err != nil {
-			return err
+	if err := json.Unmarshal(f.Work, &prior); err != nil && len(f.Work) > 0 {
+		return err
+	}
+	if plan == "" {
+		plan = prior.Plan
+		if plan == "" {
+			plan = "按计划只读复查；新证据唤醒，未知回执不重放"
 		}
 	}
-
-	if blocker != "" && owner != "human" {
-		if blocker != "permission" && blocker != "unsupported" {
-			return errors.New("blocker 仅支持 permission / unsupported")
+	if blocker != "" {
+		switch blocker {
+		case "policy_required":
+			if s.FindingRepairAvailable == nil {
+				return errors.New("未配置可信维护范围查询，不能宣称缺授权")
+			}
+			available, err := s.FindingRepairAvailable(ctx, session, f)
+			if err != nil {
+				return err
+			}
+			if available {
+				return errors.New("资产已有维护范围，须核对具体动作，不能笼统记为缺授权")
+			}
+		case "permission", "unsupported", "maintenance_window_required", "manual_business_decision", "legacy_decommission_confirm", "external_dependency":
+			if err := s.findingEvidence(ctx, session, f, ids, false, blocker); err != nil {
+				return err
+			}
+		default:
+			return errors.New("不支持的结构化阻塞原因")
 		}
-		if err := s.findingEvidence(ctx, session, f, ids, false, blocker); err != nil {
-			return err
+		if blocker == "permission" || blocker == "unsupported" || blocker == "manual_business_decision" || blocker == "legacy_decommission_confirm" {
+			owner = "human"
+		} else {
+			owner = "ai"
 		}
-		owner, stage = "human", "blocked"
+	} else {
+		// 未显式提交新的阻塞结论时保留旧原因；成功复核结案另走独立路径。
+		blocker = prior.Blocker
+	}
+	if len(ids) > 0 {
+		if !newBlocker || blocker == "policy_required" {
+			if err := s.findingEvidence(ctx, session, f, ids, true, ""); err != nil {
+				return err
+			}
+		}
+		prior.EvidenceCommands = ids
+		now := time.Now()
+		prior.EvidenceAt, prior.EvidenceStale = &now, false
 	}
 	next := time.Now().Add(time.Hour)
-	if f.WorkAttempts >= findings.RepairBudget {
+	if f.WorkAttempts >= 3 || prior.RepairAttempts >= findings.RepairBudget {
 		next = time.Now().Add(24 * time.Hour)
 		stage = "monitoring"
+	}
+	if f.Severity == "high" && prior.EscalatedAt == nil {
+		next = time.Now().Add(time.Hour)
 	}
 	if blocker != "" {
 		stage = "blocked"
@@ -212,9 +286,41 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 	if prior.OriginalProblem == "" {
 		prior.OriginalProblem = f.Detail
 	}
-	w := findings.Work{OriginalTitle: prior.OriginalTitle, OriginalProblem: prior.OriginalProblem, Stage: stage, Plan: plan, WakeOn: "new_observation_or_next_check", Blocker: blocker, EvidenceCommands: ids}
-	_, err := s.DB.Finding.Update().Where(finding.IDEQ(f.ID), finding.GroupIDEQ(session.GroupID), finding.StatusEQ("open")).SetWorkOwner(owner).SetWorkNextCheckAt(next).SetWork(findings.EncodeWork(w)).Save(ctx)
-	return err
+	prior.Version = 2
+	prior.Plan, prior.Blocker, prior.Stage = plan, blocker, stage
+	prior.WakeOn = "new_observation_or_next_check"
+	escalated, err := s.updateFindingRisk(ctx, session, f, &prior, ids)
+	if err != nil {
+		return err
+	}
+	if prior.RiskSince != nil && prior.EscalatedAt == nil {
+		next = time.Now().Add(15 * time.Minute)
+	}
+	tx, err := s.DB.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	current, err := tx.Asset.Query().Where(asset.IDEQ(f.AssetID), asset.GroupIDEQ(session.GroupID)).Exist(ctx)
+	if err != nil {
+		return err
+	}
+	if !current {
+		return errors.New("待办主机已转组")
+	}
+	n, err := tx.Finding.Update().Where(finding.IDEQ(f.ID), finding.GroupIDEQ(session.GroupID), finding.StatusEQ("open"), findings.Snapshot(f)).SetWorkOwner(owner).SetWorkNextCheckAt(next).SetWork(findings.EncodeWork(prior)).Save(ctx)
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return errors.New("待办计划或修复预留已变化，请重新读取后跟进")
+	}
+	if escalated {
+		if err := audit.Checked(ctx, tx.AuditLog.Create(), "system", "server", "finding_risk_escalated", f.ID.String(), "risk="+prior.RiskKind+" session="+session.ID.String()+" evidence="+fmt.Sprint(ids)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func findingWorkJSON(f *ent.Finding) any { var w any; _ = json.Unmarshal(f.Work, &w); return w }

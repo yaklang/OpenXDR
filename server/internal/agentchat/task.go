@@ -62,7 +62,8 @@ func (s *Service) RunTask(ctx context.Context, job schedule.Job) (retErr error) 
 		defer func() {
 			done, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 			defer cancel()
-			if err := findings.Release(done, s.DB, session.ID, time.Now()); err != nil && retErr == nil {
+			interrupted := errors.Is(retErr, context.Canceled) || errors.Is(retErr, context.DeadlineExceeded)
+			if err := findings.Release(done, s.DB, session.ID, time.Now(), interrupted); err != nil && retErr == nil {
 				retErr = err
 			}
 		}()
