@@ -58,14 +58,18 @@ func (Incident) Fields() []ent.Field {
 	}
 }
 
-// ClosureProposal AI 提的结案建议
+// ClosureProposal 结案建议；自动复核只接受服务端绑定的当前证据与归属。
 type ClosureProposal struct {
 	// closed 属实已处置 / false_positive 误报或良性
-	Status    string     `json:"status"`
-	Note      string     `json:"note"`
-	SessionID uuid.UUID  `json:"sessionId"`
-	ReportID  *uuid.UUID `json:"reportId,omitempty"`
-	At        time.Time  `json:"at"`
+	Status      string      `json:"status"`
+	Note        string      `json:"note"`
+	SessionID   uuid.UUID   `json:"sessionId"`
+	ReportID    *uuid.UUID  `json:"reportId,omitempty"`
+	At          time.Time   `json:"at"`
+	EvidenceKey string      `json:"evidenceKey,omitempty"`
+	VerdictHash string      `json:"verdictHash,omitempty"`
+	GroupID     uuid.UUID   `json:"groupId,omitempty"`
+	AssetIDs    []uuid.UUID `json:"assetIds,omitempty"`
 }
 
 func (Incident) Edges() []ent.Edge {

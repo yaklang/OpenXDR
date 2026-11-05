@@ -16,9 +16,10 @@ import (
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/report"
 	"openxdr/server/ent/schema"
+	"openxdr/server/internal/closurereview"
 )
 
-const proposeCloseDescription = "给本组的一个事件提结案建议，人在事件页一键采纳或忽略；结案仍由人确认，记在人的名下。" +
+const proposeCloseDescription = "给本组的一个事件提结案建议；证据充分且符合低风险良性条件时交独立审计员复核，其他保留待处理；人工仍可采纳或忽略。" +
 	"查证完一个事件后用它代替只在回复里写建议。status 取 false_positive（误报或良性）或 closed（属实且已处置）；" +
 	"note 是给人直接采纳的结案说明：定性、关键证据、依据（10–2000 字）；report 可选，填支撑这个结论的报告 id。" +
 	"同一事件再提会覆盖上一条建议。"
@@ -85,6 +86,9 @@ func (s *Service) proposeClose(ctx context.Context, session *ent.AgentSession, a
 		}
 		proposal.ReportID = &id
 	}
+	if err := closurereview.BindProposal(ctx, s.DB, inc, session.GroupID, proposal); err != nil {
+		return "", err
+	}
 	n, err := s.DB.Incident.Update().Where(incident.IDEQ(inc.ID), incident.StatusNotIn("closed", "false_positive")).
 		SetClosureProposal(proposal).Save(ctx)
 	if err != nil {
@@ -93,5 +97,5 @@ func (s *Service) proposeClose(ctx context.Context, session *ent.AgentSession, a
 	if n != 1 {
 		return marshal(map[string]any{"status": "already_closed", "note": "事件已经结案"})
 	}
-	return marshal(map[string]any{"status": "proposed", "note": "结案建议已提交，等人在事件页采纳"})
+	return marshal(map[string]any{"status": "proposed", "note": "结案建议已提交；证据充分且符合条件时由独立审计员复核，否则保留待处理"})
 }
