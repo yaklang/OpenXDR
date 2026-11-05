@@ -3,10 +3,12 @@
 // 同一条规则在同一台主机上被人判误报够多次、误报率够高、期间没有一次判属实，
 // 就生成一条待批准的抑制草案，交 AI 审计员评审（没配时留给组管理员）。草案从不直接生效。
 //
-// 只算人的结论：系统自动结案只是复述 AI 的良性判断；原样采纳 AI 结案建议的，
-// 结论和理由都出自 AI，计进来就成了「AI 提议结案 → AI 统计 → AI 提议抑制」的自我强化。
-// 两者单独计数写进依据，不进分子也不进分母。人选了误报、说明沿用 AI 研判的（ai_verdict）照常计入：
-// 结论是人下的，接口只在和 AI 研判一致时才允许不写理由。
+// 只算独立人工结论（resolution_source IS NULL 且 resolved_by 为 users 表中角色为 admin/analyst 的真实账号）：
+// 系统自动结案只是复述 AI 的良性判断；原样采纳 AI 结案建议（ai_proposal）的，
+// 结论和理由都出自 AI，计进来就成了「AI 提议结案 → AI 统计 → AI 提议抑制」的自我强化，
+// 两者单独计数写进依据，不进分子也不进分母。其他任意非 nil resolution_source（含空字符串、ai_verdict、
+// ai_review、external_integration 等）或非平台真实人工账号（如 system、ai_reviewer、viewer、已删账号）
+// 一律 fail-closed 排除，绝不计入独立人工误报统计。
 package fpstats
 
 import (
@@ -26,6 +28,7 @@ import (
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/schema"
 	"openxdr/server/ent/suppression"
+	"openxdr/server/ent/user"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/review"
 	"openxdr/server/internal/suppress"
@@ -135,7 +138,7 @@ const (
 	autoClosed      // 系统自动结案，不计入
 )
 
-func classify(inc *ent.Incident) kind {
+func classify(inc *ent.Incident, humanUsers map[string]bool) kind {
 	switch inc.Status {
 	case "closed":
 		return tp
@@ -153,8 +156,12 @@ func classify(inc *ent.Incident) kind {
 		return autoClosed
 	case inc.ResolutionSource != nil && *inc.ResolutionSource == "ai_proposal":
 		return aiProposal
-	// 外部工单系统回写的结论不是本平台分析师的独立判断，不推动抑制草案
-	case inc.ResolutionSource != nil && *inc.ResolutionSource == "external_integration":
+	// 任意非 nil resolution_source（含空字符串、ai_verdict、ai_review、external_integration 等）均非独立人工判断，不推动抑制草案
+	case inc.ResolutionSource != nil:
+		return ignored
+	}
+	resolvedBy := strings.TrimSpace(*inc.ResolvedBy)
+	if resolvedBy == "" || *inc.ResolvedBy != resolvedBy || len(humanUsers) == 0 || !humanUsers[resolvedBy] {
 		return ignored
 	}
 	return fp
@@ -204,6 +211,20 @@ func (s *Stats) Sweep(ctx context.Context, now time.Time) (int, error) {
 	if s.MinCount <= 0 {
 		return 0, nil
 	}
+	usernames, err := s.DB.User.Query().
+		Where(user.RoleIn("admin", "analyst")).
+		Select(user.FieldUsername).
+		Strings(ctx)
+	if err != nil {
+		return 0, err
+	}
+	humanUsers := make(map[string]bool, len(usernames))
+	for _, u := range usernames {
+		u = strings.TrimSpace(u)
+		if u != "" {
+			humanUsers[u] = true
+		}
+	}
 	since := now.Add(-s.Window)
 	inWindow := alert.Or(alert.TsGTE(since), alert.LastTsGTE(since))
 	// 先不带事件体按（规则、主机）粗算，只有人工误报够数的才去读事件体按实体细算
@@ -227,7 +248,7 @@ func (s *Stats) Sweep(ctx context.Context, now time.Time) (int, error) {
 		if byKey[k] == nil {
 			byKey[k] = &tally{}
 		}
-		byKey[k].add(a.Edges.Incident, classify(a.Edges.Incident))
+		byKey[k].add(a.Edges.Incident, classify(a.Edges.Incident, humanUsers))
 	}
 	keys := make([]key, 0, len(byKey))
 	for k, t := range byKey {
@@ -246,7 +267,7 @@ func (s *Stats) Sweep(ctx context.Context, now time.Time) (int, error) {
 		if err != nil {
 			return created, err
 		}
-		for _, d := range s.drafts(k, byKey[k], hits) {
+		for _, d := range s.drafts(k, byKey[k], hits, humanUsers) {
 			ok, err := s.propose(ctx, d, now)
 			if err != nil {
 				return created, err
@@ -266,7 +287,7 @@ type hit struct {
 }
 
 // drafts 先按实体找能收窄的值；实体维度分散（没有哪个值单独够数）时才考虑整条规则
-func (s *Stats) drafts(k key, whole *tally, alerts []*ent.Alert) []draft {
+func (s *Stats) drafts(k key, whole *tally, alerts []*ent.Alert, humanUsers map[string]bool) []draft {
 	hits := make([]hit, 0, len(alerts))
 	for _, a := range alerts {
 		if a.Edges.Incident == nil {
@@ -280,7 +301,7 @@ func (s *Stats) drafts(k key, whole *tally, alerts []*ent.Alert) []draft {
 	}
 	concentrated := false
 	for _, field := range entityFields {
-		values := entityTallies(hits, field)
+		values := entityTallies(hits, field, humanUsers)
 		var out []draft
 		for _, v := range values {
 			if generic(field, v.value) {
@@ -303,7 +324,7 @@ func (s *Stats) drafts(k key, whole *tally, alerts []*ent.Alert) []draft {
 	}
 	for _, field := range []string{"file.path", imageField} {
 		var out []draft
-		for _, v := range entityTalliesBy(hits, field, tempDirPrefix) {
+		for _, v := range entityTalliesBy(hits, field, tempDirPrefix, humanUsers) {
 			if v.t.counts[fp] >= s.MinCount {
 				concentrated = true
 			}
@@ -331,11 +352,11 @@ type valueTally struct {
 
 // entityTallies 某字段每个取值的结论计数，按误报数从多到少。
 // 事件体读不到的命中不知道是哪个值：属实与未结案的从严算进每个值，误报的不算
-func entityTallies(hits []hit, field string) []valueTally {
-	return entityTalliesBy(hits, field, func(v string) (string, bool) { return v, true })
+func entityTallies(hits []hit, field string, humanUsers map[string]bool) []valueTally {
+	return entityTalliesBy(hits, field, func(v string) (string, bool) { return v, true }, humanUsers)
 }
 
-func entityTalliesBy(hits []hit, field string, extract func(string) (string, bool)) []valueTally {
+func entityTalliesBy(hits []hit, field string, extract func(string) (string, bool), humanUsers map[string]bool) []valueTally {
 	byValue := map[string]*valueTally{}
 	var unknown []*ent.Incident
 	for _, h := range hits {
@@ -355,12 +376,12 @@ func entityTalliesBy(hits []hit, field string, extract func(string) (string, boo
 		if byValue[lower] == nil {
 			byValue[lower] = &valueTally{value: v, t: &tally{}}
 		}
-		byValue[lower].t.add(h.inc, classify(h.inc))
+		byValue[lower].t.add(h.inc, classify(h.inc, humanUsers))
 	}
 	out := make([]valueTally, 0, len(byValue))
 	for _, v := range byValue {
 		for _, inc := range unknown {
-			if k := classify(inc); k == tp || k == pending {
+			if k := classify(inc, humanUsers); k == tp || k == pending {
 				v.t.add(inc, k)
 			}
 		}

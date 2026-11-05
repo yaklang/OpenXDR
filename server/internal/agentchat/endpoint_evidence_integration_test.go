@@ -722,4 +722,49 @@ func TestEndpointEvidenceJournalUTCLegacyGuardAndOneTimeUpgrade(t *testing.T) {
 	if err != nil || res2.CommandID != newID.String() || delivered != 1 || len(inbox) != 0 {
 		t.Fatalf("重复调用 @utc-v2 必须零重放: res2=%+v err=%v delivered=%d inbox=%d", res2, err, delivered, len(inbox))
 	}
+
+	// 3. 无锚点 @utc-v2 指令处于 pending/sent/unknown 时，带 AnchorEventID 或 LXC 修订的新指令同样必须被阻断（严禁重放）；
+	//    仅当无锚点 @utc-v2 已 succeeded/failed 后，才允许按 AnchorEventID 发起一次精准锚点窗口查询并幂等复用。
+	anchorID := ev.ID
+	anchoredCmd := "pct exec 203 -- journalctl --no-pager --utc -n 40 --since '2026-11-01 09:59:27 UTC' --until '2026-11-01 10:29:27 UTC' -u ssh -u sshd"
+	incAnchorBlocked := db.Incident.Create().SetTitle("unanchored-v2-unknown-blocks-anchor").SetStatus("triaged").SetGraph(json.RawMessage(`{}`)).SaveX(ctx)
+	db.Alert.Create().SetIncidentID(incAnchorBlocked.ID).SetAssetID(host.ID).SetEventID(ev.ID).SetRuleID("lxc.ssh").SetSeverity(3).SetTs(alertTs).SaveX(ctx)
+	blkKey := triage.IncidentEvidenceKey(incAnchorBlocked)
+	unanchoredHostAuthID := triage.EndpointEvidenceCommandID(incAnchorBlocked.ID, blkKey, 0, host.ID, triage.TemplateLinuxAuthJournal)
+	db.Command.Create().SetID(unanchoredHostAuthID).SetAssetID(host.ID).SetIncidentID(incAnchorBlocked.ID).
+		SetKind("exec").SetCmd("journalctl --no-pager --utc -n 40").SetStatus("unknown").SetIssuedBy("system").SaveX(ctx)
+
+	if _, err := svc.CollectEndpointEvidence(ctx, triage.EndpointEvidenceRequest{
+		IncidentID: incAnchorBlocked.ID, EvidenceKey: blkKey, GroupID: group.ID, AssetID: host.ID,
+		Template: triage.TemplateLinuxAuthJournal, Command: anchoredCmd, AnchorEventID: &anchorID, AnchorTs: alertTs,
+	}); err == nil || !strings.Contains(err.Error(), "unknown") {
+		t.Fatalf("旧版无锚点 @utc-v2 指令处于 unknown 时必须阻断锚点/LXC 新指令: %v", err)
+	}
+
+	// 将旧版无锚点宿主机 @utc-v2 置为 succeeded（如宿主机 -- No entries --），允许 LXC 锚点指令执行一次并幂等复用
+	db.Command.UpdateOneID(unanchoredHostAuthID).SetStatus("succeeded").SetStdout("-- No entries --").ExecX(ctx)
+	go func() {
+		cmd := <-inbox
+		delivered++
+		_ = hub.Complete(ctx, agentID, &pb.CommandResult{
+			CommandId: cmd.Id,
+			Status:    pb.CommandResult_SUCCEEDED,
+			ExitCode:  0,
+			Stdout:    "Nov 01 10:14:27 UTC gateway sshd[321]: Accepted publickey for root from 10.1.1.1",
+		})
+	}()
+	resAnchored1, err := svc.CollectEndpointEvidence(ctx, triage.EndpointEvidenceRequest{
+		IncidentID: incAnchorBlocked.ID, EvidenceKey: blkKey, GroupID: group.ID, AssetID: host.ID,
+		Template: triage.TemplateLinuxAuthJournal, Command: anchoredCmd, AnchorEventID: &anchorID, AnchorTs: alertTs,
+	})
+	if err != nil || !strings.Contains(resAnchored1.Stdout, "Accepted publickey") || resAnchored1.AnchorEventID != anchorID.String() {
+		t.Fatalf("旧宿主机回执 succeeded 后应允许执行一次 LXC 锚点查询: res=%+v err=%v", resAnchored1, err)
+	}
+	resAnchored2, err := svc.CollectEndpointEvidence(ctx, triage.EndpointEvidenceRequest{
+		IncidentID: incAnchorBlocked.ID, EvidenceKey: blkKey, GroupID: group.ID, AssetID: host.ID,
+		Template: triage.TemplateLinuxAuthJournal, Command: anchoredCmd, AnchorEventID: &anchorID, AnchorTs: alertTs,
+	})
+	if err != nil || resAnchored2.CommandID != resAnchored1.CommandID || delivered != 2 || len(inbox) != 0 {
+		t.Fatalf("同一 AnchorEventID 重复调用必须幂等复用回执: res2=%+v err=%v delivered=%d", resAnchored2, err, delivered)
+	}
 }

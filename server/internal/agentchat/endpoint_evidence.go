@@ -51,7 +51,9 @@ func (s *Service) CollectEndpointEvidence(ctx context.Context, req triage.Endpoi
 	}
 
 	legacyID := triage.LegacyEndpointEvidenceCommandID(req.IncidentID, req.EvidenceKey, req.EvidenceVersion, req.AssetID, req.Template)
-	cmdID := triage.EndpointEvidenceCommandID(req.IncidentID, req.EvidenceKey, req.EvidenceVersion, req.AssetID, req.Template, req.Command)
+	unanchoredHostV2ID := triage.EndpointEvidenceCommandID(req.IncidentID, req.EvidenceKey, req.EvidenceVersion, req.AssetID, req.Template)
+	unanchoredCmdV2ID := triage.EndpointEvidenceCommandID(req.IncidentID, req.EvidenceKey, req.EvidenceVersion, req.AssetID, req.Template, req.Command)
+	cmdID := triage.EndpointEvidenceCommandIDWithAnchor(req.IncidentID, req.EvidenceKey, req.EvidenceVersion, req.AssetID, req.Template, req.AnchorEventID, req.Command)
 	existing, getErr := s.DB.Command.Get(ctx, cmdID)
 	if getErr != nil && !ent.IsNotFound(getErr) {
 		return nil, getErr
@@ -69,17 +71,22 @@ func (s *Service) CollectEndpointEvidence(ctx context.Context, req triage.Endpoi
 		}
 		return toEndpointEvidenceResult(existing, req), nil
 	}
-	if cmdID != legacyID {
-		legacy, legErr := s.DB.Command.Get(ctx, legacyID)
+	seenPrior := map[uuid.UUID]bool{cmdID: true}
+	for _, priorID := range []uuid.UUID{legacyID, unanchoredHostV2ID, unanchoredCmdV2ID} {
+		if priorID == uuid.Nil || seenPrior[priorID] {
+			continue
+		}
+		seenPrior[priorID] = true
+		prior, legErr := s.DB.Command.Get(ctx, priorID)
 		if legErr != nil && !ent.IsNotFound(legErr) {
 			return nil, legErr
 		}
-		if legacy != nil {
-			if legacy.AssetID != req.AssetID || legacy.Kind != "exec" || legacy.IncidentID == nil || *legacy.IncidentID != req.IncidentID {
+		if prior != nil {
+			if prior.AssetID != req.AssetID || prior.Kind != "exec" || prior.IncidentID == nil || *prior.IncidentID != req.IncidentID {
 				return nil, errors.New("端点取证旧版指令身份冲突")
 			}
-			if legacy.Status != "succeeded" && legacy.Status != "failed" && legacy.Status != "unsupported" {
-				return nil, fmt.Errorf("存在状态为 %s 的旧版取证指令，严禁自动创建新取证指令或重放", legacy.Status)
+			if prior.Status != "succeeded" && prior.Status != "failed" && prior.Status != "unsupported" {
+				return nil, fmt.Errorf("存在状态为 %s 的旧版取证指令，严禁自动创建新取证指令或重放", prior.Status)
 			}
 		}
 	}
@@ -255,6 +262,12 @@ func toEndpointEvidenceResult(cmd *ent.Command, req triage.EndpointEvidenceReque
 	if !req.Until.IsZero() {
 		out.To = req.Until.UTC().Format(time.RFC3339)
 	}
+	if req.AnchorEventID != nil && *req.AnchorEventID != uuid.Nil {
+		out.AnchorEventID = req.AnchorEventID.String()
+	}
+	if !req.AnchorTs.IsZero() {
+		out.AnchorTs = req.AnchorTs.UTC().Format(time.RFC3339)
+	}
 	return out
 }
 
@@ -278,11 +291,15 @@ func (s *Service) recordEndpointEvidenceSessionMessages(ctx context.Context, ses
 	if !req.Since.IsZero() && !req.Until.IsZero() {
 		windowDesc = fmt.Sprintf("%s 至 %s (UTC)", req.Since.UTC().Format(time.RFC3339), req.Until.UTC().Format(time.RFC3339))
 	}
+	anchorDesc := ""
+	if req.AnchorEventID != nil && *req.AnchorEventID != uuid.Nil {
+		anchorDesc = fmt.Sprintf("锚点事件 ID：%s\n", req.AnchorEventID)
+	}
 	taskText := fmt.Sprintf("【平台安全事件受控只读补证任务】\n"+
-		"事件 ID：%s\n资产组 ID：%s\n目标主机：%s (%s)\n受控只读模板：%s\n取证时间窗口：%s\n"+
+		"事件 ID：%s\n资产组 ID：%s\n目标主机：%s (%s)\n受控只读模板：%s\n%s取证时间窗口：%s\n"+
 		"任务目的与边界：平台 AI 研判正在核实该安全事件的缺失遥测，仅限在目标受管 Linux 主机上执行服务端预置的固定只读模板命令以获取认证日志片段、当前进程快照、包管理历史日志或事件关联单容器的 Web 服务日志。"+
 		"本任务由服务端系统受控生成，不代表原事件操作已获人工批准或合法，严禁修改系统状态或读取密钥文件。",
-		req.IncidentID, req.GroupID, host.Hostname, host.ID, req.Template, windowDesc)
+		req.IncidentID, req.GroupID, host.Hostname, host.ID, req.Template, anchorDesc, windowDesc)
 	intentText := fmt.Sprintf("为补充安全事件 %s 在受管主机 %s (%s) 上的缺失调查上下文，现按固定只读模板 %s 执行只读取证命令（超时 5 秒，只读无副作用）：%s",
 		req.IncidentID, host.Hostname, host.ID, req.Template, req.Command)
 

@@ -53,3 +53,31 @@ func TestTempDirPrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyIsolatesNonNilResolutionSourceAndRequiresHumanUser(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+	humans := map[string]bool{"alice": true, "bob": true}
+
+	if got := classify(&ent.Incident{Status: "false_positive", ResolvedBy: strPtr("alice")}, humans); got != fp {
+		t.Fatalf("真实人工且无 resolution_source 应计为 fp，实得 %v", got)
+	}
+	if got := classify(&ent.Incident{Status: "false_positive", ResolvedBy: strPtr("system")}, humans); got != autoClosed {
+		t.Fatalf("system 自动结案应计为 autoClosed，实得 %v", got)
+	}
+	if got := classify(&ent.Incident{Status: "false_positive", ResolvedBy: strPtr("alice"), ResolutionSource: strPtr("ai_proposal")}, humans); got != aiProposal {
+		t.Fatalf("ai_proposal 应计为 aiProposal，实得 %v", got)
+	}
+	for _, src := range []string{"", " ", "ai_verdict", "ai_review", "external_integration", "custom_bot"} {
+		if got := classify(&ent.Incident{Status: "false_positive", ResolvedBy: strPtr("alice"), ResolutionSource: strPtr(src)}, humans); got != ignored {
+			t.Fatalf("非 nil resolution_source=%q 必须被隔离为 ignored，实得 %v", src, got)
+		}
+	}
+	for _, who := range []string{"", "ai_reviewer", "ghost-admin", "viewer1", " alice "} {
+		if got := classify(&ent.Incident{Status: "false_positive", ResolvedBy: strPtr(who)}, humans); got != ignored {
+			t.Fatalf("非 users 表有效人工身份 resolved_by=%q 必须被隔离为 ignored，实得 %v", who, got)
+		}
+	}
+	if got := classify(&ent.Incident{Status: "closed", ResolvedBy: strPtr("ai_reviewer"), ResolutionSource: strPtr("ai_review")}, humans); got != tp {
+		t.Fatalf("closed 事件无论来源都应按 tp 阻断误报统计，实得 %v", got)
+	}
+}

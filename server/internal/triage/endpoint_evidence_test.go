@@ -50,6 +50,7 @@ func TestParseStrictAgentContainerAndReadOnlyTemplates(t *testing.T) {
 
 	for _, cmd := range []string{
 		"journalctl --no-pager --utc -n 40 --since '2026-11-01 09:59:27 UTC' --until '2026-11-01 11:44:31 UTC' -u ssh -u sshd -t sshd -t sudo -t su",
+		"pct exec 203 -- journalctl --no-pager --utc -n 40 --since '2026-11-01 09:59:27 UTC' --until '2026-11-01 10:29:27 UTC' -u ssh -u sshd",
 		"journalctl --no-pager --utc -n 25 --since '2026-11-05 05:45:00 UTC' --until '2026-11-05 06:15:00 UTC' -u apt-daily.service -u apt-daily-upgrade.service -u unattended-upgrades.service -u packagekit.service && tail -n 30 /var/log/dpkg.log /var/log/apt/history.log",
 		"docker logs --timestamps --since '2026-11-05T05:45:00Z' --until '2026-11-05T06:15:00Z' --tail 40 978b4e7c6f53",
 		"pct exec 203 -- journalctl --no-pager --utc -n 40 --since '2026-11-01 09:59:27 UTC' --until '2026-11-01 11:44:31 UTC' -u caddy -u nginx -u apache2 -u httpd",
@@ -87,6 +88,30 @@ func TestParseStrictAgentContainerAndReadOnlyTemplates(t *testing.T) {
 	curDocker := EndpointEvidenceCommandID(incID, "100", 1, assetID, TemplateLinuxContainerWebLogs, "docker logs --timestamps --since '2026-11-05T05:45:00Z' --until '2026-11-05T06:15:00Z' --tail 40 978b4e7c6f53")
 	if legDocker != curDocker {
 		t.Fatal("Docker logs 使用 RFC3339Z，CommandID 应保持不变")
+	}
+
+	hostAuthID := EndpointEvidenceCommandID(incID, "100", 1, assetID, TemplateLinuxAuthJournal, "journalctl --no-pager --utc -n 40")
+	lxcAuthID := EndpointEvidenceCommandID(incID, "100", 1, assetID, TemplateLinuxAuthJournal, "pct exec 203 -- journalctl --no-pager --utc -n 40")
+	if hostAuthID == lxcAuthID {
+		t.Fatal("LXC 容器认证日志模板必须与宿主机认证日志模板派生不同 CommandID")
+	}
+	evID1, evID2 := uuid.New(), uuid.New()
+	anchored1 := EndpointEvidenceCommandIDWithAnchor(incID, "100", 1, assetID, TemplateLinuxAuthJournal, &evID1, "journalctl --no-pager --utc -n 40")
+	anchored2 := EndpointEvidenceCommandIDWithAnchor(incID, "100", 1, assetID, TemplateLinuxAuthJournal, &evID2, "journalctl --no-pager --utc -n 40")
+	if anchored1 == hostAuthID || anchored1 == anchored2 {
+		t.Fatal("带 event_id 锚点的取证指令必须与无锚点及不同 event_id 的指令 ID 区分")
+	}
+
+	hasC, _, _, err := parseOptionalStrictAgentContainer(json.RawMessage(`{"process":{"name":"sshd"}}`))
+	if err != nil || hasC {
+		t.Fatalf("宿主机事件（无 container 字段）应解析为 hasContainer=false, err=nil，实得 hasC=%v err=%v", hasC, err)
+	}
+	hasC, rt, uid, err = parseOptionalStrictAgentContainer(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203"}}`))
+	if err != nil || !hasC || rt != "lxc" || uid != "203" {
+		t.Fatalf("LXC 容器事件解析异常: hasC=%v rt=%q uid=%q err=%v", hasC, rt, uid, err)
+	}
+	if _, _, _, err := parseOptionalStrictAgentContainer(json.RawMessage(`{"container":{"runtime":"lxc","uid":"203; id"}}`)); err == nil {
+		t.Fatal("包含非法 container 字段的事件必须 fail-closed 报错")
 	}
 }
 

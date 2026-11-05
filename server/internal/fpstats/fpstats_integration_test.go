@@ -58,6 +58,10 @@ const dns = `{"query":{"hostname":"Updates.Example.com"},"process":{"file":{"pat
 
 func TestSweep(t *testing.T) {
 	ctx, db := testdb.New(t)
+	db.User.Create().SetUsername("alice").SetPasswordHash("x").SetRole("admin").SaveX(ctx)
+	db.User.Create().SetUsername("bob").SetPasswordHash("x").SetRole("analyst").SaveX(ctx)
+	db.User.Create().SetUsername("carol").SetPasswordHash("x").SetRole("analyst").SaveX(ctx)
+	db.User.Create().SetUsername("viewer_only").SetPasswordHash("x").SetRole("viewer").SaveX(ctx)
 	group := db.Group.Create().SetName("g").SaveX(ctx)
 	host := db.Asset.Create().SetHostname("pve1").SetGroupID(group.ID).SaveX(ctx)
 	f := &fixture{ctx: ctx, db: db, host: host.ID, t: t}
@@ -65,9 +69,9 @@ func TestSweep(t *testing.T) {
 	s := &Stats{DB: db, Window: 30 * 24 * time.Hour, MinCount: 5, MinRatio: 90, Days: 30, Cooldown: 30 * 24 * time.Hour,
 		Proposed: func(id uuid.UUID) { submitted = append(submitted, id) }}
 
-	// 达到阈值：5 次人工误报（含一次采纳 AI 研判），按域名 + 进程映像收窄
+	// 达到阈值：5 次独立人工误报（resolution_source 为 nil，且结案人为真实 admin/analyst 用户），按域名 + 进程映像收窄
 	f.times(4, "hit", "false_positive", "alice", "", dns)
-	f.incident("hit", "false_positive", "bob", "ai_verdict", dns)
+	f.incident("hit", "false_positive", "bob", "", dns)
 	// 不够数
 	f.times(4, "few", "false_positive", "alice", "", dns)
 	// 有一次判属实
@@ -77,6 +81,21 @@ func TestSweep(t *testing.T) {
 	f.times(4, "aiprop", "false_positive", "alice", "", dns)
 	f.times(3, "aiprop", "false_positive", "alice", "ai_proposal", dns)
 	f.times(3, "aiprop", "false_positive", "system", "", dns)
+	// 采纳 AI 研判结论（ai_verdict）、AI 独立结案审计（ai_review）、空串来源与非真实人工账号均不计入独立人工误报
+	f.times(4, "aiverdict", "false_positive", "alice", "", dns)
+	f.times(3, "aiverdict", "false_positive", "bob", "ai_verdict", dns)
+	f.times(4, "aireview", "false_positive", "alice", "", dns)
+	f.times(3, "aireview", "false_positive", "ai_reviewer", "ai_review", dns)
+	f.times(4, "nonhuman", "false_positive", "alice", "", dns)
+	f.times(2, "nonhuman", "false_positive", "ghost_user", "", dns)
+	f.times(2, "nonhuman", "false_positive", "viewer_only", "", dns)
+	now := time.Now()
+	emptySrc := ""
+	incEmptySrc := db.Incident.Create().SetStatus("false_positive").SetGraph(json.RawMessage(`{}`)).
+		SetCreatedAt(now.Add(-time.Hour)).SetResolvedBy("alice").SetResolvedAt(now).SetResolution("x").
+		SetNillableResolutionSource(&emptySrc).SaveX(ctx)
+	evEmptySrc := db.Event.Create().SetTs(now).SetClassUID(4003).SetSource("agent").SetAssetID(host.ID).SetRaw(json.RawMessage(dns)).SaveX(ctx)
+	db.Alert.Create().SetTs(now.Add(-time.Hour)).SetRuleID("nonhuman").SetSeverity(2).SetAssetID(host.ID).SetIncidentID(incEmptySrc.ID).SetEventID(evEmptySrc.ID).SaveX(ctx)
 	// 外部工单系统回写的误报也不计入
 	f.times(4, "external", "false_positive", "alice", "", dns)
 	f.times(3, "external", "false_positive", "ticket-bot", "external_integration", dns)
@@ -113,7 +132,7 @@ func TestSweep(t *testing.T) {
 	if n, err := s.Sweep(ctx, time.Now()); err != nil || n != 4 || len(submitted) != 4 {
 		t.Fatalf("应生成 4 条草案，得到 %d %v", n, err)
 	}
-	for _, rule := range []string{"few", "real", "aiprop", "external", "ratio", "purged", "covered", "critical", "xdr:new-process"} {
+	for _, rule := range []string{"few", "real", "aiprop", "aiverdict", "aireview", "nonhuman", "external", "ratio", "purged", "covered", "critical", "xdr:new-process"} {
 		if d := f.drafts(rule); len(d) != 0 {
 			t.Errorf("%s 不该生成草案：%+v", rule, d[0])
 		}
