@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"openxdr/server/ent"
 	"openxdr/server/internal/commandgate"
+	"openxdr/server/internal/findings"
 	"openxdr/server/internal/triage"
 )
 
@@ -63,7 +64,15 @@ func (r *Reviewer) Review(ctx context.Context, session *ent.AgentSession, f *ent
 		}
 		rows = append(rows, evidence{c.ID, *c.Cmd, *c.Stdout})
 	}
-	material, _ := json.Marshal(map[string]any{"finding_id": f.ID, "group_id": f.GroupID, "asset_id": f.AssetID, "key": f.Key, "title": f.Title, "original_problem": f.Detail, "first_seen": f.FirstSeen, "evidence": rows})
+	var original findings.Work
+	_ = json.Unmarshal(f.Work, &original)
+	if original.OriginalTitle == "" {
+		original.OriginalTitle = f.Title
+	}
+	if original.OriginalProblem == "" {
+		original.OriginalProblem = f.Detail
+	}
+	material, _ := json.Marshal(map[string]any{"finding_id": f.ID, "group_id": f.GroupID, "asset_id": f.AssetID, "key": f.Key, "title": original.OriginalTitle, "original_problem": original.OriginalProblem, "first_seen": f.FirstSeen, "evidence": rows})
 	llm := triage.NewLLM(base, model, key, time.Minute)
 	llm.NoThinking = true
 	llm.MaxTokens = 1536

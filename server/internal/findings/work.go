@@ -18,6 +18,8 @@ const RepairBudget = 3
 
 // Work 只记录当前调查计划与真实引用，不把模型判断当成人工授权。
 type Work struct {
+	OriginalTitle    string      `json:"original_title,omitempty"`
+	OriginalProblem  string      `json:"original_problem,omitempty"`
 	Stage            string      `json:"stage"`
 	Plan             string      `json:"plan"`
 	WakeOn           string      `json:"wake_on"`
@@ -57,12 +59,20 @@ func Claim(ctx context.Context, db *ent.Client, session *ent.AgentSession, now t
 		if !allowed {
 			continue
 		}
+		var prior Work
+		_ = json.Unmarshal(f.Work, &prior)
+		if prior.OriginalTitle == "" {
+			prior.OriginalTitle = f.Title
+		}
+		if prior.OriginalProblem == "" {
+			prior.OriginalProblem = f.Detail
+		}
 		stage, plan := "investigating", "先只读复查现状；仅在现有组授权范围内执行必要的最小可回滚修复，随后独立验证"
 		if f.WorkAttempts >= RepairBudget {
 			stage, plan = "monitoring", "主动修复预算已用尽，仅只读观察；新证据或人工重新打开后再评估"
 		}
 		f, err = tx.Finding.UpdateOneID(f.ID).SetWorkSessionID(session.ID).SetWorkLeaseUntil(lease).
-			AddWorkAttempts(1).SetWork(EncodeWork(Work{Stage: stage, Plan: plan, WakeOn: "new_observation_or_next_check"})).Save(ctx)
+			AddWorkAttempts(1).SetWork(EncodeWork(Work{OriginalTitle: prior.OriginalTitle, OriginalProblem: prior.OriginalProblem, Stage: stage, Plan: plan, WakeOn: "new_observation_or_next_check"})).Save(ctx)
 		if err != nil {
 			return nil, err
 		}

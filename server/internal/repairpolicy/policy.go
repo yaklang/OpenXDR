@@ -1,0 +1,464 @@
+// Package repairpolicy 保存管理员明确委托的有限修复范围，不把模型意图当成授权。
+package repairpolicy
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"regexp"
+	"slices"
+	"strings"
+	"time"
+
+	"entgo.io/ent/dialect/sql"
+	"github.com/google/uuid"
+	"openxdr/server/ent"
+	"openxdr/server/ent/asset"
+	"openxdr/server/ent/command"
+	"openxdr/server/ent/finding"
+	"openxdr/server/ent/predicate"
+	"openxdr/server/ent/setting"
+	"openxdr/server/ent/taskrun"
+	"openxdr/server/ent/user"
+	"openxdr/server/internal/audit"
+	"openxdr/server/internal/auth"
+	"openxdr/server/internal/commandgate"
+	"openxdr/server/internal/findings"
+)
+
+const SettingKey = "repair-policy"
+const RestartFailedService = "restart_failed_service"
+
+type Grant struct {
+	ID              uuid.UUID   `json:"id"`
+	Action          string      `json:"action"`
+	GroupID         uuid.UUID   `json:"group_id"`
+	AssetIDs        []uuid.UUID `json:"asset_ids"`
+	Units           []string    `json:"units"`
+	ExpiresAt       time.Time   `json:"expires_at"`
+	CooldownMinutes int         `json:"cooldown_minutes"`
+}
+type Policy struct {
+	Grants []Grant `json:"grants"`
+}
+type Store struct{ DB *ent.Client }
+type probeRef struct {
+	SessionID uuid.UUID `json:"session_id"`
+	CommandID uuid.UUID `json:"command_id"`
+	AssetID   uuid.UUID `json:"asset_id"`
+	Unit      string    `json:"unit"`
+}
+type use struct {
+	SessionID     uuid.UUID `json:"session_id"`
+	GrantID       uuid.UUID `json:"grant_id"`
+	ReservationID uuid.UUID `json:"reservation_id"`
+	ReservedAt    time.Time `json:"reserved_at"`
+	NextAllowedAt time.Time `json:"next_allowed_at"`
+	ProbeID       uuid.UUID `json:"probe_id"`
+}
+
+var unitName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}\.service$`)
+var restart = regexp.MustCompile(`^systemctl restart -- ([a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}\.service)$`)
+
+func validUnit(unit string) bool {
+	if !unitName.MatchString(unit) || strings.Contains(unit, "..") {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSuffix(unit, ".service"))
+	for _, core := range []string{"openxdr", "patroni", "postgres", "nats", "ssh", "network", "system", "dbus", "audit", "rsyslog", "firewall", "iptables", "nftables", "ufw", "tailscale", "docker", "containerd", "kube", "pve", "corosync", "keepalived", "etcd", "consul", "mysql", "mariadb", "mongo", "clickhouse", "kafka", "zookeeper", "apparmor", "selinux", "polkit", "cron", "chrony", "ntp"} {
+		if strings.Contains(name, core) {
+			return false
+		}
+	}
+	return true
+}
+func ProbeCommand(unit string) string {
+	return "systemctl show --property=Id,ActiveState,UnitFileState -- " + unit
+}
+func strict(raw []byte, out any) error {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(out); err != nil {
+		return err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return errors.New("JSON包含额外内容")
+	}
+	return nil
+}
+
+func (s *Store) Load(ctx context.Context) (Policy, error) {
+	row, err := s.DB.Setting.Get(ctx, SettingKey)
+	if ent.IsNotFound(err) {
+		return Policy{Grants: []Grant{}}, nil
+	}
+	if err != nil {
+		return Policy{}, err
+	}
+	var p Policy
+	err = strict(row.Value, &p)
+	return p, err
+}
+
+func (s *Store) validate(ctx context.Context, p Policy, now time.Time) error {
+	if len(p.Grants) > 50 {
+		return errors.New("最多50条有限授权")
+	}
+	seen := map[uuid.UUID]bool{}
+	for _, g := range p.Grants {
+		if g.ID == uuid.Nil || seen[g.ID] || g.Action != RestartFailedService || g.GroupID == uuid.Nil || len(g.AssetIDs) == 0 || len(g.AssetIDs) > 50 || len(g.Units) == 0 || len(g.Units) > 20 || g.CooldownMinutes < 60 || g.CooldownMinutes > 10080 || !g.ExpiresAt.After(now) || g.ExpiresAt.After(now.Add(30*24*time.Hour)) {
+			return errors.New("授权须有唯一ID、明确组/资产/服务、60分钟以上冷却及30天内有效期")
+		}
+		seen[g.ID] = true
+		assets := map[uuid.UUID]bool{}
+		for _, id := range g.AssetIDs {
+			if id == uuid.Nil || assets[id] {
+				return errors.New("资产名单无效或重复")
+			}
+			assets[id] = true
+			ok, err := s.DB.Asset.Query().Where(asset.IDEQ(id), asset.GroupIDEQ(g.GroupID)).Exist(ctx)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errors.New("授权资产不在指定组")
+			}
+		}
+		units := map[string]bool{}
+		for _, u := range g.Units {
+			if !validUnit(u) || units[u] {
+				return errors.New("只允许非关键、无路径/实例/转义的规范服务精确名")
+			}
+			units[u] = true
+		}
+	}
+	return nil
+}
+
+// Save 只接受认证上下文中的真实全局管理员，内部任务/模型没有写策略入口。
+func (s *Store) Save(ctx context.Context, p Policy, remote string) error {
+	actor := auth.From(ctx)
+	if actor == nil {
+		return errors.New("仅真实管理员可配置维护范围")
+	}
+	current, err := s.DB.User.Get(ctx, actor.ID)
+	if err != nil || current.Role != "admin" || current.Username == "system" || current.Username == "ai-reviewer" {
+		return errors.New("仅真实管理员可配置维护范围")
+	}
+	if err := s.validate(ctx, p, time.Now()); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	tx, err := s.DB.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	current, err = tx.User.Query().Where(user.IDEQ(actor.ID), user.RoleEQ("admin")).Where(func(q *sql.Selector) { q.ForUpdate() }).Only(ctx)
+	if err != nil {
+		return errors.New("管理员权限已失效")
+	}
+	n, err := tx.Setting.Update().Where(setting.IDEQ(SettingKey)).SetValue(raw).Save(ctx)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		if err := tx.Setting.Create().SetID(SettingKey).SetValue(raw).Exec(ctx); err != nil {
+			return err
+		}
+	}
+	if err := audit.Checked(ctx, tx.AuditLog.Create(), current.Username, remote, "repair_policy_update", SettingKey, "admin_user_id="+current.ID.String()+" policy="+string(raw)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u := auth.From(r.Context())
+		if u == nil {
+			http.Error(w, "需要管理员登录", http.StatusForbidden)
+			return
+		}
+		current, err := s.DB.User.Get(r.Context(), u.ID)
+		if err != nil || current.Role != "admin" {
+			http.Error(w, "仅管理员可访问维护范围", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			p, err := s.Load(r.Context())
+			if err != nil {
+				http.Error(w, "读取维护范围失败", http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(p)
+		case http.MethodPut:
+			raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32768))
+			if err != nil {
+				http.Error(w, "请求过大", http.StatusBadRequest)
+				return
+			}
+			var p Policy
+			if err := strict(raw, &p); err != nil {
+				http.Error(w, "维护范围JSON无效", http.StatusBadRequest)
+				return
+			}
+			if err := s.Save(r.Context(), p, audit.RemoteAddr(r)); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.Header().Set("Allow", "GET, PUT")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+}
+
+func (s *Store) claimed(ctx context.Context, session *ent.AgentSession, id uuid.UUID) (*ent.AgentSession, *ent.Finding, error) {
+	if session == nil {
+		return nil, nil, errors.New("缺少真实任务会话")
+	}
+	now := time.Now()
+	current, err := s.DB.AgentSession.Get(ctx, session.ID)
+	if err != nil || current.Kind != "task" || current.Initiator != "system" || current.Status != "running" || current.CancelRequestedAt != nil || current.GroupID != session.GroupID || current.RunOwner == nil || current.RunExpiresAt == nil || !current.RunExpiresAt.After(now) || current.RunDeadlineAt == nil || !current.RunDeadlineAt.After(now) {
+		return nil, nil, errors.New("任务会话或租约失效")
+	}
+	bound, err := s.DB.TaskRun.Query().Where(taskrun.TaskIDEQ(findings.FollowupTask), taskrun.SessionIDEQ(current.ID), taskrun.GroupIDEQ(current.GroupID), taskrun.StatusEQ("running")).Exist(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !bound {
+		return nil, nil, errors.New("不是平台自治跟进任务")
+	}
+	filters := []predicate.Finding{finding.GroupIDEQ(current.GroupID), finding.StatusEQ("open"), finding.WorkOwnerEQ("ai"), finding.WorkSessionIDEQ(current.ID), finding.WorkLeaseUntilGT(now)}
+	if id != uuid.Nil {
+		filters = append(filters, finding.IDEQ(id))
+	}
+	rows, err := s.DB.Finding.Query().Where(filters...).All(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, f := range rows {
+		if !slices.Contains(current.Subjects, "finding:"+f.ID.String()) || f.WorkAttempts > findings.RepairBudget {
+			continue
+		}
+		ok, err := s.DB.Asset.Query().Where(asset.IDEQ(f.AssetID), asset.GroupIDEQ(current.GroupID)).Exist(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok {
+			return current, f, nil
+		}
+	}
+	return nil, nil, errors.New("待办未被本轮有效领取或修复预算已耗尽")
+}
+
+// RecordProbe 在 exec 真实下发后由服务端调用；模型不能通过工具参数伪造会话与指令的关联。
+func (s *Store) RecordProbe(ctx context.Context, session *ent.AgentSession, c *ent.Command) error {
+	if session == nil {
+		return errors.New("缺少真实任务会话")
+	}
+	if c == nil || c.Kind != "exec" || c.Cmd == nil {
+		return nil
+	}
+	prefix := "systemctl show --property=Id,ActiveState,UnitFileState -- "
+	if !strings.HasPrefix(*c.Cmd, prefix) {
+		return nil
+	}
+	unit := strings.TrimPrefix(*c.Cmd, prefix)
+	if !validUnit(unit) || *c.Cmd != ProbeCommand(unit) {
+		return nil
+	}
+	// 其它既有会话不受此策略影响，也不能借它建立自治修复授权证据。
+	bound, err := s.DB.TaskRun.Query().Where(taskrun.TaskIDEQ(findings.FollowupTask), taskrun.SessionIDEQ(session.ID), taskrun.StatusEQ("running")).Exist(ctx)
+	if err != nil {
+		return err
+	}
+	if !bound {
+		return nil
+	}
+	current, _, err := s.claimed(ctx, session, uuid.Nil)
+	if err != nil {
+		return err
+	}
+	rows, err := s.DB.Finding.Query().Where(finding.GroupIDEQ(current.GroupID), finding.WorkSessionIDEQ(current.ID), finding.AssetIDEQ(c.AssetID), finding.StatusEQ("open"), finding.WorkLeaseUntilGT(time.Now())).All(ctx)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return errors.New("诊断指令目标未被领取")
+	}
+	policy, err := s.Load(ctx)
+	if err != nil {
+		return err
+	}
+	inScope := false
+	for _, grant := range policy.Grants {
+		if grant.Action == RestartFailedService && grant.GroupID == current.GroupID && grant.ExpiresAt.After(time.Now()) && slices.Contains(grant.AssetIDs, c.AssetID) && slices.Contains(grant.Units, unit) {
+			inScope = true
+			break
+		}
+	}
+	if !inScope {
+		return nil
+	} // 只保留已委托服务的诊断引用，避免任意 unit 名积累配置行。
+	actual, err := s.DB.Command.Get(ctx, c.ID)
+	if err != nil {
+		return err
+	}
+	if actual.Kind != "exec" || actual.AssetID != c.AssetID || actual.Cmd == nil || *actual.Cmd != ProbeCommand(unit) || actual.CreatedAt.Before(current.CreatedAt) {
+		return errors.New("实际诊断指令与会话范围不一致")
+	}
+	raw, _ := json.Marshal(probeRef{current.ID, c.ID, c.AssetID, unit})
+	key := probeKey(c.AssetID, unit)
+	n, err := s.DB.Setting.Update().Where(setting.IDEQ(key)).SetValue(raw).Save(ctx)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return s.DB.Setting.Create().SetID(key).SetValue(raw).Exec(ctx)
+	}
+	return nil
+}
+func probeKey(asset uuid.UUID, unit string) string {
+	return "repair-probe/" + asset.String() + "/" + unit
+}
+func useKey(asset uuid.UUID, unit string) string { return "repair-use/" + asset.String() + "/" + unit }
+
+// Authorize 只预留一次精确动作；预留后 Gate 拒绝/超时也不重发，避免“没回执就再试”。
+func (s *Store) Authorize(ctx context.Context, session *ent.AgentSession, f *ent.Finding, cmd string) (retErr error) {
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		target := "unbound"
+		if session != nil {
+			target = session.ID.String()
+		}
+		if err := audit.Checked(logCtx, s.DB.AuditLog.Create(), "system", "server", "repair_action_denied", target, retErr.Error()); err != nil {
+			retErr = fmt.Errorf("%w；拒绝审计落库失败", retErr)
+		}
+	}()
+
+	match := restart.FindStringSubmatch(cmd)
+	if len(match) != 2 || !validUnit(match[1]) {
+		return errors.New("自主修复仅支持明确授权的 systemctl restart -- <非关键服务>")
+	}
+	unit := match[1]
+	if f == nil {
+		return errors.New("缺少待办")
+	}
+	current, actual, err := s.claimed(ctx, session, f.ID)
+	if err != nil {
+		return err
+	}
+	if actual.AssetID != f.AssetID {
+		return errors.New("资产范围变化")
+	}
+	now := time.Now()
+	tx, err := s.DB.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	row, err := tx.Setting.Query().Where(setting.IDEQ(SettingKey)).Where(func(q *sql.Selector) { q.ForUpdate() }).Only(ctx)
+	if err != nil {
+		return errors.New("未配置可信维护范围，仅只读跟进")
+	}
+	var p Policy
+	if err := strict(row.Value, &p); err != nil {
+		return err
+	}
+	var grant *Grant
+	for i := range p.Grants {
+		g := &p.Grants[i]
+		if g.ID != uuid.Nil && g.CooldownMinutes <= 10080 && !g.ExpiresAt.After(now.Add(30*24*time.Hour)) && g.Action == RestartFailedService && g.GroupID == current.GroupID && g.ExpiresAt.After(now) && g.CooldownMinutes >= 60 && slices.Contains(g.AssetIDs, actual.AssetID) && slices.Contains(g.Units, unit) {
+			grant = g
+			break
+		}
+	}
+	if grant == nil {
+		return errors.New("动作、资产或服务不在当前有效维护范围")
+	}
+	proofRow, err := tx.Setting.Get(ctx, probeKey(actual.AssetID, unit))
+	if err != nil {
+		return errors.New("缺少本会话实际下发的固定只读诊断")
+	}
+	var ref probeRef
+	if err := strict(proofRow.Value, &ref); err != nil {
+		return err
+	}
+	if ref.SessionID != current.ID || ref.AssetID != actual.AssetID || ref.Unit != unit {
+		return errors.New("诊断关联不匹配")
+	}
+	probe, err := tx.Command.Get(ctx, ref.CommandID)
+	if err != nil {
+		return err
+	}
+	if probe.AssetID != actual.AssetID || probe.Kind != "exec" || probe.Cmd == nil || *probe.Cmd != ProbeCommand(unit) || probe.Status != "succeeded" || probe.ExitCode == nil || *probe.ExitCode != 0 || probe.Truncated || probe.CompletedAt == nil || probe.CompletedAt.Before(now.Add(-10*time.Minute)) || probe.CompletedAt.After(now) || probe.CreatedAt.Before(current.CreatedAt) || probe.Stdout == nil {
+		return errors.New("诊断未完整成功或已过期")
+	}
+	fields := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(*probe.Stdout), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			return errors.New("systemctl诊断字段不完整或重复")
+		}
+		if _, duplicate := fields[k]; duplicate {
+			return errors.New("systemctl诊断字段不完整或重复")
+		}
+		fields[k] = v
+	}
+	if len(fields) != 3 || fields["Id"] != unit || fields["ActiveState"] != "failed" || fields["UnitFileState"] != "enabled" {
+		return errors.New("诊断未证明精确目标服务为 failed 且 enabled，禁止猜测或别名绕过")
+	}
+	pending, err := tx.Command.Query().Where(command.AssetIDEQ(actual.AssetID), command.StatusIn("pending", "sent", "unknown")).All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, c := range pending {
+		if c.Kind != "exec" || c.Cmd == nil || !commandgate.ReadOnly(*c.Cmd) {
+			return errors.New("存在未知写动作，禁止自动重放或新增修复")
+		}
+	}
+	key := useKey(actual.AssetID, unit)
+	old, err := tx.Setting.Get(ctx, key)
+	if err != nil && !ent.IsNotFound(err) {
+		return err
+	}
+	if old != nil {
+		var prior use
+		if err := strict(old.Value, &prior); err != nil {
+			return err
+		}
+		if prior.SessionID == current.ID || prior.NextAllowedAt.After(now) {
+			return errors.New("相同会话已预留动作或仍处于资产服务冷却期")
+		}
+	}
+	reserved := use{SessionID: current.ID, GrantID: grant.ID, ReservationID: uuid.NewSHA1(uuid.NameSpaceOID, []byte("openxdr:repair|"+grant.ID.String()+"|"+current.ID.String()+"|"+actual.AssetID.String()+"|"+unit)), ReservedAt: now, NextAllowedAt: now.Add(time.Duration(grant.CooldownMinutes) * time.Minute), ProbeID: probe.ID}
+	raw, _ := json.Marshal(reserved)
+	if old == nil {
+		err = tx.Setting.Create().SetID(key).SetValue(raw).Exec(ctx)
+	} else {
+		err = tx.Setting.UpdateOneID(key).SetValue(raw).Exec(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	if err := audit.Checked(ctx, tx.AuditLog.Create(), "system", "server", "repair_action_reserved", actual.ID.String(), fmt.Sprintf("grant=%s session=%s asset=%s unit=%s probe=%s reservation=%s expires=%s", grant.ID, current.ID, actual.AssetID, unit, probe.ID, reserved.ReservationID, grant.ExpiresAt.UTC().Format(time.RFC3339))); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

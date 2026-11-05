@@ -60,6 +60,8 @@ type Service struct {
 	ReviewFinding func(context.Context, *ent.AgentSession, *ent.Finding, []*ent.Command) (bool, string, error)
 	// AuthorizeFindingRepair 仅由服务端可信维护范围授权最小写动作；为空时自治跟进只读。
 	AuthorizeFindingRepair func(context.Context, *ent.AgentSession, *ent.Finding, string) error
+	// RecordFindingProbe 将实际下发的固定只读诊断绑定到服务端会话，模型不能伪造此关联。
+	RecordFindingProbe func(context.Context, *ent.AgentSession, *ent.Command) error
 	// FoldAbove 历史超过这么多字节时折叠较早的工具结果与思考过程再发给模型，0 不折叠
 	FoldAbove int
 	// running 后台运行中的对话：停机时等它们把终态写完再退出
@@ -739,6 +741,11 @@ func (s *Service) tool(ctx context.Context, session *ent.AgentSession, who comma
 		cmd, err := s.Gate.Issue(ctx, who)
 		if err != nil {
 			return "", err
+		}
+		if s.RecordFindingProbe != nil {
+			if err := s.RecordFindingProbe(ctx, session, cmd); err != nil {
+				return "", fmt.Errorf("指令 %s 已下发但诊断关联落库失败，不自动重放: %w", cmd.ID, err)
+			}
 		}
 		return s.waitCommand(ctx, cmd, body.Timeout)
 	case "report":

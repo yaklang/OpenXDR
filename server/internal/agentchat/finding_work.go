@@ -198,9 +198,32 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 	if blocker != "" {
 		stage = "blocked"
 	}
-	w := findings.Work{Stage: stage, Plan: plan, WakeOn: "new_observation_or_next_check", Blocker: blocker, EvidenceCommands: ids}
+	if prior.OriginalTitle == "" {
+		prior.OriginalTitle = f.Title
+	}
+	if prior.OriginalProblem == "" {
+		prior.OriginalProblem = f.Detail
+	}
+	w := findings.Work{OriginalTitle: prior.OriginalTitle, OriginalProblem: prior.OriginalProblem, Stage: stage, Plan: plan, WakeOn: "new_observation_or_next_check", Blocker: blocker, EvidenceCommands: ids}
 	_, err := s.DB.Finding.Update().Where(finding.IDEQ(f.ID), finding.GroupIDEQ(session.GroupID), finding.StatusEQ("open")).SetWorkOwner(owner).SetWorkNextCheckAt(next).SetWork(findings.EncodeWork(w)).Save(ctx)
 	return err
 }
 
 func findingWorkJSON(f *ent.Finding) any { var w any; _ = json.Unmarshal(f.Work, &w); return w }
+
+func originalTitle(f *ent.Finding) string {
+	var w findings.Work
+	_ = json.Unmarshal(f.Work, &w)
+	if w.OriginalTitle != "" {
+		return w.OriginalTitle
+	}
+	return f.Title
+}
+func originalProblem(f *ent.Finding) string {
+	var w findings.Work
+	_ = json.Unmarshal(f.Work, &w)
+	if w.OriginalProblem != "" {
+		return w.OriginalProblem
+	}
+	return f.Detail
+}

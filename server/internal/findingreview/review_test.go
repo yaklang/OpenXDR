@@ -48,7 +48,7 @@ func TestFindingReviewerRealModelAndIndependentContext(t *testing.T) {
 	cmd, out := "df -P /", "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 100000 60000 40000 60% /\n"
 	code := int32(0)
 	c := &ent.Command{ID: id, AssetID: asset, Kind: "exec", Status: "succeeded", Cmd: &cmd, Stdout: &out, ExitCode: &code, CreatedAt: now, CompletedAt: &now}
-	f := &ent.Finding{ID: uuid.New(), AssetID: asset, Key: "disk-full", Title: "根分区96%", Detail: "根分区空间不足"}
+	f := &ent.Finding{ID: uuid.New(), AssetID: asset, Key: "disk-full", Title: "本轮模型改写为正常", Detail: "无异常", Work: json.RawMessage(`{"original_title":"根分区96%","original_problem":"根分区空间不足"}`)}
 	session := &ent.AgentSession{CreatedAt: now, Model: "stale-model"}
 	current := "real-model-a"
 	calls := 0

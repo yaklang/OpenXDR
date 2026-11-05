@@ -123,7 +123,7 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 		}
 		f, err = s.DB.Finding.Create().SetGroupID(session.GroupID).SetAssetID(body.Host).SetKey(body.Key).
 			SetTitle(body.Title).SetDetail(body.Detail).SetSeverity(body.Severity).SetSessionID(session.ID).
-			SetWorkOwner("ai").SetWorkNextCheckAt(now.Add(time.Hour)).SetWork(findings.EncodeWork(findings.Work{Stage: "waiting", Plan: "先只读复查现状与影响，授权内最小修复后独立验证", WakeOn: "new_observation_or_next_check"})).Save(ctx)
+			SetWorkOwner("ai").SetWorkNextCheckAt(now.Add(time.Hour)).SetWork(findings.EncodeWork(findings.Work{OriginalTitle: body.Title, OriginalProblem: body.Detail, Stage: "waiting", Plan: "先只读复查现状与影响，授权内最小修复后独立验证", WakeOn: "new_observation_or_next_check"})).Save(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -167,7 +167,7 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 			defer tx.Rollback()
 			err = tx.Finding.UpdateOneID(f.ID).Where(finding.StatusEQ("open"), finding.LastSeenEQ(f.LastSeen)).SetStatus("resolved").SetTitle(body.Title).SetDetail(body.Detail).
 				SetResolvedAt(now).SetResolvedBy(commandgate.SystemActor).
-				SetLastSeen(now).SetSessionID(session.ID).ClearWorkSessionID().ClearWorkLeaseUntil().ClearWorkNextCheckAt().SetWork(findings.EncodeWork(findings.Work{Stage: "resolved", Plan: "独立复核通过：" + reviewReason, WakeOn: "recurrence", EvidenceCommands: body.EvidenceCommands})).Exec(ctx)
+				SetLastSeen(now).SetSessionID(session.ID).ClearWorkSessionID().ClearWorkLeaseUntil().ClearWorkNextCheckAt().SetWork(findings.EncodeWork(findings.Work{OriginalTitle: originalTitle(f), OriginalProblem: originalProblem(f), Stage: "resolved", Plan: "独立复核通过：" + reviewReason, WakeOn: "recurrence", EvidenceCommands: body.EvidenceCommands})).Exec(ctx)
 			if err != nil {
 				return "", err
 			}
