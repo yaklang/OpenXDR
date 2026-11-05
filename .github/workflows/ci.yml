@@ -128,6 +128,9 @@ jobs:
       - working-directory: server/pi-runtime
         run: npm test
 
+      - name: Sandbox CLI contract
+        run: node --test deploy/pi-sandbox/xdr.test.mjs
+
   web:
     name: Web (React)
     runs-on: ubuntu-latest
