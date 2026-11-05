@@ -13,7 +13,7 @@ type actionDefinition struct {
 
 var actionDefinitions = []actionDefinition{
 	{Code: "verify_source", Text: "在现有权限范围内，向相关资产负责人逐一核实本事件实际涉及的资产、主机或客户端来源的应用归属、变更授权与业务用途，分别记录可核验的依据；涉及多个对象或经中间节点转发时，不把单一对象或中间节点的归属结论套用到其他对象。"},
-	{Code: "collect_original_records", Text: "先通过 query_event_raw 精查平台已保留原文、对受管 Linux 主机使用 collect_endpoint_evidence 做受控只读取证；仅在目标非纳管/不可达、权限或策略拒绝、日志已确认不存在或仍超裁剪上限时，由人工从可用的原始日志来源补取完整记录；平台事件检索的 raw 模式只改变搜索范围，不能取消正文裁剪或扩大返回上限。"},
+	{Code: "collect_original_records", Text: "先通过 query_event_raw 精查平台已保留原文，关联行为用 query_event_context 在事发同主机时间窗精查，对受管 Linux 主机使用 collect_endpoint_evidence 做受控只读取证；仅在目标非纳管/不可达、权限或策略拒绝、日志已确认不存在或仍超裁剪上限时，由人工从可用的原始日志来源补取完整记录；平台事件检索的 raw 模式只改变搜索范围，不能取消正文裁剪或扩大返回上限。"},
 	{Code: "trace_process", Text: "核实事件中的 process_guid 后查询进程血缘；查询失败或记录缺失时由人工补证，不把缺失当作无父进程。"},
 	{Code: "inspect_history", Text: "查询本事件涉及资产的告警历史和最近采集状态，核对时间范围；最近状态不能证明事发时的采集覆盖。"},
 	{Code: "inspect_baseline", Text: "按资产与完整程序路径查询 UEBA 基线；基线首次记录不是安装时间或实际首次执行时间，未命中仍为未知。"},

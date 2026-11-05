@@ -1678,7 +1678,7 @@ export interface TriageRun {
   started_at: string
   ready_at?: string
   finished_at?: string
-  trigger: 'initial' | 'reopened' | 'urgent' | 'evidence'
+  trigger: 'initial' | 'reopened' | 'urgent' | 'evidence' | `capability_upgrade_v${number}`
   status: 'running' | 'succeeded' | 'failed' | 'interrupted'
   model: string
   error_code: string

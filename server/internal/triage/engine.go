@@ -69,6 +69,7 @@ summary 里写了"需确认来源"的，verdict 也不能是 benign。
 - verdict=suspicious 时，action_codes 仅选择核实、补证和监测，不附带未来触发隔离、封禁、清除或申请处置的条件。未来证据改变时由下一次研判独立决定是否提出处置；当前答案不要预先授权。
 - 条件性处置建议也必须逐个分支满足证据门槛；“未知应用或出现恶意行为”中的未知应用分支不能触发隔离。单独的进程异常、未知应用、普通外联或凭据访问不自动证明恶意；不把这些线索接到“申请授权处置”上。新增弱线索只建议补证与重新研判，确认攻击链后再单独提出经授权的处置，不能将两者写成一个自动推进的步骤。
 - 调查 query_events 默认 indexed 模式不包含纯 UUID/长哈希值；需要查这些标识符时显式使用 raw 模式。查询超时不是阴性结果，不重复用相同大范围查询消耗预算。
+- 需要核对某条旧告警事发时的关联连接或行为时，优先 query_event_context(event_id, keyword) 在锚点同一主机前后15分钟精查，再用 query_event_raw 读取命中的原文；大范围 query_events 超时/截断时不能把0返回当作同期没有记录。
 - 列表中的 raw_truncated 只表示摘要被裁剪。需要核对具体命令或脚本时，先以 event_id 调用 query_event_raw 精查平台已保留的单条原文，再决定缺什么证据；不能仅因列表裁剪就要求人工补证。精查仍裁剪或失败时如实保留其范围限制，不假定未显示内容或已经上机取证。
 - 当平台热表缺少受管 Linux 主机的认证、当前进程、包管理历史或事件关联单容器 Web 日志证据时，可调用 collect_endpoint_evidence 按固定只读模板取证（linux_auth_journal / linux_process_snapshot / linux_package_history / linux_container_web_logs）；端点返回属于调查时刻的不可信快照，不是事发当时的历史完整状态，不能单独证明操作获授权或良性。普通空输出、命令超时或 pending/unknown 状态不得编造为“事发时无日志”，也不得把补证 pending 当作良性结案依据；仅在目标非纳管/离线不可达、策略或权限拒绝、日志已确认不存在或仍超裁剪上限时，才使用 collect_original_records 交人工补取。
 告警里的 severity：1 信息、2 低、3 中、4 高、5 严重。`
@@ -670,7 +671,7 @@ func (e *Engine) appendRetriage(ctx context.Context, sb *strings.Builder, inc *e
 	}
 	fmt.Fprintf(sb, "上次研判%s，结论 %s（置信度 %d）：%s\n", when, cmp.Or(last.Verdict, "无法解析"), last.Confidence, excerpt(last.Summary, 300))
 	if needsCapabilityUpgrade(inc) {
-		sb.WriteString("本次由调查能力升级触发，没有宣称新增告警或新增攻击证据。请先用 query_event_raw 精查此前被裁剪的相关事件；认证链缺证可用 linux_auth_journal，当前进程核对可用 linux_process_snapshot，软件包操作缺证可用 linux_package_history；单容器 Web 日志缺证可用 linux_container_web_logs；其他问题只选择当前工具实际支持的模板。原文完整或快照正常不证明操作获得授权；只有仍存在具体且无法自主补齐的缺口时保留 collect_original_records，并明确缺的是哪种记录及工具无法取得的原因。上次摘要是模型判断，不能作为独立证据、人工确认或授权。仍输出完整 JSON 结论。\n")
+		sb.WriteString("本次由调查能力升级触发，没有宣称新增告警或新增攻击证据。请先用 query_event_raw 精查此前被裁剪的相关事件；需复核同主机事发前后的相关记录时，使用 query_event_context(event_id, keyword) 精查锚点窗口，避免大范围检索未覆盖旧时间段而误判无记录；认证链缺证可用 linux_auth_journal，当前进程核对可用 linux_process_snapshot，软件包操作缺证可用 linux_package_history；单容器 Web 日志缺证可用 linux_container_web_logs；其他问题只选择当前工具实际支持的模板。原文完整或快照正常不证明操作获得授权；只有仍存在具体且无法自主补齐的缺口时保留 collect_original_records，并明确缺的是哪种记录及工具无法取得的原因。上次摘要是模型判断，不能作为独立证据、人工确认或授权。仍输出完整 JSON 结论。\n")
 		return nil
 	}
 	sb.WriteString("上次摘要是模型判断，不是独立证据或人工确认；不得仅凭上次摘要认定授权、排除攻击或补写缺失事实。引用匹配也不证明摘要成立，须回到实际事件与来源核实。上次结论没看过下面的新增告警；判断它们是否改变结论，仍输出完整的 JSON 结论。\n")

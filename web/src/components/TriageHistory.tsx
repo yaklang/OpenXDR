@@ -21,7 +21,7 @@ export function TriageHistory({ id }: { id: string }) {
       <Table<TriageRun> size="small" rowKey="id" loading={query.isPending} dataSource={query.data?.items ?? []} pagination={false} scroll={{ x: 1000 }} columns={[
         { title: t('thTime'), width: 170, render: (_, row) => fmtTime(row.started_at) },
         { title: t('thStatus'), width: 130, render: (_, row) => <Tag color={row.status === 'failed' ? 'error' : row.status === 'succeeded' ? 'success' : 'default'}>{row.status === 'running' && !row.heartbeat_valid ? t('triageRunUnknown') : t(statuses[row.status])}</Tag> },
-        { title: t('triageRunTrigger'), width: 120, render: (_, row) => t(triggers[row.trigger]) },
+        { title: t('triageRunTrigger'), width: 120, render: (_, row) => t(row.trigger.startsWith('capability_upgrade_v') ? 'triageRunCapability' : triggers[row.trigger as keyof typeof triggers] ?? 'triageRunUnknown') },
         { title: t('triageRunWait'), width: 100, render: (_, row) => row.ready_at ? seconds(Math.max(0, Date.parse(row.started_at) - Date.parse(row.ready_at))) : '—' },
         { title: t('triageRunDuration'), width: 110, render: (_, row) => row.status === 'running' ? '—' : row.error_code === 'lease_replaced' ? t('triageRunUnknown') : seconds(row.duration_ms) },
         { title: t('triageRunModel'), width: 180, render: (_, row) => `${row.model || '—'} · ${row.model_calls ?? 0} / ${seconds(row.model_ms)}` },

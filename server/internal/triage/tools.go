@@ -22,6 +22,8 @@ const eventExcerptBytes = 300
 var investigationTools = []Tool{
 	makeTool("query_event_raw", "按 event_id 精查本事件资产组内最近 168 小时、仍保留在热表的一条原文，最多 4096 字节（含省略标记），超限明确 raw_truncated。先用本工具核实列表中被裁剪的命令或脚本；不读取端点文件、冷归档或未采集日志，不支持调大上限或改变范围。",
 		`{"type":"object","properties":{"event_id":{"type":"string","description":"查询结果或告警中的事件 UUID"}},"required":["event_id"],"additionalProperties":false}`),
+	makeTool("query_event_context", "以已留存 event_id 为锚点，按 keyword 精查本事件关联主机在事发前后15分钟的热表记录（最多15条、每条正文300字节）。需要复核旧告警的同期入站连接、进程或相关行为时优先用本工具；不可指定主机、时间窗或上限。原文再用query_event_raw精查。",
+		`{"type":"object","properties":{"event_id":{"type":"string"},"keyword":{"type":"string"}},"required":["event_id","keyword"],"additionalProperties":false}`),
 	makeTool("collect_endpoint_evidence", "对本事件关联的受管 Linux 主机按固定只读模板补取端点证据（linux_auth_journal 读取事件时间窗口前后认证 journal 片段；linux_process_snapshot 读取当前进程快照，不是事发历史；linux_package_history 读取包管理 unit journal 与当前固定 apt/dpkg 日志末尾；linux_container_web_logs 仅读取本事件在该主机上唯一关联 agent 容器的 Docker 标准日志或 LXC Web 服务 unit journal），输出最多 4096 字节。不接受任意命令、文件路径或容器名，同一事件证据版本下重复调用只查已有回执、不重放。",
 		`{"type":"object","properties":{"asset_id":{"type":"string","description":"本事件涉及主机的 asset UUID"},"template":{"type":"string","enum":["linux_auth_journal","linux_process_snapshot","linux_package_history","linux_container_web_logs"],"description":"固定只读取证模板"}},"required":["asset_id","template"],"additionalProperties":false}`),
 	makeTool("process_baseline", "仅在本事件资产组内，按资产 ID 和可执行文件完整路径查询 UEBA 基线首次记录。不是安装时间、实际首次执行时间或恶意证明；未命中表示平台基线未知。",
@@ -60,7 +62,7 @@ func (e *Engine) execTool(ctx context.Context, name, args string) string {
 			elapsed := time.Since(started).Milliseconds()
 			run.toolMS += elapsed
 			tool := name
-			if tool != "query_events" && tool != "query_event_raw" && tool != "collect_endpoint_evidence" && tool != "host_alerts" && tool != "process_lineage" && tool != "process_baseline" {
+			if tool != "query_events" && tool != "query_event_raw" && tool != "query_event_context" && tool != "collect_endpoint_evidence" && tool != "host_alerts" && tool != "process_lineage" && tool != "process_baseline" {
 				tool = "unknown"
 			}
 			detail := map[string]any{"tool": tool, "duration_ms": elapsed, "failed": failed}
@@ -85,6 +87,8 @@ func (e *Engine) execTool(ctx context.Context, name, args string) string {
 			return e.toolProcessBaseline(ctx, args)
 		case "query_events":
 			return e.toolQueryEvents(ctx, args)
+		case "query_event_context":
+			return e.toolEventContext(ctx, args)
 		case "query_event_raw":
 			return e.toolEventRaw(ctx, args)
 		case "collect_endpoint_evidence":
