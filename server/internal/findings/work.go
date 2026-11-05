@@ -41,8 +41,14 @@ func Claim(ctx context.Context, db *ent.Client, session *ent.AgentSession, now t
 		finding.GroupIDEQ(session.GroupID), finding.StatusEQ("open"), finding.WorkOwnerEQ("ai"),
 		finding.Or(finding.WorkNextCheckAtIsNil(), finding.WorkNextCheckAtLTE(now)),
 		finding.Or(finding.WorkLeaseUntilIsNil(), finding.WorkLeaseUntilLTE(now)),
-	).Where(func(s *sql.Selector) { s.ForUpdate(sql.WithLockAction(sql.SkipLocked)) }).
-		Order(ent.Asc(finding.FieldWorkNextCheckAt), ent.Asc(finding.FieldFirstSeen), ent.Asc(finding.FieldID)).Limit(BatchSize).All(ctx)
+	).Where(func(s *sql.Selector) {
+		owned := sql.Table(asset.Table).As("work_asset")
+		s.Where(sql.Exists(sql.Select(owned.C(asset.FieldID)).From(owned).Where(sql.And(sql.ColumnsEQ(owned.C(asset.FieldID), s.C(finding.FieldAssetID)), sql.EQ(owned.C(asset.FieldGroupID), session.GroupID)))))
+		s.ForUpdate(sql.WithLockAction(sql.SkipLocked))
+	}).Order(func(s *sql.Selector) {
+		s.OrderExpr(sql.Expr("CASE " + s.C(finding.FieldSeverity) + " WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END"))
+		s.OrderExpr(sql.Expr(s.C(finding.FieldWorkNextCheckAt) + " ASC NULLS FIRST"))
+	}, ent.Asc(finding.FieldFirstSeen), ent.Asc(finding.FieldID)).Limit(BatchSize).All(ctx)
 	if err != nil {
 		return nil, err
 	}
