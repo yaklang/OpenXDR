@@ -59,10 +59,17 @@ func TestEvidenceRepairRejectsUnsupportedClaims(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				var request struct {
-					Tools []Tool `json:"tools"`
+					Tools    []Tool    `json:"tools"`
+					Messages []Message `json:"messages"`
 				}
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Error(err)
+				}
+				prompt := request.Messages[len(request.Messages)-1].Content
+				for _, detail := range []string{"具体问题：", "query-1", "truncated", "value=false", "台账值=true"} {
+					if !strings.Contains(prompt, detail) {
+						t.Errorf("修正提示缺少 %q: %s", detail, prompt)
+					}
 				}
 				if len(request.Tools) != 0 {
 					t.Error("修正不得重执行工具")
@@ -211,5 +218,23 @@ func TestMissingEvidenceClaimsRepairOnce(t *testing.T) {
 		if calls != 1 || (err == nil) != (repair != "") {
 			t.Fatalf("calls=%d err=%v", calls, err)
 		}
+	}
+}
+
+func TestEvidenceClaimErrorDetails(t *testing.T) {
+	for _, tc := range []struct{ id, field, value, detail string }{
+		{"unknown", "status", `"ok"`, "有效编号（最多 20 项）：[query-1]"},
+		{"query-1", "truncated", "false", "可用字段：[status]"},
+		{"query-1", "status", `"error"`, `台账值="ok"`},
+	} {
+		t.Run(tc.detail, func(t *testing.T) {
+			content := strings.TrimSuffix(validVerdict, "}") + fmt.Sprintf(`,"evidence_claims":[{"evidence_id":%q,"field":%q,"value":%s}]}`, tc.id, tc.field, tc.value)
+			_, err := bindEvidence(Message{Content: content}, []Message{{Role: "tool", Content: `{"status":"ok"}`}})
+			for _, detail := range []string{"证据引用不存在或与查询元数据不一致", "evidence_id=" + shortEvidenceValue(tc.id), "field=" + shortEvidenceValue(tc.field), "value=" + tc.value, tc.detail} {
+				if err == nil || !strings.Contains(err.Error(), detail) {
+					t.Fatalf("缺少 %q: %v", detail, err)
+				}
+			}
+		})
 	}
 }

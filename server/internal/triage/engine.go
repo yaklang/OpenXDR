@@ -412,16 +412,17 @@ func (e *Engine) finishVerdictObserved(ctx context.Context, msgs []Message, msg 
 		}
 		return answer, err
 	}
-	if answer, err := bind(msg); err == nil {
+	answer, firstErr := bind(msg)
+	if firstErr == nil {
 		return answer, nil
 	}
 	msgs = append(msgs, msg, Message{Role: "user", Content: `上一条结论格式、证据引用、建议代码无效或输出不完整。基于已有调查证据重新输出一个完整、简洁的 JSON 对象，不调用工具，不续写片段，不增加未经证实的事实。
-字段：verdict（malicious/suspicious/benign）、confidence（0 到 100 的数字）、summary（非空字符串）、kill_chain（字符串数组）、action_codes（建议目录中的非空代码数组，不提交 actions 文案）。字符串中的反斜杠、引号和换行必须按 JSON 转义；命令无需逐字抄录，可用中文概述。已有工具证据时 evidence_claims 必须为非空数组，引用必须与查询台账中的编号、字段和值完全一致；缺失字段不可推断为 false。只输出 JSON。`})
+字段：verdict（malicious/suspicious/benign）、confidence（0 到 100 的数字）、summary（非空字符串）、kill_chain（字符串数组）、action_codes（建议目录中的非空代码数组，不提交 actions 文案）。字符串中的反斜杠、引号和换行必须按 JSON 转义；命令无需逐字抄录，可用中文概述。已有工具证据时 evidence_claims 必须为非空数组，引用必须与查询台账中的编号、字段和值完全一致；缺失字段不可推断为 false。只输出 JSON。` + "\n具体问题：" + firstErr.Error()})
 	corrected, err := e.chat(ctx, msgs, nil)
 	if err != nil {
 		return "", fmt.Errorf("研判格式修正失败: %w", err)
 	}
-	answer, err := bind(corrected)
+	answer, err = bind(corrected)
 	if err != nil {
 		return "", fmt.Errorf("研判结论无效，等待重试: %w", err)
 	}

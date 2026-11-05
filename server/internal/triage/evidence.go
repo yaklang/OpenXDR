@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 )
 
 // queryEvidence 记录查询覆盖和事件结构化字段，不把事件正文或模型推断升级成已核验事实。
@@ -152,7 +153,29 @@ func bindEvidence(msg Message, messages []Message) (string, error) {
 			claimed, supplied := claim["value"]
 			matched := exists && supplied && reflect.DeepEqual(value, claimed)
 			if !matched {
-				return "", fmt.Errorf("证据引用不存在或与查询元数据不一致")
+				reason := ""
+				switch {
+				case factsByID[id] == nil:
+					ids := make([]string, 0, len(factsByID))
+					for key := range factsByID {
+						ids = append(ids, key)
+					}
+					sort.Strings(ids)
+					if len(ids) > 20 {
+						ids = ids[:20]
+					}
+					reason = fmt.Sprintf("evidence_id 不存在；有效编号（最多 20 项）：%v", ids)
+				case !exists:
+					fields := make([]string, 0, len(factsByID[id]))
+					for key := range factsByID[id] {
+						fields = append(fields, key)
+					}
+					sort.Strings(fields)
+					reason = fmt.Sprintf("field 不存在；可用字段：%v", fields)
+				default:
+					reason = fmt.Sprintf("value 不匹配；台账值=%s", shortEvidenceValue(value))
+				}
+				return "", fmt.Errorf("证据引用不存在或与查询元数据不一致: evidence_id=%s field=%s value=%s；%s", shortEvidenceValue(id), shortEvidenceValue(field), shortEvidenceValue(claimed), reason)
 			}
 		}
 	}
@@ -163,4 +186,14 @@ func bindEvidence(msg Message, messages []Message) (string, error) {
 	verdict["evidence_observations"] = evidenceObservations(claims)
 	out, err := json.Marshal(verdict)
 	return string(out), err
+}
+
+// shortEvidenceValue 限制诊断值长度，避免长字符串淹没纠正提示和日志。
+func shortEvidenceValue(value any) string {
+	raw, _ := json.Marshal(value)
+	chars := []rune(string(raw))
+	if len(chars) > 120 {
+		return string(chars[:120]) + "…"
+	}
+	return string(raw)
 }
