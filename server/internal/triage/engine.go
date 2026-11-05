@@ -254,6 +254,7 @@ func (e *Engine) triageOne(ctx context.Context, inc *ent.Incident) (runErr error
 	timing := &runTiming{}
 	ctx = context.WithValue(ctx, timingKey{}, timing)
 	localEngine, localLLM := *e, *e.LLM
+	localLLM.sessionID = row.ID.String()
 	localLLM.Endpoint = func() (string, string, string) { return base, model, key }
 	originalUsage := localLLM.OnUsage
 	localLLM.OnUsage = func(model string, input, output int) {

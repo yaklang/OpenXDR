@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -33,16 +35,18 @@ type LLM struct {
 	// Endpoint 每次调用时取地址、模型与密钥（控制台可改）；为空用上面的固定值
 	Endpoint func() (baseURL, model, apiKey string)
 	// OnUsage 调用成功后报告用量，供用量概览；为空不记
-	OnUsage func(model string, input, output int)
-	http    *http.Client
+	OnUsage   func(model string, input, output int)
+	http      *http.Client
+	sessionID string
 }
 
 func NewLLM(baseURL, model, apiKey string, timeout time.Duration) *LLM {
 	return &LLM{
-		BaseURL: baseURL,
-		Model:   model,
-		APIKey:  apiKey,
-		http:    &http.Client{Timeout: timeout},
+		BaseURL:   baseURL,
+		Model:     model,
+		APIKey:    apiKey,
+		http:      &http.Client{Timeout: timeout},
+		sessionID: uuid.NewString(),
 	}
 }
 
@@ -150,6 +154,15 @@ func (l *LLM) Chat(ctx context.Context, msgs []Message, tools []Tool) (Message, 
 		return Message{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Go 订阅按会话归属请求；仅对该供应商域名发送专用标识，不从模型输入接受 headers。
+	if strings.EqualFold(req.URL.Hostname(), "opencode.ai") {
+		session := l.sessionID
+		if session == "" {
+			session = uuid.NewString()
+		}
+		req.Header.Set("x-opencode-session", session)
+		req.Header.Set("x-opencode-client", "pi")
+	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
