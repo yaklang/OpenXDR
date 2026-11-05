@@ -223,8 +223,15 @@ func TestSandboxCLITrackEndToEndWithRealReviewerAndUnknownBlock(t *testing.T) {
 }
 
 func TestRealSandboxContainerBridgeAndPiSDKEndToEnd(t *testing.T) {
-	image := "openxdr-pi-sandbox:candidate-20261106"
+	image := os.Getenv("OPENXDR_SANDBOX_TEST_IMAGE")
+	required := image != ""
+	if image == "" {
+		image = "openxdr-pi-sandbox:test"
+	}
 	if err := exec.Command("docker", "image", "inspect", image).Run(); err != nil {
+		if required {
+			t.Fatalf("required sandbox image %s unavailable: %v", image, err)
+		}
 		t.Skipf("skipping real container bridge test (%s not built on this runner): %v", image, err)
 	}
 
