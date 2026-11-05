@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { Agent } from '@earendil-works/pi-agent-core';
@@ -27,6 +28,9 @@ export async function run(request, send, callTool, signal) {
       tools.some(tool => !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tool.name) || tool.parameters?.type !== 'object')) {
     throw new Error('工具名称或参数 schema 无效');
   }
+  const sessionHeaders = endpoint.hostname.toLowerCase() === 'opencode.ai'
+    ? { 'x-opencode-session': randomUUID(), 'x-opencode-client': 'pi' }
+    : undefined;
   const models = createModels();
   models.setProvider(createProvider({
     id: 'openxdr', name: 'OpenXDR', baseUrl: endpoint.href,
@@ -38,6 +42,7 @@ export async function run(request, send, callTool, signal) {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 128000, maxTokens,
       compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
+      ...(sessionHeaders ? { headers: sessionHeaders } : {}),
     }],
   }));
   let turns = 0;

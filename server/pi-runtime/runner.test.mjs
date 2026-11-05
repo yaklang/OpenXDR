@@ -125,3 +125,41 @@ test('GLM 本地端点显式关闭模板 thinking，保留工具调用', async t
   assert.equal(calls, 2);
   assert.equal(events.at(-1).stop_reason, 'stop');
 });
+
+test('opencode.ai 仅对该精确域名附加会话与客户端归属头，跨轮保持一致', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const seenSessions = [];
+  let calls = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(typeof input === 'string' ? input : input.url);
+    const headers = new Headers(init?.headers || (typeof input === 'object' ? input.headers : undefined));
+    if (url.hostname === 'opencode.ai') {
+      const sid = headers.get('x-opencode-session');
+      assert.match(sid || '', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+      assert.equal(headers.get('x-opencode-client'), 'pi');
+      seenSessions.push(sid);
+    } else {
+      assert.equal(headers.get('x-opencode-session'), null);
+      assert.equal(headers.get('x-opencode-client'), null);
+    }
+    calls++;
+    const delta = calls === 1 ? toolDelta : { role: 'assistant', content: 'OK' };
+    const reason = calls === 1 ? 'tool_calls' : 'stop';
+    const sse = `data: ${JSON.stringify({ id: 'test', object: 'chat.completion.chunk', model: 'glm-5.3-flash', choices: [{ index: 0, delta, finish_reason: null }] })}\n\n` +
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: reason }], usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } })}\n\ndata: [DONE]\n\n`;
+    return new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  };
+  await run({ type: 'run', api_base: 'https://opencode.ai/inference/go/v1', model: 'glm-5.3-flash', prompt: '测试', tools: [tool] },
+    () => {}, async () => ({ success: true, output: '1' }));
+  assert.equal(seenSessions.length, 2);
+  assert.equal(seenSessions[0], seenSessions[1]);
+
+  await run({ type: 'run', api_base: 'https://opencode.ai/inference/go/v1', model: 'glm-5.3-flash', prompt: '第二次会话' },
+    () => {});
+  assert.equal(seenSessions.length, 3);
+  assert.notEqual(seenSessions[2], seenSessions[0]);
+
+  await run({ type: 'run', api_base: 'https://opencode.ai.example.invalid/v1', model: 'glm-5.3-flash', prompt: '非目标域名' },
+    () => {});
+});
