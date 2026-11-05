@@ -159,6 +159,7 @@ func main() {
 	chat.ReviewFinding = (&findingreview.Reviewer{Endpoint: chat.Endpoint, OnUsage: aiconf.Recorder(client, "finding_review")}).Review
 	repair := &repairpolicy.Store{DB: client}
 	chat.AuthorizeFindingRepair = repair.Authorize
+	chat.RevalidateFindingRepair = repair.Revalidate
 	chat.RecordFindingProbe = repair.RecordProbe
 	go cluster.RunLeader(ctx, db, "closure-review", closureReviewer.Run)
 	go cluster.RunLeader(ctx, db, "triage", triageEngine.Run)

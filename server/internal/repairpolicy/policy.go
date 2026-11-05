@@ -122,12 +122,12 @@ func (s *Store) validate(ctx context.Context, p Policy, now time.Time) error {
 				return errors.New("资产名单无效或重复")
 			}
 			assets[id] = true
-			ok, err := s.DB.Asset.Query().Where(asset.IDEQ(id), asset.GroupIDEQ(g.GroupID)).Exist(ctx)
+			ok, err := s.DB.Asset.Query().Where(asset.IDEQ(id), asset.GroupIDEQ(g.GroupID), asset.OsEQ("linux")).Exist(ctx)
 			if err != nil {
 				return err
 			}
 			if !ok {
-				return errors.New("授权资产不在指定组")
+				return errors.New("授权资产不是指定组的 Linux 主机")
 			}
 		}
 		units := map[string]bool{}
@@ -258,7 +258,7 @@ func claimedWithClient(ctx context.Context, db *ent.Client, session *ent.AgentSe
 		if !slices.Contains(current.Subjects, "finding:"+f.ID.String()) || f.WorkAttempts > findings.RepairBudget {
 			continue
 		}
-		ok, err := db.Asset.Query().Where(asset.IDEQ(f.AssetID), asset.GroupIDEQ(current.GroupID)).Exist(ctx)
+		ok, err := db.Asset.Query().Where(asset.IDEQ(f.AssetID), asset.GroupIDEQ(current.GroupID), asset.OsEQ("linux")).Exist(ctx)
 		if err != nil {
 			return nil, nil, err
 		}

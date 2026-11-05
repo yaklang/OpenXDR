@@ -40,7 +40,7 @@ type fixture struct {
 func setup(t *testing.T) *fixture {
 	ctx, db := testdb.New(t)
 	g := db.Group.Create().SetName("g").SaveX(ctx)
-	a := db.Asset.Create().SetHostname("a").SetGroupID(g.ID).SaveX(ctx)
+	a := db.Asset.Create().SetHostname("a").SetOs("linux").SetGroupID(g.ID).SaveX(ctx)
 	admin := db.User.Create().SetUsername("admin").SetPasswordHash("h").SetRole("admin").SaveX(ctx)
 	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("real").SetStatus("running").SetRunOwner(uuid.New()).SetRunExpiresAt(time.Now().Add(3 * time.Minute)).SetRunDeadlineAt(time.Now().Add(30 * time.Minute)).SaveX(ctx)
 	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service-failed-worker").SetTitle("worker failed").SetWorkOwner("ai").SetWorkSessionID(session.ID).SetWorkLeaseUntil(time.Now().Add(30 * time.Minute)).SetWorkAttempts(1).SaveX(ctx)
@@ -319,5 +319,20 @@ func TestRepairRevalidatedAfterReviewerWaitBeforeHub(t *testing.T) {
 				t.Fatalf("commands created %d want %d", n, expected)
 			}
 		})
+	}
+}
+
+func TestNonLinuxRepairScopeRejected(t *testing.T) {
+	x := setup(t)
+	x.db.Asset.UpdateOneID(x.f.AssetID).SetOs("windows").ExecX(x.ctx)
+	if err := x.store.Save(auth.WithUser(x.ctx, x.admin), Policy{Grants: []Grant{x.grant}}, "test"); err == nil {
+		t.Fatal("非Linux主机接受了systemd维护范围")
+	}
+	x.db.Asset.UpdateOneID(x.f.AssetID).SetOs("linux").ExecX(x.ctx)
+	x.save(t)
+	x.bind(t)
+	x.db.Asset.UpdateOneID(x.f.AssetID).SetOs("windows").ExecX(x.ctx)
+	if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err == nil {
+		t.Fatal("系统类型改变仍允许Linux动作")
 	}
 }
