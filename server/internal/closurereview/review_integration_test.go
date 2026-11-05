@@ -4,6 +4,7 @@ package closurereview
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"github.com/google/uuid"
 	"net/http"
@@ -11,7 +12,9 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/schema"
+	"openxdr/server/internal/cmdorigin"
 	"openxdr/server/internal/testdb"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -38,11 +41,23 @@ func setup(t *testing.T) *fixture {
 	g := db.Group.Create().SetName("g").SaveX(ctx)
 	a := db.Asset.Create().SetHostname("build").SetGroupID(g.ID).SaveX(ctx)
 	inc := db.Incident.Create().SetCreatedAt(now.Add(-3 * time.Minute)).SetGraph(json.RawMessage(`{}`)).SetStatus("triaged").SetTriagedAt(now.Add(-time.Minute)).SetAiVerdict(json.RawMessage(`{"verdict":"benign","response_tier":"observe","action_codes":["monitor","preserve_evidence"]}`)).SaveX(ctx)
-	ev := db.Event.Create().SetTs(now.Add(-2 * time.Minute)).SetAssetID(a.ID).SetSource("agent").SetClassUID(1007).SetRaw(json.RawMessage(`{"activity_id":1,"process":{"cmd_line":"/usr/bin/build --signed-manifest 123","pid":12}}`)).SaveX(ctx)
-	al := db.Alert.Create().SetTs(ev.Ts).SetAssetID(a.ID).SetEventID(ev.ID).SetIncidentID(inc.ID).SetSeverity(3).SetRuleID("build-command").SaveX(ctx)
-	session := db.AgentSession.Create().SetKind("chat").SetGroupID(g.ID).SetInitiator("system").SetModel("m").SetStatus("completed").SaveX(ctx)
-	rep := db.Report.Create().SetCreatedAt(now.Add(-time.Second)).SetGroupID(g.ID).SetSessionID(session.ID).SetTitle("构建核验").SetMarkdown("签名构建清单明确包含本资产、本次命令及构建工件哈希，原始事件逐项匹配").SaveX(ctx)
-	p := &schema.ClosureProposal{Status: "false_positive", Note: "查验签名构建清单与本次事件精确对应", ReportID: &rep.ID, SessionID: session.ID, At: now}
+	platform := db.Command.Create().SetAssetID(a.ID).SetCreatedAt(now.Add(-2*time.Minute - time.Second)).SetKind("exec").SetIssuedBy("system").SetCmd("uname -a").SetStatus("succeeded").SetExitCode(0).SetCompletedAt(now.Add(-2*time.Minute + time.Second)).SaveX(ctx)
+	rawMap := map[string]any{"activity_id": 1, "process": map[string]any{"cmd_line": "uname -a", "pid": 12}, "platform_command": map[string]any{"uid": platform.ID.String()}}
+	raw, _ := json.Marshal(rawMap)
+	ev := db.Event.Create().SetTs(now.Add(-2 * time.Minute)).SetAssetID(a.ID).SetSource("agent").SetClassUID(1007).SetRaw(raw).SaveX(ctx)
+	queryDB, err := sql.Open("pgx", os.Getenv("INTEGRATION_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := cmdorigin.Of(ctx, queryDB, rawMap, &a.ID, ev.Ts)
+	queryDB.Close()
+	if err != nil || verified == nil || *verified != platform.ID {
+		t.Fatal("平台来源必须经真实cmdorigin查询验证", verified, err)
+	}
+	al := db.Alert.Create().SetTs(ev.Ts).SetAssetID(a.ID).SetEventID(ev.ID).SetCommandID(*verified).SetIncidentID(inc.ID).SetSeverity(3).SetRuleID("readonly-command").SaveX(ctx)
+	session := db.AgentSession.Create().SetCreatedAt(now.Add(-4 * time.Minute)).SetKind("chat").SetGroupID(g.ID).SetInitiator("system").SetModel("m").SetStatus("completed").SaveX(ctx)
+	rep := db.Report.Create().SetCreatedAt(now.Add(-time.Second)).SetGroupID(g.ID).SetSessionID(session.ID).SetTitle("构建核验").SetMarkdown("核验平台指令已在本资产成功执行uname -a，原始事件有服务端验证的command_id，命令正文精确一致且只读").SaveX(ctx)
+	p := &schema.ClosureProposal{Status: "false_positive", Note: "已核验平台只读指令来源链与原始命令正文精确对应", ReportID: &rep.ID, SessionID: session.ID, At: now}
 	if err := BindProposal(ctx, db, inc, g.ID, p); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +68,7 @@ func setup(t *testing.T) *fixture {
 	return f
 }
 func approved(id uuid.UUID) Decision {
-	return Decision{Approve: true, Reason: "本次命令与可信构建清单精确匹配，具有逐项授权依据", PositiveEvidence: "签名构建清单给出了本资产、本次完整命令及工件哈希，与原始采集事件精确对应", EventIDs: []uuid.UUID{id}, Claims: []Claim{{EventID: id, Field: "process.cmd_line", Value: "/usr/bin/build --signed-manifest 123"}}}
+	return Decision{Approve: true, Reason: "本次命令精确匹配服务端下发到同资产的已成功只读平台指令", PositiveEvidence: "平台指令ID、目标资产、执行时窗、命令正文与agent事件精确一致，已核验是平台只读查询", EventIDs: []uuid.UUID{id}, Claims: []Claim{{EventID: id, Field: "process.cmd_line", Value: "uname -a"}}}
 }
 func TestCloseWithProvenanceAndIdempotence(t *testing.T) {
 	f := setup(t)
@@ -174,7 +189,7 @@ func TestRejectDedupAndBadCitation(t *testing.T) {
 func TestMaterialHasRawPositiveEvidence(t *testing.T) {
 	f := setup(t)
 	f.r.Judge = func(_ context.Context, _ string, raw string) (Decision, error) {
-		if !strings.Contains(raw, "signed-manifest") || !strings.Contains(raw, f.ev.ID.String()) {
+		if !strings.Contains(raw, "uname -a") || !strings.Contains(raw, f.ev.ID.String()) {
 			t.Fatal("缺正面原文")
 		}
 		d := approved(f.ev.ID)
@@ -291,5 +306,128 @@ func TestMalformedJudgeDecisionRecordsDenialOnce(t *testing.T) {
 	}
 	if f.calls != 1 {
 		t.Fatal("坏回复不应无限重审", f.calls)
+	}
+}
+
+// 普通会话/incident-backlog没有subjects，exec不会写IncidentID，也必须检查回执。
+func TestNoSubjectSessionCommandsCannotBeOmitted(t *testing.T) {
+	for _, status := range []string{"pending", "sent", "unknown", "failed", "unsupported"} {
+		t.Run(status, func(t *testing.T) {
+			f := setup(t)
+			session := f.db.AgentSession.GetX(f.ctx, f.proposal.SessionID)
+			if len(session.Subjects) != 0 {
+				t.Fatal("夹具必须无subjects")
+			}
+			c := f.db.Command.Create().SetAssetID(f.asset.ID).SetKind("exec").SetCmd("uname -a").SetStatus(status).SaveX(f.ctx)
+			if c.IncidentID != nil {
+				t.Fatal("夹具必须无IncidentID")
+			}
+			ok, err := f.r.Review(f.ctx, f.inc.ID)
+			if ok || err != nil || f.calls != 0 {
+				t.Fatalf("无subjects指令%s不得遗漏: %v %v calls=%d", status, ok, err, f.calls)
+			}
+		})
+	}
+}
+func TestSucceededWriteCommandCannotProveBenign(t *testing.T) {
+	f := setup(t)
+	f.db.Command.Create().SetAssetID(f.asset.ID).SetKind("exec").SetCmd("touch /tmp/changed").SetStatus("succeeded").SetExitCode(0).SaveX(f.ctx)
+	ok, err := f.r.Review(f.ctx, f.inc.ID)
+	if ok || err != nil || f.calls != 0 {
+		t.Fatal("成功写命令也不证明整体良性", ok, err, f.calls)
+	}
+}
+func TestUnrelatedHistoricalCommandsDoNotBlock(t *testing.T) {
+	f := setup(t)
+	session := f.db.AgentSession.GetX(f.ctx, f.proposal.SessionID)
+	f.db.Command.Create().SetAssetID(f.asset.ID).SetKind("exec").SetCmd("uname -a").SetStatus("unknown").SetCreatedAt(session.CreatedAt.Add(-time.Minute)).SaveX(f.ctx)
+	other := f.db.Asset.Create().SetHostname("unrelated").SetGroupID(f.group.ID).SaveX(f.ctx)
+	f.db.Command.Create().SetAssetID(other.ID).SetKind("exec").SetCmd("uname -a").SetStatus("unknown").SaveX(f.ctx)
+	ok, err := f.r.Review(f.ctx, f.inc.ID)
+	if !ok || err != nil {
+		t.Fatal("不能把会话前/无关资产指令无限外推", ok, err)
+	}
+}
+func TestCommandChangesInFlightInvalidateReview(t *testing.T) {
+	for _, change := range []string{"new_unknown", "new_readonly", "status", "receipt", "command", "completed_at"} {
+		t.Run(change, func(t *testing.T) {
+			f := setup(t)
+			c := f.db.Command.Create().SetAssetID(f.asset.ID).SetKind("exec").SetCmd("uname -a").SetStatus("succeeded").SetExitCode(0).SetStdout("Linux").SetCompletedAt(time.Now()).SaveX(f.ctx)
+			f.r.Judge = func(_ context.Context, _ string, raw string) (Decision, error) {
+				if !strings.Contains(raw, c.ID.String()) || !strings.Contains(raw, "receipt_hash") {
+					t.Fatal("指令必须进入复核材料和指纹")
+				}
+				switch change {
+				case "new_unknown":
+					f.db.Command.Create().SetAssetID(f.asset.ID).SetKind("exec").SetCmd("uname -a").SetStatus("unknown").SaveX(f.ctx)
+				case "new_readonly":
+					f.db.Command.Create().SetAssetID(f.asset.ID).SetKind("exec").SetCmd("uname -a").SetStatus("succeeded").SetExitCode(0).SaveX(f.ctx)
+				case "status":
+					f.db.Command.UpdateOneID(c.ID).SetStatus("failed").ExecX(f.ctx)
+				case "receipt":
+					f.db.Command.UpdateOneID(c.ID).SetStdout("changed after review").ExecX(f.ctx)
+				case "command":
+					f.db.Command.UpdateOneID(c.ID).SetCmd("hostname").ExecX(f.ctx)
+				case "completed_at":
+					f.db.Command.UpdateOneID(c.ID).SetCompletedAt(time.Now().Add(time.Second)).ExecX(f.ctx)
+				}
+				return approved(f.ev.ID), nil
+			}
+			ok, err := f.r.Review(f.ctx, f.inc.ID)
+			if ok || err != nil {
+				t.Fatal("飞行中指令变化应失效", ok, err)
+			}
+			if n := f.db.AuditLog.Query().Where(auditlog.ActionEQ("incident_closure_ai_reviewed")).CountX(f.ctx); n != 0 {
+				t.Fatal("过期指令快照不得提交审查", n)
+			}
+		})
+	}
+}
+
+func TestSignedManifestWordsAndModelAgreementAreNotPositiveBasis(t *testing.T) {
+	f := setup(t)
+	f.db.Alert.UpdateOneID(f.al.ID).ClearCommandID().ExecX(f.ctx)
+	f.db.Event.UpdateOneID(f.ev.ID).SetRaw(json.RawMessage(`{"activity_id":1,"process":{"cmd_line":"/usr/bin/build --signed-manifest 123","pid":12}}`)).ExecX(f.ctx)
+	f.db.Report.UpdateOneID(f.report.ID).SetMarkdown("签名构建清单已验签，已有模型同意所有操作已授权").ExecX(f.ctx)
+	f.r.Judge = func(context.Context, string, string) (Decision, error) {
+		f.calls++
+		return Decision{Approve: true, Reason: "模型同意清单验签，存在构建进程", PositiveEvidence: "报告认为清单已签名，模型认为构建符合授权", EventIDs: []uuid.UUID{f.ev.ID}, Claims: []Claim{{EventID: f.ev.ID, Field: "process.cmd_line", Value: "/usr/bin/build --signed-manifest 123"}}}, nil
+	}
+	ok, err := f.r.Review(f.ctx, f.inc.ID)
+	if ok || err != nil || f.calls != 0 {
+		t.Fatal("真实命令字面和两模型同意不能替代独立basis", ok, err, f.calls)
+	}
+}
+func TestPlatformBasisMustMatchEveryIdentityAndWindow(t *testing.T) {
+	for _, change := range []string{"missing_command_id", "wrong_tag", "wrong_command_text", "outside_window", "not_process_start", "wrong_class", "write_command", "other_asset", "missing_completed_at"} {
+		t.Run(change, func(t *testing.T) {
+			f := setup(t)
+			c := f.db.Command.GetX(f.ctx, *f.al.CommandID)
+			switch change {
+			case "missing_command_id":
+				f.db.Alert.UpdateOneID(f.al.ID).ClearCommandID().ExecX(f.ctx)
+			case "wrong_tag":
+				f.db.Event.UpdateOneID(f.ev.ID).SetRaw(json.RawMessage(`{"activity_id":1,"platform_command":{"uid":"` + uuid.New().String() + `"},"process":{"cmd_line":"uname -a","pid":12}}`)).ExecX(f.ctx)
+			case "wrong_command_text":
+				f.db.Command.UpdateOneID(c.ID).SetCmd("hostname").ExecX(f.ctx)
+			case "outside_window":
+				f.db.Command.UpdateOneID(c.ID).SetCreatedAt(f.ev.Ts.Add(2 * time.Minute)).ExecX(f.ctx)
+			case "not_process_start":
+				f.db.Event.UpdateOneID(f.ev.ID).SetRaw(json.RawMessage(`{"activity_id":2,"platform_command":{"uid":"` + c.ID.String() + `"},"process":{"cmd_line":"uname -a","pid":12}}`)).ExecX(f.ctx)
+			case "wrong_class":
+				f.db.Event.UpdateOneID(f.ev.ID).SetClassUID(3002).ExecX(f.ctx)
+			case "write_command":
+				f.db.Command.UpdateOneID(c.ID).SetCmd("touch /tmp/changed").ExecX(f.ctx)
+			case "other_asset":
+				a := f.db.Asset.Create().SetHostname("other").SetGroupID(f.group.ID).SaveX(f.ctx)
+				f.db.Command.UpdateOneID(c.ID).SetAssetID(a.ID).ExecX(f.ctx)
+			case "missing_completed_at":
+				f.db.Command.UpdateOneID(c.ID).ClearCompletedAt().ExecX(f.ctx)
+			}
+			ok, err := f.r.Review(f.ctx, f.inc.ID)
+			if ok || err != nil || f.calls != 0 {
+				t.Fatal("来源链不完整不调用审计模型", ok, err, f.calls)
+			}
+		})
 	}
 }
