@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/schema"
+	"openxdr/server/internal/incidentwork"
 	"openxdr/server/internal/testdb"
 	"testing"
 	"time"
@@ -58,6 +59,11 @@ func TestAuditBenignManualEscalation(t *testing.T) {
 			}
 			inc := db.Incident.Create().SetStatus("triaged").SetCreatedAt(old).SetTriagedAt(old).SetGraph(json.RawMessage(`{}`)).SetAiVerdict(raw).SaveX(ctx)
 			db.Alert.Create().SetTs(old).SetRuleID("audit-benign-manual").SetSeverity(3).SetIncidentID(inc.ID).ExecX(ctx)
+			if tc.action == "monitor" {
+				if err := incidentwork.Refresh(ctx, db, db.Incident.GetX(ctx, inc.ID), time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if got := db.Incident.Query().Where(Needed(), incident.IDEQ(inc.ID)).ExistX(ctx); got != tc.needReview {
 				t.Errorf("review needed=%v want %v", got, tc.needReview)
 			}

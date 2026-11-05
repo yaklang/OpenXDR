@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"openxdr/server/ent/incident"
+	"openxdr/server/internal/incidentwork"
 	"openxdr/server/internal/testdb"
 )
 
@@ -44,7 +45,7 @@ func TestSweep(t *testing.T) {
 	}
 	benign, err := client.Incident.Create().
 		SetGraph(json.RawMessage(`{}`)).SetStatus("triaged").
-		SetAiVerdict(json.RawMessage(`{"verdict":"benign"}`)).
+		SetAiVerdict(json.RawMessage(`{"verdict":"benign"}`)).SetTriagedAt(time.Now()).
 		Save(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -56,6 +57,9 @@ func TestSweep(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if err := incidentwork.Refresh(ctx, client, client.Incident.GetX(ctx, benign.ID), time.Now()); err != nil {
+		t.Fatal(err)
+	}
 	if err := n.sweep(ctx); err != nil {
 		t.Fatal(err)
 	}

@@ -15,12 +15,16 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"openxdr/server/ent"
+	"openxdr/server/internal/incidentwork"
 	"openxdr/server/internal/testdb"
 )
 
 func oldIncident(ctx context.Context, t *testing.T, client *ent.Client, status, verdict string, severity int16) *ent.Incident {
 	t.Helper()
 	c := client.Incident.Create().SetGraph(json.RawMessage(`{}`)).SetStatus(status).SetCreatedAt(time.Now().Add(-time.Hour))
+	if status == "triaged" {
+		c.SetTriagedAt(time.Now().Add(-time.Hour))
+	}
 	if verdict != "" {
 		c.SetAiVerdict(json.RawMessage(`{"verdict":"` + verdict + `"}`))
 	}
@@ -29,6 +33,9 @@ func oldIncident(ctx context.Context, t *testing.T, client *ent.Client, status, 
 		t.Fatal(err)
 	}
 	if _, err := client.Alert.Create().SetTs(time.Now()).SetRuleID("r").SetSeverity(severity).SetIncidentID(inc.ID).Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := incidentwork.Refresh(ctx, client, client.Incident.GetX(ctx, inc.ID), time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	return inc

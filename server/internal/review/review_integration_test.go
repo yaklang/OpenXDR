@@ -13,6 +13,7 @@ import (
 
 	"openxdr/server/ent/predicate"
 	"openxdr/server/internal/decoy"
+	"openxdr/server/internal/incidentwork"
 	"openxdr/server/internal/testdb"
 )
 
@@ -30,6 +31,9 @@ func TestPredicates(t *testing.T) {
 	}
 	mk := func(name, status, verdict string, created time.Time, alerts ...al) {
 		c := db.Incident.Create().SetStatus(status).SetGraph(json.RawMessage(`{}`)).SetCreatedAt(created)
+		if status == "triaged" {
+			c.SetTriagedAt(created)
+		}
 		if verdict != "" {
 			c.SetAiVerdict(json.RawMessage(verdict))
 		}
@@ -69,6 +73,10 @@ func TestPredicates(t *testing.T) {
 	mk("已结案恶意高危", "closed", malicious, old, al{"r1", 5})
 	mk("误报良性", "false_positive", benign, old, al{"r1", 1})
 	mk("已结案含诱饵", "closed", "", old, al{dec, 1})
+
+	if err := incidentwork.Reconcile(ctx, db, now); err != nil {
+		t.Fatal(err)
+	}
 
 	query := func(p predicate.Incident) []string {
 		var out []string
