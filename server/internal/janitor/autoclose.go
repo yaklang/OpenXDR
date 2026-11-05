@@ -2,24 +2,22 @@ package janitor
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
-	"entgo.io/ent/dialect/sql"
+	"github.com/google/uuid"
 	"openxdr/server/ent"
 	"openxdr/server/ent/incident"
-	"openxdr/server/internal/audit"
-	"openxdr/server/internal/incidentstate"
 	"openxdr/server/internal/review"
 )
 
-// AutoClose 把 AI 判良性、放了 Days 天没人处理的事件按误报结案，
-// 免得待处理清单被噪声撑满。需人工复核的事件（review.Needed）以及未证实为良性的可疑事件永远不会被自动按误报关掉。
+// AutoClose 将到期且已有当前结案建议的良性事件交独立审计。
+// 等待天数仅决定复查时机，不是良性证据；所有结案由 Review 完成。
 type AutoClose struct {
 	DB       *ent.Client
 	Days     int
 	Interval time.Duration
+	Review   func(context.Context, uuid.UUID) (bool, error)
 }
 
 // Run 拿到租约先扫一次再按周期扫：只靠定时器的话，部署频繁时每次重启都把计时清零，永远轮不到。
@@ -40,39 +38,37 @@ func (a *AutoClose) Run(ctx context.Context) {
 	}
 }
 
-// sweep 锁住候选后将结案、审计和发件箱一起提交，批量有界。
+// sweep 只触发有界复核，不持锁调用模型，也不绕过独立审计直接按超时结案。
 func (a *AutoClose) sweep(ctx context.Context) (int, error) {
-	if a.Days <= 0 {
+	if a.Days <= 0 || a.Review == nil {
 		return 0, nil
 	}
-	now := time.Now()
-	note := fmt.Sprintf("AI 判良性、%d 天无人处理，系统自动结案", a.Days)
-	tx, err := a.DB.Tx(ctx)
+	rows, err := a.DB.Incident.Query().Where(review.StaleBenign(time.Now().AddDate(0, 0, -a.Days)), incident.ClosureProposalNotNil()).Order(ent.Asc(incident.FieldID)).Limit(500).All(ctx)
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
-	rows, err := tx.Incident.Query().Where(review.StaleBenign(now.AddDate(0, 0, -a.Days))).Order(ent.Asc(incident.FieldID)).Limit(500).
-		Where(func(s *sql.Selector) { s.ForUpdate(sql.WithLockAction(sql.SkipLocked)) }).All(ctx)
-	if err != nil {
-		return 0, err
-	}
+	closed := 0
 	for _, row := range rows {
-		err := tx.Incident.UpdateOneID(row.ID).SetStatus("false_positive").SetResolution(note).SetResolvedBy(review.ClosedBy).SetResolvedAt(now).ClearClosureProposal().Exec(ctx)
+		p := row.ClosureProposal
+		if p == nil || p.Status != "false_positive" || row.TriagedAt == nil || p.EvidenceKey == "" || p.VerdictHash == "" || p.At.Before(*row.TriagedAt) {
+			continue
+		}
+		stale := false
+		for _, at := range []*time.Time{row.EvidenceAt, row.UrgentAt} {
+			if at != nil && p.At.Before(*at) {
+				stale = true
+			}
+		}
+		if stale {
+			continue
+		}
+		ok, err := a.Review(ctx, row.ID)
 		if err != nil {
-			return 0, err
+			return closed, err
 		}
-		if err := incidentstate.Record(ctx, tx, row.ID, incidentstate.StatusChanged, incidentstate.Origin{Kind: "system"}, row.Status); err != nil {
-			return 0, err
-		}
-	}
-	if len(rows) > 0 {
-		if err := audit.Checked(ctx, tx.AuditLog.Create(), "system", "server", "incident_auto_closed", "", fmt.Sprintf("自动结案 %d 个事件（%d 天无人处理的 AI 判良性事件）", len(rows), a.Days)); err != nil {
-			return 0, err
+		if ok {
+			closed++
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	return len(rows), nil
+	return closed, nil
 }
