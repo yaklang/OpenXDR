@@ -3,7 +3,6 @@
 package agentchat
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"openxdr/server/ent/commandpolicy"
 	"openxdr/server/internal/commandgate"
+	"openxdr/server/internal/commandreview"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/testdb"
 	"openxdr/server/internal/triage"
@@ -102,23 +102,71 @@ func TestEndpointEvidenceEndToEndWithTriageAndFailClosedBoundaries(t *testing.T)
 		t.Fatalf("被拒绝的取证请求不应产生成功下发指令，实得 %d", db.Command.Query().CountX(ctx))
 	}
 
-	// 3. 组策略命中且 AI 审计员拒绝时 fail-closed
-	pol := db.CommandPolicy.Create().SetGroupID(groupA.ID).SetOrigin(commandpolicy.OriginAi).SetMode(commandpolicy.ModeDeny).SetPattern(`\bjournalctl\b`).SaveX(ctx)
-	gate.Reviewer = func(_ context.Context, _ commandgate.Request) (bool, string, error) {
-		return false, "审计员测试拒绝 journalctl", nil
-	}
+	// 3. 未配置真实模型（或传入占位符模型）时 fail-closed 拒绝
 	if _, err := svc.CollectEndpointEvidence(ctx, triage.EndpointEvidenceRequest{
 		IncidentID: inc.ID, EvidenceVersion: 1, GroupID: groupA.ID, AssetID: hostLinux.ID,
 		Template: triage.TemplateLinuxAuthJournal, Command: "journalctl --no-pager --utc -n 40",
-	}); err == nil || !strings.Contains(err.Error(), "审计员") {
-		t.Fatalf("审计员拒绝应 fail-closed 返回原因: %v", err)
+	}); err == nil {
+		t.Fatal("未配置真实模型应被拒绝")
 	}
-	db.CommandPolicy.DeleteOneID(pol.ID).ExecX(ctx)
-	gate.Reviewer = nil
 
-	// 4. 完整闭环：triage 第一轮调用 collect_endpoint_evidence(linux_auth_journal) ->
-	//    fake agent 收到固定窗口命令并返回 >4096B 日志 -> 截断至 4096B 且 truncated=true ->
-	//    第二轮模型消费输出并提交引用 query-1 的结论；重复调用同一模板零重放。
+	// 4. 真实 commandreview.Reviewer + HTTP LLM 端点测试：
+	//    校验 session.Model 为受信配置的真实模型名、SessionMessage 包含任务与目的材料，
+	//    先验证审计员拒绝 fail-closed，再验证审计员批准后真实进入 Hub 指令通道并完成回执。
+	var reviewerCalls int
+	var reviewerSawModel, reviewerSawMaterial string
+	var reviewerApprove bool
+	reviewSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model    string           `json:"model"`
+			Messages []triage.Message `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		reviewerCalls++
+		reviewerSawModel = body.Model
+		for _, m := range body.Messages {
+			if m.Role == "user" {
+				reviewerSawMaterial = m.Content
+			}
+		}
+		if reviewerApprove {
+			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"approve\":true,\"reason\":\"受控只读认证日志补证任务确有必要\"}"}}]}`))
+		} else {
+			w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"approve\":false,\"reason\":\"审计员测试拒绝 journalctl\"}"}}]}`))
+		}
+	}))
+	defer reviewSrv.Close()
+
+	svc.AI = func() (string, string, string) {
+		return reviewSrv.URL, "test-key", "qwen3-security-real"
+	}
+	realReviewer := &commandreview.Reviewer{
+		DB:       db,
+		Endpoint: func() (string, string) { return reviewSrv.URL, "test-key" },
+	}
+	gate.Reviewer = realReviewer.Review
+	pol := db.CommandPolicy.Create().SetGroupID(groupA.ID).SetOrigin(commandpolicy.OriginAi).SetMode(commandpolicy.ModeDeny).SetPattern(`\bjournalctl\b`).SaveX(ctx)
+
+	reviewerApprove = false
+	if _, err := svc.CollectEndpointEvidence(ctx, triage.EndpointEvidenceRequest{
+		IncidentID: inc.ID, EvidenceVersion: 1, GroupID: groupA.ID, AssetID: hostLinux.ID,
+		Template: triage.TemplateLinuxAuthJournal, Command: "journalctl --no-pager --utc -n 40",
+		Since: alertTs.Add(-15 * time.Minute), Until: alertTs.Add(15 * time.Minute),
+	}); err == nil || !strings.Contains(err.Error(), "审计员") {
+		t.Fatalf("真实审计员拒绝应 fail-closed 返回原因: %v", err)
+	}
+	if reviewerSawModel != "qwen3-security-real" {
+		t.Fatalf("审计员请求模型名错误: got=%q want=qwen3-security-real", reviewerSawModel)
+	}
+	if !strings.Contains(reviewerSawMaterial, inc.ID.String()) ||
+		!strings.Contains(reviewerSawMaterial, hostLinux.Hostname) ||
+		!strings.Contains(reviewerSawMaterial, triage.TemplateLinuxAuthJournal) ||
+		!strings.Contains(reviewerSawMaterial, "不代表原事件操作已获人工批准或合法") {
+		t.Fatalf("审计员材料缺少可信 SessionMessage 任务上下文: %s", reviewerSawMaterial)
+	}
+
+	// 审计员批准路径：真实进入 Hub 通道并完成回执，输出 >4096B 被截断至 4096B 且 truncated=true
+	reviewerApprove = true
 	go func() {
 		cmd := <-inbox
 		longOut := "Nov 05 06:00:00 linux-prod-1 sshd[1234]: Accepted publickey for ops from 10.0.0.9 port 51234 ssh2\n" + strings.Repeat("A", 5000)
@@ -128,6 +176,13 @@ func TestEndpointEvidenceEndToEndWithTriageAndFailClosedBoundaries(t *testing.T)
 			ExitCode:  0,
 			Stdout:    longOut,
 		})
+	}()
+	db.CommandPolicy.DeleteOneID(pol.ID).ExecX(ctx)
+	// 保留 pol 或重新挂一条策略让这次成功路径也经过真实 commandreview.Reviewer 批准！
+	pol2 := db.CommandPolicy.Create().SetGroupID(groupA.ID).SetOrigin(commandpolicy.OriginAi).SetMode(commandpolicy.ModeDeny).SetPattern(`\bjournalctl\b`).SaveX(ctx)
+	defer func() {
+		db.CommandPolicy.DeleteOneID(pol2.ID).ExecX(ctx)
+		gate.Reviewer = nil
 	}()
 
 	var turns int

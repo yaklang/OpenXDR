@@ -2,7 +2,9 @@ package agentchat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -76,6 +78,10 @@ func (s *Service) CollectEndpointEvidence(ctx context.Context, req triage.Endpoi
 	if !s.Gate.Hub.Online(*host.AgentID) {
 		return nil, errors.New("目标主机 agent 离线，未连接指令通道")
 	}
+	model := s.resolveEndpointEvidenceModel(req.Model)
+	if model == "" {
+		return nil, errors.New("未配置可用的 AI 模型，拒绝执行受控端点取证")
+	}
 
 	deadline := time.Now().Add(30 * time.Second)
 	session, err := s.DB.AgentSession.Create().
@@ -84,11 +90,15 @@ func (s *Service) CollectEndpointEvidence(ctx context.Context, req triage.Endpoi
 		SetInitiator(commandgate.SystemActor).
 		SetTitle("研判受控只读补证").
 		SetSubjects([]string{"incident:" + req.IncidentID.String()}).
-		SetModel("system-readonly-template").
+		SetModel(model).
 		SetStatus("running").
 		SetRunDeadlineAt(deadline).
 		Save(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.recordEndpointEvidenceSessionMessages(ctx, session.ID, host, req); err != nil {
+		_ = s.DB.AgentSession.UpdateOneID(session.ID).SetStatus("failed").Exec(context.WithoutCancel(ctx))
 		return nil, err
 	}
 
@@ -228,4 +238,40 @@ func toEndpointEvidenceResult(cmd *ent.Command, req triage.EndpointEvidenceReque
 		out.To = req.Until.UTC().Format(time.RFC3339)
 	}
 	return out
+}
+
+func (s *Service) resolveEndpointEvidenceModel(reqModel string) string {
+	var model string
+	if s.AI != nil {
+		_, _, model = s.Endpoint()
+		model = strings.TrimSpace(model)
+	}
+	if model == "" {
+		model = strings.TrimSpace(reqModel)
+	}
+	if model == "" || model == "system-readonly-template" {
+		return ""
+	}
+	return model
+}
+
+func (s *Service) recordEndpointEvidenceSessionMessages(ctx context.Context, sessionID uuid.UUID, host *ent.Asset, req triage.EndpointEvidenceRequest) error {
+	windowDesc := "当前调查时刻快照（非历史区间）"
+	if !req.Since.IsZero() && !req.Until.IsZero() {
+		windowDesc = fmt.Sprintf("%s 至 %s (UTC)", req.Since.UTC().Format(time.RFC3339), req.Until.UTC().Format(time.RFC3339))
+	}
+	taskText := fmt.Sprintf("【平台安全事件受控只读补证任务】\n"+
+		"事件 ID：%s\n资产组 ID：%s\n目标主机：%s (%s)\n受控只读模板：%s\n取证时间窗口：%s\n"+
+		"任务目的与边界：平台 AI 研判正在核实该安全事件的缺失遥测，仅限在目标受管 Linux 主机上执行服务端预置的固定只读模板命令以获取当前认证日志片段或进程快照。"+
+		"本任务由服务端系统受控生成，不代表原事件操作已获人工批准或合法，严禁修改系统状态或读取密钥文件。",
+		req.IncidentID, req.GroupID, host.Hostname, host.ID, req.Template, windowDesc)
+	intentText := fmt.Sprintf("为补充安全事件 %s 在受管主机 %s (%s) 上的缺失调查上下文，现按固定只读模板 %s 执行只读取证命令（超时 5 秒，只读无副作用）：%s",
+		req.IncidentID, host.Hostname, host.ID, req.Template, req.Command)
+
+	userRaw, _ := json.Marshal(map[string]any{"role": "user", "content": taskText})
+	if err := s.DB.SessionMessage.Create().SetSessionID(sessionID).SetSeq(1).SetRole("user").SetContent(userRaw).Exec(ctx); err != nil {
+		return err
+	}
+	assistantRaw, _ := json.Marshal(map[string]any{"role": "assistant", "content": intentText})
+	return s.DB.SessionMessage.Create().SetSessionID(sessionID).SetSeq(2).SetRole("assistant").SetContent(assistantRaw).Exec(ctx)
 }

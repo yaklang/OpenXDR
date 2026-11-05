@@ -30,6 +30,7 @@ type EndpointEvidenceRequest struct {
 	AssetID         uuid.UUID
 	Template        string
 	Command         string
+	Model           string
 	Since           time.Time
 	Until           time.Time
 	Coverage        string
@@ -130,6 +131,10 @@ func (e *Engine) toolEndpointEvidence(ctx context.Context, args string) (any, er
 		return nil, errors.New("受控取证模板未通过只读安全校验")
 	}
 
+	var model string
+	if e.LLM != nil {
+		_, model, _ = e.LLM.endpoint()
+	}
 	res, err := e.EndpointEvidence(ctx, EndpointEvidenceRequest{
 		IncidentID:  e.investigationID,
 		EvidenceKey: IncidentEvidenceKey(inc),
@@ -137,6 +142,7 @@ func (e *Engine) toolEndpointEvidence(ctx context.Context, args string) (any, er
 		AssetID:     host.ID,
 		Template:    in.Template,
 		Command:     cmd,
+		Model:       strings.TrimSpace(model),
 		Since:       since,
 		Until:       until,
 		Coverage:    coverage,
