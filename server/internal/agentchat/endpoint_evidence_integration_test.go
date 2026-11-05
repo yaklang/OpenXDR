@@ -219,7 +219,7 @@ func TestEndpointEvidenceEndToEndWithTriageAndFailClosedBoundaries(t *testing.T)
 	res1, err := svc.CollectEndpointEvidence(ctx, triage.EndpointEvidenceRequest{
 		IncidentID: inc.ID, EvidenceKey: evKey, GroupID: groupA.ID, AssetID: hostLinux.ID,
 		Template: triage.TemplateLinuxAuthJournal,
-		Command:  "journalctl --no-pager --utc -n 40 --since '2026-11-05 05:45:00' --until '2026-11-05 06:15:00' -u ssh -u sshd -t sshd -t sudo -t su",
+		Command:  "journalctl --no-pager --utc -n 40 --since '2026-11-05 05:45:00 UTC' --until '2026-11-05 06:15:00 UTC' -u ssh -u sshd -t sshd -t sudo -t su",
 		Since:    alertTs.Add(-15 * time.Minute), Until: alertTs.Add(15 * time.Minute),
 		Coverage: "当前快照不是事发历史",
 	})
@@ -234,7 +234,7 @@ func TestEndpointEvidenceEndToEndWithTriageAndFailClosedBoundaries(t *testing.T)
 	res2, err := svc.CollectEndpointEvidence(ctx, triage.EndpointEvidenceRequest{
 		IncidentID: inc.ID, EvidenceKey: evKey, GroupID: groupA.ID, AssetID: hostLinux.ID,
 		Template: triage.TemplateLinuxAuthJournal,
-		Command:  "journalctl --no-pager --utc -n 40 --since '2026-11-05 05:45:00' --until '2026-11-05 06:15:00' -u ssh -u sshd -t sshd -t sudo -t su",
+		Command:  "journalctl --no-pager --utc -n 40 --since '2026-11-05 05:45:00 UTC' --until '2026-11-05 06:15:00 UTC' -u ssh -u sshd -t sshd -t sudo -t su",
 	})
 	if err != nil || res2.CommandID != res1.CommandID || len(inbox) != 0 {
 		t.Fatalf("重复调用必须幂等复用已有指令且零重投: res2=%+v err=%v inbox=%d", res2, err, len(inbox))
@@ -258,7 +258,7 @@ func TestEndpointEvidenceEndToEndWithTriageAndFailClosedBoundaries(t *testing.T)
 	if _, err := svc.CollectEndpointEvidence(ctx, triage.EndpointEvidenceRequest{
 		IncidentID: inc.ID, EvidenceKey: evKey, GroupID: groupA.ID, AssetID: hostLinux.ID,
 		Template: triage.TemplateLinuxAuthJournal,
-		Command:  "journalctl --no-pager --utc -n 40 --since '2026-11-05 05:45:00' --until '2026-11-05 06:15:00' -u ssh -u sshd -t sshd -t sudo -t su",
+		Command:  "journalctl --no-pager --utc -n 40 --since '2026-11-05 05:45:00 UTC' --until '2026-11-05 06:15:00 UTC' -u ssh -u sshd -t sshd -t sudo -t su",
 	}); err == nil {
 		t.Fatal("资产转组后应拒绝读取回执")
 	}

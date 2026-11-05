@@ -84,7 +84,7 @@ func TestCollectEndpointEvidenceToolAndTriageConsumption(t *testing.T) {
 	if readerCalls != 1 {
 		t.Fatalf("应调用 1 次受控取证回调，实际 %d", readerCalls)
 	}
-	if !strings.Contains(capturedReq.Command, "journalctl --no-pager --utc -n 40 --since '2026-11-05 05:45:00' --until '2026-11-05 06:15:00'") {
+	if !strings.Contains(capturedReq.Command, "journalctl --no-pager --utc -n 40 --since '2026-11-05 05:45:00 UTC' --until '2026-11-05 06:15:00 UTC'") {
 		t.Fatalf("时间窗口命令模板异常: %s", capturedReq.Command)
 	}
 	if !strings.Contains(toolResult, `"truncated":true`) || !strings.Contains(toolResult, "当前快照不是事发当时的历史完整状态") {
