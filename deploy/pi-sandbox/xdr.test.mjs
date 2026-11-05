@@ -292,7 +292,7 @@ test('xdr track supports legacy 6-arg call, full optional metadata, and strict n
   });
 });
 
-test('sandbox xdr -> bridge /tool socket -> platform tool_request/tool_result E2E positive and unknown-command negative flow', async () => {
+test('xdr CLI over mock /tool socket simulating platform contract: positive resolution and unknown-command negative flow', async () => {
   // Simulate platform state (commands, findings, independent reviewer) behind bridge.mjs /tool socket
   const commands = new Map();
   const findings = new Map([

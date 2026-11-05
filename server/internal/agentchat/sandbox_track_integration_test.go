@@ -3,9 +3,11 @@
 package agentchat
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -218,4 +220,205 @@ func TestSandboxCLITrackEndToEndWithRealReviewerAndUnknownBlock(t *testing.T) {
 		t.Fatalf("f2 work metadata not preserved: owner=%s work=%s", gotF2.WorkOwner, string(gotF2.Work))
 	}
 	_ = ent.MaskNotFound
+}
+
+func TestRealSandboxContainerBridgeAndPiSDKEndToEnd(t *testing.T) {
+	image := "openxdr-pi-sandbox:candidate-20261106"
+	if err := exec.Command("docker", "image", "inspect", image).Run(); err != nil {
+		t.Skipf("skipping real container bridge test (%s not built on this runner): %v", image, err)
+	}
+
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("g").SaveX(ctx)
+	agentID := uuid.New()
+	a := db.Asset.Create().SetHostname("pve1").SetGroupID(g.ID).SetAgentID(agentID).SetOs("linux").SaveX(ctx)
+	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("glm-5.3-flash").SetStatus("running").SaveX(ctx)
+	f1 := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service").SetTitle("app.service failed").SetDetail("ActiveState=failed").SaveX(ctx)
+	b := db.Asset.Create().SetHostname("pve2").SetGroupID(g.ID).SetAgentID(uuid.New()).SetOs("linux").SaveX(ctx)
+	f2 := db.Finding.Create().SetGroupID(g.ID).SetAssetID(b.ID).SetKey("service-unknown").SetTitle("worker failed").SetDetail("ActiveState=failed").SaveX(ctx)
+	unknownWrite := db.Command.Create().SetAssetID(b.ID).SetKind("exec").SetCmd("systemctl restart worker.service").SetStatus("unknown").SaveX(ctx)
+	roB := db.Command.Create().SetAssetID(b.ID).SetKind("exec").SetCmd("systemctl is-active worker.service").SetStatus("succeeded").SetExitCode(0).SetStdout("active\n").SetCompletedAt(time.Now()).SaveX(ctx)
+
+	hub := response.NewHub(db, true)
+	inbox := hub.Attach(agentID)
+	defer hub.Detach(agentID, inbox)
+	var latestProbeID atomic.Value
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case cmd, ok := <-inbox:
+				if !ok {
+					return
+				}
+				latestProbeID.Store(cmd.Id)
+				_ = hub.Complete(ctx, agentID, &pb.CommandResult{
+					CommandId: cmd.Id,
+					Status:    pb.CommandResult_SUCCEEDED,
+					ExitCode:  0,
+					Stdout:    "ActiveState=active\nSubState=running\n",
+				})
+			}
+		}
+	}()
+
+	// Mock LLM server handling both Pi SDK streaming chat completions (inside bridge.mjs) and findingreview JSON completions
+	var piTurn atomic.Int32
+	llm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		var req struct {
+			Stream bool `json:"stream"`
+		}
+		_ = json.Unmarshal(bodyBytes, &req)
+		if !req.Stream {
+			// findingreview.Reviewer.Review request
+			cid, _ := latestProbeID.Load().(string)
+			w.Header().Set("Content-Type", "application/json")
+			resp := fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":%q}}]}`,
+				fmt.Sprintf(`{"approve":true,"reason":"app.service 已由真实容器内 xdr exec 只读命令证明恢复","proofs":[{"command_id":%q,"quote":"ActiveState=active"}]}`, cid))
+			_, _ = w.Write([]byte(resp))
+			return
+		}
+		// Pi SDK streaming request inside bridge.mjs
+		w.Header().Set("Content-Type", "text/event-stream")
+		turn := piTurn.Add(1)
+		if turn == 1 {
+			script := fmt.Sprintf(`set -e
+out=$(xdr exec pve1 'systemctl show app.service -p ActiveState -p SubState' 30)
+cid=$(printf '%%s\n' "$out" | sed -n 's/^\[id=\([0-9a-f-]*\) status=succeeded exit=0\].*/\1/p')
+xdr track pve1 service low resolved 'app.service 已恢复' 'ActiveState=active SubState=running' --evidence "$cid"
+st=$(xdr command-status %s | jq -r .status)
+[ "$st" = "unknown" ]
+if xdr track pve2 service-unknown high resolved '试图在unknown时关单' 'active' --evidence %s 2>/tmp/neg.err; then
+  exit 1
+fi
+grep -q '存在未确认写操作，不能宣称已修复' /tmp/neg.err
+`, unknownWrite.ID.String(), roB.ID.String())
+			argsJSON, _ := json.Marshal(map[string]string{"command": script})
+			chunk1, _ := json.Marshal(map[string]any{
+				"id": "1", "object": "chat.completion.chunk",
+				"choices": []map[string]any{{
+					"index": 0,
+					"delta": map[string]any{
+						"role": "assistant",
+						"tool_calls": []map[string]any{{
+							"index": 0, "id": "call_bash_1", "type": "function",
+							"function": map[string]any{"name": "bash", "arguments": string(argsJSON)},
+						}},
+					},
+				}},
+			})
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", chunk1)
+			_, _ = fmt.Fprintf(w, "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
+			_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
+			return
+		}
+		_, _ = fmt.Fprintf(w, "data: {\"id\":\"2\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprintf(w, "data: [DONE]\n\n")
+	}))
+	defer llm.Close()
+
+	reviewer := &findingreview.Reviewer{
+		Endpoint: func() (string, string, string) { return llm.URL, "test-key", "glm-5.3-flash" },
+	}
+	gate := &commandgate.Gate{DB: db, Hub: hub}
+	svc := &Service{
+		DB:            db,
+		Gate:          gate,
+		ReviewFinding: reviewer.Review,
+	}
+
+	ctxData, err := svc.contextData(ctx, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runReq := map[string]any{
+		"type":          "run",
+		"api_base":      llm.URL,
+		"api_key":       "test-key",
+		"model":         "glm-5.3-flash",
+		"prompt":        "复查并关闭已恢复的 service 待办",
+		"max_turns":     4,
+		"context":       ctxData,
+		"system_prompt": "test",
+		"tools":         []map[string]any{{"name": "exec"}, {"name": "command_status"}, {"name": "verify_command"}, {"name": "track"}},
+	}
+	runLine, _ := json.Marshal(runReq)
+
+	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i", "--network", "host", image)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := stdin.Write(append(runLine, '\n')); err != nil {
+		t.Fatal(err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	gotResult := false
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var msg struct {
+			Type   string          `json:"type"`
+			CallID string          `json:"call_id"`
+			Name   string          `json:"name"`
+			Args   json.RawMessage `json:"args"`
+			Error  string          `json:"error"`
+		}
+		if err := json.Unmarshal(line, &msg); err != nil {
+			t.Fatalf("invalid bridge JSONL line: %s (%v)", string(line), err)
+		}
+		switch msg.Type {
+		case "tool_request":
+			out, toolErr := svc.tool(ctx, session, commandgate.Request{System: true}, msg.Name, msg.Args)
+			reply := map[string]any{
+				"type":    "tool_result",
+				"call_id": msg.CallID,
+				"success": toolErr == nil,
+				"output":  out,
+			}
+			if toolErr != nil {
+				reply["output"] = toolErr.Error()
+			}
+			replyBytes, _ := json.Marshal(reply)
+			if _, err := stdin.Write(append(replyBytes, '\n')); err != nil {
+				t.Fatal(err)
+			}
+		case "result":
+			gotResult = true
+			_ = stdin.Close()
+		case "error":
+			_ = stdin.Close()
+			t.Fatalf("bridge returned error: %s (stderr=%s)", msg.Error, stderr.String())
+		}
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("bridge container exited with error: %v (stderr=%s)", err, stderr.String())
+	}
+	if !gotResult {
+		t.Fatalf("bridge container did not emit result (stderr=%s)", stderr.String())
+	}
+
+	gotF1 := db.Finding.GetX(ctx, f1.ID)
+	var w1 findings.Work
+	_ = json.Unmarshal(gotF1.Work, &w1)
+	probeID, _ := latestProbeID.Load().(string)
+	if gotF1.Status != "resolved" || w1.Stage != "resolved" || len(w1.EvidenceCommands) != 1 || w1.EvidenceCommands[0].String() != probeID {
+		t.Fatalf("real container bridge did not resolve f1: status=%s work=%s", gotF1.Status, string(gotF1.Work))
+	}
+	if db.Finding.GetX(ctx, f2.ID).Status != "open" {
+		t.Fatal("unrelated finding f2 should remain open")
+	}
 }

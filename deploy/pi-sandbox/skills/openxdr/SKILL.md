@@ -156,7 +156,8 @@ closed 属实且已处置；说明写成人能直接采纳的结案说明，可�
 不要读它的内容，也不要把它放进 for 列表或变量里——那样整条命令都会转去等人审批。
 需要持续处理的问题用 `xdr track` 登记，一个问题一条，同一问题每次用同一个 key；正常项写进报告，不登记。
 `xdr track ... open` 应带 `--next-step` 写明下一步具体核查或处置计划；问题已修复用 `xdr track ... resolved --evidence <本轮独立只读复查指令id>`（取 `xdr exec` 首行 `id=...`，严禁仅凭写操作回执或空输出关单）；
-若因策略未授权、维护窗口、业务架构决策、退役服务待确认、上游依赖故障、权限拒绝或端点不支持而阻塞，用 `--blocker <policy_required|maintenance_window_required|manual_business_decision|legacy_decommission_confirm|external_dependency|permission|unsupported>` 并附 `--evidence <指令id>`（最多 5 个本轮独立只读复查指令 UUID）。
+若因策略未授权、维护窗口、业务架构决策、退役服务待确认、上游依赖故障、权限拒绝或端点不支持而阻塞，用 `--blocker <policy_required|maintenance_window_required|manual_business_decision|legacy_decommission_confirm|external_dependency|permission|unsupported>` 并附 `--evidence <指令id>`（最多 5 个本轮独立只读复查指令 UUID）：
+其中 `policy_required`（由服务端核实无维护范围授权）以及带本轮完整只读探针回执的 `maintenance_window_required` / `manual_business_decision` / `legacy_decommission_confirm` / `external_dependency` 均保持平台自治跟进（`work_owner=ai`），不因模型标签直接转交人工或推送通知；`permission` / `unsupported` 须附真实失败或不支持回执，且即便转人工阻塞后平台仍会按期只读复查风险。对退役服务（`legacy_decommission_confirm`）、需业务决策或上游故障（`external_dependency`）严禁执行 `systemctl restart` 或自动清理。
 同主机在 `xdr context` 的 `subjects` 里有多条领取的待办且需要执行已授权写修复时，必须在 `xdr exec` 带 `--finding <待办id>` 精确绑定目标待办；`xdr exec` 超时或返回 `unknown` 时，必须先用 `xdr command-status <指令id>` 查询真实回执，严禁换命令重放写操作。
 
 **调查服务**：查清端口由哪个进程监听、可执行文件属于哪个软件包、服务单元与配置、谁在访问、是否需要对当前范围开放，
