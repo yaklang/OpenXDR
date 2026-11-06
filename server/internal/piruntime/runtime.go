@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"openxdr/server/internal/modelroute"
 	"openxdr/server/internal/worklimit"
 	"os/exec"
 	"strings"
@@ -25,16 +26,18 @@ type Tool struct {
 // Request.Messages 使用 Pi 原生消息格式，必须来自平台保存的可信会话记录。
 // APIKey 只通过 stdin 发送，不应将 Request 写入日志或会话表。
 type Request struct {
-	Type         string            `json:"type"`
-	APIBase      string            `json:"api_base"`
-	APIKey       string            `json:"api_key"`
-	Model        string            `json:"model"`
-	SystemPrompt string            `json:"system_prompt"`
-	Prompt       string            `json:"prompt"`
-	Messages     []json.RawMessage `json:"messages,omitempty"`
-	Tools        []Tool            `json:"tools,omitempty"`
-	MaxTurns     int               `json:"max_turns,omitempty"`
-	MaxTokens    int               `json:"max_tokens,omitempty"`
+	FallbackEndpoints []modelroute.Endpoint `json:"fallback_endpoints,omitempty"`
+	FallbackModels    string                `json:"fallback_models,omitempty"`
+	Type              string                `json:"type"`
+	APIBase           string                `json:"api_base"`
+	APIKey            string                `json:"api_key"`
+	Model             string                `json:"model"`
+	SystemPrompt      string                `json:"system_prompt"`
+	Prompt            string                `json:"prompt"`
+	Messages          []json.RawMessage     `json:"messages,omitempty"`
+	Tools             []Tool                `json:"tools,omitempty"`
+	MaxTurns          int                   `json:"max_turns,omitempty"`
+	MaxTokens         int                   `json:"max_tokens,omitempty"`
 	// Context 沙箱模式下的组内数据，沙箱里经 xdr context 读取；本地 runner 模式放在系统提示里，不用这个字段
 	Context json.RawMessage `json:"context,omitempty"`
 }
@@ -189,12 +192,19 @@ func (r Runtime) Run(ctx context.Context, request Request, handle Handler, obser
 			return nil, fmt.Errorf("Pi 返回未知事件类型 %q", event.Type)
 		}
 		observed := event
-		if request.APIKey != "" {
-			observed.Error = strings.ReplaceAll(observed.Error, request.APIKey, "[已隐藏]")
-			observed.Response = strings.ReplaceAll(observed.Response, request.APIKey, "[已隐藏]")
+		secrets := []string{request.APIKey}
+		for _, endpoint := range request.FallbackEndpoints {
+			secrets = append(secrets, endpoint.APIKey)
+		}
+		for _, secret := range secrets {
+			if secret == "" {
+				continue
+			}
+			observed.Error = strings.ReplaceAll(observed.Error, secret, "[已隐藏]")
+			observed.Response = strings.ReplaceAll(observed.Response, secret, "[已隐藏]")
 			// 供应商错误也可能出现在 message_end.message.errorMessage 中。
-			observed.Event = redactJSON(observed.Event, request.APIKey)
-			observed.Args = redactJSON(observed.Args, request.APIKey)
+			observed.Event = redactJSON(observed.Event, secret)
+			observed.Args = redactJSON(observed.Args, secret)
 		}
 		if err := observe(ctx, observed); err != nil {
 			return nil, fmt.Errorf("记录 Pi 事件失败: %w", err)

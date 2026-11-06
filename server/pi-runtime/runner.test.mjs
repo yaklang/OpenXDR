@@ -1,4 +1,5 @@
 import test from 'node:test';
+// 验证切换发生在单次模型 HTTP 请求内，已执行的工具结果继续沿用。
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
@@ -8,6 +9,48 @@ import { run } from './runner.mjs';
 const tool = { name: 'query', description: '查询测试数据', parameters: {
   type: 'object', properties: { sql: { type: 'string' } }, required: ['sql'], additionalProperties: false,
 } };
+
+test('额度耗尽后沿用备用模型与工具历史，工具只执行一次', async t => {
+  const calls = [];
+  let tools = 0;
+  const apiBase = await mockModel(t, (body, res) => {
+    calls.push(body.model);
+    if (body.model === 'primary') { res.writeHead(429); res.end('{}'); return; }
+    const hasResult = body.messages.some(m => m.role === 'tool');
+    completion(res, hasResult ? { role: 'assistant', content: '完成' } : toolDelta, hasResult ? 'stop' : 'tool_calls');
+  });
+  const events = [];
+  await run({ type:'run', api_base:apiBase, model:'primary', fallback_models:'backup', prompt:'测试', tools:[tool] },
+    e => events.push(e), async () => { tools++; return { success:true, output:'已执行' }; });
+  assert.deepEqual(calls, ['primary','backup','backup']);
+  assert.equal(tools,1);
+  const assistants = events.filter(e => e.event?.type === 'message_end' && e.event.message?.role === 'assistant');
+  assert.ok(assistants.length >= 2);
+  assert.ok(assistants.every(e => e.event.message.model === 'backup'));
+  assert.equal(events.at(-1).response,'完成');
+});
+
+test('服务额度耗尽后切换 API 和密钥，沿用已执行的工具结果', async t => {
+  const calls=[];let tools=0;
+  const backup=await mockModel(t,(body,res)=>{
+    calls.push('backup');assert.equal(res.req.headers.authorization,'Bearer backup-key');
+    assert.equal(body.model,'backup-model');assert.ok(body.messages.some(m=>m.role==='tool'));
+    completion(res,{role:'assistant',content:'备用完成'},'stop');
+  });
+  const primary=await mockModel(t,(body,res)=>{
+    calls.push(body.model);assert.equal(res.req.headers.authorization,'Bearer primary-key');
+    if (body.messages.some(m=>m.role==='tool')) {res.writeHead(402);res.end('{}');return;}
+    completion(res,toolDelta,'tool_calls');
+  });
+  const events=[];
+  await run({type:'run',api_base:primary,api_key:'primary-key',model:'primary-model',fallback_models:'primary-backup',
+    fallback_endpoints:[{base_url:backup,api_key:'backup-key',model:'backup-model'}],prompt:'测试',tools:[tool]},
+    e=>events.push(e),async()=>{tools++;return {success:true,output:'工具完成'};});
+  assert.deepEqual(calls,['primary-model','primary-model','primary-backup','backup']);
+  assert.equal(tools,1);assert.equal(events.at(-1).response,'备用完成');
+  const last=events.findLast(e=>e.event?.type==='message_end' && e.event.message?.role==='assistant');
+  assert.equal(last.event.message.model,'backup-model');
+});
 
 async function mockModel(t, responder) {
   const server = createServer(async (req, res) => {

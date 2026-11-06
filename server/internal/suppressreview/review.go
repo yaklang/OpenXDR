@@ -25,6 +25,7 @@ import (
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/commandreview"
+	"openxdr/server/internal/modelroute"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/triage"
@@ -37,9 +38,10 @@ var ErrUnavailable = errors.New("AI 审计员暂时不可用")
 type Judge func(ctx context.Context, model, material string) (approve bool, reason string, err error)
 
 type Reviewer struct {
-	DB    *ent.Client
-	Store *suppress.Store
-	Rules sigma.Catalog
+	FallbackEndpoints func() []modelroute.Endpoint
+	DB                *ent.Client
+	Store             *suppress.Store
+	Rules             sigma.Catalog
 	// Model 没有会话（或会话已不在）时用的模型；空表示没配 AI，草案留给人审
 	Model func() string
 	// Judge 为空时调模型（New 填好）；测试替换
@@ -53,11 +55,21 @@ type Reviewer struct {
 
 // New 用推理端点调模型评审
 func New(db *ent.Client, store *suppress.Store, rules sigma.Catalog, endpoint func() (baseURL, apiKey string),
-	model func() string, onUsage func(model string, input, output int)) *Reviewer {
-	return &Reviewer{DB: db, Store: store, Rules: rules, Model: model, Interval: 5 * time.Minute,
+	model func() string, onUsage func(model string, input, output int), fallback ...func() string) *Reviewer {
+	var reviewer *Reviewer
+	reviewer = &Reviewer{DB: db, Store: store, Rules: rules, Model: model, Interval: 5 * time.Minute,
 		Judge: func(ctx context.Context, model, material string) (bool, string, error) {
 			base, key := endpoint()
 			llm := triage.NewLLM(base, model, key, time.Minute)
+			if len(fallback) > 0 {
+				llm.FallbackModels = fallback[0]
+			}
+			llm.FallbackEndpoints = func() []modelroute.Endpoint {
+				if reviewer.FallbackEndpoints != nil {
+					return reviewer.FallbackEndpoints()
+				}
+				return nil
+			}
 			llm.NoThinking, llm.MaxTokens, llm.OnUsage = true, 512, onUsage
 			reply, err := llm.Chat(ctx, []triage.Message{{Role: "system", Content: prompt}, {Role: "user", Content: material}}, nil)
 			if err != nil {
@@ -65,6 +77,7 @@ func New(db *ent.Client, store *suppress.Store, rules sigma.Catalog, endpoint fu
 			}
 			return commandreview.Verdict(reply.Content)
 		}}
+	return reviewer
 }
 
 const prompt = `你是 OpenXDR 的抑制审计员，替组管理员决定一条抑制草案能不能生效。生效后，这台主机上满足条件的这条规则命中不再产生告警，压错了就会把真实攻击一起藏掉。

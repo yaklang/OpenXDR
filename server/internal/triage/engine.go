@@ -257,10 +257,12 @@ func (e *Engine) triageOne(ctx context.Context, inc *ent.Incident) (runErr error
 	timing := &runTiming{}
 	ctx = context.WithValue(ctx, timingKey{}, timing)
 	localEngine, localLLM := *e, *e.LLM
+	actualModel := model
 	localLLM.sessionID = row.ID.String()
 	localLLM.Endpoint = func() (string, string, string) { return base, model, key }
 	originalUsage := localLLM.OnUsage
 	localLLM.OnUsage = func(model string, input, output int) {
+		actualModel = model
 		timing.input += input
 		timing.output += output
 		if originalUsage != nil {
@@ -295,7 +297,7 @@ func (e *Engine) triageOne(ctx context.Context, inc *ent.Incident) (runErr error
 	if err != nil {
 		return err
 	}
-	verdict := withEvidenceCapability(withModel(parseVerdict(inc.ID.String(), answer), model))
+	verdict := withEvidenceCapability(withModel(parseVerdict(inc.ID.String(), answer), actualModel))
 	stage = "persist"
 	tx, err := e.DB.Tx(ctx)
 	if err != nil {
@@ -339,7 +341,7 @@ func (e *Engine) triageOne(ctx context.Context, inc *ent.Incident) (runErr error
 	if err := incidentstate.Record(ctx, tx, inc.ID, incidentstate.Triaged, incidentstate.Origin{Kind: "system"}, ""); err != nil {
 		return err
 	}
-	if err := runUpdate(tx.Client(), row, timing, time.Now()).SetStatus(triagerun.StatusSucceeded).Exec(ctx); err != nil {
+	if err := runUpdate(tx.Client(), row, timing, time.Now()).SetModel(actualModel).SetStatus(triagerun.StatusSucceeded).Exec(ctx); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {

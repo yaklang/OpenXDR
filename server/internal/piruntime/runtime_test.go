@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"openxdr/server/internal/modelroute"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -113,7 +114,7 @@ func TestRuntime(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			runtime := testRuntime(t)
 			calls := 0
-			result, err := runtime.Run(context.Background(), Request{Prompt: tc.name, APIKey: "test-secret",
+			result, err := runtime.Run(context.Background(), Request{Prompt: tc.name, APIKey: "different-primary-key", FallbackEndpoints: []modelroute.Endpoint{{APIKey: "test-secret"}},
 				Tools: []Tool{{Name: "query", Parameters: json.RawMessage(`{"type":"object"}`)}}},
 				func(ctx context.Context, name string, args json.RawMessage) (string, error) {
 					calls++

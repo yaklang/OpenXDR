@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"net/http"
+	"openxdr/server/internal/modelroute"
 	"os"
 	"regexp"
 	"strings"
@@ -35,9 +36,12 @@ type LLM struct {
 	// Endpoint 每次调用时取地址、模型与密钥（控制台可改）；为空用上面的固定值
 	Endpoint func() (baseURL, model, apiKey string)
 	// OnUsage 调用成功后报告用量，供用量概览；为空不记
-	OnUsage   func(model string, input, output int)
-	http      *http.Client
-	sessionID string
+	OnUsage func(model string, input, output int)
+	// FallbackModels 逗号分隔的有序备用模型；只对纯文本请求生效。
+	FallbackModels    func() string
+	FallbackEndpoints func() []modelroute.Endpoint
+	http              *http.Client
+	sessionID         string
 }
 
 func NewLLM(baseURL, model, apiKey string, timeout time.Duration) *LLM {
@@ -45,7 +49,7 @@ func NewLLM(baseURL, model, apiKey string, timeout time.Duration) *LLM {
 		BaseURL:   baseURL,
 		Model:     model,
 		APIKey:    apiKey,
-		http:      &http.Client{Timeout: timeout},
+		http:      &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		sessionID: uuid.NewString(),
 	}
 }
@@ -127,6 +131,10 @@ func makeTool(name, description string, parameters string) Tool {
 // 最终答案的 JSON 提取交给 parseVerdict 的容错逻辑。
 func (l *LLM) Chat(ctx context.Context, msgs []Message, tools []Tool) (Message, error) {
 	baseURL, model, apiKey := l.endpoint()
+	return l.chatFallback(ctx, baseURL, model, apiKey, msgs, tools)
+}
+
+func (l *LLM) chatOnce(ctx context.Context, baseURL, model, apiKey string, msgs []Message, tools []Tool) (Message, error) {
 	payload := map[string]any{
 		"model":       model,
 		"messages":    msgs,
@@ -169,7 +177,10 @@ func (l *LLM) Chat(ctx context.Context, msgs []Message, tools []Tool) (Message, 
 
 	resp, err := l.http.Do(req)
 	if err != nil {
-		return Message{}, err
+		if ctx.Err() != nil {
+			return Message{}, ctx.Err()
+		}
+		return Message{}, &LLMTransportError{}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

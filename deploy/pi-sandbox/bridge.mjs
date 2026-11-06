@@ -6,6 +6,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
+import { modelFallback } from './model-fallback.mjs';
 import {
   createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager,
 } from '@earendil-works/pi-coding-agent';
@@ -121,9 +122,13 @@ export async function run(request, send, callTool, signal) {
   });
 
   const xdr = serveXdr(allowed, callTool, signal);
+  // 沙箱进程只服务一次 run；仅拦截模型 completions 的精确地址。
+  const originalFetch = globalThis.fetch;
+  const routing = modelFallback(request, originalFetch);
   let turns = 0;
   let limited = false;
   session.subscribe(event => {
+    routing.annotate(event);
     if (event.type === 'turn_end' && ++turns >= maxTurns) {
       limited = true;
       session.abort();
@@ -136,6 +141,7 @@ export async function run(request, send, callTool, signal) {
   signal?.throwIfAborted();
   signal?.addEventListener('abort', abort, { once: true });
   try {
+    globalThis.fetch = routing.fetch;
     await session.prompt(request.prompt);
     signal?.throwIfAborted();
     const last = session.agent.state.messages.findLast(message => message.role === 'assistant');
@@ -144,6 +150,7 @@ export async function run(request, send, callTool, signal) {
     }
     send({ type: 'result', response: textOf(last), turns, stop_reason: limited ? 'max_turns' : last.stopReason });
   } finally {
+    globalThis.fetch = originalFetch;
     signal?.removeEventListener('abort', abort);
     xdr.close();
   }

@@ -95,6 +95,41 @@ func decodeTarget(w http.ResponseWriter, r *http.Request) (notify.Target, bool) 
 var vtBase = "https://www.virustotal.com"
 
 func mapAISettings(mux *http.ServeMux, db *ent.Client, ai *aiconf.Store, sqlDB *sql.DB) {
+	mux.HandleFunc("POST /api/settings/ai/models", func(w http.ResponseWriter, r *http.Request) {
+		var p struct {
+			aiconf.Patch
+			ProviderID string `json:"providerId"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32768)).Decode(&p) != nil {
+			http.Error(w, "请求体不是合法 JSON", http.StatusBadRequest)
+			return
+		}
+		c, err := ai.Preview(r.Context(), p.Patch)
+		if err != nil {
+			http.Error(w, "模型配置无效", http.StatusBadRequest)
+			return
+		}
+		if p.ProviderID != "" {
+			found := false
+			for _, v := range c.Providers {
+				if v.ID == p.ProviderID {
+					c.BaseURL, c.APIKey = v.BaseURL, v.APIKey
+					found = true
+					break
+				}
+			}
+			if !found {
+				http.Error(w, "备用服务不存在", http.StatusBadRequest)
+				return
+			}
+		}
+		ids, err := aiconf.Models(r.Context(), c)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, map[string]any{"models": ids})
+	})
 	mux.HandleFunc("GET /api/settings/ai", func(w http.ResponseWriter, r *http.Request) {
 		v, err := ai.View(r.Context())
 		if err != nil {
@@ -105,7 +140,7 @@ func mapAISettings(mux *http.ServeMux, db *ent.Client, ai *aiconf.Store, sqlDB *
 	})
 	mux.HandleFunc("PUT /api/settings/ai", func(w http.ResponseWriter, r *http.Request) {
 		var p aiconf.Patch
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&p) != nil {
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32768)).Decode(&p) != nil {
 			http.Error(w, "请求体不是合法 JSON", http.StatusBadRequest)
 			return
 		}
@@ -222,7 +257,7 @@ func vtPing(ctx context.Context, key string) error {
 
 func changedFields(p aiconf.Patch) string {
 	var out []string
-	for name, set := range map[string]bool{"baseUrl": p.BaseURL != nil, "model": p.Model != nil, "piModel": p.PiModel != nil, "ptr": p.PTR != nil, "vtAlertMin": p.VTAlertMin != nil} {
+	for name, set := range map[string]bool{"providers": p.Providers != nil, "fallbackModels": p.FallbackModels != nil, "baseUrl": p.BaseURL != nil, "model": p.Model != nil, "piModel": p.PiModel != nil, "ptr": p.PTR != nil, "vtAlertMin": p.VTAlertMin != nil} {
 		if set {
 			out = append(out, name)
 		}

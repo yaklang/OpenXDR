@@ -42,10 +42,20 @@ func TestRequestRuleTitles(t *testing.T) {
 	db.Alert.Create().SetTs(now).SetRuleID("r-theirs").SetSeverity(3).SetAssetID(theirs.ID).SaveX(ctx)
 	session := db.AgentSession.Create().SetKind("chat").SetGroupID(group.ID).SetInitiator("a").SetModel("test").SetStatus("idle").SetTitle("").SaveX(ctx)
 	service := &Service{DB: db, Rules: titles{"r-mine": "本组规则", "r-old": "过期规则", "r-theirs": "他组规则"}}
+	service.FallbackModels = func() string { return "backup-a,backup-b" }
 	r, err := service.request(ctx, session, "检查", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if r.FallbackModels != "backup-a,backup-b" {
+		t.Fatal("本机请求丢失备用配置")
+	}
+	service.Sandboxed = true
+	sandbox, err := service.request(ctx, session, "检查", nil)
+	if err != nil || sandbox.FallbackModels != r.FallbackModels {
+		t.Fatalf("沙箱请求丢失备用配置: %v", err)
+	}
+	service.Sandboxed = false
 	if !strings.Contains(r.SystemPrompt, `"r-mine":"本组规则"`) || strings.Contains(r.SystemPrompt, "过期规则") || strings.Contains(r.SystemPrompt, "他组规则") {
 		t.Fatalf("规则名范围不对：%s", r.SystemPrompt)
 	}

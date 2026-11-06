@@ -1120,16 +1120,24 @@ export const saveNotifySettings = (s: NotifySettings) => send('PUT', '/api/setti
 export const testNotifySettings = (s: NotifySettings) => send('POST', '/api/settings/notify/test', s)
 
 // AI 与外部情报配置：密钥只回是否已设与末四位；source 标明每项来自控制台还是环境变量
+export interface AIProvider {
+  id: string; name: string; baseUrl: string; model: string; piModel: string; fallbackModels: string; enabled: boolean
+  apiKeySet: boolean; apiKeyHint?: string
+}
+export type AIProviderPatch = Omit<AIProvider, 'apiKeySet' | 'apiKeyHint'> & { apiKey?: string }
 export interface AISettings {
-  baseUrl: string; model: string; piModel: string; ptr: boolean; vtAlertMin: number
+ providers: AIProvider[]
+  baseUrl: string; model: string; piModel: string; fallbackModels: string; ptr: boolean; vtAlertMin: number
   apiKeySet: boolean; apiKeyHint?: string; vtKeySet: boolean; vtKeyHint?: string; abuseCHKeySet: boolean; abuseCHKeyHint?: string
   source: Record<string, 'console' | 'env'>
   canSaveSecrets: boolean
 }
 // 只发改动的项；密钥传空串表示清空；reset 里的项回到环境变量
 export interface AISettingsPatch {
-  baseUrl?: string; model?: string; piModel?: string; ptr?: boolean; vtAlertMin?: number; apiKey?: string; vtKey?: string; abuseCHKey?: string; reset?: string[]
+ providers?: AIProviderPatch[]
+  baseUrl?: string; model?: string; piModel?: string; fallbackModels?: string; ptr?: boolean; vtAlertMin?: number; apiKey?: string; vtKey?: string; abuseCHKey?: string; reset?: string[]
 }
+export const fetchAIModels = async (p: AISettingsPatch & { providerId?: string }): Promise<{ models: string[] }> => (await send('POST', '/api/settings/ai/models', p)).json()
 export const fetchAISettings = () => get<AISettings>('/api/settings/ai')
 export const saveAISettings = async (p: AISettingsPatch): Promise<AISettings> => (await send('PUT', '/api/settings/ai', p)).json()
 export const testAISettings = async (p: AISettingsPatch & { target: 'model' | 'piModel' | 'vt' }): Promise<{ ms: number; reply: string }> =>

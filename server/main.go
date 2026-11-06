@@ -59,6 +59,7 @@ import (
 	"openxdr/server/internal/ipdb"
 	"openxdr/server/internal/janitor"
 	"openxdr/server/internal/liveness"
+	"openxdr/server/internal/modelroute"
 	"openxdr/server/internal/notify"
 	"openxdr/server/internal/piruntime"
 	"openxdr/server/internal/queryrole"
@@ -356,7 +357,8 @@ func startSuppressionReview(ctx context.Context, db *sql.DB, client *ent.Client,
 	reviewer := suppressreview.New(client, store, rules,
 		func() (string, string) { c := conf(); return c.BaseURL, c.APIKey },
 		func() string { c := conf(); return cmp.Or(c.PiModel, c.Model) },
-		aiconf.Recorder(client, "review"))
+		aiconf.Recorder(client, "review"), func() string { return conf().FallbackModels })
+	reviewer.FallbackEndpoints = func() []modelroute.Endpoint { return conf().Routes(true) }
 	go cluster.RunLeader(ctx, db, "suppression-review", reviewer.Run)
 	return reviewer
 }
@@ -389,6 +391,8 @@ func newAIConf(client *ent.Client, credentialVault *hostimport.Vault) *aiconf.St
 func newLLM(client *ent.Client, conf func() aiconf.Config, feature string) *triage.LLM {
 	l := triage.NewLLM("", "", "", time.Duration(getenvInt("AI_TIMEOUT_SECONDS", 120))*time.Second)
 	l.Endpoint = func() (string, string, string) { c := conf(); return c.BaseURL, c.Model, c.APIKey }
+	l.FallbackModels = func() string { return conf().FallbackModels }
+	l.FallbackEndpoints = func() []modelroute.Endpoint { return conf().Routes(false) }
 	l.OnUsage = aiconf.Recorder(client, feature)
 	return l
 }
@@ -718,7 +722,9 @@ func startChat(ctx context.Context, db *sql.DB, client *ent.Client, rules sigma.
 	piRuntime := newPiRuntime()
 	chat := &agentchat.Service{Base: ctx, Rules: rules, Timeout: time.Duration(getenvInt("PI_TIMEOUT_SECONDS", 14400)) * time.Second, DB: client, SQL: db, Gate: &commandgate.Gate{DB: client, Hub: hub, ApprovalTimeout: time.Duration(getenvInt("PI_APPROVAL_TIMEOUT_SECONDS", 600)) * time.Second, Notify: feishuapproval.ApprovalNotifier(client, webhook.Send)},
 		Runtime: piRuntime, Sandboxed: piRuntime.Sandboxed(),
-		AI: func() (string, string, string) { c := conf(); return c.BaseURL, c.APIKey, c.PiModel }, Query: queryRoles,
+		FallbackModels:    func() string { return conf().FallbackModels },
+		FallbackEndpoints: func() []modelroute.Endpoint { return conf().Routes(true) },
+		AI:                func() (string, string, string) { c := conf(); return c.BaseURL, c.APIKey, c.PiModel }, Query: queryRoles,
 		GroupDailyTokens: getenvInt("PI_GROUP_DAILY_TOKENS", 0), MaxTurns: getenvInt("PI_MAX_TURNS", 500),
 		// 长会话折叠较早的工具结果与思考过程再发给模型，库里与界面仍是原文
 		FoldAbove: getenvInt("PI_HISTORY_FOLD_KB", 64) * 1024}

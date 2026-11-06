@@ -8,7 +8,7 @@ RUN sed -i 's|deb.debian.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list.d/debi
 WORKDIR /opt/openxdr-sandbox
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --registry=$NPM_REGISTRY
-COPY bridge.mjs ./
+COPY bridge.mjs model-fallback.mjs ./
 COPY skills/ ./skills/
 COPY xdr /usr/local/bin/xdr
 # jq 薄包装：过滤式里写了 SQL 的 -> 而报语法错时补一句提示，其余行为与退出码不变

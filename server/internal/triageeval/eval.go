@@ -168,6 +168,8 @@ func checkActions(ctx context.Context, llm *triage.LLM, c Case, answer json.RawM
 	input, _ := json.Marshal(map[string]any{"tool_contract": triage.InvestigationContract(), "observed_evidence": c.ObservedEvidence(), "actions": v.Actions, "rubric": c.Rubric["actions"]})
 	focused := triage.NewLLM(llm.BaseURL, llm.Model, llm.APIKey, 120*time.Second)
 	focused.Endpoint, focused.OnUsage = llm.Endpoint, llm.OnUsage
+	focused.FallbackModels = llm.FallbackModels
+	focused.FallbackEndpoints = llm.FallbackEndpoints
 	focused.MaxTokens = llm.MaxTokens
 	if focused.MaxTokens == 0 {
 		focused.MaxTokens = 8192
