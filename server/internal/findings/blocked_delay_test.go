@@ -5,11 +5,13 @@ import (
 	"time"
 )
 
-func TestBlockedDelaySequence(t *testing.T) {
+func TestBlockedDelayGrowsDespiteEvidenceUpdates(t *testing.T) {
 	for _, blocker := range []string{"permission", "external_dependency"} {
 		t.Run(blocker, func(t *testing.T) {
 			w := Work{Blocker: blocker}
-			for _, hours := range []int{6, 12, 24, 48, 72, 72} {
+			for round, hours := range []int{6, 12, 24, 48, 72, 72} {
+				evidenceAt := time.Now().Add(time.Duration(round) * time.Hour)
+				w.EvidenceAt = &evidenceAt
 				want := time.Duration(hours) * time.Hour
 				if blocker == "external_dependency" {
 					want = min(want, 12*time.Hour)
@@ -29,13 +31,9 @@ func TestBlockedDelaySequence(t *testing.T) {
 	}
 }
 func TestBlockedDelayResets(t *testing.T) {
-	now := time.Now()
-	for _, change := range []string{"clear", "change", "evidence", "first_evidence"} {
+	for _, change := range []string{"clear", "change"} {
 		t.Run(change, func(t *testing.T) {
 			w := Work{Blocker: "permission"}
-			if change != "first_evidence" {
-				w.EvidenceAt = &now
-			}
 			for range 4 {
 				BlockedDelay(&w, true)
 			}
@@ -44,9 +42,6 @@ func TestBlockedDelayResets(t *testing.T) {
 				w.Blocker = ""
 			case "change":
 				w.Blocker = "unsupported"
-			default:
-				later := now.Add(time.Minute)
-				w.EvidenceAt = &later
 			}
 			want := 6 * time.Hour
 			if change == "clear" {

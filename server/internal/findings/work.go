@@ -35,7 +35,6 @@ type Work struct {
 	WakeOn                string      `json:"wake_on"`
 	BlockedRounds         int         `json:"blocked_rounds,omitempty"`
 	BlockedReason         string      `json:"blocked_reason,omitempty"`
-	BlockedEvidenceAt     *time.Time  `json:"blocked_evidence_at,omitempty"`
 	Blocker               string      `json:"blocker,omitempty"`
 	EvidenceCommands      []uuid.UUID `json:"evidence_commands,omitempty"`
 	EvidenceAt            *time.Time  `json:"evidence_at,omitempty"`
@@ -255,12 +254,10 @@ func recoverEndedWork(ctx context.Context, tx *ent.Tx, group uuid.UUID) error {
 
 // BlockedDelay 只计算复查间隔；advance 仅在释放本轮任务时累计，保存计划不重复计数。
 func BlockedDelay(w *Work, advance bool) time.Duration {
-	sameEvidence := w.EvidenceAt == nil && w.BlockedEvidenceAt == nil || w.EvidenceAt != nil && w.BlockedEvidenceAt != nil && w.EvidenceAt.Equal(*w.BlockedEvidenceAt)
-	if w.Blocker == "" || w.Blocker != w.BlockedReason || !sameEvidence {
+	if w.Blocker == "" || w.Blocker != w.BlockedReason {
 		w.BlockedRounds = 0
 	}
 	w.BlockedReason = w.Blocker
-	w.BlockedEvidenceAt = w.EvidenceAt
 	if w.Blocker == "" {
 		return 0
 	}
