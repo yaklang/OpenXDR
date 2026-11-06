@@ -1,0 +1,9 @@
+[Unit]
+Description=刷新 OpenXDR 沙箱模型端点 DNS
+Requires=openxdr-sandbox-firewall.service
+After=openxdr-sandbox-firewall.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/openxdr/sandbox-firewall.env
+ExecStart=/bin/sh /usr/local/lib/openxdr/firewall.sh refresh
