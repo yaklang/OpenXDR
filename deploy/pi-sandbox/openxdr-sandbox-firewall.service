@@ -7,7 +7,7 @@ Requires=docker.service
 Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=/etc/openxdr/sandbox-firewall.env
-ExecStart=/bin/sh /usr/local/lib/openxdr/firewall.sh
+ExecStart=/bin/sh /usr/local/lib/openxdr/firewall.sh setup
 
 [Install]
 WantedBy=multi-user.target

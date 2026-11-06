@@ -1,0 +1,10 @@
+[Unit]
+Description=定期刷新 OpenXDR 沙箱模型端点 DNS
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

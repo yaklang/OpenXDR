@@ -24,12 +24,14 @@ docker network create -o com.docker.network.bridge.name=br-sandbox \
   -o com.docker.network.bridge.enable_icc=false openxdr-sandbox
 
 # 3. 防火墙：出口只放行模型端点（其余立刻拒绝），sandboxd 端口只对 server 节点开放
+apt-get install -y ipset iptables util-linux
+mkdir -p /etc/openxdr
 install -D -m 0755 firewall.sh /usr/local/lib/openxdr/firewall.sh
 cat > /etc/openxdr/sandbox-firewall.env <<'X'
-MODEL_ENDPOINTS=10.0.0.5:8000
-PLATFORM_NODES=10.0.0.1 10.0.0.2
+MODEL_ENDPOINTS="10.0.0.5:8000 api.deepseek.com:443 opencode.ai:443"
+PLATFORM_NODES="10.0.0.1 10.0.0.2"
 X
-install -m 0644 openxdr-sandbox-firewall.service sandboxd.service /etc/systemd/system/
+install -m 0644 openxdr-sandbox-firewall*.service openxdr-sandbox-firewall-refresh.timer sandboxd.service /etc/systemd/system/
 
 # 4. sandboxd：TLS 证书私钥与密钥只放在本机，sandboxd 用户需能读取
 useradd -r -s /usr/sbin/nologin -G docker sandboxd
@@ -39,10 +41,22 @@ SANDBOXD_KEY=<至少 32 个字符>
 SANDBOXD_TLS_CERT=/etc/openxdr/sandboxd.crt
 SANDBOXD_TLS_KEY=/etc/openxdr/sandboxd.key
 X
-systemctl daemon-reload && systemctl enable --now openxdr-sandbox-firewall sandboxd
+systemctl daemon-reload && systemctl enable --now openxdr-sandbox-firewall openxdr-sandbox-firewall-refresh.timer sandboxd
 ```
 
 server 侧配置 `SANDBOX_URL=https://<沙箱主机>:8090`、`SANDBOX_KEY`、`SANDBOX_CA_FILE`（签发 sandboxd 证书的 CA）。
 
 Docker 会把宿主代理变量注入容器，sandboxd 起容器时已全部清空：Node 不认 `NO_PROXY` 里的网段写法，
 内网模型请求会被送进代理。
+
+## 防火墙升级
+
+Debian 12 需安装 `ipset`、`iptables`、`util-linux`。覆盖安装 `firewall.sh`、
+`openxdr-sandbox-firewall*.service` 与 `openxdr-sandbox-firewall-refresh.timer` 到上述位置，
+执行 `systemctl daemon-reload`、`systemctl restart openxdr-sandbox-firewall.service`，
+再执行 `systemctl enable --now openxdr-sandbox-firewall-refresh.timer`。
+
+每两分钟按端口重建 IPv4 ipset，再原子 swap；同端口任一域名解析失败则保留旧集合。
+首次解析失败保持空集合，出口拒绝。已有连接仍遵循 conntrack 规则。
+修改端口或其他防火墙配置后需重启主服务；仅 DNS 变化无需重启。
+可用 `systemctl status openxdr-sandbox-firewall-refresh.timer` 和对应 service 日志检查刷新。
