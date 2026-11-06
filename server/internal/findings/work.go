@@ -33,6 +33,8 @@ type Work struct {
 	Stage                 string      `json:"stage"`
 	Plan                  string      `json:"plan"`
 	WakeOn                string      `json:"wake_on"`
+	BlockedRounds         int         `json:"blocked_rounds,omitempty"`
+	BlockedReason         string      `json:"blocked_reason,omitempty"`
 	Blocker               string      `json:"blocker,omitempty"`
 	EvidenceCommands      []uuid.UUID `json:"evidence_commands,omitempty"`
 	EvidenceAt            *time.Time  `json:"evidence_at,omitempty"`
@@ -183,6 +185,9 @@ func Release(ctx context.Context, db *ent.Client, session uuid.UUID, now time.Ti
 		if f.Severity == "high" && w.EscalatedAt == nil {
 			delay = time.Hour
 		}
+		if blocked := BlockedDelay(&w, true); blocked > 0 {
+			delay = blocked
+		}
 		if w.RiskSince != nil && w.EscalatedAt == nil {
 			delay = 15 * time.Minute
 		}
@@ -245,4 +250,24 @@ func recoverEndedWork(ctx context.Context, tx *ent.Tx, group uuid.UUID) error {
 		return audit.Checked(ctx, tx.AuditLog.Create(), "system", "server", "finding_work_orphan_recovered", group.String(), fmt.Sprintf("count=%d；仅清理已结束会话遗留的待办租约，计划、计数、结论与复查时间未改；未下发或重放指令", recovered))
 	}
 	return nil
+}
+
+// BlockedDelay 只计算复查间隔；advance 仅在释放本轮任务时累计，保存计划不重复计数。
+func BlockedDelay(w *Work, advance bool) time.Duration {
+	if w.Blocker == "" || w.Blocker != w.BlockedReason {
+		w.BlockedRounds = 0
+	}
+	w.BlockedReason = w.Blocker
+	if w.Blocker == "" {
+		return 0
+	}
+	rounds := min(max(w.BlockedRounds, 0), 4)
+	delay := min(6*time.Hour*time.Duration(1<<rounds), 72*time.Hour)
+	if w.Blocker == "external_dependency" {
+		delay = min(delay, 12*time.Hour)
+	}
+	if advance {
+		w.BlockedRounds = min(rounds+1, 4)
+	}
+	return delay
 }

@@ -304,6 +304,9 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 			return err
 		}
 	}
+	if delay := findings.BlockedDelay(&prior, false); delay > 0 {
+		next = time.Now().Add(delay)
+	}
 	if prior.RiskSince != nil && prior.EscalatedAt == nil {
 		next = time.Now().Add(15 * time.Minute)
 	}
