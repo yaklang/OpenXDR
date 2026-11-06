@@ -31,7 +31,7 @@ func TestManualReopenInvalidatesWorkAndRunningLease(t *testing.T) {
 		t.Fatal(r.StatusCode)
 	}
 	got := db.Incident.GetX(ctx, inc.ID)
-	if got.Status != "open" || got.Work != nil || got.WorkNextCheckAt != nil || got.TriageStartedAt != nil || got.TriageHeartbeatAt != nil || got.TriageFailures != 0 || got.TriageRetryAt != nil {
+	if got.Status != "open" || (got.Work == nil || got.Work.ManualOwner == "" || got.Work.Owner != "human") || got.WorkNextCheckAt != nil || got.TriageStartedAt != nil || got.TriageHeartbeatAt != nil || got.TriageFailures != 0 || got.TriageRetryAt != nil {
 		t.Fatal("人工重开仍保留旧计划或执行租约")
 	}
 }

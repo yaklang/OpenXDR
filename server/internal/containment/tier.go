@@ -24,6 +24,11 @@ func tierName(t string) string {
 // tier 资产的处置等级与依据，优先级：跑着 OpenXDR server 的一律核心 > 人工指定（锁定）> 所在区域指定 > AI 定级 > 默认生产。
 // 监听清单是 agent 报的，失陷主机能把自己伪造成核心；核心只让它自己免于隔离，受害方照样封锁它
 func (e *Engine) tier(ctx context.Context, a *ent.Asset) (string, string, error) {
+	return EffectiveTier(ctx, e.DB, a)
+}
+
+// EffectiveTier 按响应引擎的统一优先级解析资产等级，查询失败时交由调用方拒绝操作。
+func EffectiveTier(ctx context.Context, db *ent.Client, a *ent.Asset) (string, string, error) {
 	if runsServer(a.Listening) {
 		return TierCore, "运行 OpenXDR server", nil
 	}
@@ -31,7 +36,7 @@ func (e *Engine) tier(ctx context.Context, a *ent.Asset) (string, string, error)
 		return string(*a.ResponseTier), "人工指定", nil
 	}
 	if a.GroupID != nil {
-		zones, err := e.DB.Zone.Query().Where(zone.GroupIDEQ(*a.GroupID)).All(ctx)
+		zones, err := db.Zone.Query().Where(zone.GroupIDEQ(*a.GroupID)).All(ctx)
 		if err != nil {
 			return "", "", err
 		}

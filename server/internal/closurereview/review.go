@@ -1,4 +1,4 @@
-// Package closurereview 独立复核低风险良性结案建议，缺证或不确定时保留事件。
+// Package closurereview 独立复核良性与已遏制威胁结案，缺证或不确定时保留事件。
 package closurereview
 
 import (
@@ -70,7 +70,7 @@ func New(db *ent.Client, endpoint func() (string, string), model func() string, 
 		llm.NoThinking = true
 		llm.MaxTokens = 1200
 		llm.OnUsage = usage
-		msg, err := llm.Chat(ctx, []triage.Message{{Role: "system", Content: prompt}, {Role: "user", Content: material}}, nil)
+		msg, err := llm.Chat(ctx, []triage.Message{{Role: "system", Content: closurePrompt(material)}, {Role: "user", Content: material}}, nil)
 		if err != nil {
 			return Decision{}, err
 		}
@@ -181,15 +181,19 @@ type positiveBasis struct {
 	CommandID uuid.UUID `json:"command_id"`
 }
 type material struct {
-	IncidentID uuid.UUID               `json:"incident_id"`
-	Proposal   *schema.ClosureProposal `json:"proposal"`
-	Verdict    json.RawMessage         `json:"verdict"`
-	TriagedAt  time.Time               `json:"triaged_at"`
-	Report     *ent.Report             `json:"report"`
-	Alerts     []*ent.Alert            `json:"alerts"`
-	Events     []*ent.Event            `json:"events"`
-	Commands   []commandEvidence       `json:"commands"`
-	Basis      []positiveBasis         `json:"positive_basis"`
+	Contained   *containedEvidence      `json:"contained,omitempty"`
+	EvidenceKey string                  `json:"evidence_key,omitempty"`
+	VerdictHash string                  `json:"verdict_hash,omitempty"`
+	Graph       json.RawMessage         `json:"graph,omitempty"`
+	IncidentID  uuid.UUID               `json:"incident_id"`
+	Proposal    *schema.ClosureProposal `json:"proposal"`
+	Verdict     json.RawMessage         `json:"verdict"`
+	TriagedAt   time.Time               `json:"triaged_at"`
+	Report      *ent.Report             `json:"report"`
+	Alerts      []*ent.Alert            `json:"alerts"`
+	Events      []*ent.Event            `json:"events"`
+	Commands    []commandEvidence       `json:"commands"`
+	Basis       []positiveBasis         `json:"positive_basis"`
 }
 
 func eligible(inc *ent.Incident) bool {
@@ -224,6 +228,9 @@ func load(ctx context.Context, db *ent.Client, id uuid.UUID) (*material, error) 
 	inc, err := db.Incident.Get(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if containedEligible(inc) {
+		return loadContained(ctx, db, inc)
 	}
 	if !eligible(inc) {
 		return nil, ErrIneligible
@@ -330,7 +337,7 @@ func load(ctx context.Context, db *ent.Client, id uuid.UUID) (*material, error) 
 }
 func fingerprint(m *material) string { b, _ := json.Marshal(m); return digest(b) }
 func validate(d Decision, m *material) bool {
-	if len(m.Basis) != len(m.Events) || len(m.Basis) == 0 || !d.Approve || strings.TrimSpace(d.Reason) == "" || len(strings.TrimSpace(d.PositiveEvidence)) < 20 {
+	if m.Contained == nil && len(m.Basis) != len(m.Events) || (m.Contained == nil && len(m.Basis) == 0) || !d.Approve || strings.TrimSpace(d.Reason) == "" || len(strings.TrimSpace(d.PositiveEvidence)) < 20 {
 		return false
 	}
 	expected := []uuid.UUID{}
@@ -432,7 +439,13 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 		return false, err
 	}
 	if approved {
-		n, err = tx.Incident.Update().Where(incident.IDEQ(id), incident.StatusEQ("triaged"), incident.TriagedAtEQ(m.TriagedAt)).SetStatus("false_positive").SetResolvedBy("system").SetResolutionSource("ai_review").SetResolvedAt(time.Now()).SetResolution("独立结案审计：" + d.Reason + "；正面证据：" + d.PositiveEvidence).ClearClosureProposal().Save(ctx)
+		status := "false_positive"
+		resolution := "独立结案审计：" + d.Reason + "；正面证据：" + d.PositiveEvidence
+		if m.Contained != nil {
+			status = "closed"
+			resolution += "；已遏制处置：" + containmentSummary(m.Contained)
+		}
+		n, err = tx.Incident.Update().Where(incident.IDEQ(id), incident.StatusEQ("triaged"), incident.TriagedAtEQ(m.TriagedAt)).SetStatus(status).SetResolvedBy("system").SetResolutionSource("ai_review").SetResolvedAt(time.Now()).SetResolution(resolution).ClearClosureProposal().Save(ctx)
 		if err != nil || n != 1 {
 			return false, err
 		}
@@ -467,7 +480,7 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 func (r *Reviewer) Sweep(ctx context.Context) error {
 	r.sweepMu.Lock()
 	defer r.sweepMu.Unlock()
-	ids, err := r.DB.Incident.Query().Where(incident.StatusEQ("triaged"), incident.ClosureProposalNotNil(), incident.IDGT(r.cursor)).Order(ent.Asc(incident.FieldID)).Limit(100).IDs(ctx)
+	ids, err := r.DB.Incident.Query().Where(incident.StatusEQ("triaged"), incident.IDGT(r.cursor)).Order(ent.Asc(incident.FieldID)).Limit(100).IDs(ctx)
 	if err != nil {
 		return err
 	}
