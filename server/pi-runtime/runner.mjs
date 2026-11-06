@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { Agent } from '@earendil-works/pi-agent-core';
 import { createModels, createProvider } from '@earendil-works/pi-ai';
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
+import { modelFallback } from './model-fallback.mjs';
 
 const textOf = message => (message?.content || [])
   .filter(part => part.type === 'text').map(part => part.text).join('');
@@ -46,6 +47,7 @@ export async function run(request, send, callTool, signal) {
     }],
   }));
   let turns = 0;
+  const routing = modelFallback(request);
   let limited = false;
   const agent = new Agent({
     initialState: {
@@ -64,7 +66,7 @@ export async function run(request, send, callTool, signal) {
     toolExecution: 'sequential',
     // GLM 的本地兼容端点不会从 SDK thinkingLevel 推断模板开关。
     streamFn: (model, context, options) => models.streamSimple(model, context, {
-      ...options, maxTokens,
+      ...options, maxTokens, fetch: routing.fetch,
       ...(/(^|\/)glm[-_.]/i.test(request.model) ? {
         samplingParams: { ...options?.samplingParams, chat_template_kwargs: { enable_thinking: false } },
       } : {}),
@@ -75,7 +77,7 @@ export async function run(request, send, callTool, signal) {
       return limited;
     },
   });
-  agent.subscribe(event => send({ type: 'event', event }));
+  agent.subscribe(event => { routing.annotate(event); send({ type: 'event', event }); });
   const abort = () => agent.abort();
   signal?.throwIfAborted();
   signal?.addEventListener('abort', abort, { once: true });

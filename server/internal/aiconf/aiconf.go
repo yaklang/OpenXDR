@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -26,12 +25,15 @@ const (
 
 // Config 生效中的配置
 type Config struct {
-	BaseURL string
-	APIKey  string
+	Providers [4]Provider
+	BaseURL   string
+	APIKey    string
 	// 事件研判与资产标注用的模型；空表示不启用
 	Model string
 	// AI 助手与定时任务（Pi）用的模型；空表示不启用
 	PiModel string
+	// 逗号分隔的备用模型，空表示关闭自动切换。
+	FallbackModels string
 	// 公网目的地址反向解析
 	PTR        bool
 	VTKey      string
@@ -42,11 +44,13 @@ type Config struct {
 
 // stored 库里存的：字段为空表示没在控制台改过，用环境变量
 type stored struct {
-	BaseURL    *string `json:"baseUrl,omitempty"`
-	Model      *string `json:"model,omitempty"`
-	PiModel    *string `json:"piModel,omitempty"`
-	PTR        *bool   `json:"ptr,omitempty"`
-	VTAlertMin *int    `json:"vtAlertMin,omitempty"`
+	Providers      []providerStored `json:"providers,omitempty"`
+	FallbackModels *string          `json:"fallbackModels,omitempty"`
+	BaseURL        *string          `json:"baseUrl,omitempty"`
+	Model          *string          `json:"model,omitempty"`
+	PiModel        *string          `json:"piModel,omitempty"`
+	PTR            *bool            `json:"ptr,omitempty"`
+	VTAlertMin     *int             `json:"vtAlertMin,omitempty"`
 	// 密文；Sealed 为空表示在控制台清空了
 	APIKey     *secret `json:"apiKey,omitempty"`
 	VTKey      *secret `json:"vtKey,omitempty"`
@@ -107,6 +111,10 @@ func (s *Store) load(ctx context.Context) (stored, error) {
 
 func (s *Store) merge(raw stored) Config {
 	c := s.Default
+	c.Providers = s.providerConfig(raw.Providers)
+	if raw.FallbackModels != nil {
+		c.FallbackModels = *raw.FallbackModels
+	}
 	if raw.BaseURL != nil {
 		c.BaseURL = *raw.BaseURL
 	}
@@ -157,6 +165,8 @@ func (s *Store) usable(sec *secret, field string) *secret {
 
 // View 给界面看的：密钥只说有没有、末四位，每项标明来自控制台还是环境变量
 type View struct {
+	Providers      []ProviderView    `json:"providers"`
+	FallbackModels string            `json:"fallbackModels"`
 	BaseURL        string            `json:"baseUrl"`
 	Model          string            `json:"model"`
 	PiModel        string            `json:"piModel"`
@@ -188,13 +198,15 @@ func (s *Store) View(ctx context.Context) (View, error) {
 	mark("baseUrl", raw.BaseURL != nil)
 	mark("model", raw.Model != nil)
 	mark("piModel", raw.PiModel != nil)
+	mark("fallbackModels", raw.FallbackModels != nil)
 	mark("ptr", raw.PTR != nil)
 	mark("vtAlertMin", raw.VTAlertMin != nil)
 	mark("apiKey", apiKey != nil)
 	mark("vtKey", vtKey != nil)
 	mark("abuseCHKey", abuseCHKey != nil)
 	return View{
-		BaseURL: c.BaseURL, Model: c.Model, PiModel: c.PiModel, PTR: c.PTR, VTAlertMin: c.VTAlertMin,
+		Providers:      providerViews(c),
+		FallbackModels: c.FallbackModels, BaseURL: c.BaseURL, Model: c.Model, PiModel: c.PiModel, PTR: c.PTR, VTAlertMin: c.VTAlertMin,
 		APIKeySet: c.APIKey != "", APIKeyHint: hintOf(apiKey, c.APIKey), VTKeySet: c.VTKey != "", VTKeyHint: hintOf(vtKey, c.VTKey),
 		AbuseCHKeySet: c.AbuseCHKey != "", AbuseCHKeyHint: hintOf(abuseCHKey, c.AbuseCHKey),
 		Source: src, CanSaveSecrets: s.Vault != nil,
@@ -217,24 +229,48 @@ func tail(s string) string {
 
 // Patch 一次修改：nil 不动；Reset 里列出的项回到环境变量。密钥传空串表示清空
 type Patch struct {
-	BaseURL    *string  `json:"baseUrl"`
-	Model      *string  `json:"model"`
-	PiModel    *string  `json:"piModel"`
-	PTR        *bool    `json:"ptr"`
-	VTAlertMin *int     `json:"vtAlertMin"`
-	APIKey     *string  `json:"apiKey"`
-	VTKey      *string  `json:"vtKey"`
-	AbuseCHKey *string  `json:"abuseCHKey"`
-	Reset      []string `json:"reset"`
+	Providers      *[]ProviderPatch `json:"providers"`
+	FallbackModels *string          `json:"fallbackModels"`
+	BaseURL        *string          `json:"baseUrl"`
+	Model          *string          `json:"model"`
+	PiModel        *string          `json:"piModel"`
+	PTR            *bool            `json:"ptr"`
+	VTAlertMin     *int             `json:"vtAlertMin"`
+	APIKey         *string          `json:"apiKey"`
+	VTKey          *string          `json:"vtKey"`
+	AbuseCHKey     *string          `json:"abuseCHKey"`
+	Reset          []string         `json:"reset"`
 }
 
 var ErrNoVault = errors.New("未配置 HOST_CREDENTIAL_KEY，不能在控制台保存密钥，请改用环境变量")
 
 // Check 校验修改，不合法直接拒绝
 func (p Patch) Check() error {
+	if p.Providers != nil {
+		if err := checkProviders(*p.Providers); err != nil {
+			return err
+		}
+	}
+	if p.FallbackModels != nil {
+		if len(*p.FallbackModels) > 1032 {
+			return errors.New("备用模型最多 8 个")
+		}
+		if *p.FallbackModels != "" {
+			seen := map[string]bool{}
+			for _, m := range strings.Split(*p.FallbackModels, ",") {
+				if m == "" || len(m) > 128 || strings.ContainsAny(m, " \t\r\n") || seen[m] {
+					return errors.New("备用模型名不能为空、重复或包含空白，且不超过 128 字符")
+				}
+				seen[m] = true
+			}
+			if len(seen) > 8 {
+				return errors.New("备用模型最多 8 个")
+			}
+		}
+	}
 	if p.BaseURL != nil {
-		if u, err := url.Parse(*p.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return errors.New("推理服务地址必须是 http(s) 链接")
+		if !validBaseURL(*p.BaseURL) {
+			return errors.New("推理服务地址必须是无内嵌凭据、查询参数或片段的 http(s) 链接")
 		}
 	}
 	for _, m := range []*string{p.Model, p.PiModel} {
@@ -258,7 +294,7 @@ func (p Patch) Check() error {
 	return nil
 }
 
-var resettable = map[string]bool{"baseUrl": true, "model": true, "piModel": true, "ptr": true, "vtAlertMin": true, "apiKey": true, "vtKey": true, "abuseCHKey": true}
+var resettable = map[string]bool{"fallbackModels": true, "baseUrl": true, "model": true, "piModel": true, "ptr": true, "vtAlertMin": true, "apiKey": true, "vtKey": true, "abuseCHKey": true}
 
 func (s *Store) Save(ctx context.Context, p Patch) error {
 	if err := p.Check(); err != nil {
@@ -268,9 +304,18 @@ func (s *Store) Save(ctx context.Context, p Patch) error {
 	if err != nil {
 		return err
 	}
+	if p.Providers != nil {
+		raw.Providers, err = s.saveProviders(raw.Providers, *p.Providers)
+		if err != nil {
+			return err
+		}
+	}
 	if p.BaseURL != nil {
 		v := strings.TrimRight(*p.BaseURL, "/")
 		raw.BaseURL = &v
+	}
+	if p.FallbackModels != nil {
+		raw.FallbackModels = p.FallbackModels
 	}
 	if p.Model != nil {
 		raw.Model = p.Model
@@ -313,6 +358,8 @@ func (s *Store) Save(ctx context.Context, p Patch) error {
 			raw.Model = nil
 		case "piModel":
 			raw.PiModel = nil
+		case "fallbackModels":
+			raw.FallbackModels = nil
 		case "ptr":
 			raw.PTR = nil
 		case "vtAlertMin":
@@ -349,6 +396,20 @@ func (s *Store) Preview(ctx context.Context, p Patch) (Config, error) {
 		return Config{}, err
 	}
 	c := s.Get(ctx)
+	if p.Providers != nil {
+		old := map[string]Provider{}
+		for _, v := range c.Providers {
+			old[v.ID] = v
+		}
+		c.Providers = [4]Provider{}
+		for i, v := range *p.Providers {
+			key := old[v.ID].APIKey
+			if v.APIKey != nil {
+				key = *v.APIKey
+			}
+			c.Providers[i] = Provider{ID: v.ID, Name: v.Name, BaseURL: strings.TrimRight(v.BaseURL, "/"), APIKey: key, Model: v.Model, PiModel: v.PiModel, FallbackModels: v.FallbackModels, Enabled: v.Enabled}
+		}
+	}
 	for _, r := range p.Reset {
 		switch r {
 		case "baseUrl":
@@ -357,6 +418,8 @@ func (s *Store) Preview(ctx context.Context, p Patch) (Config, error) {
 			c.Model = s.Default.Model
 		case "piModel":
 			c.PiModel = s.Default.PiModel
+		case "fallbackModels":
+			c.FallbackModels = s.Default.FallbackModels
 		case "apiKey":
 			c.APIKey = s.Default.APIKey
 		case "vtKey":
@@ -365,7 +428,7 @@ func (s *Store) Preview(ctx context.Context, p Patch) (Config, error) {
 			c.AbuseCHKey = s.Default.AbuseCHKey
 		}
 	}
-	for _, f := range []struct{ in, out *string }{{p.BaseURL, &c.BaseURL}, {p.Model, &c.Model}, {p.PiModel, &c.PiModel}, {p.APIKey, &c.APIKey}, {p.VTKey, &c.VTKey}, {p.AbuseCHKey, &c.AbuseCHKey}} {
+	for _, f := range []struct{ in, out *string }{{p.FallbackModels, &c.FallbackModels}, {p.BaseURL, &c.BaseURL}, {p.Model, &c.Model}, {p.PiModel, &c.PiModel}, {p.APIKey, &c.APIKey}, {p.VTKey, &c.VTKey}, {p.AbuseCHKey, &c.AbuseCHKey}} {
 		if f.in != nil {
 			*f.out = *f.in
 		}
