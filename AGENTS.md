@@ -117,6 +117,7 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
 - `triage`：旧 AI 研判引擎（带只读调查工具逐个研判 incident）
 - `piruntime` / `agentchat`：Pi 子进程（配置 `SANDBOX_URL` 时经 `cmd/sandboxd` 的隔离容器）、会话消息、exec/query/report 与后台运行、停止
 - `commandgate`：人工与 AI exec 的组权限、命令名单、审批（人工发起的阻塞等组管理员，AI 发起的交 AI 审计员）、硬拒绝清单与审计
+- `repairpolicy` / `repaircmd`：管理员有限修复委托（失败服务重启、磁盘回收封闭模板），精确资产/目录、有效期、冷却、一次性预留与审计；磁盘回收须保留前后 `df -P` 独立效果证据
 - `commandreview`：AI 审计员——AI 发起、命中名单的命令用会话自己的模型当场评审，结果记审批与审计
 - `schedule` / `report`：`tasks/*.yml` 预设任务按组定时拉起 Pi 会话（系统身份），报告 HTML/PDF 渲染
 - `response`：响应处置（结束进程 / 隔离与解封主机或容器 / 封禁与解封 IP / 隔离与恢复文件），含自动响应钩子

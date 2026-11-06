@@ -20,6 +20,7 @@ import (
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
+	"openxdr/server/internal/repaircmd"
 )
 
 // prepareFindingWork 只认真实调度记录，不以可修改的标题或模型参数识别任务身份。
@@ -105,8 +106,9 @@ func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSessi
 	if readOnly {
 		return nil, nil
 	}
-	if !findingRestart.MatchString(cmd) {
-		err := errors.New("自治跟进只允许只读命令：这条命令没有被认定为只读（含命令替换、cd、docker exec 等写入或无法确定的片段）。请拆成单条简单的只读命令；写操作只允许已授权的 systemctl restart -- <服务>。")
+	_, reclaim := repaircmd.Parse(cmd)
+	if !findingRestart.MatchString(cmd) && !reclaim {
+		err := errors.New("自治跟进只允许只读命令：这条命令没有被认定为只读（含命令替换、cd、docker exec 等写入或无法确定的片段）。请拆成单条简单的只读命令；写操作只允许已授权的 systemctl restart -- <服务>、docker image prune -f、docker builder prune -f、apt-get clean 或 find -- <授权目录> -xdev -type f -mtime +<7..3650> -delete。")
 		logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
 		if auditErr := audit.Checked(logCtx, s.DB.AuditLog.Create(), "system", "server", "repair_action_denied", session.ID.String(), err.Error()); auditErr != nil {
@@ -126,6 +128,9 @@ func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSessi
 	}
 	if s.AuthorizeFindingRepair == nil || s.RevalidateFindingRepair == nil {
 		return nil, errors.New("未配置明确的自主修复维护范围，本任务只读跟进；不能自行重启生产服务、删除数据、安装补丁或修改 HA/数据库/安全采集/网络")
+	}
+	if reclaim && (s.RecordFindingProbe == nil || s.VerifyFindingRepair == nil) {
+		return nil, errors.New("未配置磁盘回收指令关联与独立效果验证，本任务仅允许只读跟进")
 	}
 	if err := s.AuthorizeFindingRepair(ctx, session, target, cmd); err != nil {
 		return nil, err
@@ -214,6 +219,9 @@ func (s *Service) findingEvidence(ctx context.Context, session *ent.AgentSession
 				return errors.New("回执未证明端点能力不支持")
 			}
 		}
+	}
+	if resolved && s.VerifyFindingRepair != nil {
+		return s.VerifyFindingRepair(ctx, session, f, ids)
 	}
 	return nil
 }

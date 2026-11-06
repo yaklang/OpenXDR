@@ -99,7 +99,7 @@ func TestSystemAutoApprovesReadOnly(t *testing.T) {
 	}
 
 	// 同样命中名单、但会改东西：不自动批准
-	destructive := "whoami; rm -rf /tmp/x"
+	destructive := "whoami; touch /tmp/x"
 	sys.Command.Cmd = &destructive
 	if _, err := f.gate.Issue(f.ctx, sys); err == nil || !strings.Contains(err.Error(), "等待组管理员批准") {
 		t.Fatalf("非只读命令应等审批，得到 %v", err)

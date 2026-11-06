@@ -26,6 +26,7 @@ var hardDeny = []struct {
 	why string
 	re  *regexp.Regexp
 }{
+	{"删除文件或回收缓存", regexp.MustCompile(`(?i)` + cmdPos + `rm\b|` + cmdPos + `find\b[^;&|\n]*-delete\b|` + cmdPos + `docker\s+(?:image|builder)\s+prune\b|` + cmdPos + `apt-get\s+clean\b`)},
 	{"停止或卸载 OpenXDR agent", regexp.MustCompile(`(?i)` + cmdPos + `(?:systemctl|service)\s+(?:stop|disable|mask|kill)\b[^;&|\n]*openxdr|` +
 		cmdPos + `(?:pkill|killall|taskkill)\b[^;&|\n]*openxdr|` + cmdPos + `rm\b[^;&|\n]*(?:/usr/local/bin/openxdr|/var/lib/openxdr|/etc/systemd/system/openxdr)|` +
 		`(?:Stop|Remove)-Service\b[^;&|\n]*openxdr`)},

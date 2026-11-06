@@ -62,7 +62,9 @@ type Service struct {
 	AuthorizeFindingRepair func(context.Context, *ent.AgentSession, *ent.Finding, string) error
 	// RevalidateFindingRepair 审批等待后、真正下发前重新核验同一份维护预留。
 	RevalidateFindingRepair func(context.Context, *ent.AgentSession, *ent.Finding, string) error
-	// RecordFindingProbe 将实际下发的固定只读诊断绑定到服务端会话，模型不能伪造此关联。
+	// VerifyFindingRepair 独立核验磁盘回收前后探针，不以消费预留代替效果。
+	VerifyFindingRepair func(context.Context, *ent.AgentSession, *ent.Finding, []uuid.UUID) error
+	// RecordFindingProbe 绑定实际下发的诊断与回收指令，模型不能伪造关联。
 	RecordFindingProbe func(context.Context, *ent.AgentSession, *ent.Command) error
 	// FindingRepairAvailable 只读核对当前资产是否存在真实有效的维护授权。
 	FindingRepairAvailable func(context.Context, *ent.AgentSession, *ent.Finding) (bool, error)
@@ -739,6 +741,7 @@ func (s *Service) tool(ctx context.Context, session *ent.AgentSession, who comma
 			return "", err
 		}
 		if repairTarget != nil {
+			who.AuthorizedRepair = true
 			who.BeforeIssue = func(issueCtx context.Context) error {
 				if s.RevalidateFindingRepair == nil {
 					return errors.New("未配置维护范围的下发前复核")

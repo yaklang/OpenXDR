@@ -10,6 +10,7 @@ import (
 
 	"openxdr/server/ent/approval"
 	"openxdr/server/ent/auditlog"
+	"openxdr/server/ent/commandpolicy"
 )
 
 // AI 发起、命中名单的命令由审计员当场评审：批准即下发，拒绝与评审出错都不执行；三种结果都记审批与审计，决定人 ai-reviewer
@@ -74,5 +75,59 @@ func TestHardDeniedNeverReachesReviewer(t *testing.T) {
 	assertNoCommand(t, f)
 	if n := f.db.Approval.Query().CountX(f.ctx); n != 0 {
 		t.Fatalf("硬拒绝不留审批记录，得到 %d", n)
+	}
+}
+
+func TestReclaimExceptionRequiresInternalAuthorizationAndExactTemplate(t *testing.T) {
+	for _, mode := range []string{"generic", "flag-only", "non-template", "revoked", "disabled", "review-denied", "authorized"} {
+		t.Run(mode, func(t *testing.T) {
+			f := setup(t)
+			task := f.db.AgentSession.Create().SetKind("task").SetGroupID(f.req.GroupID).SetInitiator(SystemActor).SetModel("m").SaveX(f.ctx)
+			f.req.System, f.req.SessionID = true, &task.ID
+			cmd := "find -- /srv/cache -xdev -type f -mtime +7 -delete"
+			f.req.Command.Cmd = &cmd
+			f.db.CommandPolicy.Create().SetGroupID(f.req.GroupID).SetOrigin(commandpolicy.OriginAi).SetMode(commandpolicy.ModeDeny).SetPattern("find").ExecX(f.ctx)
+			reviews, finals := 0, 0
+			f.gate.Reviewer = func(context.Context, Request) (bool, string, error) {
+				reviews++
+				return mode != "review-denied", "已评审", nil
+			}
+			if mode != "generic" {
+				f.req.AuthorizedRepair = true
+			}
+			if mode != "flag-only" {
+				f.req.BeforeIssue = func(context.Context) error {
+					finals++
+					if mode == "revoked" {
+						return errors.New("授权已撤销")
+					}
+					return nil
+				}
+			}
+			if mode == "non-template" {
+				cmd += "; id"
+			}
+			if mode == "disabled" {
+				f.gate.Hub.Enabled = false
+			}
+			out, err := f.gate.Issue(f.ctx, f.req)
+			if mode == "authorized" {
+				if err != nil || out == nil || reviews != 1 || finals != 1 {
+					t.Fatal(out, err, reviews, finals)
+				}
+				<-f.ch
+			} else {
+				if err == nil {
+					t.Fatal("拒绝条件被绕过")
+				}
+				assertNoCommand(t, f)
+				if (mode == "generic" || mode == "flag-only" || mode == "non-template" || mode == "disabled") && reviews != 0 {
+					t.Fatal("拒绝路径进入审计员")
+				}
+				if mode == "review-denied" && finals != 0 {
+					t.Fatal("审批拒绝后消费了预留")
+				}
+			}
+		})
 	}
 }

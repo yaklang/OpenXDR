@@ -5,6 +5,11 @@ import "testing"
 // 硬拒绝只认命令位置上的写法：切断平台、毁证据的拦下，查询里出现同样的词不受影响
 func TestHardDenied(t *testing.T) {
 	denied := []string{
+		"rm -rf /tmp/openxdr-test-xyz",
+		"find -- /tmp/cache -xdev -type f -mtime +7 -delete",
+		"docker image prune -f",
+		"docker builder prune -f",
+		"apt-get clean",
 		"systemctl stop openxdr-agent",
 		"sudo systemctl disable --now openxdr-agent.service",
 		"pkill -f openxdr-agent",
@@ -45,7 +50,6 @@ func TestHardDenied(t *testing.T) {
 		"ufw status",
 		"cat /etc/sudoers.d/90-cloud-init-users",
 		"cp /etc/sudoers.d/90-cloud /root/backup/ && visudo -cf /etc/sudoers.d/90-cloud",
-		"rm -rf /tmp/openxdr-test-xyz",
 		"df -h /",
 		"Get-Service OpenXDRAgent",
 	}

@@ -30,10 +30,12 @@ import (
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
+	"openxdr/server/internal/repaircmd"
 )
 
 const SettingKey = "repair-policy"
 const RestartFailedService = "restart_failed_service"
+const ReclaimDisk = "reclaim_disk"
 
 type Grant struct {
 	ID              uuid.UUID   `json:"id"`
@@ -41,6 +43,7 @@ type Grant struct {
 	GroupID         uuid.UUID   `json:"group_id"`
 	AssetIDs        []uuid.UUID `json:"asset_ids"`
 	Units           []string    `json:"units"`
+	Paths           []string    `json:"paths,omitempty"`
 	ExpiresAt       time.Time   `json:"expires_at"`
 	CooldownMinutes int         `json:"cooldown_minutes"`
 }
@@ -58,6 +61,10 @@ type use struct {
 	ProblemHash   string     `json:"problem_hash"`
 	GrantVersion  string     `json:"grant_version"`
 	FindingID     uuid.UUID  `json:"finding_id"`
+	Command       string     `json:"command,omitempty"`
+	ActionID      uuid.UUID  `json:"action_id,omitempty"`
+	VerifiedAt    *time.Time `json:"verified_at,omitempty"`
+	AfterProbeID  uuid.UUID  `json:"after_probe_id,omitempty"`
 	FinalizedAt   *time.Time `json:"finalized_at,omitempty"`
 	SessionID     uuid.UUID  `json:"session_id"`
 	GrantID       uuid.UUID  `json:"grant_id"`
@@ -116,8 +123,18 @@ func (s *Store) validate(ctx context.Context, p Policy, now time.Time) error {
 	}
 	seen := map[uuid.UUID]bool{}
 	for _, g := range p.Grants {
-		if g.ID == uuid.Nil || seen[g.ID] || g.Action != RestartFailedService || g.GroupID == uuid.Nil || len(g.AssetIDs) == 0 || len(g.AssetIDs) > 50 || len(g.Units) == 0 || len(g.Units) > 20 || g.CooldownMinutes < 60 || g.CooldownMinutes > 10080 || !g.ExpiresAt.After(now) || g.ExpiresAt.After(now.Add(30*24*time.Hour)) {
-			return errors.New("授权须有唯一ID、明确组/资产/服务、60分钟以上冷却及30天内有效期")
+		if g.ID == uuid.Nil || seen[g.ID] || (g.Action != RestartFailedService && g.Action != ReclaimDisk) || g.GroupID == uuid.Nil || len(g.AssetIDs) == 0 || len(g.AssetIDs) > 50 || (g.Action == RestartFailedService && len(g.Units) == 0) || len(g.Units) > 20 || len(g.Paths) > 20 || g.CooldownMinutes < 60 || g.CooldownMinutes > 10080 || !g.ExpiresAt.After(now) || g.ExpiresAt.After(now.Add(30*24*time.Hour)) {
+			return errors.New("授权须有唯一ID、明确组/资产/动作、60至10080分钟冷却及30天内有效期")
+		}
+		if g.Action == ReclaimDisk && len(g.Units) != 0 || g.Action == RestartFailedService && len(g.Paths) != 0 {
+			return errors.New("服务与目录名单必须对应各自授权动作")
+		}
+		paths := map[string]bool{}
+		for _, p := range g.Paths {
+			if !repaircmd.Path(p) || paths[p] {
+				return errors.New("回收目录须为非关键目录的规范绝对路径且不得重复")
+			}
+			paths[p] = true
 		}
 		seen[g.ID] = true
 		assets := map[uuid.UUID]bool{}
@@ -281,6 +298,12 @@ func (s *Store) RecordProbe(ctx context.Context, session *ent.AgentSession, c *e
 	if c == nil || c.Kind != "exec" || c.Cmd == nil {
 		return nil
 	}
+	if _, ok := repaircmd.Parse(*c.Cmd); ok {
+		return s.recordDiskAction(ctx, session, c)
+	}
+	if strings.HasPrefix(*c.Cmd, "df -P ") {
+		return s.recordDiskProbe(ctx, session, c)
+	}
 	prefix := "systemctl show --property=Id,ActiveState,UnitFileState -- "
 	if !strings.HasPrefix(*c.Cmd, prefix) {
 		return nil
@@ -371,17 +394,24 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 		}
 	}()
 
+	action, unit := RestartFailedService, ""
 	match := restart.FindStringSubmatch(cmd)
-	if len(match) != 2 || !validUnit(match[1]) {
-		return errors.New("自主修复仅支持明确授权的 systemctl restart -- <非关键服务>")
+	if len(match) == 2 && validUnit(match[1]) {
+		unit = match[1]
+	} else if _, ok := repaircmd.Parse(cmd); ok {
+		action, unit = ReclaimDisk, ReclaimDisk
+	} else {
+		return errors.New("自主修复仅支持明确授权的 systemctl restart -- <非关键服务>、docker image prune -f、docker builder prune -f、apt-get clean 或 find -- <授权目录> -xdev -type f -mtime +<7..3650> -delete")
 	}
-	unit := match[1]
 	if f == nil {
 		return errors.New("缺少待办")
 	}
 	current, actual, err := s.claimed(ctx, session, f.ID)
 	if err != nil {
 		return err
+	}
+	if action == ReclaimDisk && !diskFinding(actual) {
+		return errors.New("磁盘回收仅适用于 key/title 明确的磁盘容量待办")
 	}
 	if actual.AssetID != f.AssetID {
 		return errors.New("资产范围变化")
@@ -405,6 +435,9 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 		return err
 	}
 	now = time.Now()
+	if action == ReclaimDisk && !diskFinding(actual) {
+		return errors.New("待办已不属于磁盘容量问题")
+	}
 	work, err := repairWork(actual, finalize)
 	if err != nil {
 		return err
@@ -419,7 +452,7 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 		if err := strict(used.Value, &prior); err != nil {
 			return err
 		}
-		if prior.FindingID != actual.ID || prior.SessionID != current.ID || prior.FinalizedAt != nil {
+		if prior.FindingID != actual.ID || prior.SessionID != current.ID || prior.FinalizedAt != nil || (action == ReclaimDisk && prior.Command != cmd) {
 			return errors.New("维护预留不匹配或已消费，禁止再次下发")
 		}
 	}
@@ -430,13 +463,13 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	var grant *Grant
 	for i := range p.Grants {
 		g := &p.Grants[i]
-		if (!finalize || g.ID == prior.GrantID) && grantApplies(*g, current.GroupID, actual.AssetID, now) && slices.Contains(g.Units, unit) {
+		if (!finalize || g.ID == prior.GrantID) && grantApplies(*g, current.GroupID, actual.AssetID, now) && actionScope(*g, action, unit, cmd) {
 			grant = g
 			break
 		}
 	}
 	if grant == nil {
-		return errors.New("动作、资产或服务不在当前有效维护范围")
+		return errors.New("动作、资产、服务或目录不在当前有效维护范围")
 	}
 	version := grantVersion(*grant)
 	if finalize && (prior.ProblemHash != problem || prior.GrantVersion != version) {
@@ -451,29 +484,35 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	if err := strict(proofRow.Value, &ref); err != nil {
 		return err
 	}
-	if ref.SessionID != current.ID || ref.AssetID != actual.AssetID || ref.Unit != unit {
+	if ref.SessionID != current.ID || ref.AssetID != actual.AssetID || (action == RestartFailedService && ref.Unit != unit) {
 		return errors.New("诊断关联不匹配")
 	}
 	probe, err := tx.Command.Get(ctx, ref.CommandID)
 	if err != nil {
 		return err
 	}
-	if probe.AssetID != actual.AssetID || probe.Kind != "exec" || probe.Cmd == nil || *probe.Cmd != ProbeCommand(unit) || probe.Status != "succeeded" || probe.ExitCode == nil || *probe.ExitCode != 0 || probe.Truncated || probe.CompletedAt == nil || probe.CompletedAt.Before(now.Add(-10*time.Minute)) || probe.CompletedAt.After(now) || probe.CreatedAt.Before(current.CreatedAt) || probe.Stdout == nil {
+	if probe.AssetID != actual.AssetID || probe.Kind != "exec" || probe.Cmd == nil || *probe.Cmd != expectedProbe(action, unit, ref.Unit) || probe.Status != "succeeded" || probe.ExitCode == nil || *probe.ExitCode != 0 || probe.Truncated || probe.CompletedAt == nil || probe.CompletedAt.Before(now.Add(-10*time.Minute)) || probe.CompletedAt.After(now) || probe.CreatedAt.Before(current.CreatedAt) || probe.Stdout == nil {
 		return errors.New("诊断未完整成功或已过期")
 	}
-	fields := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(*probe.Stdout), "\n") {
-		k, v, ok := strings.Cut(line, "=")
-		if !ok {
-			return errors.New("systemctl诊断字段不完整或重复")
+	if action == ReclaimDisk {
+		if _, err := diskSample(probe, ref.Unit); err != nil {
+			return err
 		}
-		if _, duplicate := fields[k]; duplicate {
-			return errors.New("systemctl诊断字段不完整或重复")
+	} else {
+		fields := map[string]string{}
+		for _, line := range strings.Split(strings.TrimSpace(*probe.Stdout), "\n") {
+			k, v, ok := strings.Cut(line, "=")
+			if !ok {
+				return errors.New("systemctl诊断字段不完整或重复")
+			}
+			if _, duplicate := fields[k]; duplicate {
+				return errors.New("systemctl诊断字段不完整或重复")
+			}
+			fields[k] = v
 		}
-		fields[k] = v
-	}
-	if len(fields) != 3 || fields["Id"] != unit || fields["ActiveState"] != "failed" || fields["UnitFileState"] != "enabled" {
-		return errors.New("诊断未证明精确目标服务为 failed 且 enabled，禁止猜测或别名绕过")
+		if len(fields) != 3 || fields["Id"] != unit || fields["ActiveState"] != "failed" || fields["UnitFileState"] != "enabled" {
+			return errors.New("诊断未证明精确目标服务为 failed 且 enabled，禁止猜测或别名绕过")
+		}
 	}
 	pending, err := tx.Command.Query().Where(command.AssetIDEQ(actual.AssetID), command.StatusIn("pending", "sent", "unknown")).All(ctx)
 	if err != nil {
@@ -514,10 +553,10 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 			return err
 		}
 		if prior.SessionID == current.ID || prior.NextAllowedAt.After(now) {
-			return errors.New("相同会话已预留动作或仍处于资产服务冷却期")
+			return errors.New("相同会话已预留动作或仍处于资产动作冷却期")
 		}
 	}
-	reserved := use{ProblemHash: problem, GrantVersion: version, FindingID: actual.ID, SessionID: current.ID, GrantID: grant.ID, ReservationID: reservationID(*grant, current.ID, actual, unit, problem, version), ReservedAt: now, NextAllowedAt: now.Add(time.Duration(grant.CooldownMinutes) * time.Minute), ProbeID: probe.ID}
+	reserved := use{Command: cmd, ProblemHash: problem, GrantVersion: version, FindingID: actual.ID, SessionID: current.ID, GrantID: grant.ID, ReservationID: reservationID(*grant, current.ID, actual, unit, problem, version), ReservedAt: now, NextAllowedAt: now.Add(time.Duration(grant.CooldownMinutes) * time.Minute), ProbeID: probe.ID}
 	raw, _ := json.Marshal(reserved)
 	if old == nil {
 		err = tx.Setting.Create().SetID(key).SetValue(raw).Exec(ctx)
@@ -556,8 +595,8 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 
 // HasGrant 仅查询服务端实际保存的精确授权，不把模型声明或相似服务名视为委托。
 func (s *Store) HasGrant(ctx context.Context, groupID, assetID uuid.UUID, action, unit string) (bool, error) {
-	if groupID == uuid.Nil || assetID == uuid.Nil || action != RestartFailedService || !validUnit(unit) {
-		return false, errors.New("维护范围查询必须指定真实组、资产、精确动作和规范服务")
+	if groupID == uuid.Nil || assetID == uuid.Nil || (action != RestartFailedService && action != ReclaimDisk) || (action == RestartFailedService && !validUnit(unit)) {
+		return false, errors.New("维护范围查询必须指定真实组、资产、精确动作及服务或回收命令")
 	}
 	owned, err := s.DB.Asset.Query().Where(asset.IDEQ(assetID), asset.GroupIDEQ(groupID), asset.OsEQ("linux")).Exist(ctx)
 	if err != nil || !owned {
@@ -569,7 +608,7 @@ func (s *Store) HasGrant(ctx context.Context, groupID, assetID uuid.UUID, action
 	}
 	now := time.Now()
 	for _, grant := range policy.Grants {
-		if grantApplies(grant, groupID, assetID, now) && slices.Contains(grant.Units, unit) {
+		if grantApplies(grant, groupID, assetID, now) && actionScope(grant, action, unit, unit) {
 			return true, nil
 		}
 	}
@@ -611,6 +650,8 @@ func problemHash(f *ent.Finding, work findings.Work) string {
 func grantVersion(grant Grant) string {
 	grant.AssetIDs = slices.Clone(grant.AssetIDs)
 	slices.SortFunc(grant.AssetIDs, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	grant.Paths = slices.Clone(grant.Paths)
+	slices.Sort(grant.Paths)
 	grant.Units = slices.Clone(grant.Units)
 	slices.Sort(grant.Units)
 	grant.ExpiresAt = grant.ExpiresAt.UTC()
@@ -638,6 +679,9 @@ func (s *Store) HasAssetGrant(ctx context.Context, groupID, assetID uuid.UUID) (
 		if !grantApplies(g, groupID, assetID, now) {
 			continue
 		}
+		if g.Action == ReclaimDisk {
+			return true, nil
+		}
 		for _, unit := range g.Units {
 			if validUnit(unit) {
 				return true, nil
@@ -648,5 +692,5 @@ func (s *Store) HasAssetGrant(ctx context.Context, groupID, assetID uuid.UUID) (
 }
 
 func grantApplies(g Grant, groupID, assetID uuid.UUID, now time.Time) bool {
-	return g.ID != uuid.Nil && g.Action == RestartFailedService && g.GroupID == groupID && g.ExpiresAt.After(now) && !g.ExpiresAt.After(now.Add(30*24*time.Hour)) && g.CooldownMinutes >= 60 && g.CooldownMinutes <= 10080 && slices.Contains(g.AssetIDs, assetID)
+	return g.ID != uuid.Nil && (g.Action == RestartFailedService || g.Action == ReclaimDisk) && g.GroupID == groupID && g.ExpiresAt.After(now) && !g.ExpiresAt.After(now.Add(30*24*time.Hour)) && g.CooldownMinutes >= 60 && g.CooldownMinutes <= 10080 && slices.Contains(g.AssetIDs, assetID)
 }

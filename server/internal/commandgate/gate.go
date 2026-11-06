@@ -16,6 +16,7 @@ import (
 	"openxdr/server/ent/commandpolicy"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/auth"
+	"openxdr/server/internal/repaircmd"
 	"openxdr/server/internal/response"
 )
 
@@ -40,6 +41,8 @@ type Request struct {
 	ApprovalTimeout time.Duration
 	// PreferReviewer 为 true 时，若命令命中高风险管控名单，优先交 AI 审计员评审，未配置审计员则直接拒绝，不走系统自动放行或人工长等待
 	PreferReviewer bool
+	// AuthorizedRepair 仅由服务端成功预留有限修复后设置，仍须下发前复核。
+	AuthorizedRepair bool `json:"-"`
 	// BeforeIssue 仅供服务端在审批等待后重新核验动作范围，不接受外部参数。
 	BeforeIssue func(context.Context) error `json:"-"`
 }
@@ -164,7 +167,9 @@ func (g *Gate) Issue(ctx context.Context, req Request) (out *ent.Command, retErr
 	if err != nil {
 		return nil, err
 	}
-	if why := hardDenied(*req.Command.Cmd); why != "" && req.Origin == "ai" {
+	_, reclaim := repaircmd.Parse(*req.Command.Cmd)
+	authorizedReclaim := req.AuthorizedRepair && req.BeforeIssue != nil && req.System && req.SessionID != nil && reclaim
+	if why := hardDenied(*req.Command.Cmd); why != "" && req.Origin == "ai" && !authorizedReclaim {
 		return nil, fmt.Errorf("这条命令属于平台硬拒绝的操作（%s），不执行也不送审计；不要换写法重试，确有必要在回复里说明，由人处理", why)
 	}
 	if g.Hub == nil || !g.Hub.Enabled {
