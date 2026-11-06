@@ -839,7 +839,7 @@ DNS 事件摘要额外提供 query、requester、answers、进程与端点等结
 
 修复效果由独立 `findingreview` 基于服务端保存的原始问题及真实完整只读回执复核。不得先改写问题定义再声称修复，执行成功、空日志、无告警或模型意见一致都不是效果证明；审计失败、归组变化或新写操作会阻止关闭。
 
-写动作额外受管理员维护范围约束，`GET/PUT /api/settings/repair-policy` 只允许真实 admin 账号。首批仅支持明确资产与精确 unit 的 `restart_failed_service`，策略有有效期与每资产服务冷却；必须先取得本轮固定 `systemctl show` 回执，核对真实 Id、failed、enabled 状态，再走既有 Gate。核心平台、数据库、网络、安全与容器运行时服务不在此动作范围。名单默认为空，不把新版本发布或模型意愿当成授权；没有范围时真实执行只读调查、监测和独立复核。完整策略格式见 `server/internal/repairpolicy/README.md`。
+写动作额外受管理员维护范围约束，`GET/PUT /api/settings/repair-policy` 只允许真实 admin 账号。支持明确资产与精确 unit 的 `restart_failed_service`，以及仅适用于 Finding key/title 明确磁盘容量问题的 `reclaim_disk`；策略有效期最多30天，冷却为60至10080分钟。服务重启必须先取得本轮固定 `systemctl show` 回执，核对真实 Id、failed、enabled 状态。磁盘回收仅支持 `docker image prune -f`、`docker builder prune -f`、`apt-get clean` 与 `find -- <paths精确目录> -xdev -type f -mtime +<7..3650> -delete`，不允许额外参数或组合命令。`paths` 由真实管理员配置，关键目录及其祖先禁止授权。回收前后必须保存同挂载的完整成功 `df -P <mount>` 回执，后探针晚于回收完成且同一文件系统可用空间增加，才能记效果验证通过；下发前消费预留不代表验证成功。更换模板不能绕过每资产回收冷却。两种动作都走既有 Gate 权限、名单、审批与审计；通用 AI exec 的删除/缓存回收硬拒绝保持生效，只有服务端 grant 已预留的精确模板可走内部例外且必须下发前复核。核心平台、数据库、网络、安全与容器运行时服务不在此动作范围。名单默认为空，不把新版本发布或模型意愿当成授权；没有范围时真实执行只读调查、监测和独立复核。完整策略格式见 `server/internal/repairpolicy/README.md`。
 
 维护范围在最终下发前还会复核：等待审计期间撤销、到期、转组、系统类型改变、诊断过期、新未知写操作或待办已关闭，均拒绝进入 Hub。最终复核一次性消费原预留，不通过换会话或换授权 ID 重放动作。
 

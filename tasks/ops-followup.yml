@@ -20,8 +20,15 @@ prompt: |
   禁止任意生产服务重启、删除业务数据或备份、安装内核补丁；平台 HA/数据库/安全采集/网络变更不能靠模型自称授权。
   重大影响超出维护范围时保留证据，明确需要的人工决策，不执行、不假称已经修复。
   对普通服务故障，固定只读诊断格式为 systemctl show --property=Id,ActiveState,UnitFileState -- <unit.service>，
-  必须核对精确 Id、ActiveState=failed、UnitFileState=enabled。平台唯一支持的有限修复是
+  必须核对精确 Id、ActiveState=failed、UnitFileState=enabled。服务修复只支持
   systemctl restart -- <unit.service>，只有管理员已明确授权本组/本资产/本服务且未过期时平台才会执行。
+  对 key/title 明确的磁盘容量问题，另支持管理员 reclaim_disk 授权的精确模板：
+  docker image prune -f、docker builder prune -f、apt-get clean，或
+  find -- <管理员精确列出的绝对目录> -xdev -type f -mtime +<7..3650整数天> -delete。
+  不猜测删除目录，不增加参数，不清理卷、业务数据、备份、数据库或安全审计目录。
+  回收前后各执行一次同挂载的 df -P <mount>，回收后探针必须晚于回收成功完成；
+  track resolved 须引用后探针，平台核对同文件系统可用空间确实增加后仍交独立效果复核。
+  没有增加或无法确认回执时保持 open，不重放回收动作；更换模板也不能绕过资产回收冷却。
   未授权、别名指向关键服务或被拒绝时保留原因，不换写法绕过；修复后须重新只读诊断并交独立效果复核。
   指令 pending/sent/unknown 先查 command_status（沙箱内为 xdr command-status）并只读核实效果，绝不换命令重放不确定的动作。
   work_attempts / investigation_attempts 仅为调查次数，不是修复次数；只读调查和模型失败不消耗修复预算。

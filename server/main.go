@@ -161,6 +161,7 @@ func main() {
 	chat.AuthorizeFindingRepair = repair.Authorize
 	chat.RevalidateFindingRepair = repair.Revalidate
 	chat.RecordFindingProbe = repair.RecordProbe
+	chat.VerifyFindingRepair = repair.VerifyDisk
 	chat.FindingRepairAvailable = func(ctx context.Context, session *ent.AgentSession, f *ent.Finding) (bool, error) {
 		return repair.HasAssetGrant(ctx, session.GroupID, f.AssetID)
 	}

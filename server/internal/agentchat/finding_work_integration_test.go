@@ -241,3 +241,40 @@ func TestFindingRepairBindsFinalGateRevalidation(t *testing.T) {
 		t.Fatal("revoked action persisted a command")
 	}
 }
+
+func TestFindingReclaimTemplatesReachGrantAndRequireVerification(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("g").SaveX(ctx)
+	a := db.Asset.Create().SetHostname("a").SetGroupID(g.ID).SaveX(ctx)
+	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
+	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("disk-full").SetTitle("磁盘空间不足").SetWorkOwner("ai").SetWorkSessionID(session.ID).SetWorkLeaseUntil(time.Now().Add(time.Minute)).SaveX(ctx)
+	db.Task.Create().SetID(findings.FollowupTask).SetName("follow").SetSchedule("*/30 * * * *").SetPrompt("p").ExecX(ctx)
+	db.TaskRun.Create().SetTaskID(findings.FollowupTask).SetGroupID(g.ID).SetSessionID(session.ID).SetScheduledAt(time.Now()).SetStatus("running").ExecX(ctx)
+	count := 0
+	svc := &Service{DB: db, AuthorizeFindingRepair: func(context.Context, *ent.AgentSession, *ent.Finding, string) error { count++; return nil }, RevalidateFindingRepair: func(context.Context, *ent.AgentSession, *ent.Finding, string) error { return nil }}
+	if _, err := svc.findingExecTarget(ctx, session, a.ID, "apt-get clean", f.ID); err == nil || count != 0 {
+		t.Fatal("缺少验证仍预留回收")
+	}
+	svc.RecordFindingProbe = func(context.Context, *ent.AgentSession, *ent.Command) error { return nil }
+	svc.VerifyFindingRepair = func(context.Context, *ent.AgentSession, *ent.Finding, []uuid.UUID) error {
+		return fmt.Errorf("空间尚未增加")
+	}
+	for _, cmd := range []string{"docker image prune -f", "docker builder prune -f", "apt-get clean", "find -- /srv/cache -xdev -type f -mtime +7 -delete"} {
+		target, err := svc.findingExecTarget(ctx, session, a.ID, cmd, f.ID)
+		if err != nil || target == nil || target.ID != f.ID {
+			t.Fatal(cmd, target, err)
+		}
+	}
+	if count != 4 {
+		t.Fatal("回收模板未走真实授权入口", count)
+	}
+	for _, cmd := range []string{"apt-get clean; id", "find -- /srv/cache -xdev -type f -mtime +6 -delete", "docker image prune -af"} {
+		if _, err := svc.findingExecTarget(ctx, session, a.ID, cmd, f.ID); err == nil || !strings.Contains(err.Error(), "docker image prune -f") {
+			t.Fatal("非模板命令未拒绝或缺少可用模板提示", err)
+		}
+	}
+	probe := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("df -P /").SetCreatedAt(time.Now()).SetStatus("succeeded").SetExitCode(0).SetStdout("fresh probe").SetCompletedAt(time.Now()).SaveX(ctx)
+	if err := svc.findingEvidence(ctx, session, f, []uuid.UUID{probe.ID}, true, ""); err == nil || !strings.Contains(err.Error(), "空间尚未增加") {
+		t.Fatal("结案绕过独立回收验证", err)
+	}
+}
