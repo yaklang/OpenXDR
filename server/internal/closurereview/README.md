@@ -17,7 +17,7 @@
 
 ## 已遏制威胁结案
 
-新增 contained 路径不需要 Pi 提案：服务端按当前 evidence key、verdict hash 和完整材料指纹绑定独立审查，串行化事务内重新加载全部门禁，变化即作废。仅接受最新证据后的 suspicious/malicious 研判；每条告警均须有处置记录，事件或告警关联的所有处置必须 active/executed/expired/lifted 且原始指令回执 succeeded。目标、来源和告警资产均不得 core。pending/held/skipped/failed 或缺回执一律拒绝。
+新增 contained 路径不需要 Pi 提案：服务端按当前 evidence key、verdict hash 和完整材料指纹绑定独立审查，串行化事务内重新加载全部门禁，变化即作废。仅接受最新证据后的 suspicious/malicious 研判；每条告警均须有处置记录，事件或告警关联的所有处置必须 active/executed/expired/lifted 且原始指令回执 succeeded。目标、来源和告警资产均不得 core，统一复用 containment.EffectiveTier：运行 openxdr-server > 人工锁定等级 > 区域等级 > AI 标注 > 默认生产；等级查询失败时拒绝结案。pending/held/skipped/failed 或缺回执一律拒绝。
 
 最后处置创建、成功回执或结束时间中的最晚时刻起至少六小时安静。相关资产上任意新增告警（含 last_ts）均阻止结案；原始事件按进程 GUID、父子关系、连接、命令、映像、文件、域名与地址比较实体。原始事件查询超过 1000 条或实体无法识别时拒绝，宁可保留事件。该窗口只说明没有观察到相关新增证据，不宣称采集完整或系统恢复。
 

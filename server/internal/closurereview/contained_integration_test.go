@@ -146,3 +146,36 @@ func TestContainedSuccessfulStates(t *testing.T) {
 		})
 	}
 }
+
+func TestContainedEffectiveCoreTier(t *testing.T) {
+	for _, role := range []string{"alert", "target", "source"} {
+		for _, basis := range []string{"server", "zone", "annotation"} {
+			t.Run(role+"/"+basis, func(t *testing.T) {
+				f, c := setupContained(t)
+				a := f.asset
+				if role != "alert" {
+					a = f.db.Asset.Create().SetHostname(role).SetGroupID(f.group.ID).SaveX(f.ctx)
+					if role == "source" {
+						f.db.Containment.UpdateOneID(c.ID).SetSourceAssetID(a.ID).ExecX(f.ctx)
+					} else {
+						f.db.Containment.UpdateOneID(c.ID).SetAssetID(a.ID).SetSourceAssetID(f.asset.ID).ExecX(f.ctx)
+						f.db.Command.UpdateOneID(*c.CommandID).SetAssetID(a.ID).ExecX(f.ctx)
+					}
+				}
+				switch basis {
+				case "server":
+					f.db.Asset.UpdateOneID(a.ID).SetListening(json.RawMessage(`[{"process":"openxdr-server"}]`)).SetResponseTier("lab").SetLockedFields([]string{"response_tier"}).ExecX(f.ctx)
+				case "zone":
+					z := f.db.Zone.Create().SetGroupID(f.group.ID).SetName("核心区").SetKind("internal").SetResponseTier("core").SaveX(f.ctx)
+					f.db.Asset.UpdateOneID(a.ID).SetZoneID(z.ID).SetResponseTier("lab").ExecX(f.ctx)
+				case "annotation":
+					f.db.Asset.UpdateOneID(a.ID).SetResponseTier("core").SetResponseTierReason("核心业务节点").ExecX(f.ctx)
+				}
+				ok, err := f.r.Review(f.ctx, f.inc.ID)
+				if ok || err != nil || f.calls != 0 {
+					t.Fatal("有效核心等级必须在调用模型前拒绝结案", ok, err, f.calls)
+				}
+			})
+		}
+	}
+}

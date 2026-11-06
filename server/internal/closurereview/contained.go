@@ -13,6 +13,7 @@ import (
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/containment"
 	"openxdr/server/ent/event"
+	responsecontainment "openxdr/server/internal/containment"
 	"openxdr/server/internal/triage"
 )
 
@@ -65,8 +66,11 @@ func loadContained(ctx context.Context, db *ent.Client, inc *ent.Incident) (*mat
 	ids := make([]uuid.UUID, 0, len(alerts))
 	assets := []uuid.UUID{}
 	for _, a := range alerts {
-		if a.Ts.After(*inc.TriagedAt) || (a.LastTs != nil && a.LastTs.After(*inc.TriagedAt)) || a.AssetID == nil || a.Edges.Asset == nil || a.Edges.Asset.ResponseTier != nil && *a.Edges.Asset.ResponseTier == "core" || a.EventID == nil {
+		if a.Ts.After(*inc.TriagedAt) || (a.LastTs != nil && a.LastTs.After(*inc.TriagedAt)) || a.AssetID == nil || a.Edges.Asset == nil || a.EventID == nil {
 			return nil, ErrIneligible
+		}
+		if err := requireNonCore(ctx, db, a.Edges.Asset); err != nil {
+			return nil, err
 		}
 		ids = append(ids, a.ID)
 		assets = append(assets, *a.AssetID)
@@ -101,8 +105,8 @@ func loadContained(ctx context.Context, db *ent.Client, inc *ent.Incident) (*mat
 		if err != nil {
 			return nil, err
 		}
-		if target.ResponseTier != nil && *target.ResponseTier == "core" {
-			return nil, ErrIneligible
+		if err := requireNonCore(ctx, db, target); err != nil {
+			return nil, err
 		}
 		assets = append(assets, c.AssetID)
 		if c.SourceAssetID != nil {
@@ -110,8 +114,8 @@ func loadContained(ctx context.Context, db *ent.Client, inc *ent.Incident) (*mat
 			if err != nil {
 				return nil, err
 			}
-			if src.ResponseTier != nil && *src.ResponseTier == "core" {
-				return nil, ErrIneligible
+			if err := requireNonCore(ctx, db, src); err != nil {
+				return nil, err
 			}
 			assets = append(assets, src.ID)
 		}
@@ -181,4 +185,15 @@ func containmentSummary(c *containedEvidence) string {
 		parts = append(parts, fmt.Sprintf("%s %s %s (%s)", row.ID, row.Kind, row.Target, row.State))
 	}
 	return strings.Join(parts, "；")
+}
+
+func requireNonCore(ctx context.Context, db *ent.Client, a *ent.Asset) error {
+	tier, _, err := responsecontainment.EffectiveTier(ctx, db, a)
+	if err != nil {
+		return err
+	}
+	if tier == responsecontainment.TierCore {
+		return ErrIneligible
+	}
+	return nil
 }
