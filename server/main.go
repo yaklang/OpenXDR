@@ -48,6 +48,7 @@ import (
 	"openxdr/server/internal/eventsearch"
 	"openxdr/server/internal/feishuapproval"
 	"openxdr/server/internal/findingreview"
+	"openxdr/server/internal/findings"
 	"openxdr/server/internal/fpstats"
 	"openxdr/server/internal/grpcsvc"
 	"openxdr/server/internal/hostimport"
@@ -163,6 +164,14 @@ func main() {
 	chat.RevalidateFindingRepair = repair.Revalidate
 	chat.RecordFindingProbe = repair.RecordProbe
 	chat.VerifyFindingRepair = repair.VerifyDisk
+	chat.FindingRepairCapabilities = func(ctx context.Context, session *ent.AgentSession, f *ent.Finding, cmd, mount string) (findings.RepairCapabilities, error) {
+		return repair.Capabilities(ctx, session.GroupID, session.ID, f, cmd, mount)
+	}
+	chat.RefreshFindingWork = func(ctx context.Context, group uuid.UUID, now time.Time) error {
+		return findings.RefreshWake(ctx, client, group, now, func(ctx context.Context, f *ent.Finding) (findings.RepairCapabilities, error) {
+			return repair.Capabilities(ctx, group, uuid.Nil, f, "", "")
+		})
+	}
 	chat.FindingRepairAvailable = func(ctx context.Context, session *ent.AgentSession, f *ent.Finding) (bool, error) {
 		return repair.HasAssetGrant(ctx, session.GroupID, f.AssetID)
 	}

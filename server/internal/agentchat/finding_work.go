@@ -10,12 +10,14 @@ import (
 	"strings"
 	"time"
 
+	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 	"openxdr/server/ent"
 	"openxdr/server/ent/agentsession"
 	"openxdr/server/ent/asset"
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/finding"
+	entgroup "openxdr/server/ent/group"
 	"openxdr/server/ent/taskrun"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/commandgate"
@@ -28,6 +30,11 @@ func (s *Service) prepareFindingWork(ctx context.Context, session *ent.AgentSess
 	bound, err := s.DB.TaskRun.Query().Where(taskrun.TaskIDEQ(findings.FollowupTask), taskrun.SessionIDEQ(session.ID), taskrun.GroupIDEQ(session.GroupID), taskrun.StatusEQ("running")).Exist(ctx)
 	if err != nil || !bound {
 		return false, false, err
+	}
+	if s.RefreshFindingWork != nil {
+		if err := s.RefreshFindingWork(ctx, session.GroupID, time.Now()); err != nil {
+			return true, false, err
+		}
 	}
 	rows, err := findings.Claim(ctx, s.DB, session, time.Now())
 	if err != nil {
@@ -114,6 +121,12 @@ func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSessi
 		if auditErr := audit.Checked(logCtx, s.DB.AuditLog.Create(), "system", "server", "repair_action_denied", session.ID.String(), err.Error()); auditErr != nil {
 			return nil, fmt.Errorf("%w；拒绝审计落库失败", err)
 		}
+		if s.FindingRepairCapabilities != nil {
+			denied := &findings.RepairError{State: findings.RepairCapabilities{Status: "action_unsupported"}}
+			if recordErr := s.recordRepairBlocker(ctx, session, target, cmd, denied); recordErr != nil {
+				return nil, fmt.Errorf("%w；保存动作能力缺口失败: %v", err, recordErr)
+			}
+		}
 		return nil, err
 	}
 	// 无法确认归属到某次待办的旧写操作也不能冒险重放；先只读查清或由人确认。
@@ -133,6 +146,9 @@ func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSessi
 		return nil, errors.New("未配置磁盘回收指令关联与独立效果验证，本任务仅允许只读跟进")
 	}
 	if err := s.AuthorizeFindingRepair(ctx, session, target, cmd); err != nil {
+		if recordErr := s.recordRepairBlocker(ctx, session, target, cmd, err); recordErr != nil {
+			return nil, fmt.Errorf("%w；保存阻塞状态失败: %v", err, recordErr)
+		}
 		return nil, err
 	}
 	return target, nil
@@ -226,7 +242,7 @@ func (s *Service) findingEvidence(ctx context.Context, session *ent.AgentSession
 	return nil
 }
 
-func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession, f *ent.Finding, plan, blocker string, ids []uuid.UUID) error {
+func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession, f *ent.Finding, plan, blocker string, ids []uuid.UUID, options ...findingPlanOptions) error {
 	if len(ids) > 5 {
 		return errors.New("最多关联五条本轮证据指令")
 	}
@@ -241,6 +257,47 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 	if err := json.Unmarshal(f.Work, &prior); err != nil && len(f.Work) > 0 {
 		return err
 	}
+	oldBlocker := prior.Blocker
+	if (oldBlocker == "manual_business_decision" || oldBlocker == "legacy_decommission_confirm") && blocker != "" && blocker != oldBlocker {
+		return errors.New("业务决策或退役阻塞不能由模型改写为机器前置条件")
+	}
+	if oldBlocker == "external_dependency" && blocker != "" && blocker != oldBlocker && blocker != "none" {
+		return errors.New("上游依赖阻塞不能通过换分类解除")
+	}
+	opts := findingPlanOptions{}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	state, err := s.preparePlanConditions(ctx, session, f, &prior, opts)
+	if err != nil {
+		return err
+	}
+	if blocker == "none" {
+		dependencyRecovered := false
+		if prior.Blocker == "external_dependency" && len(prior.DependsOn) > 0 {
+			_, all, err := findings.DependencyState(ctx, s.DB, session.GroupID, f.ID, prior.DependsOn)
+			if err != nil {
+				return err
+			}
+			dependencyRecovered = all
+		}
+		if !findings.MachineBlocker(prior.Blocker) && prior.Blocker != "maintenance_window_required" && !dependencyRecovered {
+			return errors.New("不能由模型解除业务决策、退役、人工或上游依赖阻塞")
+		}
+		if state == nil || state.Status != "ready" {
+			return errors.New("服务端尚未确认精确动作前置条件可用")
+		}
+		prior.Blocker = ""
+		blocker = ""
+	}
+	if blocker == "maintenance_window_required" && state != nil && prior.RepairCommand == "" {
+		return errors.New("请先指定精确修复命令再记录维护窗口，不能用窗口掩盖不支持的动作")
+	}
+	if state != nil && prior.RepairCommand != "" && (findings.MachineBlocker(blocker) || blocker == "maintenance_window_required") {
+		if state.Status != blocker {
+			return fmt.Errorf("阻塞原因应为 %s：%s", state.Status, state.Reason)
+		}
+	}
 	if plan == "" {
 		plan = prior.Plan
 		if plan == "" {
@@ -249,7 +306,17 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 	}
 	if blocker != "" {
 		switch blocker {
+		case "cooldown", "probe_invalid", "action_unsupported", "budget_exhausted":
+			if state == nil || prior.RepairCommand == "" || state.Status != blocker {
+				return errors.New("此阻塞必须由服务端核对精确动作，不能由模型猜测")
+			}
 		case "policy_required":
+			if state != nil {
+				if prior.RepairCommand == "" || state.Status != "policy_required" {
+					return errors.New("请先查询精确修复动作能力，不能笼统宣称缺授权")
+				}
+				break
+			}
 			if s.FindingRepairAvailable == nil {
 				return errors.New("未配置可信维护范围查询，不能宣称缺授权")
 			}
@@ -261,6 +328,9 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 				return errors.New("资产已有维护范围，须核对具体动作，不能笼统记为缺授权")
 			}
 		case "permission", "unsupported", "maintenance_window_required", "manual_business_decision", "legacy_decommission_confirm", "external_dependency":
+			if blocker == "maintenance_window_required" && state != nil && state.Status == blocker && state.RetryAt != nil {
+				break
+			}
 			if err := s.findingEvidence(ctx, session, f, ids, false, blocker); err != nil {
 				return err
 			}
@@ -275,6 +345,9 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 	} else {
 		// 未显式提交新的阻塞结论时保留旧原因；成功复核结案另走独立路径。
 		blocker = prior.Blocker
+	}
+	if f.WorkOwner == "human" {
+		owner = "human"
 	}
 	if len(ids) > 0 {
 		prior.EvidenceCommands = ids
@@ -299,8 +372,19 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 		prior.OriginalProblem = f.Detail
 	}
 	prior.Version = 2
+	if state != nil {
+		prior.Version = 3
+	}
 	prior.Plan, prior.Blocker, prior.Stage = plan, blocker, stage
+	if state != nil && state.Status == blocker {
+		prior.BlockerDetail = state.Reason
+	} else {
+		prior.BlockerDetail = ""
+	}
 	prior.WakeOn = "new_observation_or_next_check"
+	if prior.RetryAt != nil || prior.WakeAt != nil || len(prior.DependsOn) > 0 || prior.PolicyFingerprint != "" {
+		prior.WakeOn = "condition_or_next_check"
+	}
 	complete, err := s.findingReferences(ctx, session, f, ids)
 	if err != nil {
 		return err
@@ -318,11 +402,25 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 	if prior.RiskSince != nil && prior.EscalatedAt == nil {
 		next = time.Now().Add(15 * time.Minute)
 	}
+	next = findings.EarlierWake(&prior, time.Now(), next)
 	tx, err := s.DB.Tx(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if opts.DependsOn != nil {
+		if _, err := tx.Group.Query().Where(entgroup.IDEQ(session.GroupID)).Where(func(q *sql.Selector) { q.ForUpdate() }).Only(ctx); err != nil {
+			return err
+		}
+		if err := findings.ValidateDependencies(ctx, tx.Client(), session.GroupID, f.ID, *opts.DependsOn); err != nil {
+			return err
+		}
+		fp, _, err := findings.DependencyState(ctx, tx.Client(), session.GroupID, f.ID, *opts.DependsOn)
+		if err != nil {
+			return err
+		}
+		prior.DependencyFingerprint = fp
+	}
 	current, err := tx.Asset.Query().Where(asset.IDEQ(f.AssetID), asset.GroupIDEQ(session.GroupID)).Exist(ctx)
 	if err != nil {
 		return err
@@ -330,7 +428,7 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 	if !current {
 		return errors.New("待办主机已转组")
 	}
-	n, err := tx.Finding.Update().Where(finding.IDEQ(f.ID), finding.GroupIDEQ(session.GroupID), finding.StatusEQ("open"), findings.Snapshot(f)).SetWorkOwner(owner).SetWorkNextCheckAt(next).SetWork(findings.EncodeWork(prior)).Save(ctx)
+	n, err := tx.Finding.Update().Where(finding.IDEQ(f.ID), finding.GroupIDEQ(session.GroupID), finding.StatusEQ("open"), finding.WorkOwnerEQ(f.WorkOwner), findings.Snapshot(f)).SetWorkOwner(owner).SetWorkNextCheckAt(next).SetWork(findings.EncodeWork(prior)).Save(ctx)
 	if err != nil {
 		return err
 	}

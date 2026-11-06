@@ -9,6 +9,7 @@ import (
 
 	"openxdr/server/ent/approval"
 	"openxdr/server/ent/auditlog"
+	"openxdr/server/ent/commandpolicy"
 )
 
 // 系统身份只能在本组的任务会话里用；人不能冒用任务会话，系统也不能借用对话会话。
@@ -113,5 +114,24 @@ func TestSystemAutoApprovesReadOnly(t *testing.T) {
 	}
 	if n := f.db.Approval.Query().Where(approval.StatusEQ(approval.StatusConsumed)).CountX(f.ctx); n != 1 {
 		t.Errorf("只应自动批准 1 次，得到 %d", n)
+	}
+}
+
+func TestSystemAutoApprovesFirewallQueries(t *testing.T) {
+	f := setup(t)
+	task := f.db.AgentSession.Create().SetKind("task").SetGroupID(f.req.GroupID).SetInitiator(SystemActor).SetModel("m").SaveX(f.ctx)
+	f.db.Asset.UpdateOneID(f.req.Command.AssetID).SetOs("linux").ExecX(f.ctx)
+	f.db.CommandPolicy.Create().SetGroupID(f.req.GroupID).SetOrigin(commandpolicy.OriginAi).SetMode(commandpolicy.ModeDeny).SetPattern("iptables|nft").ExecX(f.ctx)
+	sys := f.req
+	sys.System, sys.SessionID, sys.ApprovalTimeout = true, &task.ID, 80*time.Millisecond
+	for _, query := range []string{"iptables -S", "iptables -L -n -v", "nft list ruleset"} {
+		sys.Command.Cmd = &query
+		if _, err := f.gate.Issue(f.ctx, sys); err != nil {
+			t.Fatalf("防火墙查询未自动批准：%s: %v", query, err)
+		}
+		<-f.ch
+	}
+	if n := f.db.Approval.Query().Where(approval.StatusEQ(approval.StatusConsumed)).CountX(f.ctx); n != 3 {
+		t.Fatalf("自动审批回执数量：%d", n)
 	}
 }

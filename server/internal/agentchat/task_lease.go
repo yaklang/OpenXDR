@@ -209,7 +209,7 @@ func (s *Service) guardTool(ctx context.Context, prior *ent.AgentSession, name s
 
 func replaySafeTool(name string) bool {
 	switch name {
-	case "query", "command_status", "memories":
+	case "query", "command_status", "memories", "repair_capabilities":
 		return true
 	default:
 		return false

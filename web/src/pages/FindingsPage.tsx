@@ -54,6 +54,10 @@ function FindingWorkDetails({ finding: f, onCommand }: { finding: FindingRow; on
   const w = f.work
   if (!w) return null
   const blockers: Record<string, string> = {
+    cooldown: t('findingWorkCooldown'),
+    probe_invalid: t('findingWorkProbeInvalid'),
+    action_unsupported: t('findingWorkActionUnsupported'),
+    budget_exhausted: t('findingWorkBudgetExhausted'),
     permission: t('findingWorkPermission'),
     unsupported: t('findingWorkUnsupported'),
     policy_required: t('findingWorkPolicyRequired'),
@@ -65,7 +69,11 @@ function FindingWorkDetails({ finding: f, onCommand }: { finding: FindingRow; on
   const risks: Record<string, string> = { disk_pressure: t('findingWorkDiskPressure'), memory_pressure: t('findingWorkMemoryPressure') }
   // 新版 JSON 省略零值；旧数据缺少独立计数时保留未知，不把调查轮次冒充修复次数。
   const count = (value: number | undefined) => value ?? (w.version != null && w.version >= 2 ? 0 : t('findingWorkNotRecorded'))
-  const wake: Record<string, string> = { new_observation_or_next_check: t('findingWorkObservation'), recurrence: t('findingWorkRecurrence') }
+  const wake: Record<string, string> = { new_observation_or_next_check: t('findingWorkObservation'), recurrence: t('findingWorkRecurrence'), condition_or_next_check: t('findingWorkCondition') }
+  const reasons: Record<string, string> = {
+    authorization_changed: t('findingWakePolicy'), cooldown_or_window_elapsed: t('findingWakeTime'),
+    dependency_recovered: t('findingWakeDependency'), scheduled_review: t('findingWakeReview'), capability_upgrade: t('findingWakeUpgrade'),
+  }
   return <>
     <Descriptions column={1} size="small">
       {(w.original_problem && w.original_problem !== f.detail || w.original_title && w.original_title !== f.title) && <Descriptions.Item label={t('findingWorkOriginal')}><Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>{w.original_title && `${w.original_title}\n`}{w.original_problem}</Typography.Paragraph></Descriptions.Item>}
@@ -79,7 +87,12 @@ function FindingWorkDetails({ finding: f, onCommand }: { finding: FindingRow; on
       {w.risk_kind && <Descriptions.Item label={t('findingWorkRisk')}>{risks[w.risk_kind] ?? w.risk_kind}</Descriptions.Item>}
       {w.risk_since && <Descriptions.Item label={t('findingWorkRiskSince')}>{fmtTime(w.risk_since)}</Descriptions.Item>}
       {w.escalated_at && <Descriptions.Item label={t('findingWorkEscalatedAt')}>{fmtTime(w.escalated_at)}</Descriptions.Item>}
-      {w.blocker && <Descriptions.Item label={t('findingWorkBlocker')}>{blockers[w.blocker] ?? w.blocker}</Descriptions.Item>}
+      {w.blocker && <Descriptions.Item label={t('findingWorkBlocker')}>{blockers[w.blocker] ?? w.blocker}{w.blocker_detail && <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{w.blocker_detail}</Typography.Paragraph>}</Descriptions.Item>}
+      {w.repair_command && <Descriptions.Item label={t('findingWorkRepairCommand')}><Typography.Text code>{w.repair_command}</Typography.Text></Descriptions.Item>}
+      {w.retry_at && <Descriptions.Item label={t('findingWorkRetryAt')}>{fmtTime(w.retry_at)}</Descriptions.Item>}
+      {w.wake_at && <Descriptions.Item label={t('findingWorkWakeAt')}>{fmtTime(w.wake_at)}</Descriptions.Item>}
+      {!!w.depends_on?.length && <Descriptions.Item label={t('findingWorkDependencies')}><Space wrap>{w.depends_on.map(id => <Link key={id} to={`/findings?ids=${id}`}>{id}</Link>)}</Space></Descriptions.Item>}
+      {w.last_wake_reason && <Descriptions.Item label={t('findingWorkLastWake')}>{reasons[w.last_wake_reason] ?? w.last_wake_reason}</Descriptions.Item>}
       {w.wake_on && <Descriptions.Item label={t('incidentWorkWake')}>{wake[w.wake_on] ?? w.wake_on}</Descriptions.Item>}
       {f.workSessionId && <Descriptions.Item label={t('findingWorkSession')}><Link to={`/chat/${f.workSessionId}`}>{t('openSession')}</Link></Descriptions.Item>}
       {!!w.evidence_commands?.length && <Descriptions.Item label={t('findingWorkEvidence')}><Space wrap>{w.evidence_commands.map((id, index) => <Button type="link" size="small" key={id} onClick={() => onCommand(id)}>{index + 1}. {t('commandViewDetail')}</Button>)}</Space></Descriptions.Item>}

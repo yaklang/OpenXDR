@@ -39,7 +39,8 @@ var trackParameters = json.RawMessage(`{"type":"object","properties":{` +
 	`"detail":{"type":"string","minLength":1,"maxLength":4000},` +
 	`"severity":{"type":"string","enum":["low","medium","high"]},` +
 	`"status":{"type":"string","enum":["open","resolved","withdrawn"]},` +
-	`"next_step":{"type":"string","maxLength":1000},"blocker":{"type":"string","enum":["policy_required","maintenance_window_required","manual_business_decision","legacy_decommission_confirm","external_dependency","permission","unsupported"]},` +
+	`"next_step":{"type":"string","maxLength":1000},"blocker":{"type":"string","enum":["policy_required","maintenance_window_required","manual_business_decision","legacy_decommission_confirm","external_dependency","permission","unsupported","cooldown","probe_invalid","action_unsupported","budget_exhausted","none"]},` +
+	`"repair_command":{"type":"string","maxLength":512},"repair_mount":{"type":"string","maxLength":256},"depends_on":{"type":"array","maxItems":5,"items":{"type":"string","format":"uuid"}},"wake_at":{"type":"string","format":"date-time"},` +
 	`"evidence_commands":{"type":"array","maxItems":5,"items":{"type":"string","format":"uuid"}}},` +
 	`"required":["host","key","title","detail","severity","status"],"additionalProperties":false}`)
 
@@ -48,6 +49,7 @@ var findingKey = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 // track 按（组、主机、key）登记或复查待办。人工忽略的不动，原样告诉模型。
 func (s *Service) track(ctx context.Context, session *ent.AgentSession, args json.RawMessage) (string, error) {
 	var body struct {
+		findingPlanOptions
 		Host             uuid.UUID   `json:"host"`
 		Key              string      `json:"key"`
 		Title            string      `json:"title"`
@@ -127,7 +129,7 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 		if err != nil {
 			return "", err
 		}
-		if err := s.saveFindingPlan(ctx, session, f, body.NextStep, body.Blocker, body.EvidenceCommands); err != nil {
+		if err := s.saveFindingPlan(ctx, session, f, body.NextStep, body.Blocker, body.EvidenceCommands, body.findingPlanOptions); err != nil {
 			return "", err
 		}
 		return marshal(map[string]any{"id": f.ID, "status": "open", "new": true})
@@ -202,7 +204,7 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 		if err != nil {
 			return "", err
 		}
-		if err := s.saveFindingPlan(ctx, session, f, body.NextStep, body.Blocker, body.EvidenceCommands); err != nil {
+		if err := s.saveFindingPlan(ctx, session, f, body.NextStep, body.Blocker, body.EvidenceCommands, body.findingPlanOptions); err != nil {
 			return "", err
 		}
 		return marshal(map[string]any{"id": f.ID, "status": "open", "reopened": reopened})
@@ -211,16 +213,18 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 
 // findingBrief 给模型看的待办摘要。
 type findingBrief struct {
-	Host      uuid.UUID  `json:"host"`
-	Hostname  string     `json:"hostname"`
-	Key       string     `json:"key"`
-	Title     string     `json:"title"`
-	Severity  string     `json:"severity,omitempty"`
-	FirstSeen string     `json:"first_seen,omitempty"`
-	WorkOwner string     `json:"work_owner,omitempty"`
-	NextCheck *time.Time `json:"next_check_at,omitempty"`
-	Work      any        `json:"work,omitempty"`
-	Note      *string    `json:"note,omitempty"`
+	Host         uuid.UUID                    `json:"host"`
+	Hostname     string                       `json:"hostname"`
+	Key          string                       `json:"key"`
+	Title        string                       `json:"title"`
+	Severity     string                       `json:"severity,omitempty"`
+	FirstSeen    string                       `json:"first_seen,omitempty"`
+	WorkOwner    string                       `json:"work_owner,omitempty"`
+	NextCheck    *time.Time                   `json:"next_check_at,omitempty"`
+	Work         any                          `json:"work,omitempty"`
+	Note         *string                      `json:"note,omitempty"`
+	ID           uuid.UUID                    `json:"id,omitempty"`
+	Capabilities *findings.RepairCapabilities `json:"repair_capabilities,omitempty"`
 }
 
 // recentResolvedWindow 人工标为已处理并附说明的待办保留在上下文里的时长：
@@ -237,7 +241,7 @@ func (s *Service) findingsFor(ctx context.Context, group uuid.UUID, hostnames ma
 			return nil, nil, nil, err
 		}
 		for _, f := range rows {
-			b := findingBrief{Host: f.AssetID, Hostname: hostnames[f.AssetID], Key: f.Key, Title: f.Title}
+			b := findingBrief{ID: f.ID, Host: f.AssetID, Hostname: hostnames[f.AssetID], Key: f.Key, Title: f.Title}
 			if status == "open" {
 				b.Severity, b.FirstSeen = f.Severity, f.FirstSeen.Format(time.DateOnly)
 				b.WorkOwner, b.NextCheck, b.Work = f.WorkOwner, f.WorkNextCheckAt, findingWorkJSON(f)

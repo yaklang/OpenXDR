@@ -55,6 +55,7 @@ usage() {
   xdr hosts                              本组主机（主机名、角色、重要程度、区域）
   xdr context                            平台给的组内数据：资产、规则名、待办、交来的事件（JSON）
   xdr exec <主机名> <命令|-> [超时秒] [--finding <待办id>]  在主机上执行命令（首行含指令 id；同主机多条待办执行写修复时用 --finding 指定 context.subjects 里的待办 id）；- 表示从 stdin 读命令
+  xdr repair-capabilities <待办id> [精确修复命令] [挂载点]  查询支持动作、真实授权、所需探针和冷却/窗口时间
   xdr command-status <指令 id>           只读查询已有指令的最新回执（exec 超时或状态 unknown 时先查，禁止自动重试）
   xdr verify-command <指令 id> <effective|ineffective|inconclusive> <telemetry_post_action|exec_probe|receipt_correlation|context_only|ai_investigation> <预期效果> <实测证据> [--events <事件id,...>] [--context-events <事件id,...>]  记录指令效果验证
   xdr sql [--json] <只读SQL|->           查本组只读视图，默认 TSV（首行列名）；--json 每行一个 JSON 对象，
@@ -136,6 +137,11 @@ case "$cmd" in
       '{host:$h,cmd:$c,timeout:$t} + (if $hf == 1 then {finding_id:$fid} else {} end)')
     out=$(call exec "$payload")
     jq -r '"[id=\(.id // "-") status=\(.status) exit=\(.exit_code // "-")\(if .truncated then " truncated" else "" end)]", (.stdout // ""), (if (.stderr // "") != "" then "[stderr]\n" + .stderr else empty end)' <<<"$out" ;;
+  repair-capabilities|repair_capabilities)
+    need "$cmd" 1 "$@"
+    no_extra "$cmd" 3 "$#"
+    fid=$(require_uuid "finding_id" "$1")
+    call repair_capabilities "$(jq -cn --arg f "$fid" --arg c "${2:-}" --arg m "${3:-}" '{finding_id:$f,command:$c,mount:$m}')" ;;
   command-status|command_status)
     need "command-status" 1 "$@"
     no_extra "command-status" 1 "$#"
@@ -210,8 +216,18 @@ case "$cmd" in
     has_blocker=0
     evidence='[]'
     has_evidence=0
+    repair_command="";repair_mount="";depends_on='[]';wake_at="";has_conditions=0;has_depends=0
     while [ $# -gt 0 ]; do
       case "$1" in
+        --repair-command|--repair-mount|--depends-on|--wake-at)
+          [ $# -ge 2 ] || { echo "缺少 $1 参数值" >&2; exit 2; }
+          case "$1" in
+            --repair-command) repair_command=$2 ;;
+            --repair-mount) repair_mount=$2 ;;
+            --wake-at) wake_at=$2 ;;
+            --depends-on) if [ "$2" = none ]; then depends_on='[]';else depends_on=$(parse_uuid_csv "depends_on" "$2" 5 '[]');fi;has_depends=1 ;;
+          esac
+          has_conditions=1;shift 2 ;;
         --next-step|--next_step)
           [ $# -ge 2 ] || { echo "缺少 $1 参数值" >&2; exit 2; }
           [ -n "${2//[[:space:]]/}" ] || { echo "next_step 不能为空" >&2; exit 2; }
@@ -222,11 +238,11 @@ case "$cmd" in
           next_step=$val; has_next=1; shift ;;
         --blocker)
           [ $# -ge 2 ] || { echo "缺少 $1 参数值" >&2; exit 2; }
-          case "$2" in policy_required|maintenance_window_required|manual_business_decision|legacy_decommission_confirm|external_dependency|permission|unsupported) ;; *) echo "blocker 必须是 policy_required / maintenance_window_required / manual_business_decision / legacy_decommission_confirm / external_dependency / permission / unsupported：$2" >&2; exit 2 ;; esac
+          case "$2" in policy_required|maintenance_window_required|manual_business_decision|legacy_decommission_confirm|external_dependency|permission|unsupported|cooldown|probe_invalid|action_unsupported|budget_exhausted|none) ;; *) echo "blocker 必须是 policy_required / maintenance_window_required / manual_business_decision / legacy_decommission_confirm / external_dependency / permission / unsupported：$2" >&2; exit 2 ;; esac
           blocker=$2; has_blocker=1; shift 2 ;;
         --blocker=*)
           val=${1#*=}
-          case "$val" in policy_required|maintenance_window_required|manual_business_decision|legacy_decommission_confirm|external_dependency|permission|unsupported) ;; *) echo "blocker 必须是 policy_required / maintenance_window_required / manual_business_decision / legacy_decommission_confirm / external_dependency / permission / unsupported：$val" >&2; exit 2 ;; esac
+          case "$val" in policy_required|maintenance_window_required|manual_business_decision|legacy_decommission_confirm|external_dependency|permission|unsupported|cooldown|probe_invalid|action_unsupported|budget_exhausted|none) ;; *) echo "blocker 必须是 policy_required / maintenance_window_required / manual_business_decision / legacy_decommission_confirm / external_dependency / permission / unsupported：$val" >&2; exit 2 ;; esac
           blocker=$val; has_blocker=1; shift ;;
         --evidence|--evidence-commands|--evidence_commands)
           [ $# -ge 2 ] || { echo "缺少 $1 参数值" >&2; exit 2; }
@@ -255,10 +271,15 @@ case "$cmd" in
     title=${pos[4]}
     detail=$(text "${pos[5]}")
     payload=$(jq -cn --arg h "$host" --arg k "$key" --arg sv "$sev" --arg st "$st" --arg t "$title" --arg d "$detail" \
+      --arg rc "$repair_command" --arg rm "$repair_mount" --arg wa "$wake_at" --argjson hd "$has_depends" --argjson deps "$depends_on" \
       --argjson hn "$has_next" --arg ns "$next_step" \
       --argjson hb "$has_blocker" --arg bl "$blocker" \
       --argjson he "$has_evidence" --argjson ev "$evidence" \
       '{host:$h,key:$k,severity:$sv,status:$st,title:$t,detail:$d}
+      + (if $rc != "" then {repair_command:$rc} else {} end)
+      + (if $rm != "" then {repair_mount:$rm} else {} end)
+      + (if $wa != "" then {wake_at:$wa} else {} end)
+      + (if $hd == 1 then {depends_on:$deps} else {} end)
       + (if $hn == 1 then {next_step:$ns} else {} end)
       + (if $hb == 1 then {blocker:$bl} else {} end)
       + (if $he == 1 then {evidence_commands:$ev} else {} end)')

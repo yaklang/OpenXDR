@@ -50,6 +50,11 @@ func TestFindingAutonomyClaimsBudgetAndScope(t *testing.T) {
 	if err := svc.guardFindingExec(ctx, session, a.ID, "df -h"); err != nil {
 		t.Fatal(err)
 	}
+	for _, cmd := range []string{"iptables -S", "iptables -L -n -v", "nft list ruleset"} {
+		if err := svc.guardFindingExec(ctx, session, a.ID, cmd); err != nil {
+			t.Fatalf("只读防火墙诊断被拒：%s: %v", cmd, err)
+		}
+	}
 	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl restart -- test.service"); err == nil {
 		t.Fatal("write without trusted maintenance scope accepted")
 	}

@@ -438,3 +438,19 @@ test('xdr CLI over mock /tool socket simulating platform contract: positive reso
     assert.deepEqual(findings.get('service-down').work.evidence_commands, [roCmdId]);
   });
 });
+
+test('repair capability lookup and conditional follow-up fields preserve exact intent', async () => {
+  await withMockSocket(() => ({ output: '{}' }), async ({ execXdr, calls }) => {
+    await execXdr(['repair-capabilities', CMD_UUID_1.toUpperCase(), 'apt-get clean', '/']);
+    assert.deepEqual(calls[0], { name: 'repair_capabilities', args: { finding_id: CMD_UUID_1, command: 'apt-get clean', mount: '/' } });
+    const at = '2026-12-01T02:00:00Z';
+    await execXdr(['track', 'pve1', 'disk-full', 'high', 'open', 'disk', 'evidence', '--blocker', 'cooldown', '--repair-command', 'apt-get clean', '--repair-mount', '/', '--depends-on', CMD_UUID_1, '--wake-at', at]);
+    assert.equal(calls[1].args.repair_command, 'apt-get clean');
+    assert.equal(calls[1].args.repair_mount, '/');
+    assert.equal(calls[1].args.blocker, 'cooldown');
+    assert.equal(calls[1].args.wake_at, at);
+    assert.deepEqual(calls[1].args.depends_on, [CMD_UUID_1]);
+    await assert.rejects(() => execXdr(['repair-capabilities', 'not-a-uuid']), /finding_id 必须是有效的 UUID/);
+    assert.equal(calls.length, 2);
+  });
+});

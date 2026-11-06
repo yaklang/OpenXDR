@@ -196,3 +196,19 @@ closed 属实且已处置；说明写成人能直接采纳的结案说明，可�
 ```
 
 级别：没有需要人处理的事项写 ok（只存档不推送），有就写 attention，疑似入侵或服务即将中断写 urgent。对话里也照这个分。
+
+## 自治修复能力与条件复查
+
+执行前用 `xdr repair-capabilities <待办UUID> '<精确命令>' [挂载点]` 查询服务端状态；它只读，不预留动作、不消耗修复预算。
+`action_unsupported` 表示平台没有此封闭动作，`policy_required` 表示此精确动作缺授权，`cooldown` 表示真实动作冷却，
+`probe_invalid` 表示缺少本会话完整固定探针，`maintenance_window_required` 表示管理员窗口未到，`budget_exhausted` 表示修复预算耗尽。
+结果含支持模板、有效范围、所需探针、冷却/窗口时间；`ready` 是瞬时快照，执行仍会重新核对全部门禁。
+
+`xdr track ... --repair-command 'apt-get clean' --repair-mount / --blocker cooldown` 登记拟执行命令和服务端确认的阻塞。
+`--blocker none` 只允许服务端已确认 ready 时清除旧机器前置条件，不解除业务决策、退役或人工责任；上游依赖须先确认登记的依赖全部恢复。
+`--depends-on <同组待办UUID,...>` 登记上游依赖（最多5条，拒绝环），`--depends-on none` 清空依赖。
+只有依赖经既有独立复核或人工流程确认 resolved 才会触发恢复重评估，删除或转组不算恢复。
+`--wake-at <RFC3339时间>` 安排5分钟至30天内的复查，它不是维护授权；管理员维护窗口通过 repair-policy 的 `not_before`/`expires_at` 配置。
+条件变化在正常调度领取前核对，唤醒后仍须重新调查，不自动关闭问题、不修改授权、不重放未知指令。
+
+上游依赖仅在登记的同组依赖全部确认 resolved 且精确动作前置条件 ready 后，可重新评估并清除旧依赖阻塞；下发前仍重查依赖，重新打开即拒绝。人工负责人、业务决定和退役确认不得由模型改成机器阻塞来绕过。

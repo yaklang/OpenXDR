@@ -38,6 +38,7 @@ const RestartFailedService = "restart_failed_service"
 const ReclaimDisk = "reclaim_disk"
 
 type Grant struct {
+	NotBefore       *time.Time  `json:"not_before,omitempty"`
 	ID              uuid.UUID   `json:"id"`
 	Action          string      `json:"action"`
 	GroupID         uuid.UUID   `json:"group_id"`
@@ -123,6 +124,9 @@ func (s *Store) validate(ctx context.Context, p Policy, now time.Time) error {
 	}
 	seen := map[uuid.UUID]bool{}
 	for _, g := range p.Grants {
+		if g.NotBefore != nil && !g.NotBefore.Before(g.ExpiresAt) {
+			return errors.New("维护窗口开始时间必须早于授权到期时间")
+		}
 		if g.ID == uuid.Nil || seen[g.ID] || (g.Action != RestartFailedService && g.Action != ReclaimDisk) || g.GroupID == uuid.Nil || len(g.AssetIDs) == 0 || len(g.AssetIDs) > 50 || (g.Action == RestartFailedService && len(g.Units) == 0) || len(g.Units) > 20 || len(g.Paths) > 20 || g.CooldownMinutes < 60 || g.CooldownMinutes > 10080 || !g.ExpiresAt.After(now) || g.ExpiresAt.After(now.Add(30*24*time.Hour)) {
 			return errors.New("授权须有唯一ID、明确组/资产/动作、60至10080分钟冷却及30天内有效期")
 		}
@@ -416,6 +420,15 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	if actual.AssetID != f.AssetID {
 		return errors.New("资产范围变化")
 	}
+	if !finalize {
+		state, err := s.Capabilities(ctx, current.GroupID, current.ID, actual, cmd, "")
+		if err != nil {
+			return err
+		}
+		if state.Status != "ready" {
+			return &findings.RepairError{State: state}
+		}
+	}
 	now := time.Now()
 	tx, err := s.DB.Tx(ctx)
 	if err != nil {
@@ -438,9 +451,21 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	if action == ReclaimDisk && !diskFinding(actual) {
 		return errors.New("待办已不属于磁盘容量问题")
 	}
+	if actual.WorkOwner != "ai" {
+		return errors.New("人工持有的待办仅允许只读跟进，拒绝自动修复")
+	}
 	work, err := repairWork(actual, finalize)
 	if err != nil {
 		return err
+	}
+	if len(work.DependsOn) > 0 {
+		_, all, err := findings.DependencyState(ctx, tx.Client(), current.GroupID, actual.ID, work.DependsOn)
+		if err != nil {
+			return err
+		}
+		if !all {
+			return errors.New("上游依赖尚未确认恢复或已重新打开，拒绝修复并保留原预留")
+		}
 	}
 	problem := problemHash(actual, work)
 	var prior use
@@ -476,16 +501,37 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 		return errors.New("原问题或维护授权版本已变化，原预留不再适用")
 	}
 
+	key := useKey(actual.AssetID, unit)
+	var old *ent.Setting
+	if !finalize {
+		old, err = tx.Setting.Get(ctx, key)
+		if err != nil && !ent.IsNotFound(err) {
+			return err
+		}
+		if old != nil {
+			var prior use
+			if err := strict(old.Value, &prior); err != nil {
+				return err
+			}
+			if prior.SessionID == current.ID {
+				return errors.New("相同会话已预留动作，禁止再次预留；先查询原指令回执并只读验证效果")
+			}
+			if prior.NextAllowedAt.After(now) {
+				return fmt.Errorf("资产动作仍处于冷却期，最早 %s 后重新评估；期间仅只读观察，不重放指令", prior.NextAllowedAt.UTC().Format(time.RFC3339))
+			}
+		}
+	}
+
 	proofRow, err := tx.Setting.Get(ctx, probeKey(actual.AssetID, unit))
 	if err != nil {
-		return errors.New("缺少本会话实际下发的固定只读诊断")
+		return errors.New("缺少固定诊断：请在本会话单独执行 systemctl show --property=Id,ActiveState,UnitFileState -- <服务> 或磁盘 df -P <挂载点>，不要拼接其它命令")
 	}
 	var ref probeRef
 	if err := strict(proofRow.Value, &ref); err != nil {
 		return err
 	}
 	if ref.SessionID != current.ID || ref.AssetID != actual.AssetID || (action == RestartFailedService && ref.Unit != unit) {
-		return errors.New("诊断关联不匹配")
+		return errors.New("诊断属于其它会话、资产或服务：请在当前会话对目标单独执行固定只读探针，不得复用旧回执")
 	}
 	probe, err := tx.Command.Get(ctx, ref.CommandID)
 	if err != nil {
@@ -523,7 +569,6 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 			return errors.New("存在未知写动作，禁止自动重放或新增修复")
 		}
 	}
-	key := useKey(actual.AssetID, unit)
 	if finalize {
 		reservation := reservationID(*grant, current.ID, actual, unit, problem, version)
 		if prior.ProbeID != probe.ID || prior.ReservationID != reservation || prior.ReservedAt.Before(*probe.CompletedAt) {
@@ -542,19 +587,6 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 			return err
 		}
 		return tx.Commit()
-	}
-	old, err := tx.Setting.Get(ctx, key)
-	if err != nil && !ent.IsNotFound(err) {
-		return err
-	}
-	if old != nil {
-		var prior use
-		if err := strict(old.Value, &prior); err != nil {
-			return err
-		}
-		if prior.SessionID == current.ID || prior.NextAllowedAt.After(now) {
-			return errors.New("相同会话已预留动作或仍处于资产动作冷却期")
-		}
 	}
 	reserved := use{Command: cmd, ProblemHash: problem, GrantVersion: version, FindingID: actual.ID, SessionID: current.ID, GrantID: grant.ID, ReservationID: reservationID(*grant, current.ID, actual, unit, problem, version), ReservedAt: now, NextAllowedAt: now.Add(time.Duration(grant.CooldownMinutes) * time.Minute), ProbeID: probe.ID}
 	raw, _ := json.Marshal(reserved)
@@ -655,6 +687,10 @@ func grantVersion(grant Grant) string {
 	grant.Units = slices.Clone(grant.Units)
 	slices.Sort(grant.Units)
 	grant.ExpiresAt = grant.ExpiresAt.UTC()
+	if grant.NotBefore != nil {
+		at := grant.NotBefore.UTC()
+		grant.NotBefore = &at
+	}
 	return digest(grant)
 }
 func reservationID(grant Grant, session uuid.UUID, f *ent.Finding, unit, problem, version string) uuid.UUID {
@@ -692,5 +728,9 @@ func (s *Store) HasAssetGrant(ctx context.Context, groupID, assetID uuid.UUID) (
 }
 
 func grantApplies(g Grant, groupID, assetID uuid.UUID, now time.Time) bool {
-	return g.ID != uuid.Nil && (g.Action == RestartFailedService || g.Action == ReclaimDisk) && g.GroupID == groupID && g.ExpiresAt.After(now) && !g.ExpiresAt.After(now.Add(30*24*time.Hour)) && g.CooldownMinutes >= 60 && g.CooldownMinutes <= 10080 && slices.Contains(g.AssetIDs, assetID)
+	return (g.NotBefore == nil || !g.NotBefore.After(now)) && grantScopeValid(g, groupID, assetID, now)
+}
+
+func grantScopeValid(g Grant, groupID, assetID uuid.UUID, now time.Time) bool {
+	return g.ID != uuid.Nil && (g.Action == RestartFailedService || g.Action == ReclaimDisk) && g.GroupID == groupID && g.ExpiresAt.After(now) && (g.NotBefore == nil || g.NotBefore.Before(g.ExpiresAt)) && !g.ExpiresAt.After(now.Add(30*24*time.Hour)) && g.CooldownMinutes >= 60 && g.CooldownMinutes <= 10080 && slices.Contains(g.AssetIDs, assetID)
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,7 +158,7 @@ func TestDiskVerificationRequiresIndependentImprovement(t *testing.T) {
 			}
 			err := x.store.VerifyDisk(x.ctx, x.session, x.f, []uuid.UUID{after.ID})
 			if (err == nil) != (tc.name == "success") {
-				t.Fatal(err)
+				t.Fatalf("%v; action=%+v", err, x.db.Command.GetX(x.ctx, action.ID))
 			}
 			var u use
 			if err := strict(x.db.Setting.GetX(x.ctx, useKey(x.f.AssetID, ReclaimDisk)).Value, &u); err != nil {
@@ -194,5 +195,32 @@ func TestDiskRevalidateBindsOriginalCommandAndPolicy(t *testing.T) {
 				t.Fatal("变化后仍下发")
 			}
 		})
+	}
+}
+
+// 冷却应先于旧探针诊断返回，且拒绝不消耗下一次修复预算。
+func TestDiskCooldownExplainsDeadlineBeforeStaleProbe(t *testing.T) {
+	x := setupDisk(t, "apt-get clean")
+	x.save(t)
+	x.bind(t)
+	if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err != nil {
+		t.Fatal(err)
+	}
+	row := x.db.Setting.GetX(x.ctx, useKey(x.f.AssetID, ReclaimDisk))
+	var u use
+	if err := strict(row.Value, &u); err != nil {
+		t.Fatal(err)
+	}
+	deadline := u.NextAllowedAt.UTC().Format(time.RFC3339)
+	u.SessionID = uuid.New()
+	raw, _ := json.Marshal(u)
+	x.db.Setting.UpdateOneID(row.ID).SetValue(raw).ExecX(x.ctx)
+	x.db.Setting.DeleteOneID(probeKey(x.f.AssetID, ReclaimDisk)).ExecX(x.ctx)
+	err := x.store.Authorize(x.ctx, x.session, x.f, "docker builder prune -f")
+	if err == nil || !strings.Contains(err.Error(), "冷却期") || !strings.Contains(err.Error(), deadline) {
+		t.Fatalf("未给出真实冷却截止时间：%v", err)
+	}
+	if repairCount(t, x).RepairAttempts != 1 {
+		t.Fatal("冷却拒绝消耗修复预算")
 	}
 }

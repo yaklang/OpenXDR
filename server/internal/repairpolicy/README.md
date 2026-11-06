@@ -77,6 +77,8 @@ mux.Handle("/api/settings/repair-policy", store.Handler())
 {"grants":[{"id":"<uuid>","action":"reclaim_disk","group_id":"<uuid>","asset_ids":["<uuid>"],"paths":["/srv/app-cache"],"expires_at":"<30天内的RFC3339时间>","cooldown_minutes":1440}]}
 ```
 
+冷却在核查固定诊断前返回真实截止时间，避免旧会话探针错误掩盖冷却；同会话仍禁止重复预留。冷却不等于缺授权，不清空预留或重放动作。
+
 先执行单条 `df -P <mount>`（例如 `df -P /`），引用由服务端实际下发的探针，要求
 最近10分钟成功、无截断/错误、规范 POSIX 容量和精确挂载。一次性预留绑定原问题、授权版本、
 精确回收命令与前探针。所有模板共享每资产的回收冷却，更换目录、模板或 grant 不重置冷却。
@@ -92,3 +94,22 @@ Gate 的内部 `AuthorizedRepair` 标记只在授权预留成功后设置；通�
 或只引用回收前探针均拒绝确认；仍保留预留和冷却，不能自动重放。
 效果验证通过后仍须独立 `findingreview` 确认原问题已经恢复才关闭待办；空间增加本身不等于问题解决。
 当前没有维护范围 Web UI，真实管理员通过既有 GET/PUT 接口维护 `paths`。
+
+## 动作能力、阻塞与唤醒
+
+`Capabilities` 只读返回同组实际资产上待办的支持模板、精确授权、所需固定探针及冷却/窗口时间，不创建预留。
+精确命令的状态分别为 `action_required`、`action_unsupported`、`policy_required`、`maintenance_window_required`、
+`cooldown`、`probe_invalid`、`budget_exhausted` 或 `ready`；业务/上游/人工阻塞继续保留。
+`ready` 只是查询时的前置条件快照，授权、审批后复核、全局开关、签名、租约、预算和审计照旧执行。
+
+管理员 grant 可带 `not_before`（RFC3339，早于 `expires_at`）指定窗口开始。字段缺省即原有有效期行为。
+维护窗口阻塞中的待办需要带明确 `not_before` 的有效授权；模型自己的 `wake_at` 只安排重评估，不授权写操作。
+`RepairError` 仅用于预留前可确定的拒绝；未知 COMMIT 与投递结果不归为可重试前置条件。
+
+正常 `ops-followup` 领取前，通过实际维护策略指纹、服务端冷却截止、计划复查时间与同组依赖待办的状态重新评估。
+依赖恢复仅认已经独立复核或人工标为 resolved 的待办，不把删除、转组、忽略或没有输出当成恢复。
+条件变化只把 `work_next_check_at` 提前并记录 `finding_work_woken` 审计；不提升人工负责人、不减少修复次数、不结案。
+没有新条件时沿用原有退避，不反复唤醒。同一条件核实与计划更新用 CAS 防止覆盖并发预留；依赖登记按组串行防止并发形成环。
+无事件订阅或额外探测进程：唤醒延迟上限受既有自治任务调度周期与排队影响，默认每30分钟检查。
+
+上游依赖仅在登记的同组依赖全部确认 resolved 且精确动作前置条件 ready 后，可重新评估并清除旧依赖阻塞；下发前仍重查依赖，重新打开即拒绝。人工负责人、业务决定和退役确认不得由模型改成机器阻塞来绕过。

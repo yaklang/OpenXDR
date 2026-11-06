@@ -25,6 +25,7 @@ import (
 	"openxdr/server/internal/assetmap"
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/commandgate"
+	"openxdr/server/internal/findings"
 	"openxdr/server/internal/memories"
 	"openxdr/server/internal/modelroute"
 	"openxdr/server/internal/piruntime"
@@ -68,7 +69,9 @@ type Service struct {
 	// VerifyFindingRepair 独立核验磁盘回收前后探针，不以消费预留代替效果。
 	VerifyFindingRepair func(context.Context, *ent.AgentSession, *ent.Finding, []uuid.UUID) error
 	// RecordFindingProbe 绑定实际下发的诊断与回收指令，模型不能伪造关联。
-	RecordFindingProbe func(context.Context, *ent.AgentSession, *ent.Command) error
+	RecordFindingProbe        func(context.Context, *ent.AgentSession, *ent.Command) error
+	FindingRepairCapabilities func(context.Context, *ent.AgentSession, *ent.Finding, string, string) (findings.RepairCapabilities, error)
+	RefreshFindingWork        func(context.Context, uuid.UUID, time.Time) error
 	// FindingRepairAvailable 只读核对当前资产是否存在真实有效的维护授权。
 	FindingRepairAvailable func(context.Context, *ent.AgentSession, *ent.Finding) (bool, error)
 	// FoldAbove 历史超过这么多字节时折叠较早的工具结果与思考过程再发给模型，0 不折叠
@@ -482,6 +485,35 @@ func (s *Service) contextData(ctx context.Context, session *ent.AgentSession) (d
 	if err != nil {
 		return nil, err
 	}
+	if s.FindingRepairCapabilities != nil {
+		for i := range openFindings {
+			claimed := false
+			for _, subject := range session.Subjects {
+				if subject == "finding:"+openFindings[i].ID.String() {
+					claimed = true
+					break
+				}
+			}
+			if !claimed {
+				continue
+			}
+			f, err := s.DB.Finding.Get(ctx, openFindings[i].ID)
+			if err != nil {
+				return nil, err
+			}
+			var w findings.Work
+			if len(f.Work) > 0 {
+				if err := json.Unmarshal(f.Work, &w); err != nil {
+					return nil, err
+				}
+			}
+			cap, err := s.FindingRepairCapabilities(ctx, session, f, w.RepairCommand, w.RepairMount)
+			if err != nil {
+				return nil, err
+			}
+			openFindings[i].Capabilities = &cap
+		}
+	}
 	subjects, err := s.subjectsFor(ctx, session, hostnames)
 	if err != nil {
 		return nil, err
@@ -702,6 +734,7 @@ var reportTool = piruntime.Tool{Name: "report", Description: "保存当前会话
 func (s *Service) tools(ctx context.Context, group uuid.UUID) []piruntime.Tool {
 	tools := []piruntime.Tool{
 		commandStatusTool,
+		repairCapabilitiesTool,
 		verifyCommandTool,
 		{Name: "exec", Description: "对组内资产执行命令，命中高风险名单的由 AI 审计员当场评审，拒绝时附理由。host 为资产 UUID；同一主机领取多个待办时，写操作必须用 finding_id 指定本轮待办 UUID。", Parameters: json.RawMessage(`{"type":"object","properties":{"host":{"type":"string"},"cmd":{"type":"string","minLength":1,"maxLength":32768},"timeout":{"type":"integer","minimum":1,"maximum":300},"finding_id":{"type":"string","format":"uuid"}},"required":["host","cmd"],"additionalProperties":false}`)},
 		{Name: "track", Description: trackDescription, Parameters: trackParameters},
@@ -807,6 +840,8 @@ func (s *Service) tool(ctx context.Context, session *ent.AgentSession, who comma
 			return "", err
 		}
 		return marshal(map[string]any{"reportId": report.ID, "title": report.Title, "level": report.Level})
+	case "repair_capabilities":
+		return s.repairCapabilities(ctx, session, args)
 	case "track":
 		return s.track(ctx, session, args)
 	case "ignore":

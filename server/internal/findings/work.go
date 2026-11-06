@@ -23,6 +23,15 @@ const RepairBudget = 3
 
 // Work 只记录当前调查计划与真实引用，不把模型判断当成人工授权。
 type Work struct {
+	BlockerDetail         string      `json:"blocker_detail,omitempty"`
+	RepairCommand         string      `json:"repair_command,omitempty"`
+	RepairMount           string      `json:"repair_mount,omitempty"`
+	PolicyFingerprint     string      `json:"policy_fingerprint,omitempty"`
+	RetryAt               *time.Time  `json:"retry_at,omitempty"`
+	WakeAt                *time.Time  `json:"wake_at,omitempty"`
+	DependsOn             []uuid.UUID `json:"depends_on,omitempty"`
+	DependencyFingerprint string      `json:"dependency_fingerprint,omitempty"`
+	LastWakeReason        string      `json:"last_wake_reason,omitempty"`
 	Version               int         `json:"version,omitempty"`
 	InvestigationAttempts int         `json:"investigation_attempts,omitempty"`
 	RepairAttempts        int         `json:"repair_attempts,omitempty"`
@@ -120,7 +129,7 @@ func Claim(ctx context.Context, db *ent.Client, session *ent.AgentSession, now t
 		if prior.OriginalProblem == "" {
 			prior.OriginalProblem = f.Detail
 		}
-		prior.Version = 2
+		prior.Version = max(prior.Version, 2)
 		prior.InvestigationAttempts = f.WorkAttempts + 1
 		prior.Stage = "investigating"
 		if prior.Plan == "" {
@@ -191,7 +200,7 @@ func Release(ctx context.Context, db *ent.Client, session uuid.UUID, now time.Ti
 		if w.RiskSince != nil && w.EscalatedAt == nil {
 			delay = 15 * time.Minute
 		}
-		next := now.Add(delay)
+		next := EarlierWake(&w, now, now.Add(delay))
 		if f.WorkNextCheckAt != nil && f.WorkNextCheckAt.After(now) && f.WorkNextCheckAt.Before(next) {
 			next = *f.WorkNextCheckAt
 		}
