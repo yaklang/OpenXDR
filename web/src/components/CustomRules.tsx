@@ -160,7 +160,7 @@ export function CustomRules() {
           },
           { title: t('customRuleUpdated'), dataIndex: 'updatedAt', width: 230, render: (v, r) => `${fmtTime(v)} · ${r.updatedBy}` },
           {
-            title: '', width: 120, align: 'right',
+            title: '', width: 170, align: 'right',
             render: (_, r) => (
               <TableActions>
                 <Button size="small" type="link" icon={<EditOutlined />} onClick={() => open({ id: r.id, content: r.content, enabled: r.enabled })}>{t(isAdmin ? 'customRuleEditBtn' : 'customRuleView')}</Button>
