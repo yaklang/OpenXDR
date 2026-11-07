@@ -20,7 +20,7 @@ func TestBuildContextAssetWork(t *testing.T) {
 	now := time.Now()
 	g := client.Group.Create().SetName("g").SaveX(ctx)
 	a := client.Asset.Create().SetHostname("blue-server").SetGroupID(g.ID).
-		SetListening(json.RawMessage(`[{"addr":"0.0.0.0","port":5555,"proto":"tcp","process":"node","path":"/usr/local/bin/node"}]`)).SetInventoryAt(now).SaveX(ctx)
+		SetListening(json.RawMessage(`[{"addr":"0.0.0.0","port":5555,"proto":"tcp","process":"node","path":"/usr/local/bin/node"},{"addr":"::","port":5555,"proto":"tcp","process":"node","path":"/usr/local/bin/node"}]`)).SetInventoryAt(now).SaveX(ctx)
 	other := client.Asset.Create().SetHostname("elsewhere").SetGroupID(g.ID).SaveX(ctx)
 	f := client.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("smb").SetTitle("SMB 445 源收口").SaveX(ctx)
 	client.Finding.Create().SetGroupID(g.ID).SetAssetID(other.ID).SetKey("x").SetTitle("别的主机的待办").ExecX(ctx)
@@ -50,7 +50,7 @@ func TestBuildContextAssetWork(t *testing.T) {
 	if !strings.Contains(out, "登录会话符合当前登记的可信自动化「运维钥匙」") || strings.Contains(out, "已撤销的") {
 		t.Errorf("应只按有效登记标注来源:\n%s", out)
 	}
-	for _, want := range []string{"SMB 445 源收口", "管理员执行决定（admin", "只允许 Termix 访问 445", "有效", "tcp/5555 0.0.0.0 node(/usr/local/bin/node)"} {
+	for _, want := range []string{"SMB 445 源收口", "管理员执行决定（admin", "只允许 Termix 访问 445", "有效", "tcp/5555 node(/usr/local/bin/node) @::,0.0.0.0"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("上下文缺少 %q:\n%s", want, out)
 		}

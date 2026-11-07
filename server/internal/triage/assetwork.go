@@ -22,7 +22,7 @@ const (
 	assetWorkDays     = 14
 	assetWorkAssets   = 5
 	assetWorkFindings = 8
-	assetWorkPorts    = 30
+	assetWorkPorts    = 100
 )
 
 type listeningPort struct {
@@ -94,14 +94,23 @@ func writeListening(sb *strings.Builder, a *ent.Asset) {
 	if a.InventoryAt != nil {
 		at = a.InventoryAt.UTC().Format(time.RFC3339)
 	}
-	fmt.Fprintf(sb, "监听端口（设备清单 %s，是清单时刻的状态）：", at)
-	parts := make([]string, 0, min(len(ports), assetWorkPorts))
-	for _, p := range ports[:min(len(ports), assetWorkPorts)] {
-		parts = append(parts, fmt.Sprintf("%s/%d %s %s(%s)", p.Proto, p.Port, p.Addr, p.Process, p.Path))
+	fmt.Fprintf(sb, "监听端口（设备清单 %s，是清单时刻的状态；同一端口多个地址合并列出）：", at)
+	// 同一进程在 0.0.0.0 与 :: 上各听一次，按端口/协议/进程合并，地址并列，免得双栈把名额吃掉一半
+	var parts []string
+	index := map[string]int{}
+	for _, p := range ports {
+		key := fmt.Sprintf("%s/%d %s(%s)", p.Proto, p.Port, p.Process, p.Path)
+		if i, ok := index[key]; ok {
+			parts[i] = strings.Replace(parts[i], " @", " @"+p.Addr+",", 1)
+			continue
+		}
+		index[key] = len(parts)
+		parts = append(parts, key+" @"+p.Addr)
 	}
-	sb.WriteString(strings.Join(parts, "；"))
-	if len(ports) > assetWorkPorts {
-		fmt.Fprintf(sb, "；另有 %d 个未列出", len(ports)-assetWorkPorts)
+	shown := parts[:min(len(parts), assetWorkPorts)]
+	sb.WriteString(strings.Join(shown, "；"))
+	if len(parts) > len(shown) {
+		fmt.Fprintf(sb, "；另有 %d 个未列出", len(parts)-len(shown))
 	}
 	sb.WriteString("\n")
 }
