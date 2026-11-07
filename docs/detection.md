@@ -616,7 +616,12 @@ temperature 0.1，超时 `AI_TIMEOUT_SECONDS` 默认 120s
 
 - 需人工复核的口径统一在 `server/internal/review`（`Needed`）：未研判、升级待重研判、恶意、高危可疑、响应决策或人工诱饵观察仍保留复核。已由服务端持久自治计划接管、且与当前证据和结论快照一致的良性和低危可疑事件静默；缺证由 AI 有界调查，预算耗尽后保留事实缺口、等待新证据或调查能力变化，不假结案。
 - `Incident.work` 保存负责人、阶段、证据版本、调查次数、模板与回执引用、唤醒条件及原因，`work_next_check_at` 驱动有界跟进队列。每个证据版本最多三次低优先级跟进，不改写 `evidence_at` 或重放未知指令；节点退出后复用已有研判租约接管。控制台展示实际计划，没有计划不显示已接管。
-- 静默不等于误报。缺证事件永不进入 `StaleBenign`。良性事件到期仅触发独立结案审计，不能靠时间到期或两个模型意见一致直接结案。`closurereview` 首批仅接受低风险、全部原始告警具备真实完整 agent 原文、服务端核验的只读平台指令来源链、当前报告与提案绑定正确且独立审计有正面证据的 benign；高危、恶意、缺证、未知处置和跨组材料均拒绝。结案为 `resolved_by=system`、`resolution_source=ai_review`，保留独立审计和终态 CAS；任何自动或采纳模型结论都不计作独立人工误报统计。 当前平台指令来源告警已在正常关联链路中排除，不进入 incident，因此这一正面来源分支只适用于历史或显式关联数据，不能宣称普通生产事件已具有自动误报结案能力。结束进程 effective 也不证明整起事件恢复，尚无完整恢复证明时不自动 closed，见 `server/internal/closurereview/README.md`。
+- 静默不等于误报。缺证事件永不进入 `StaleBenign`。良性事件到期仅触发独立结案审计，不能靠时间到期或两个模型意见一致直接结案。`closurereview` 每 5 分钟扫描已研判事件，按三条分支复核：
+  - **良性（无需提案）**：研判为 benign、处置分级为空或 observe、建议动作只含 monitor / preserve_evidence / review_closure；全部告警低于高危，不含情报命中、诱饵观测与平台合成检测（首次出现的新进程 `xdr:new-process` 除外），1–20 条且各自有完整原始事件；不涉及核心资产；研判之后没有新证据或新命中，最后一条告警之后安静满 1 小时；无人工接管或锁定。服务端把研判结论、告警与原始事件交给独立审计，审计必须为每个原始事件引用真实字段的完整原值来正面说明良性，服务端逐条比对；"未发现恶意"、常见进程、靶场猜测都不算证据。审计拒绝、出错或引用对不上一律保留事件，同一材料被拒后不重复调用模型。
+  - **平台只读提案**：带服务端核验的只读平台指令来源链与当前报告绑定的 Pi 结案提案，见 `server/internal/closurereview/README.md`。
+  - **已遏制**：见 [已遏制事件自动结案](contained-incident-closure.md)。
+
+  结案为 `resolved_by=system`、`resolution_source=ai_review`，保留独立审计和终态 CAS；任何自动或采纳模型结论都不计作独立人工误报统计。结束进程 effective 也不证明整起事件恢复，尚无完整恢复证明时不自动 closed。
 - 单个结案（`POST /api/incidents/{id}/status`）与批量结案（`POST /api/incidents/batch-status`）共用
   `resolutionOf`：结论与 AI 研判一致时理由可空（说明取研判摘要，记 `resolution_source=ai_verdict`），
   相反或没研判必须写；结案记结案人与时间、清掉 AI 结案建议、逐条写 `incident_status` 审计。

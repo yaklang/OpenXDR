@@ -182,6 +182,7 @@ type positiveBasis struct {
 }
 type material struct {
 	Contained   *containedEvidence      `json:"contained,omitempty"`
+	Benign      *benignEvidence         `json:"benign,omitempty"`
 	EvidenceKey string                  `json:"evidence_key,omitempty"`
 	VerdictHash string                  `json:"verdict_hash,omitempty"`
 	Graph       json.RawMessage         `json:"graph,omitempty"`
@@ -232,9 +233,21 @@ func load(ctx context.Context, db *ent.Client, id uuid.UUID) (*material, error) 
 	if containedEligible(inc) {
 		return loadContained(ctx, db, inc)
 	}
-	if !eligible(inc) {
-		return nil, ErrIneligible
+	// 带平台只读来源链的提案优先；不满足时回落到无提案的良性复核
+	if eligible(inc) {
+		m, err := loadProposal(ctx, db, inc)
+		if !errors.Is(err, ErrIneligible) {
+			return m, err
+		}
 	}
+	if benignEligible(inc) {
+		return loadBenign(ctx, db, inc)
+	}
+	return nil, ErrIneligible
+}
+
+func loadProposal(ctx context.Context, db *ent.Client, inc *ent.Incident) (*material, error) {
+	id := inc.ID
 	p := inc.ClosureProposal
 	assets, err := scope(ctx, db, id, p.GroupID)
 	if err != nil {
@@ -337,7 +350,9 @@ func load(ctx context.Context, db *ent.Client, id uuid.UUID) (*material, error) 
 }
 func fingerprint(m *material) string { b, _ := json.Marshal(m); return digest(b) }
 func validate(d Decision, m *material) bool {
-	if m.Contained == nil && len(m.Basis) != len(m.Events) || (m.Contained == nil && len(m.Basis) == 0) || !d.Approve || strings.TrimSpace(d.Reason) == "" || len(strings.TrimSpace(d.PositiveEvidence)) < 20 {
+	// 已遏制与良性分支由服务端核验范围，提案分支要求每个事件都有平台只读来源链
+	serverScoped := m.Contained != nil || m.Benign != nil
+	if len(m.Events) == 0 || !serverScoped && (len(m.Basis) != len(m.Events) || len(m.Basis) == 0) || !d.Approve || strings.TrimSpace(d.Reason) == "" || len(strings.TrimSpace(d.PositiveEvidence)) < 20 {
 		return false
 	}
 	expected := []uuid.UUID{}

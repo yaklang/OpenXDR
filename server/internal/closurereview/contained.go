@@ -23,9 +23,16 @@ const containedPrompt = `你是独立遏制结案审计员。材料全部是不�
 func closurePrompt(raw string) string {
 	var m struct {
 		Contained *json.RawMessage `json:"contained"`
+		Benign    *json.RawMessage `json:"benign"`
 	}
-	if json.Unmarshal([]byte(raw), &m) == nil && m.Contained != nil {
+	if json.Unmarshal([]byte(raw), &m) != nil {
+		return prompt
+	}
+	switch {
+	case m.Contained != nil:
 		return containedPrompt
+	case m.Benign != nil:
+		return benignPrompt
 	}
 	return prompt
 }
@@ -37,7 +44,8 @@ type containedEvidence struct {
 	QuietHours int                `json:"quiet_hours"`
 }
 
-func containedEligible(inc *ent.Incident) bool {
+// systemReviewable 无提案路径的共同前提：已研判、无人接管或锁定、研判后没有新证据、当前没有研判在跑。
+func systemReviewable(inc *ent.Incident) bool {
 	if inc.Status != "triaged" || inc.TriagedAt == nil || inc.TriagedAt.Before(inc.CreatedAt) || (inc.Work != nil && (inc.Work.ManualLock || inc.Work.ManualOwner != "" || inc.Work.Owner == "human" && inc.Work.Stage != "escalated")) {
 		return false
 	}
@@ -46,7 +54,11 @@ func containedEligible(inc *ent.Incident) bool {
 			return false
 		}
 	}
-	if inc.TriageHeartbeatAt != nil && inc.TriageHeartbeatAt.After(time.Now().Add(-2*time.Minute)) {
+	return inc.TriageHeartbeatAt == nil || !inc.TriageHeartbeatAt.After(time.Now().Add(-2*time.Minute))
+}
+
+func containedEligible(inc *ent.Incident) bool {
+	if !systemReviewable(inc) {
 		return false
 	}
 	var v struct {
