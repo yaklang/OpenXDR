@@ -391,12 +391,7 @@ func validate(d Decision, m *material) bool {
 			if ev.ID != c.EventID {
 				continue
 			}
-			var raw map[string]any
-			if json.Unmarshal(ev.Raw, &raw) != nil {
-				return false
-			}
-			// 材料里原文放在 raw 键下，模型常把 raw. 带进路径；去掉前缀后仍须与原文完全一致
-			value, ok := suppress.Lookup(raw, strings.TrimPrefix(c.Field, "raw."))
+			value, ok := claimValue(ev, c.Field)
 			if !ok || value != c.Value {
 				return false
 			}
@@ -413,6 +408,20 @@ func validate(d Decision, m *material) bool {
 		}
 	}
 	return true
+}
+
+// claimValue 引用的路径可相对于材料里的事件对象（raw.process.cmd_line、username 等服务端入库字段），
+// 也可相对于原文（process.cmd_line）；两种都在服务端数据上逐字比对。
+func claimValue(ev *ent.Event, field string) (string, bool) {
+	var doc, raw map[string]any
+	b, _ := json.Marshal(ev)
+	if json.Unmarshal(b, &doc) != nil || json.Unmarshal(ev.Raw, &raw) != nil {
+		return "", false
+	}
+	if v, ok := suppress.Lookup(doc, field); ok {
+		return v, true
+	}
+	return suppress.Lookup(raw, field)
 }
 
 // Review 对当前快照独立复核；相同快照被拒绝后不重复调用模型，新增证据/新提案才唤醒。

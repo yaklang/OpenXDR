@@ -24,7 +24,7 @@ const benignPrompt = `你是独立结案审计员，评审这起研判为良性�
 逐条核对每条告警对应的原始事件，判断其现有字段（可执行路径、完整命令行、父进程及其命令行、用户、容器、目标地址等）能否正面说明这是常见的系统、运维、中间件或业务行为，且与攻击手法无关。例如：包管理器或系统工具的标准子步骤、容器运行时派生的服务管理与状态查询、中间件自带的运维脚本、配置模板渲染、监控采集。
 材料里本来就没有的信息（命令输出、文件签名、更长的进程链、其他主机日志）不是拒绝理由；只要现有字段足以正面说明，就应批准。
 出现以下任一情况必须拒绝：可执行文件位于 /tmp、/dev/shm、/var/tmp 等可写临时目录却冒充系统命令名；下载后执行；编码或混淆载荷被执行（如 base64 解码结果交给 shell）；反弹或可疑外联；读取凭据或密钥（shadow、.ssh、云凭据、浏览器数据）；清除日志或痕迹；写入持久化（cron、systemd、authorized_keys、启动脚本）；提权；关闭安全防护；横向登录；关键字段被截断导致看不到实际行为；或你无法给出具体的正面解释。
-批准必须引用材料中的全部原始事件 id，并为每个事件给出至少一条 claims：field 是该事件 raw 内的字段路径（如 process.cmd_line、process.parent_process.cmd_line），不引用 raw 之外的字段，value 是该字段的完整原值，服务端逐字比对。理由与正面证据保持简短。
+批准必须引用材料中的全部原始事件 id，并为每个事件给出至少一条 claims：field 是材料中该事件的字段路径（如 raw.process.cmd_line、raw.process.parent_process.cmd_line），value 是该字段的完整原值，服务端逐字比对。理由与正面证据保持简短。
 仅输出JSON：{"approve":false,"reason":"理由","positive_evidence":"每条告警为何良性的具体证据，不能是缺失/未发现","event_ids":["原始事件UUID"],"claims":[{"event_id":"原始事件UUID","field":"process.cmd_line 等原始结构化字段","value":"完整原值"}]}`
 
 type benignHost struct {

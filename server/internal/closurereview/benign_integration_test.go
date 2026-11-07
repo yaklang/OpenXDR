@@ -32,7 +32,8 @@ func setupBenign(t *testing.T) *fixture {
 	f.r.Judge = func(context.Context, string, string) (Decision, error) {
 		f.calls++
 		d := benignApproval(f.ev.ID, benignCmd)
-		d.Claims[0].Field = "raw.process.cmd_line"
+		// 事件对象路径（含入库字段）与原文路径都按服务端数据逐字核对
+		d.Claims = append(d.Claims, Claim{EventID: f.ev.ID, Field: "raw.process.cmd_line", Value: benignCmd}, Claim{EventID: f.ev.ID, Field: "source", Value: "agent"})
 		return d, nil
 	}
 	return f
@@ -122,7 +123,7 @@ func TestBenignDisqualifiers(t *testing.T) {
 
 // 审计拒绝、出错、引用不存在的字段值或漏引事件，都保留事件
 func TestBenignAuditorFailClosed(t *testing.T) {
-	for _, mode := range []string{"reject", "error", "wrong_value", "missing_event", "outside_raw"} {
+	for _, mode := range []string{"reject", "error", "wrong_value", "missing_event", "unknown_field"} {
 		t.Run(mode, func(t *testing.T) {
 			f := setupBenign(t)
 			f.r.Judge = func(context.Context, string, string) (Decision, error) {
@@ -131,9 +132,9 @@ func TestBenignAuditorFailClosed(t *testing.T) {
 					return Decision{}, errors.New("模型不可用")
 				case "wrong_value":
 					return benignApproval(f.ev.ID, "/usr/bin/apt-get update"), nil
-				case "outside_raw":
+				case "unknown_field":
 					d := benignApproval(f.ev.ID, benignCmd)
-					d.Claims = []Claim{{EventID: f.ev.ID, Field: "source", Value: "agent"}}
+					d.Claims = []Claim{{EventID: f.ev.ID, Field: "raw.process.missing", Value: benignCmd}}
 					return d, nil
 				case "missing_event":
 					d := benignApproval(f.ev.ID, benignCmd)
