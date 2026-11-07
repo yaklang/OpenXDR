@@ -259,10 +259,11 @@ TCP 当前使用换行分帧；不支持 TLS Syslog 与 RFC6587 octet-counting�
 哈希情报撞的是 agent 随进程事件上报的 exe SHA-256（同一二进制只算一次，缓存按 mtime 失效）。
 
 **情报订阅**：内置 abuse.ch Feodo Tracker（僵尸网络 C2 IP）、ThreatFox
-（近期恶意软件 IP / 域名 / 哈希）、URLhaus（恶意软件分发域名）与 Emerging Threats
+（近 14 天恶意软件 IP / 域名 / 哈希）、URLhaus（恶意软件分发域名）与 Emerging Threats
 （失陷主机 IP）四个公开源，默认全部开启，server 单活每 `INTEL_FEED_INTERVAL_HOURS`
 （默认 6）小时拉取一次。内网与保留地址不入库；ThreatFox 的 URL 只收主机是 IP 的，
-挂在 GitHub 之类公共平台上的恶意 URL 若按主机名入库会误伤正常访问。手工录入的同值情报
+挂在 GitHub 之类公共平台上的恶意 URL 若按主机名入库会误伤正常访问；ThreatFox 认证导出是半年全量，
+只取其中最新一条往前 14 天内首次出现的条目。手工录入的同值情报
 优先；源里撤下的条目约两天后到期失效，关掉的源立即清空。在「威胁情报」页可逐个开关、
 立即同步，并直接看到哪些订阅情报命中过。server 需要能访问这些源（可经 `HTTPS_PROXY`）。
 

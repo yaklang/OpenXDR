@@ -52,7 +52,7 @@ type Entry struct {
 var Catalog = []Feed{
 	{ID: "feodo", Name: "abuse.ch Feodo Tracker：僵尸网络 C2 服务器 IP",
 		URL: "https://feodotracker.abuse.ch/downloads/ipblocklist.txt", Severity: 5, parse: parseList},
-	{ID: "threatfox", Name: "abuse.ch ThreatFox：近期恶意软件 IOC（IP、域名、哈希）",
+	{ID: "threatfox", Name: "abuse.ch ThreatFox：近 14 天恶意软件 IOC（IP、域名、哈希）",
 		URL: "https://threatfox.abuse.ch/export/", Severity: 4, authURL: "https://threatfox-api.abuse.ch/v2/files/exports/", authFile: "full.csv.zip", parse: parseThreatFoxZIP},
 	{ID: "urlhaus", Name: "abuse.ch URLhaus：恶意软件分发域名",
 		URL: "https://urlhaus.abuse.ch/api/", Severity: 4, authURL: "https://urlhaus-api.abuse.ch/v2/files/exports/", authFile: "hostfile.txt", parse: parseHostsFile},
@@ -421,9 +421,46 @@ func parseHostsFile(r io.Reader) ([]Entry, error) {
 	return out.entries, nil
 }
 
+// ThreatFox 认证导出只有半年全量，远超条目上限；只取导出里最新一条往前 14 天内首次出现的，
+// 以导出自身而非本机时钟为基准，同一份数据结果可复现。
+const threatFoxWindow = 14 * 24 * time.Hour
+
+type threatFoxRow struct {
+	seen                time.Time
+	value, typ, malware string
+}
+
 // parseThreatFox ThreatFox CSV 导出。URL 只取主机为 IP 的：挂在公共平台上的恶意 URL
 // 若按主机名入库，访问正常的 GitHub、Google 也会报警。
 func parseThreatFox(r io.Reader) ([]Entry, error) {
+	rows, err := readThreatFox(r)
+	if err != nil {
+		return nil, err
+	}
+	var newest time.Time
+	for _, row := range rows {
+		if row.seen.After(newest) {
+			newest = row.seen
+		}
+	}
+	cutoff := newest.Add(-threatFoxWindow)
+	var out feedEntries
+	for _, row := range rows {
+		e, ok := threatFoxEntry(row.value, row.typ)
+		if !ok || row.seen.Before(cutoff) {
+			continue
+		}
+		if row.malware != "" && row.malware != "None" {
+			e.Note = "ThreatFox：" + row.malware
+		}
+		if err := out.add(e); err != nil {
+			return nil, err
+		}
+	}
+	return out.entries, nil
+}
+
+func readThreatFox(r io.Reader) ([]threatFoxRow, error) {
 	var body strings.Builder
 	err := lines(r, func(line string) error {
 		body.WriteString(line + "\n")
@@ -435,11 +472,11 @@ func parseThreatFox(r io.Reader) ([]Entry, error) {
 	rd := csv.NewReader(strings.NewReader(body.String()))
 	rd.TrimLeadingSpace = true
 	rd.FieldsPerRecord = -1
-	var out feedEntries
+	var rows []threatFoxRow
 	for {
 		rec, err := rd.Read()
 		if err == io.EOF {
-			break
+			return rows, nil
 		}
 		if err != nil {
 			return nil, errors.New("ThreatFox CSV 格式损坏")
@@ -447,30 +484,27 @@ func parseThreatFox(r io.Reader) ([]Entry, error) {
 		if len(rec) < 8 {
 			return nil, errors.New("ThreatFox CSV 字段不足")
 		}
-		value, typ, malware := rec[2], rec[3], rec[7]
-		var e Entry
-		var ok bool
-		switch {
-		case typ == "ip:port":
-			host, _, _ := strings.Cut(value, ":")
-			e, ok = normalize("ip", host)
-		case typ == "domain":
-			e, ok = normalize("domain", value)
-		case strings.HasSuffix(typ, "_hash"):
-			e, ok = normalize("hash", value)
-		case typ == "url":
-			if u, err := url.Parse(value); err == nil {
-				e, ok = normalize("ip", u.Hostname())
-			}
+		seen, err := time.Parse(time.DateTime, rec[0])
+		if err != nil {
+			return nil, errors.New("ThreatFox CSV 首次出现时间格式错误")
 		}
-		if ok {
-			if malware != "" && malware != "None" {
-				e.Note = "ThreatFox：" + malware
-			}
-			if err := out.add(e); err != nil {
-				return nil, err
-			}
+		rows = append(rows, threatFoxRow{seen: seen, value: rec[2], typ: rec[3], malware: rec[7]})
+	}
+}
+
+func threatFoxEntry(value, typ string) (Entry, bool) {
+	switch {
+	case typ == "ip:port":
+		host, _, _ := strings.Cut(value, ":")
+		return normalize("ip", host)
+	case typ == "domain":
+		return normalize("domain", value)
+	case strings.HasSuffix(typ, "_hash"):
+		return normalize("hash", value)
+	case typ == "url":
+		if u, err := url.Parse(value); err == nil {
+			return normalize("ip", u.Hostname())
 		}
 	}
-	return out.entries, nil
+	return Entry{}, false
 }

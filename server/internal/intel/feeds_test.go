@@ -3,6 +3,7 @@ package intel
 import (
 	"io"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -98,5 +99,28 @@ func TestFeedEntriesDedupe(t *testing.T) {
 	out := collected.entries
 	if len(out) != 2 || out[0].Note != "a" {
 		t.Errorf("同值只留第一条，实际 %v", out)
+	}
+}
+
+// 认证导出是半年全量：只留最新一条往前 14 天内的，旧条目不占上限。
+func TestParseThreatFoxRecentWindow(t *testing.T) {
+	csv := strings.Join([]string{
+		`"2026-11-01 00:00:00", "1", "new.example.test", "domain", "x", "x", "x", "New", "", "50"`,
+		`"2026-10-18 00:00:00", "2", "edge.example.test", "domain", "x", "x", "x", "Edge", "", "50"`,
+		`"2026-10-17 23:59:59", "3", "old.example.test", "domain", "x", "x", "x", "Old", "", "50"`,
+	}, "\n")
+	entries, err := parseThreatFox(strings.NewReader(csv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range entries {
+		got = append(got, e.Value)
+	}
+	if strings.Join(got, ",") != "new.example.test,edge.example.test" {
+		t.Errorf("应只保留 14 天窗口内的条目，实际 %v", got)
+	}
+	if _, err := parseThreatFox(strings.NewReader(`"昨天", "1", "a.example.test", "domain", "x", "x", "x", "A"`)); err == nil {
+		t.Error("时间格式错误必须拒绝")
 	}
 }

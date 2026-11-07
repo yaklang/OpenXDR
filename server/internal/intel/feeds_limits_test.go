@@ -16,7 +16,9 @@ func TestFeedParsersBoundUniqueEntries(t *testing.T) {
 	}{
 		{"IP列表", func(i int) string { return fmt.Sprintf("11.%d.%d.%d\n", i>>16, (i>>8)&255, i&255) }, parseList},
 		{"hosts列表", func(i int) string { return fmt.Sprintf("127.0.0.1 host-%d.example.test\n", i) }, parseHostsFile},
-		{"ThreatFox", func(i int) string { return fmt.Sprintf("1,now,host-%d.example.test,domain,x,x,x,fixture\n", i) }, parseThreatFox},
+		{"ThreatFox", func(i int) string {
+			return fmt.Sprintf("2026-11-01 00:00:00,id,host-%d.example.test,domain,x,x,x,fixture\n", i)
+		}, parseThreatFox},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var body strings.Builder
