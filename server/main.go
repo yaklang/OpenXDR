@@ -160,7 +160,7 @@ func main() {
 	queryRoles := startQueryRoles(ctx, db, client, dsn)
 	chat := startChat(ctx, db, client, rules, hub, webhook, conf, queryRoles, suppressionReviewer)
 	triageEngine.EndpointEvidence = chat.CollectEndpointEvidence
-	chat.ReviewFinding = (&findingreview.Reviewer{Endpoint: chat.Endpoint, OnUsage: aiconf.Recorder(client, "finding_review")}).Review
+	chat.ReviewFinding = (&findingreview.Reviewer{DB: client, Endpoint: chat.Endpoint, OnUsage: aiconf.Recorder(client, "finding_review")}).Review
 	repair := &repairpolicy.Store{DB: client}
 	chat.AuthorizeFindingRepair = repair.Authorize
 	chat.RevalidateFindingRepair = repair.Revalidate

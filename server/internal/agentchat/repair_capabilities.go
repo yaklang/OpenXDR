@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-var repairCapabilitiesTool = piruntime.Tool{Name: "repair_capabilities", Description: "只读查询当前组待办的支持模板、精确维护范围、冷却/窗口时间及本会话固定探针要求。command 为完整精确命令；此查询不授予权限，不消耗预算。", Parameters: json.RawMessage(`{"type":"object","properties":{"finding_id":{"type":"string","format":"uuid"},"command":{"type":"string","maxLength":512},"mount":{"type":"string","maxLength":256}},"required":["finding_id"],"additionalProperties":false}`)}
+var repairCapabilitiesTool = piruntime.Tool{Name: "repair_capabilities", Description: "只读查询ops-followup封闭自动维修模板、维护范围、冷却/窗口和固定探针。它不代表管理员委托对话的全部能力；对话按operator_decision和commandgate/AI审计执行。此查询不授予权限，不消耗预算。command为完整精确命令。", Parameters: json.RawMessage(`{"type":"object","properties":{"finding_id":{"type":"string","format":"uuid"},"command":{"type":"string","maxLength":512},"mount":{"type":"string","maxLength":256}},"required":["finding_id"],"additionalProperties":false}`)}
 
 func (s *Service) repairCapabilities(ctx context.Context, session *ent.AgentSession, args json.RawMessage) (string, error) {
 	var body struct {

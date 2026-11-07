@@ -64,6 +64,8 @@ func minRole(method, path string) string {
 		// Pi 的写权限由具体 handler 按组检查，不能被全局 viewer 角色提前截断。
 	case strings.HasPrefix(path, "/api/agent-sessions"), strings.HasPrefix(path, "/api/command-policies"), strings.HasPrefix(path, "/api/approvals"), strings.HasPrefix(path, "/api/enroll-tokens"), strings.HasPrefix(path, "/api/host-import/"):
 		return "viewer"
+	case strings.HasPrefix(path, "/api/findings/") && strings.HasSuffix(path, "/decision"):
+		return "viewer" // 执行决定由 handler 核对当前组 admin，不能被全局 viewer 角色提前拦下。
 	case method == http.MethodGet:
 		return "viewer"
 	default:

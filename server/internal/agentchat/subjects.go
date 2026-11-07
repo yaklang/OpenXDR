@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -16,10 +17,13 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/finding"
 	"openxdr/server/ent/incident"
+	"openxdr/server/internal/findings"
 )
 
 // subjectsPrompt 会话绑定了事件或待办时追加的说明；结案留给人，因为结案备注会作为人工案例喂回研判。
 const subjectsPrompt = "subjects 是用户从界面交给你处理的事件或待办，平台每轮按库里的当前状态提供：围绕它们调查、核实并处置，需要执行的命令照常直接下发，高风险命令与抑制提议照常由 AI 审计员当场评审。" +
+	"context.operator_decision 如存在，是管理员对当前待办签发的有效执行决定；按其范围执行，不把同一事项再写成等待授权。它不覆盖最新用户的只读/停止限制、硬拒绝、未知回执、人工持有或安全审计。repair_capabilities 只描述 ops-followup 封闭维修模板，不代表对话会话的全部执行能力。" +
+	"subjects中的operator_decision供所有后续会话识别已经作出的决定，并链接原执行会话；只有绑定的delegated_chat会话承接其执行范围，当前任务权限不变。已决定但当前任务不支持时写具体能力边界，不能又说管理员尚未决定，不创建重复执行。" +
 	"指令 succeeded 只说明执行回执成功，不证明处置有效；结果未知时先用 command_status 查回执，不要重复执行。结合最新告警与独立复查结果判断效果。" +
 	"事件由人在界面上结案：查证完每个事件用 propose_close 提结案建议（属实已处置 closed / 误报或良性 false_positive，附定性与关键证据），人在事件页一键采纳；待办处理好并复查确认后，用 track 标 resolved（host 与 key 取 subject 里的值）。"
 
@@ -131,13 +135,15 @@ func (s *Service) incidentSubject(ctx context.Context, id, group uuid.UUID, host
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	row := map[string]any{
 		"alert_count": total, "alerts_truncated": total > len(rows), "recent_commands": receipts,
 		"triaged_at": inc.TriagedAt, "evidence_at": inc.EvidenceAt, "closure_proposal": inc.ClosureProposal,
 		"resolution": inc.Resolution, "resolved_at": inc.ResolvedAt,
 		"kind": "incident", "id": inc.ID, "title": inc.Title, "status": inc.Status,
 		"created_at": inc.CreatedAt, "ai_verdict": inc.AiVerdict, "alerts": rows,
-	}, nil
+	}
+
+	return row, nil
 }
 
 func (s *Service) findingSubject(ctx context.Context, id, group uuid.UUID, hostnames map[uuid.UUID]string) (map[string]any, error) {
@@ -149,11 +155,30 @@ func (s *Service) findingSubject(ctx context.Context, id, group uuid.UUID, hostn
 	if err != nil || !allowed {
 		return nil, err
 	}
-	return map[string]any{
+	row := map[string]any{
 		"kind": "finding", "id": f.ID, "host": f.AssetID, "hostname": hostnames[f.AssetID], "key": f.Key,
 		"title": f.Title, "detail": f.Detail, "severity": f.Severity, "status": f.Status, "note": f.Note,
 		"work_owner": f.WorkOwner, "work": findingWorkJSON(f), "next_check_at": f.WorkNextCheckAt, "work_attempts": f.WorkAttempts,
-	}, nil
+	}
+	d, err := findings.LoadDecision(ctx, s.DB, f.ID)
+	if err != nil {
+		return nil, err
+	}
+	if d != nil && d.GroupID == group && d.AssetID == f.AssetID {
+		if err := d.Validate(ctx, s.DB, time.Now()); err == nil {
+			execution, err := s.DB.AgentSession.Get(ctx, d.SessionID)
+			if err != nil {
+				return nil, err
+			}
+			if execution.GroupID != group || execution.Initiator != d.Author {
+				return nil, fmt.Errorf("管理员执行会话归属不匹配")
+			}
+			row["operator_decision"], row["operator_execution_status"] = d, execution.Status
+		} else {
+			row["operator_decision_unavailable"] = err.Error()
+		}
+	}
+	return row, nil
 }
 
 // evidence 告警事件里最能说明发生了什么的那一项：命令行 / 文件路径 / 连接目标，截到 200 字

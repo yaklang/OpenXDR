@@ -200,7 +200,7 @@ func (s *Service) findingEvidence(ctx context.Context, session *ent.AgentSession
 			}
 			for _, action := range later {
 				if action.Kind != "exec" || action.Cmd == nil || !commandgate.ReadOnly(*action.Cmd) {
-					return errors.New("复查后发生了新写操作，必须重新独立验证")
+					return fmt.Errorf("复查指令 %s 之后发生了写操作 %s；结案只能引用晚于该写操作的独立探针，不要混入修复前证据", c.ID, action.ID)
 				}
 			}
 		} else {
@@ -258,7 +258,24 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 		return err
 	}
 	oldBlocker := prior.Blocker
-	if (oldBlocker == "manual_business_decision" || oldBlocker == "legacy_decommission_confirm") && blocker != "" && blocker != oldBlocker {
+	if blocker == "none" && oldBlocker == "" {
+		blocker = ""
+	}
+	decisionAcknowledged := false
+	if blocker == "none" && (oldBlocker == "manual_business_decision" || oldBlocker == "legacy_decommission_confirm" || oldBlocker == "permission") {
+		d, err := findings.DecisionForSession(ctx, s.DB, session)
+		if err != nil {
+			return err
+		}
+		decisionAcknowledged = d != nil && d.FindingID == f.ID && f.WorkOwner == "ai"
+		if decisionAcknowledged {
+			// 承接人工意图不是声明修复；结案仍独立核对变更后证据。
+			if err := s.findingEvidence(ctx, session, f, ids, false, "none"); err != nil {
+				return err
+			}
+		}
+	}
+	if !decisionAcknowledged && (oldBlocker == "manual_business_decision" || oldBlocker == "legacy_decommission_confirm") && blocker != "" && blocker != oldBlocker {
 		return errors.New("业务决策或退役阻塞不能由模型改写为机器前置条件")
 	}
 	if oldBlocker == "external_dependency" && blocker != "" && blocker != oldBlocker && blocker != "none" {
@@ -281,10 +298,10 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 			}
 			dependencyRecovered = all
 		}
-		if !findings.MachineBlocker(prior.Blocker) && prior.Blocker != "maintenance_window_required" && !dependencyRecovered {
+		if !decisionAcknowledged && !findings.MachineBlocker(prior.Blocker) && prior.Blocker != "maintenance_window_required" && !dependencyRecovered {
 			return errors.New("不能由模型解除业务决策、退役、人工或上游依赖阻塞")
 		}
-		if state == nil || state.Status != "ready" {
+		if !decisionAcknowledged && (state == nil || state.Status != "ready") {
 			return errors.New("服务端尚未确认精确动作前置条件可用")
 		}
 		prior.Blocker = ""

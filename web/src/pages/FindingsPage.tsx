@@ -13,6 +13,7 @@ import { Ago, EmptyHint, Refreshed } from '../components/Ago'
 import { LoadError } from '../components/LoadError'
 import { ResolveModal } from '../components/ResolveModal'
 import { CommandDetailDrawer } from '../components/CommandDetailDrawer'
+import { FindingDecisionPanel } from '../components/FindingDecisionPanel'
 import { errText, fmtTime } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
 
@@ -224,6 +225,7 @@ export function FindingsPage() {
           expandable={{ expandedRowRender: f => <div className="ev-expand">
             <pre className="json-block" style={{ whiteSpace: 'pre-wrap' }}>{f.detail || '-'}</pre>
             <FindingWorkDetails finding={f} onCommand={setCommandId} />
+            <FindingDecisionPanel finding={f} />
           </div> }}
           columns={[
             { title: t('thSeverity'), dataIndex: 'severity', width: 95, sorter: (a, b) => SEVERITY[a.severity].rank - SEVERITY[b.severity].rank, render: (v: FindingRow['severity']) => <Tag color={SEVERITY[v]?.color}>{t(SEVERITY[v]?.key ?? 'sev1')}</Tag> },

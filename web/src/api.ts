@@ -306,6 +306,15 @@ export const fetchFindingsPage = (params: { status?: string; workOwner?: 'ai' | 
 export const setFindingStatus = (id: string, status: string, note?: string) =>
   send('POST', `/api/findings/${id}/status`, { status, note })
 
+export type FindingDecision = {
+  requestId: string; findingId: string; assetId: string; groupId: string; sessionId: string
+  author: string; instruction: string; createdAt: string; expiresAt: string; revoked: boolean
+}
+export const fetchFindingDecision = (id: string) => get<FindingDecision | null>(`/api/findings/${id}/decision`)
+export const delegateFinding = async (id: string, body: { requestId: string; instruction: string; expiresAt: string }): Promise<{ decision: FindingDecision; created: boolean; runError?: string }> =>
+  (await send('POST', `/api/findings/${id}/decision`, body)).json()
+export const revokeFindingDecision = (id: string) => send('DELETE', `/api/findings/${id}/decision`)
+
 // 报告是文件下载：拿到 blob 后用临时链接触发浏览器保存
 export async function downloadReport(id: string, title: string | null): Promise<void> {
   const r = await fetch(`/api/incidents/${id}/report`)

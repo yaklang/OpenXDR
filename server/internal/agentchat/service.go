@@ -485,7 +485,7 @@ func (s *Service) contextData(ctx context.Context, session *ent.AgentSession) (d
 	if err != nil {
 		return nil, err
 	}
-	if s.FindingRepairCapabilities != nil {
+	if session.Kind == "task" && s.FindingRepairCapabilities != nil {
 		for i := range openFindings {
 			claimed := false
 			for _, subject := range session.Subjects {
@@ -528,6 +528,15 @@ func (s *Service) contextData(ctx context.Context, session *ent.AgentSession) (d
 	}
 	data = map[string]any{"decoy_exclusions": exclusions, "decoys_truncated": decoysTruncated, "assets": inventory, "truncated": len(rows) > 200,
 		"rule_titles": titles, "open_findings": openFindings, "ignored_findings": ignoredFindings, "resolved_findings": resolvedFindings, "memories": memo}
+	decision, err := findings.DecisionForSession(ctx, s.DB, session)
+	if err != nil {
+		return nil, err
+	}
+	if decision != nil {
+		data["operator_decision"] = decision
+		data["execution_mode"] = "delegated_chat"
+		data["execution_boundary"] = "这是管理员按待办签发的执行会话；已记录的决定不再重复等同一授权。repair_capabilities 仅描述 ops-followup 的封闭自动维修模板，不是此对话的全部能力；本会话写动作仍受精确资产范围、commandgate 名单/AI审计和硬拒绝约束。最新用户的只读/停止要求优先，模型不能自行扩大决定。"
+	}
 	if len(subjects) > 0 {
 		data["subjects"] = subjects
 	}
@@ -762,6 +771,11 @@ func (s *Service) tool(ctx context.Context, session *ent.AgentSession, who comma
 		return "", err
 	}
 	session = current
+	decision, decisionErr := findings.DecisionForSession(ctx, s.DB, session)
+	// 已撤销的委托仍可查原回执和报告，但不能继续制造副作用。
+	if decisionErr != nil && name != "command_status" && name != "report" && name != "query" && name != "memories" {
+		return "", decisionErr
+	}
 	switch name {
 	case "command_status":
 		return s.commandStatus(ctx, session, args)
@@ -779,6 +793,14 @@ func (s *Service) tool(ctx context.Context, session *ent.AgentSession, who comma
 		}
 		if body.Timeout > 300 {
 			return "", errors.New("timeout 超过 300 秒")
+		}
+		if decision != nil && !commandgate.ReadOnly(body.Cmd) {
+			if err := findings.GuardDecisionWrite(ctx, s.DB, session, body.Host, decision.RequestID); err != nil {
+				return "", err
+			}
+			who.BeforeIssue = func(issueCtx context.Context) error {
+				return findings.GuardDecisionWrite(issueCtx, s.DB, session, body.Host, decision.RequestID)
+			}
 		}
 		repairTarget, err := s.findingExecTarget(ctx, session, body.Host, body.Cmd, body.FindingID)
 		if err != nil {

@@ -2,6 +2,12 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 
 // 全部界面文案。自制轻量字典：英文由 satisfies 约束，缺键编译不过
 const zh = {
+  findingDecisionTitle: "管理员执行决定",
+  findingDecisionActive: "决定有效",
+  findingDecisionInactive: "已撤销或到期",
+  findingDecisionRevoke: "撤销后续执行",
+  findingDecisionExecute: "决定并交给 AI 执行",
+  findingDecisionHint: "写明允许执行的事项、范围和限制。决定绑定当前待办与资产，有效24小时，提交后立即开始。命令仍经安全审计；已有未知回执不重放，硬拒绝不放行。",
   findingWorkCooldown: "修复动作冷却中",
   findingWorkProbeInvalid: "本轮探针缺失或失效",
   findingWorkActionUnsupported: "平台不支持该修复动作",
@@ -2078,6 +2084,12 @@ const zh = {
 export type MsgKey = keyof typeof zh
 
 const en = {
+  findingDecisionTitle: "Administrator execution decision",
+  findingDecisionActive: "Active decision",
+  findingDecisionInactive: "Revoked or expired",
+  findingDecisionRevoke: "Revoke further execution",
+  findingDecisionExecute: "Decide and delegate to AI",
+  findingDecisionHint: "Describe the permitted work, scope and constraints. The decision binds this finding and asset for 24 hours and starts execution immediately. Commands still require security review. Unknown outcomes are never replayed and hard denials remain enforced.",
   findingWorkCooldown: "Repair action cooling down",
   findingWorkProbeInvalid: "Current probe missing or invalid",
   findingWorkActionUnsupported: "Repair action unsupported by platform",

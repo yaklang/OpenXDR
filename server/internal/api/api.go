@@ -156,6 +156,7 @@ func Handler(db *ent.Client, conn *stdsql.DB, rules sigma.Catalog, hub *response
 	mapTasks(mux, db)
 	mapSSHDecoys(mux, db)
 	mapFindings(mux, db)
+	mapFindingDecisions(mux, db, chat)
 	mapMemories(mux, db)
 	mapReportRender(mux, db)
 	mapReportReads(mux, db)
