@@ -107,7 +107,8 @@
 
 - `curl … | bash` 在脚本或交互式 shell 里由 shell fork 出两个兄弟进程，`curl URL` 与无参数 / `-s` 的 `bash` 各一条命令行，
   都不含 `|`，单事件 `lnx_download_exec` 只看得到 `sh -c "curl … | sh"` 这种整条进命令行的形态。两端各写一条信号规则：
-  curl / wget 启动；不带脚本参数的 shell（`bash`、`sh -s`、`sh -s - server`，不含登录 shell `-bash`、`bash -c`、`bash x.sh`）。
+  curl / wget 启动（输出进不了 shell stdin 的不算：`-o 文件`/`--output /dev/null`/`-O`、`-d`/`-F`/`-T` 上传数据、访问本机回环，
+  以及默认写文件的 wget；`-o -`、`-O -`、`-qO-` 这类输出到 stdout 的照算）；不带脚本参数的 shell（`bash`、`sh -s`、`sh -s - server`，不含登录 shell `-bash`、`bash -c`、`bash x.sh`）。
   两者单独看都是运维噪声，只作信号。兄弟进程几乎同时 exec，采集到的先后不保证 curl 在前，所以用 `temporal` 不论先后，
   5 秒窗口给轮询 / netlink 采集的时间戳抖动留余量。
 - 生产 7 天回测（同上）：两条信号分别每天约 137 次与 28 次（监控探活 curl、`timeout 5 sh` 等运维插件），链路命中 2 次，

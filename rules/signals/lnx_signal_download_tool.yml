@@ -21,5 +21,18 @@ detection:
     CommandLine|startswith:
       - 'curl '
       - 'wget '
-  condition: image or command
+  # 输出进不了 shell stdin 的不算：写文件或 /dev/null、上传数据、访问本机回环；wget 默认写文件。
+  # 写成 -o - / -O - / --output-document=- 的是输出到 stdout，照算
+  to_file:
+    CommandLine|re: '\s(-o|--output)\s+[^-\s]|(?-i:\s(-O|--remote-name)(\s|$))'
+  stdout:
+    CommandLine|re: '\s-[a-z]*o\s*-(\s|$)|--output(-document)?[=\s]-(\s|$)'
+  # 区分大小写：-F 是表单上传，-f 是失败即退出（curl -f url | sh 正是要抓的形态）
+  upload:
+    CommandLine|re: '(?-i:\s(-d|--data|--data-binary|--data-raw|--data-urlencode|-F|--form|-T|--upload-file)(\s|=))'
+  loopback:
+    CommandLine|re: '(https?://|\s)(localhost|127\.0\.0\.1|\[::1\])([:/\s]|$)'
+  wget:
+    CommandLine|re: '^(\S*/)?wget\s'
+  condition: (image or command) and not ((to_file or wget) and not stdout) and not upload and not loopback
 level: informational

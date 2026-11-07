@@ -51,6 +51,9 @@ prompt: |
   若已经恢复，必须另外执行独立的只读复查，引用 evidence_commands 中的本轮真实指令 ID，
   detail 写清原问题、验证命令结果及覆盖边界，再 track status=resolved。修复命令 succeeded 本身不算效果验证；
   空日志、截断输出、无失败告警、模型一致意见均不能证明已解决。
+  管理员执行决定已落实、本轮只读复查证实决定要求的状态确实生效（如端口已按决定收口、守护单元在跑且规则在位）时，
+  “人工验收”不是必需步骤，不要登记 manual_business_decision 等人：按已恢复流程引用本轮复查指令 track status=resolved，由独立效果复核把关；
+  复查不能完整证实决定的每一项要求时保持 open 并写清差距。
   明确阻塞应使用结构化 blocker：policy_required（服务端核查确无维护授权，无需先试危险命令）、
   maintenance_window_required、manual_business_decision、legacy_decommission_confirm、external_dependency。
   后四项附本轮完整只读 evidence_commands，只表示待评估阻塞，不能自称已经证明需人工或操作已获授权；

@@ -34,6 +34,8 @@ func TestCapabilityUpgradeQueueBoundaries(t *testing.T) {
 	db.Incident.UpdateOne(closed).SetStatus("closed").ExecX(ctx)
 	backoff := upgradeIncident(f, "退避")
 	db.Incident.UpdateOne(backoff).SetTriageRetryAt(time.Now().Add(time.Hour)).ExecX(ctx)
+	plain := upgradeIncident(f, "只建议监测")
+	db.Incident.UpdateOne(plain).SetAiVerdict(json.RawMessage(`{"verdict":"benign","action_codes":["monitor"]}`)).ExecX(ctx)
 	current := upgradeIncident(f, "已用新能力")
 	db.Incident.UpdateOne(current).SetAiVerdict(withEvidenceCapability(current.AiVerdict)).ExecX(ctx)
 	queued, err := e.queue(ctx, time.Now())

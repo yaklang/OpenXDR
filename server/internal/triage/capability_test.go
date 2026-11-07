@@ -31,6 +31,10 @@ func TestCapabilityUpgradeEligibilityAndServerStamp(t *testing.T) {
 		t.Fatal("新增证据应走原有优先队列")
 	}
 	inc.EvidenceAt = nil
+	inc.AiVerdict = json.RawMessage(`{"verdict":"suspicious","action_codes":["verify_source","monitor"]}`)
+	if !needsCapabilityUpgrade(&inc) {
+		t.Fatal("卡在来源与授权核实的旧结论应按新能力重看")
+	}
 	inc.AiVerdict = json.RawMessage(`{"action_codes":["monitor"]}`)
 	if needsCapabilityUpgrade(&inc) {
 		t.Fatal("不应扩大到无补证要求的事件")

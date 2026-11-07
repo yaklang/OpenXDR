@@ -11,7 +11,6 @@ logsource:
 detection:
   selection:
     CommandLine|contains:
-      - 'history -c'
       - 'unset HISTFILE'
       - 'HISTFILESIZE=0'
       - 'HISTSIZE=0'
@@ -22,5 +21,8 @@ detection:
       - '> $HISTFILE'
       - 'shred ~/.bash_history'
       - 'ln -sf /dev/null ~/.bash_history'
-  condition: selection
+  # history -c 要求 history 是独立命令：子串匹配会把 celery 的 `-Q audit_history -c 1` 当成清历史
+  clear:
+    CommandLine|re: '(^|[\s;&|(`''"])history\s+-[a-z]*c'
+  condition: selection or clear
 level: high

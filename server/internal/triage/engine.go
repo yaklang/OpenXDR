@@ -547,6 +547,7 @@ func (e *Engine) buildContext(ctx context.Context, inc *ent.Incident) (string, e
 	e.appendIPInfo(ctx, &sb, alerts)
 	e.appendCaseHistory(ctx, &sb, inc, alerts)
 	e.appendMemories(ctx, &sb, alerts)
+	e.appendAssetWork(ctx, &sb, alerts)
 	return sb.String(), nil
 }
 
@@ -671,6 +672,9 @@ func (e *Engine) writeAlert(ctx context.Context, sb *strings.Builder, a *ent.Ale
 		}
 		fmt.Fprintf(sb, "  来源：登记的可信自动化「%s」的 SSH 会话（高危例外仍需研判：确认是否符合该自动化的正常用途，警惕其凭据被盗用）\n", name)
 	}
+	if name := e.registeredAutomation(ctx, a); name != "" {
+		fmt.Fprintf(sb, "  来源：登录会话符合当前登记的可信自动化「%s」（登记晚于本告警入库；高危例外仍需研判：确认是否符合该自动化的正常用途，警惕其凭据被盗用）\n", name)
+	}
 	// 容器健康检查的告警同理只有高危例外会进 incident
 	if a.Healthcheck {
 		sb.WriteString("  来源：docker 容器配置的健康检查命令或其后代（高危例外仍需研判：健康检查不该做这类事，警惕镜像或容器配置被篡改）\n")
@@ -725,7 +729,7 @@ func (e *Engine) appendRetriage(ctx context.Context, sb *strings.Builder, inc *e
 	}
 	fmt.Fprintf(sb, "上次研判%s，结论 %s（置信度 %d）：%s\n", when, cmp.Or(last.Verdict, "无法解析"), last.Confidence, excerpt(last.Summary, 300))
 	if needsCapabilityUpgrade(inc) {
-		sb.WriteString("本次由调查能力升级触发，没有宣称新增告警或新增攻击证据。请先用 query_event_raw 精查此前被裁剪的相关事件；需复核同主机事发前后的相关记录时，使用 query_event_context(event_id, keyword) 精查锚点窗口，避免大范围检索未覆盖旧时间段而误判无记录；认证链缺证可用 linux_auth_journal，当前进程核对可用 linux_process_snapshot，软件包操作缺证可用 linux_package_history；单容器 Web 日志缺证可用 linux_container_web_logs；其他问题只选择当前工具实际支持的模板。原文完整或快照正常不证明操作获得授权；只有仍存在具体且无法自主补齐的缺口时保留 collect_original_records，并明确缺的是哪种记录及工具无法取得的原因。上次摘要是模型判断，不能作为独立证据、人工确认或授权。仍输出完整 JSON 结论。\n")
+		sb.WriteString("本次由调查能力升级触发，没有宣称新增告警或新增攻击证据。请先用 query_event_raw 精查此前被裁剪的相关事件；需复核同主机事发前后的相关记录时，使用 query_event_context(event_id, keyword) 精查锚点窗口，避免大范围检索未覆盖旧时间段而误判无记录；认证链缺证可用 linux_auth_journal，当前进程核对可用 linux_process_snapshot，软件包操作缺证可用 linux_package_history；单容器 Web 日志缺证可用 linux_container_web_logs；其他问题只选择当前工具实际支持的模板。来源与授权先看上下文新增的「涉事主机运维待办、管理员执行决定」与告警明细里的可信自动化来源标注：变更与有效的管理员决定逐项吻合、或来自登记的可信自动化且行为符合其正常用途时，可据此认定授权。原文完整或快照正常不证明操作获得授权；只有仍存在具体且无法自主补齐的缺口时保留 collect_original_records，并明确缺的是哪种记录及工具无法取得的原因。上次摘要是模型判断，不能作为独立证据、人工确认或授权。仍输出完整 JSON 结论。\n")
 		return nil
 	}
 	sb.WriteString("上次摘要是模型判断，不是独立证据或人工确认；不得仅凭上次摘要认定授权、排除攻击或补写缺失事实。引用匹配也不证明摘要成立，须回到实际事件与来源核实。上次结论没看过下面的新增告警；判断它们是否改变结论，仍输出完整的 JSON 结论。\n")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"entgo.io/ent/dialect/sql"
@@ -16,8 +17,14 @@ import (
 )
 
 // 只有调查能力变化才提升版本；仍缺证的成功结论不会反复占用队列。
-const evidenceCapabilityVersion = 3
-const capabilityTrigger = "capability_upgrade_v3"
+// v4：上下文补了涉事主机的运维待办、管理员执行决定、监听端口，以及登记晚于告警的可信自动化来源，
+// 卡在「来源与授权待核实」（verify_source）的旧结论也按新能力重看一次。
+const evidenceCapabilityVersion = 4
+const capabilityTrigger = "capability_upgrade_v4"
+
+// capabilityActions 结论里出现这些建议，说明当时缺的正是新能力可能补上的证据
+var capabilityActions = []string{"collect_original_records", "verify_source"}
+
 const capabilityMaxAttempts = 3
 
 func needsCapabilityUpgrade(inc *ent.Incident) bool {
@@ -32,7 +39,7 @@ func needsCapabilityUpgrade(inc *ent.Incident) bool {
 		return false
 	}
 	for _, action := range verdict.Actions {
-		if action == "collect_original_records" {
+		if slices.Contains(capabilityActions, action) {
 			return true
 		}
 	}
@@ -45,7 +52,14 @@ func capabilityPending() predicate.Incident {
 		v := s.C(incident.FieldAiVerdict)
 		s.Where(sql.P(func(b *sql.Builder) {
 			b.WriteString(fmt.Sprintf("COALESCE(%s->>'evidence_capability_version', '') <> ", v)).Arg(fmt.Sprint(evidenceCapabilityVersion))
-			b.WriteString(fmt.Sprintf(" AND COALESCE(%s, '{}'::jsonb) @> ", v)).Arg(`{"action_codes":["collect_original_records"]}`).WriteString("::jsonb")
+			b.WriteString(" AND (")
+			for i, action := range capabilityActions {
+				if i > 0 {
+					b.WriteString(" OR ")
+				}
+				b.WriteString(fmt.Sprintf("COALESCE(%s, '{}'::jsonb) @> ", v)).Arg(fmt.Sprintf(`{"action_codes":[%q]}`, action)).WriteString("::jsonb")
+			}
+			b.WriteString(")")
 		}))
 	})
 }

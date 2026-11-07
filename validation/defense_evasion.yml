@@ -10,6 +10,26 @@ cases:
         name: bash
         cmd_line: "history -c"
 
+  - name: bash -c 内 history -c
+    source: 入侵后反取证常见写法
+    class: 1007
+    os: linux
+    event:
+      process:
+        name: bash
+        cmd_line: "bash -c 'history -c; exit'"
+
+  - name: celery 队列名含 history（良性对照）
+    technique: T1070.003
+    source: 生产误报 2026-11-07（audit-analyzer 的 audit_history 队列）
+    class: 1007
+    os: linux
+    expect: undetected
+    event:
+      process:
+        name: celery
+        cmd_line: "/usr/local/bin/python3.12 /usr/local/bin/celery -A analyzer.app worker -n history@%h -Q audit_history -c 1 --loglevel=info"
+
   - name: 清空 bash_history（重定向）
     source: atomic T1070.003
     class: 1007
