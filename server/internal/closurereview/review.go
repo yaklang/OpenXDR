@@ -395,7 +395,8 @@ func validate(d Decision, m *material) bool {
 			if json.Unmarshal(ev.Raw, &raw) != nil {
 				return false
 			}
-			value, ok := suppress.Lookup(raw, c.Field)
+			// 材料里原文放在 raw 键下，模型常把 raw. 带进路径；去掉前缀后仍须与原文完全一致
+			value, ok := suppress.Lookup(raw, strings.TrimPrefix(c.Field, "raw."))
 			if !ok || value != c.Value {
 				return false
 			}
