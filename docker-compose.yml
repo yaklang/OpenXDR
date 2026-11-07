@@ -61,6 +61,9 @@ services:
       SANDBOX_KEY: ${SANDBOX_KEY:-}
       SANDBOX_CA_FILE: ${SANDBOX_CA_FILE:-}
       # 首次启动的 admin 密码；不设则随机生成并打印在 server 日志里
+      THREATBOOK_API_KEY: ${THREATBOOK_API_KEY:-}
+      THREATBOOK_PER_MINUTE: ${THREATBOOK_PER_MINUTE:-5}
+      THREATBOOK_PER_DAY: ${THREATBOOK_PER_DAY:-100}
       ABUSE_CH_AUTH_KEY: ${ABUSE_CH_AUTH_KEY:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # 告警通知：留空不推送。格式 generic / dingtalk / feishu / wecom

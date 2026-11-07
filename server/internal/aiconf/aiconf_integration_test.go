@@ -285,3 +285,43 @@ func TestAbuseCHKeyLifecycle(t *testing.T) {
 		t.Fatal("被拒绝的保存不能改变原配置")
 	}
 }
+
+func TestThreatBookSaveViewReset(t *testing.T) {
+	ctx, db := testdb.New(t)
+	s := &Store{DB: db, Vault: newVault(t), Default: Config{ThreatBookKey: "environment-secret"}}
+	secret := "console-threatbook-1234"
+	if err := s.Save(ctx, Patch{ThreatBookKey: &secret}); err != nil {
+		t.Fatal(err)
+	}
+	if s.Get(ctx).ThreatBookKey != secret {
+		t.Fatal("密钥未生效")
+	}
+	view, err := s.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.ThreatBookKeySet || view.ThreatBookKeyHint != "1234" || view.Source["threatBookKey"] != "console" || strings.Contains(string(raw), secret) {
+		t.Fatalf("视图泄漏或配置错误: %s", raw)
+	}
+	stored := db.Setting.GetX(ctx, settingKey)
+	if strings.Contains(string(stored.Value), secret) {
+		t.Fatal("密钥不得明文落库")
+	}
+	empty := ""
+	if err := s.Save(ctx, Patch{ThreatBookKey: &empty}); err != nil {
+		t.Fatal(err)
+	}
+	if s.Get(ctx).ThreatBookKey != "" {
+		t.Fatal("清空后不得回退环境变量")
+	}
+	if err := s.Save(ctx, Patch{Reset: []string{"threatBookKey"}}); err != nil {
+		t.Fatal(err)
+	}
+	if s.Get(ctx).ThreatBookKey != "environment-secret" {
+		t.Fatal("重置后应使用环境变量")
+	}
+}

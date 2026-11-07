@@ -1,0 +1,9 @@
+# 可选 Syslog 接入：docker compose -f docker-compose.yml -f docker-compose.syslog.yml up -d
+# 只向可信转发设备开放；SYSLOG_PORT 默认 1514，避免占用宿主机系统日志端口。
+services:
+  server:
+    environment:
+      SYSLOG_ADDR: ":514"
+    ports:
+      - "${SYSLOG_PORT:-1514}:514/tcp"
+      - "${SYSLOG_PORT:-1514}:514/udp"

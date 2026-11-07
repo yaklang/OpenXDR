@@ -838,6 +838,9 @@ export interface EventCoverage {
 }
 
 export interface EventsResult {
+  from: string
+  to: string
+  nextCursor?: string
   items: EventRow[]
   truncated: boolean
   coverage: EventCoverage
@@ -870,6 +873,15 @@ export const startExplain = async (id: string, lang: string, refresh = false): P
   (await send('POST', `/api/events/${id}/explain?lang=${lang}${refresh ? '&refresh=1' : ''}`)).json()
 
 export const searchEvents = async (params: {
+  srcIp?: string
+  dstIp?: string
+  srcPort?: string
+  dstPort?: string
+  processName?: string
+  commandLine?: string
+  filePath?: string
+  cursor?: string
+  username?: string
   assetId?: string
   q?: string
   source?: string
@@ -882,6 +894,11 @@ export const searchEvents = async (params: {
   // /api/events 是对象契约 {items, truncated, coverage}：条数截断与覆盖缺口都在响应体里，
   // X-Truncated / X-Archive-Coverage 头只是调试摘要，前端不读
   const qs = new URLSearchParams()
+  for (const key of ['srcIp', 'dstIp', 'srcPort', 'dstPort', 'processName', 'commandLine', 'filePath'] as const) {
+    if (params[key]) qs.set(key, params[key])
+  }
+  if (params.cursor) qs.set('cursor', params.cursor)
+  if (params.username) qs.set('username', params.username)
   if (params.q) qs.set('q', params.q)
   if (params.assetId) qs.set('assetId', params.assetId)
   if (params.source) qs.set('source', params.source)
@@ -1135,14 +1152,14 @@ export type AIProviderPatch = Omit<AIProvider, 'apiKeySet' | 'apiKeyHint'> & { a
 export interface AISettings {
  providers: AIProvider[]
   baseUrl: string; model: string; piModel: string; fallbackModels: string; ptr: boolean; vtAlertMin: number
-  apiKeySet: boolean; apiKeyHint?: string; vtKeySet: boolean; vtKeyHint?: string; abuseCHKeySet: boolean; abuseCHKeyHint?: string
+  threatBookKeySet: boolean; threatBookKeyHint?: string; apiKeySet: boolean; apiKeyHint?: string; vtKeySet: boolean; vtKeyHint?: string; abuseCHKeySet: boolean; abuseCHKeyHint?: string
   source: Record<string, 'console' | 'env'>
   canSaveSecrets: boolean
 }
 // 只发改动的项；密钥传空串表示清空；reset 里的项回到环境变量
 export interface AISettingsPatch {
  providers?: AIProviderPatch[]
-  baseUrl?: string; model?: string; piModel?: string; fallbackModels?: string; ptr?: boolean; vtAlertMin?: number; apiKey?: string; vtKey?: string; abuseCHKey?: string; reset?: string[]
+  baseUrl?: string; model?: string; piModel?: string; fallbackModels?: string; ptr?: boolean; vtAlertMin?: number; apiKey?: string; vtKey?: string; abuseCHKey?: string; threatBookKey?: string; reset?: string[]
 }
 export const fetchAIModels = async (p: AISettingsPatch & { providerId?: string }): Promise<{ models: string[] }> => (await send('POST', '/api/settings/ai/models', p)).json()
 export const fetchAISettings = () => get<AISettings>('/api/settings/ai')
@@ -1791,3 +1808,30 @@ export const fetchContainments = (page: number, pageSize: number, state: string)
   get<{ items: Containment[]; total: number }>(`/api/containments?page=${page}&pageSize=${pageSize}${state ? `&state=${state}` : ''}`)
 export const fetchContainmentStatus = () => get<ContainmentStatus>('/api/containments/status')
 export const liftContainment = (id: string, reason: string) => send('POST', `/api/containments/${id}/lift`, { reason })
+
+export interface SyslogStatus {
+  address: string
+  udpListening: boolean
+  tcpListening: boolean
+  udpError?: string
+  tcpError?: string
+  received: number
+  published: number
+  dropped: number
+  failed: number
+  unassigned: number
+  lastReceived: string | null
+}
+export const fetchSyslogStatus = () => get<SyslogStatus>('/api/ingestion/syslog')
+
+export interface ThreatBookResult {
+  provider: 'threatbook'
+  ip: string
+  queriedAt: string
+  expiresAt: string
+  cached: boolean
+  judgments: string[]
+  data: unknown
+}
+export const lookupThreatBook = async (ip: string): Promise<ThreatBookResult> =>
+  (await send('POST', '/api/intel/threatbook/lookup', { ip })).json()

@@ -1,3 +1,4 @@
+import { ThreatBookLookup } from '../components/ThreatBookLookup'
 import { ImportOutlined, SyncOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Card, Empty, Flex, Form, Input, InputNumber, List, Modal, Popconfirm, Select, Space, Spin, Switch, Table, Tag, Typography } from 'antd'
@@ -151,6 +152,7 @@ export function IntelPage() {
       extra={canWrite && <Button type="primary" icon={<ImportOutlined />} onClick={() => setImporting(true)}>{t('intelImport')}</Button>}
     >
       <Flex vertical gap={20}>
+      <ThreatBookLookup />
       <FeedsCard />
       <TableCard
         title={t('intelManual')}

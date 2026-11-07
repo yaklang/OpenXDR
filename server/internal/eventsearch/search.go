@@ -40,7 +40,7 @@ func Search(ctx context.Context, query func() *ent.EventQuery, m Match, limit in
 	}
 	indexed, cancelIndex := context.WithTimeout(ctx, min(indexBudget, total/4))
 	defer cancelIndex()
-	all, err := query().Where(m.Predicate()).Order(ent.Desc(entevent.FieldTs)).Limit(limit).All(indexed)
+	all, err := query().Where(m.Predicate()).Order(ent.Desc(entevent.FieldTs), ent.Desc(entevent.FieldID)).Limit(limit).All(indexed)
 	if err == nil {
 		return all, true, nil
 	}
@@ -62,14 +62,14 @@ func recent(ctx context.Context, query func() *ent.EventQuery, m Match, limit, n
 	var edge []struct {
 		Ts time.Time `json:"ts"`
 	}
-	if err := query().Order(ent.Desc(entevent.FieldTs)).Offset(n-1).Limit(1).Select(entevent.FieldTs).Scan(ctx, &edge); err != nil {
+	if err := query().Order(ent.Desc(entevent.FieldTs), ent.Desc(entevent.FieldID)).Offset(n-1).Limit(1).Select(entevent.FieldTs).Scan(ctx, &edge); err != nil {
 		return nil, false, err
 	}
 	q := query().Where(m.scan())
 	if len(edge) > 0 {
 		q = q.Where(entevent.TsGTE(edge[0].Ts))
 	}
-	rows, err = q.Order(ent.Desc(entevent.FieldTs)).Limit(limit).All(ctx)
+	rows, err = q.Order(ent.Desc(entevent.FieldTs), ent.Desc(entevent.FieldID)).Limit(limit).All(ctx)
 	return rows, len(edge) == 0, err
 }
 

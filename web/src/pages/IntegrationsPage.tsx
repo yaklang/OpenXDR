@@ -1,3 +1,4 @@
+import { SyslogIngestionCard } from '../components/SyslogIngestionCard'
 import { TableActions } from '../components/TableActions'
 import { PlusOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -31,7 +32,7 @@ export function IntegrationsPage() {
   const users = useQuery({ queryKey: ['users'], queryFn: fetchUsers })
   const outbound = useQuery({ queryKey: ['outboundAllow'], queryFn: fetchOutboundAllow, enabled: allowOpen })
   const tokens = useQuery({ queryKey: ['integrationTokens', tokensFor?.id], queryFn: () => fetchIntegrationTokens(tokensFor!.id), enabled: !!tokensFor })
-  const scopeOptions = [{ value: 'assets:read', label: t('integrationAssetsRead') }, { value: 'incidents:read', label: t('integrationIncidentsRead') }, { value: 'tickets:write', label: t('integrationTicketsWrite') }, { value: 'incidents:resolve', label: t('integrationResolve') }, { value: 'suricata:write', label: t('integrationSuricataWrite') }]
+  const scopeOptions = [{ value: 'assets:read', label: t('integrationAssetsRead') }, { value: 'incidents:read', label: t('integrationIncidentsRead') }, { value: 'tickets:write', label: t('integrationTicketsWrite') }, { value: 'incidents:resolve', label: t('integrationResolve') }, { value: 'suricata:write', label: t('integrationSuricataWrite') }, { value: 'flows:write', label: t('integrationFlowsWrite') }]
   const run = async (fn: () => Promise<void>) => {
     if (lock.current) return
     lock.current = true; setBusy(true)
@@ -46,6 +47,8 @@ export function IntegrationsPage() {
   }
   const openTokens = (row: IntegrationRow) => { setTokensFor(row); setTokenScopes(row.scopes); setPlain(null); setDays(90) }
   return <Page title={t('navIntegrations')} subtitle={t('integrationHint')} extra={<Space><Button onClick={() => { setAllowText(undefined); setAllowOpen(true) }}>{t('integrationOutboundAllow')}</Button><Button type="primary" icon={<PlusOutlined />} onClick={() => edit()}>{t('create')}</Button></Space>}>
+    <SyslogIngestionCard />
+    <Alert type="info" showIcon title={t('integrationFlowsWrite')} description={t('integrationFlowsHint')} style={{ marginBottom: 16 }} />
     <TableCard>
       {query.isError ? <LoadError error={query.error} onRetry={() => query.refetch()} /> : <Table<IntegrationRow> rowKey="id" dataSource={query.data} loading={query.isPending} scroll={{ x: 800 }} pagination={false} columns={[
         { title: t('integrationName'), dataIndex: 'name' },

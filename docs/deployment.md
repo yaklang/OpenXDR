@@ -207,11 +207,19 @@ server 内置 syslog 接收（同端口 UDP + TCP，RFC3164 与 RFC5424 都支�
 配置 `SYSLOG_ADDR` 启用：
 
 ```bash
-SYSLOG_ADDR=:514 docker compose up -d
+# 仓库部署：显式启用并同时映射 UDP / TCP，宿主机默认 1514
+# 可在 .env 设置 SYSLOG_PORT 调整宿主机端口
+docker compose -f docker-compose.yml -f docker-compose.syslog.yml up -d
 
 # 被监控主机把日志转发过来
-echo '*.* @<server>:514' >> /etc/rsyslog.conf && systemctl restart rsyslog
+echo '*.* @<server>:1514' >> /etc/rsyslog.conf && systemctl restart rsyslog
 ```
+
+控制台「系统集成」显示当前 server 节点的 UDP / TCP 监听状态、最近收包时间、
+收到的报文、队列满丢弃、成功入队、入队失败与未匹配资产计数。
+计数从节点启动起累计，集群不合并；成功入队不代表已经落库。
+TCP 当前使用换行分帧；不支持 TLS Syslog 与 RFC6587 octet-counting。
+仅向可信转发源开放接收端口。`@@<server>:1514` 表示 rsyslog 使用 TCP，`@` 表示 UDP。
 
 日志按主机名归属资产，主机名对不上时退回源 IP 匹配，两者都对不上则归入
 统一的未归属 incident。同一主机反复报同一条日志只留一行告警并计数。
@@ -219,7 +227,31 @@ echo '*.* @<server>:514' >> /etc/rsyslog.conf && systemctl restart rsyslog
 规则里用 `logsource.category: application` 匹配这类事件，字段路径见
 `rules/lnx_ssh_auth_failure.yml`。
 
+### ntopng / nProbe 流量
+
+控制台「系统集成」启用 `flows:write` 并唯一绑定组，签发 Token 后通过 HTTPS 导入标签式 JSON。
+无需增加监听端口。支持 IPv4 / IPv6、协议、端口、首包时间和双向流量计数。
+配置与导入工具见 [流量接入说明](../integrations/flows/README.md)。
+
 ## 威胁情报
+
+### 微步在线按需 IP 分析
+
+在「系统设置 → 外部情报查询」填写微步 API Key，再到「威胁情报」输入公网 IPv4 / IPv6。
+需要 analyst 或 admin 权限。平台调用官方 `/v3/ip/query`，仅发送所查询的 IP，
+不使用只适用于入站访问来源的 IP 信誉接口。密钥通过 POST 表单发送，不进入 URL；禁止跟随重定向。
+内网、回环、链路本地与常见保留地址不发送。未配置密钥时不请求供应商。
+
+查询结果保留供应商判定标签和原始依据、查询与缓存到期时间；无标签不代表安全。
+成功结果在 PostgreSQL 缓存 24 小时；额度先预留，跨节点共享，未知响应和失败也占本地额度。
+原始缓存保留两天，后续新查询时清理。供应商 429 或业务错误不记成安全结果，也不缓存。
+外部查询与失败都记审计；不会因供应商标签直接新增检测或触发处置。
+分析员可复核后人工加入 IOC 库，级别 4、有效期 1 天，已有同值 IOC 不覆盖。
+
+接口须在微步侧开通 IP 分析权限，并按供应商要求绑定 server 的出口公网 IP。
+官方协议见 [微步 IP 分析](https://x.threatbook.com/apiDocs/ip/query)。
+
+### IOC 库与订阅
 
 内置 IOC 库：恶意 IP / 域名 / 文件哈希。三路事件（EDR / NTA / 日志）入库时
 自动与情报碰撞，命中即产生告警，走与规则告警相同的去重、抑制与关联链路。
@@ -442,6 +474,8 @@ server 全部通过环境变量配置，均有默认值：
 | `IPDB_DIR` | 空（镜像内 `/opt/openxdr/ipdb`） | 离线 IP 归属库目录（DB-IP Lite 的 `dbip-asn-lite.mmdb`、`dbip-country-lite.mmdb`，CC BY 4.0），本地查 AS 与国家、不外发地址；发版镜像自带一份，缺库时归属留空并在启动日志说明。用 `openxdr-ipdb -dir <目录>` 更新，替换后自动加载，见 [资产图谱](asset-map.md#离线归属库) |
 | `IPINFO_PTR` | `true` | 对资产连过的与告警里出现的公网地址做反向解析（PTR），结果缓存，供图谱展示与 AI 标注认地址；内网没有外部解析时可设 `false` |
 | `VT_ALERT_MIN_ENGINES` | `3` | VirusTotal 判恶意的引擎数达到该值，就把地址加入威胁情报（来源 virustotal，随缓存期到期），之后再有主机连它即按情报命中告警；重查后不再达到即失效，人工录入的同一地址不动；0 关闭 |
+| `THREATBOOK_API_KEY` | 空 | 微步在线 IP 分析 Key，可在控制台「系统设置 → 外部情报查询」加密保存覆盖。情报页按需查询公网 IP，不自动批量发送资产地址；需要供应商 IP 分析接口授权及出口 IP 绑定 |
+| `THREATBOOK_PER_MINUTE` / `THREATBOOK_PER_DAY` | `5` / `100` | 微步查询的本地额度（集群共享，UTC 分钟/日期重置），0 或负数拒绝新查询；24 小时缓存命中不消耗额度，失败请求保守计入额度。供应商另有实际额度限制 |
 | `VT_API_KEY` | 空 | VirusTotal API key。配置后查询公网地址的归属、国家、恶意判定与历史解析域名；**会把资产连过的、告警里出现的公网 IP 发给 VirusTotal**，不配置则不查 |
 | `VT_PER_MINUTE` / `VT_PER_DAY` | `4` / `500` | VirusTotal 查询限额（默认按免费额度），撞到 429 自动等下一分钟 |
 | `IPINFO_TTL_DAYS` | `7` | 公网地址信息的缓存期（天），到期重查 |

@@ -20,6 +20,7 @@ import (
 	"openxdr/server/ent/integrationgroup"
 	"openxdr/server/ent/integrationtoken"
 	"openxdr/server/internal/audit"
+	"openxdr/server/internal/flowinput"
 	"openxdr/server/internal/suricata"
 )
 
@@ -27,7 +28,7 @@ import (
 var RateLimitedRequests = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "openxdr_integration_rate_limited_total", Help: "集成 API 被限流的请求数"}, []string{"kind"})
 
 var ReadScopes = []string{"assets:read", "incidents:read"}
-var AllowedScopes = []string{"assets:read", "incidents:read", "tickets:write", "incidents:resolve", "suricata:write"}
+var AllowedScopes = []string{"assets:read", "incidents:read", "tickets:write", "incidents:resolve", "suricata:write", "flows:write"}
 
 func ValidScopes(scopes []string) bool {
 	if len(scopes) == 0 || len(scopes) > len(AllowedScopes) {
@@ -58,6 +59,7 @@ type bucket struct {
 	at     time.Time
 }
 type Service struct {
+	Flows     func(context.Context, flowinput.Origin, flowinput.Event) error
 	DB        *ent.Client
 	CursorKey []byte
 	// Suricata 把通过认证的 EVE 告警写入持久事件队列；为空时该接口不可用
@@ -139,6 +141,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/integration/v1/incidents/{id}/tickets/{externalId}", s.putTicket)
 	mux.HandleFunc("POST /api/integration/v1/incidents/{id}/resolution", s.resolve)
 	mux.HandleFunc("POST /api/integration/v1/suricata/events", s.suricataEvents)
+	mux.HandleFunc("POST /api/integration/v1/flows/{source}/events", s.flowEvents)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { Error(w, 404, "not_found", "接口不存在") })
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Request-ID", uuid.NewString())
@@ -192,6 +195,9 @@ func (s *Service) Handler() http.Handler {
 		if r.Method == http.MethodPost && r.URL.Path == "/api/integration/v1/suricata/events" {
 			needed = "suricata:write"
 		}
+		if r.Method == http.MethodPost && (r.URL.Path == "/api/integration/v1/flows/ntopng/events" || r.URL.Path == "/api/integration/v1/flows/nprobe/events") {
+			needed = "flows:write"
+		}
 		if needed == "" {
 			Error(w, 404, "not_found", "接口不存在")
 			return
@@ -201,7 +207,7 @@ func (s *Service) Handler() http.Handler {
 			return
 		}
 		// 告警写入是持续数据流，由队列背压与报文上限约束，不走面向人工调用的限流
-		ingest := needed == "suricata:write"
+		ingest := needed == "suricata:write" || needed == "flows:write"
 		if !ingest && !s.allow(i.ID) {
 			RateLimitedRequests.WithLabelValues("all").Inc()
 			w.Header().Set("Retry-After", "1")

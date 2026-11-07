@@ -123,6 +123,10 @@ func (p *Processor) ProcessBatch(ctx context.Context, events []Envelope) (err er
 	results := make([]result, len(events))
 	for i, e := range events {
 		started := time.Now()
+		e, err = flowAsset(ctx, tx, e)
+		if err != nil {
+			return err
+		}
 		envelopes, external, err := suricataHit(ctx, tx, e)
 		if err != nil {
 			return err

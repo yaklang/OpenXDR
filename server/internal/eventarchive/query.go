@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"openxdr/server/internal/eventsearch"
 )
 
 const (
@@ -33,6 +34,9 @@ const (
 //     空切片表示「一无所见」，直接返回空结果。这与热表 AssetIDIn() 的空集合口径一致：
 //     没有可见资产的用户不能因为传了个空集合就变成不限。
 type Filter struct {
+	Fields   eventsearch.Fields
+	Before   *Event // 分页边界，按 (ts, id) 倒序，排除边界自身
+	Username string
 	From, To time.Time   // 按 ts，左闭右开
 	AssetIDs []uuid.UUID // 组权限过滤：nil 不限，非 nil 受限（见类型注释）
 	Classes  []int
@@ -263,6 +267,15 @@ func newEventMatcher(f Filter) eventMatcher {
 // match 逐事件精确匹配。资产条件最要紧：受限时 AssetID 为 nil 的事件也必须丢弃，
 // 否则非 admin 能从冷块里看到无归属的事件。
 func (m eventMatcher) match(e Event) bool {
+	if !m.f.Fields.Match(e.Raw) {
+		return false
+	}
+	if m.f.Before != nil && !later(e, *m.f.Before) {
+		return false
+	}
+	if m.f.Username != "" && (e.Username == nil || *e.Username != m.f.Username) {
+		return false
+	}
 	if !m.f.From.IsZero() && e.Ts.Before(m.f.From) {
 		return false
 	}
@@ -301,6 +314,9 @@ func (m eventMatcher) match(e Event) bool {
 // 不单独比 day：day 就是块内事件的 UTC 日，被这两个条件完全覆盖（块内 ts 全在 day 当天，
 // 也因此不会跨日）。多传一个 date 参数只会在 date/timestamptz 之间加一层隐式转换。
 func (f Filter) allowsChunk(c chunkMeta) bool {
+	if f.Before != nil && c.FirstTs.After(f.Before.Ts) {
+		return false
+	}
 	if !f.From.IsZero() && c.LastTs.Before(f.From) {
 		return false
 	}

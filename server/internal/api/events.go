@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,9 +52,12 @@ type eventsCoverage struct {
 // eventsResponse 是 /api/events 的响应契约：items 是事件行，truncated 表示返回条数达到
 // limit（可能还有更早的，与扫描是否完整无关），coverage 说明冷热两层的覆盖情况。
 type eventsResponse struct {
-	Items     []eventRow     `json:"items"`
-	Truncated bool           `json:"truncated"`
-	Coverage  eventsCoverage `json:"coverage"`
+	From       time.Time      `json:"from"`
+	To         time.Time      `json:"to"`
+	Items      []eventRow     `json:"items"`
+	Truncated  bool           `json:"truncated"`
+	Coverage   eventsCoverage `json:"coverage"`
+	NextCursor string         `json:"nextCursor,omitempty"`
 }
 
 // coverage 缺口原因，与 eventsCoverage.Reason 的取值一一对应。
@@ -99,16 +104,56 @@ func mapEvents(api *http.ServeMux, db *ent.Client, conn *sql.DB) {
 		p := r.URL.Query()
 		now := time.Now()
 
-		from := now.Add(-24 * time.Hour)
-		if v, err := time.Parse(time.RFC3339, p.Get("from")); err == nil {
-			from = v
-		}
-		to := now
-		if v, err := time.Parse(time.RFC3339, p.Get("to")); err == nil {
-			to = v
+		from, to := now.Add(-24*time.Hour), now
+		for name, target := range map[string]*time.Time{"from": &from, "to": &to} {
+			if value := p.Get(name); value != "" {
+				parsed, err := time.Parse(time.RFC3339Nano, value)
+				if err != nil {
+					http.Error(w, "无效的时间参数："+name, http.StatusBadRequest)
+					return
+				}
+				*target = parsed
+			}
 		}
 
+		if from.After(to) {
+			http.Error(w, "起始时间不能晚于结束时间", http.StatusBadRequest)
+			return
+		}
+		fields := eventsearch.Fields{}
+		for _, name := range []string{"srcIp", "dstIp", "srcPort", "dstPort", "processName", "commandLine", "filePath"} {
+			if value := p.Get(name); value != "" {
+				fields[name] = value
+			}
+		}
+		if err := fields.Validate(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var before *eventarchive.Event
+		if value := p.Get("cursor"); value != "" {
+			decoded, err := base64.RawURLEncoding.DecodeString(value)
+			parts := strings.SplitN(string(decoded), "|", 2)
+			if err != nil || len(parts) != 2 {
+				http.Error(w, "无效的分页游标", http.StatusBadRequest)
+				return
+			}
+			ts, errTime := time.Parse(time.RFC3339Nano, parts[0])
+			id, errID := uuid.Parse(parts[1])
+			if errTime != nil || errID != nil {
+				http.Error(w, "无效的分页游标", http.StatusBadRequest)
+				return
+			}
+			before = &eventarchive.Event{Ts: ts, ID: id}
+		}
 		preds := append([]predicate.Event{entevent.TsGTE(from), entevent.TsLTE(to)}, s.event()...)
+		if before != nil {
+			preds = append(preds, entevent.Or(entevent.TsLT(before.Ts), entevent.And(entevent.TsEQ(before.Ts), entevent.IDLT(before.ID))))
+		}
+		if username := p.Get("username"); username != "" {
+			preds = append(preds, entevent.UsernameEQ(username))
+		}
+		preds = append(preds, fields.Predicate())
 		var assetID *uuid.UUID
 		if value := p.Get("assetId"); value != "" {
 			id, err := uuid.Parse(value)
@@ -140,7 +185,7 @@ func mapEvents(api *http.ServeMux, db *ent.Client, conn *sql.DB) {
 		if kw := p.Get("q"); kw != "" {
 			rows, complete, err = eventsearch.Search(r.Context(), query, eventsearch.Keyword(kw), limit)
 		} else {
-			rows, err = query().Order(ent.Desc(entevent.FieldTs)).Limit(limit).All(r.Context())
+			rows, err = query().Order(ent.Desc(entevent.FieldTs), ent.Desc(entevent.FieldID)).Limit(limit).All(r.Context())
 		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -150,7 +195,7 @@ func mapEvents(api *http.ServeMux, db *ent.Client, conn *sql.DB) {
 		// 冷块按同一组参数补数据。块损坏等错误如实返回 500：不能降级成只返回热表，
 		// 那会让调用方以为「查到的就是全部」。
 		cold, cov, header, err := archiveEvents(r.Context(), conn, s, eventFilter{
-			from: from, to: to, assetID: assetID, classUID: classUID,
+			fields: fields, before: before, username: p.Get("username"), from: from, to: to, assetID: assetID, classUID: classUID,
 			source: p.Get("source"), keyword: p.Get("q"), limit: limit, hotComplete: complete,
 		})
 		if err != nil {
@@ -185,12 +230,20 @@ func mapEvents(api *http.ServeMux, db *ent.Client, conn *sql.DB) {
 		for i := range out {
 			out[i].Automation = sources[out[i].ID]
 		}
-		writeJSON(w, eventsResponse{Items: out, Truncated: truncated, Coverage: cov})
+		next := ""
+		if truncated && cov.ScanComplete && len(out) > 0 {
+			last := out[len(out)-1]
+			next = base64.RawURLEncoding.EncodeToString([]byte(last.Ts.UTC().Format(time.RFC3339Nano) + "|" + last.ID.String()))
+		}
+		writeJSON(w, eventsResponse{From: from, To: to, Items: out, Truncated: truncated, Coverage: cov, NextCursor: next})
 	})
 }
 
 // eventFilter 是一次 /api/events 请求里与冷查询相关的参数，与热表查询用的是同一组。
 type eventFilter struct {
+	fields   eventsearch.Fields
+	before   *eventarchive.Event
+	username string
 	from, to time.Time
 	assetID  *uuid.UUID
 	classUID *int
@@ -256,6 +309,9 @@ func archiveEvents(ctx context.Context, conn *sql.DB, s scope, q eventFilter) ([
 		return nil, cov, "skipped=before_archive", nil
 	}
 	f := eventarchive.Filter{
+		Fields:   q.fields,
+		Before:   q.before,
+		Username: q.username,
 		From:     q.from,
 		To:       q.to.Add(time.Nanosecond), // 热表是 ts <= to，冷查询是左闭右开：补 1ns 不漏边界
 		AssetIDs: visibleAssets(s, q.assetID),

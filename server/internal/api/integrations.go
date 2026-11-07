@@ -139,8 +139,8 @@ func Integrations(db *ent.Client, vault *hostimport.Vault, allow *integrationapi
 		slices.SortFunc(body.GroupIDs, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
 		body.GroupIDs = slices.Compact(body.GroupIDs)
 		// Suricata 告警按集成的唯一授权组归属，多组时无从判断写入哪个组
-		if slices.Contains(body.Scopes, "suricata:write") && len(body.GroupIDs) != 1 {
-			integrationapi.Error(w, 400, "invalid_argument", "Suricata 写入须恰好授权一个组")
+		if (slices.Contains(body.Scopes, "suricata:write") || slices.Contains(body.Scopes, "flows:write")) && len(body.GroupIDs) != 1 {
+			integrationapi.Error(w, 400, "invalid_argument", "告警与流量写入须恰好授权一个组")
 			return
 		}
 		tx, err := db.Tx(r.Context())

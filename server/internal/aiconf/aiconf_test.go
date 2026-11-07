@@ -224,3 +224,23 @@ func TestPreview(t *testing.T) {
 		t.Fatal("非法地址应拒绝预览")
 	}
 }
+
+func TestThreatBookSecret(t *testing.T) {
+	v := newVault(t)
+	s := &Store{Vault: v, Default: Config{ThreatBookKey: "env-secret"}}
+	if got := s.merge(stored{}).ThreatBookKey; got != "env-secret" {
+		t.Fatal("默认密钥未生效")
+	}
+	if got := s.merge(stored{ThreatBookKey: seal(t, v, "console-secret", "threatBookKey")}).ThreatBookKey; got != "console-secret" {
+		t.Fatal("控制台密钥未解密")
+	}
+	if got := s.merge(stored{ThreatBookKey: &secret{}}).ThreatBookKey; got != "" {
+		t.Fatal("显式清空不能回退环境变量")
+	}
+	if err := (Patch{ThreatBookKey: ptr(strings.Repeat("k", 513))}).Check(); err == nil {
+		t.Fatal("超长密钥应拒绝")
+	}
+	if err := (Patch{Reset: []string{"threatBookKey"}}).Check(); err != nil {
+		t.Fatal(err)
+	}
+}

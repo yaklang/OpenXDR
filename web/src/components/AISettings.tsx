@@ -182,19 +182,21 @@ export function IntelLookupSettings() {
   if (query.isError) return <LoadError error={query.error} onRetry={() => query.refetch()} />
   if (!query.data) return <Card><Skeleton active /></Card>
   const view = query.data
-  const patch = () => diff(form.getFieldsValue(), view, ['ptr', 'vtAlertMin'], ['vtKey', 'abuseCHKey'])
+  const patch = () => diff(form.getFieldsValue(), view, ['ptr', 'vtAlertMin'], ['vtKey', 'abuseCHKey', 'threatBookKey'])
 
   return (
     <Card title={t('settingsIntelLookup')}>
       <Typography.Paragraph type="secondary">{t('settingsIntelLookupHint')}</Typography.Paragraph>
       {!view.canSaveSecrets && <Alert type="info" showIcon style={{ marginBottom: 16 }} title={t('noVaultHint')} />}
       <Form form={form} layout="vertical" style={{ maxWidth: 640 }} disabled={busy} initialValues={view} key={JSON.stringify(view)}
-        onFinish={async () => { if (await save(patch())) form.setFieldsValue({ vtKey: '', abuseCHKey: '' }) }}>
+        onFinish={async () => { if (await save(patch())) form.setFieldsValue({ vtKey: '', abuseCHKey: '', threatBookKey: '' }) }}>
         <Form.Item name="ptr" valuePropName="checked" label={<Space>{t('ptrLabel')}<Source field="ptr" view={view} onReset={reset} /></Space>} extra={t('ptrHint')}>
           <Switch />
         </Form.Item>
         <SecretField name="vtKey" label={t('vtKeyLabel')} set={view.vtKeySet} hint={view.vtKeyHint} view={view} onReset={reset}
           onClear={() => save({ vtKey: '' }, t('secretCleared'))} extra={t('vtKeyHint')} />
+        <SecretField name="threatBookKey" label={t('threatBookKeyLabel')} set={view.threatBookKeySet} hint={view.threatBookKeyHint} view={view} onReset={reset}
+          onClear={() => save({ threatBookKey: '' }, t('secretCleared'))} extra={t('threatBookKeyHint')} />
         <SecretField name="abuseCHKey" label={t('abuseCHKeyLabel')} set={view.abuseCHKeySet} hint={view.abuseCHKeyHint} view={view} onReset={reset}
           onClear={() => save({ abuseCHKey: '' }, t('secretCleared'))} extra={t('abuseCHKeyHint')} />
         <Form.Item name="vtAlertMin" label={<Space>{t('vtAlertMinLabel')}<Source field="vtAlertMin" view={view} onReset={reset} /></Space>} extra={t('vtAlertMinHint')}>

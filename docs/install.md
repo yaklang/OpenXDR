@@ -139,3 +139,17 @@ DYGK 使用同一份 `.env` 和主启动命令：设置 `COMPOSE_PROFILES=dygk`�
 ThreatFox 与 URLhaus 需要 abuse.ch Auth-Key。可在「系统设置 → 外部情报查询」保存（需要
 `HOST_CREDENTIAL_KEY`），或在部署 `.env` 中设置 `ABUSE_CH_AUTH_KEY` 后重建 server 容器。
 不要把密钥或包含密钥的下载链接提交到仓库。配置后在「威胁情报」点击「立即同步」，以最近成功时间和同步结果验收。
+
+## 可选 Syslog 接入
+
+默认安装不开放 Syslog。需要接入时，在安装目录下载与当前版本一致的
+`docker-compose.syslog.yml`（GitHub Release 附件），然后执行：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.syslog.yml up -d
+```
+
+该配置启用 server 的 `SYSLOG_ADDR=:514`，宿主机同时映射 TCP / UDP 1514；
+可在 `.env` 设置 `SYSLOG_PORT` 改宿主机端口。升级和日常重建时保持两个 `-f` 参数。
+转发设备指向 server 的 1514 端口，仅向可信设备放行。控制台「系统集成」可检查
+当前节点监听、收包和入队状态。协议、rsyslog 示例与限制见 [日志接入](deployment.md#日志接入)。

@@ -35,9 +35,10 @@ type Config struct {
 	// 逗号分隔的备用模型，空表示关闭自动切换。
 	FallbackModels string
 	// 公网目的地址反向解析
-	PTR        bool
-	VTKey      string
-	AbuseCHKey string
+	PTR           bool
+	ThreatBookKey string
+	VTKey         string
+	AbuseCHKey    string
 	// VirusTotal 判恶意的引擎数达到这个值，就把地址加入威胁情报；0 不加
 	VTAlertMin int
 }
@@ -52,9 +53,10 @@ type stored struct {
 	PTR            *bool            `json:"ptr,omitempty"`
 	VTAlertMin     *int             `json:"vtAlertMin,omitempty"`
 	// 密文；Sealed 为空表示在控制台清空了
-	APIKey     *secret `json:"apiKey,omitempty"`
-	VTKey      *secret `json:"vtKey,omitempty"`
-	AbuseCHKey *secret `json:"abuseCHKey,omitempty"`
+	APIKey        *secret `json:"apiKey,omitempty"`
+	ThreatBookKey *secret `json:"threatBookKey,omitempty"`
+	VTKey         *secret `json:"vtKey,omitempty"`
+	AbuseCHKey    *secret `json:"abuseCHKey,omitempty"`
 }
 
 type secret struct {
@@ -131,6 +133,7 @@ func (s *Store) merge(raw stored) Config {
 		c.VTAlertMin = *raw.VTAlertMin
 	}
 	c.APIKey = s.open(raw.APIKey, "apiKey", c.APIKey)
+	c.ThreatBookKey = s.open(raw.ThreatBookKey, "threatBookKey", c.ThreatBookKey)
 	c.VTKey = s.open(raw.VTKey, "vtKey", c.VTKey)
 	c.AbuseCHKey = s.open(raw.AbuseCHKey, "abuseCHKey", c.AbuseCHKey)
 	return c
@@ -165,20 +168,22 @@ func (s *Store) usable(sec *secret, field string) *secret {
 
 // View 给界面看的：密钥只说有没有、末四位，每项标明来自控制台还是环境变量
 type View struct {
-	Providers      []ProviderView    `json:"providers"`
-	FallbackModels string            `json:"fallbackModels"`
-	BaseURL        string            `json:"baseUrl"`
-	Model          string            `json:"model"`
-	PiModel        string            `json:"piModel"`
-	PTR            bool              `json:"ptr"`
-	VTAlertMin     int               `json:"vtAlertMin"`
-	APIKeySet      bool              `json:"apiKeySet"`
-	APIKeyHint     string            `json:"apiKeyHint,omitempty"`
-	VTKeySet       bool              `json:"vtKeySet"`
-	VTKeyHint      string            `json:"vtKeyHint,omitempty"`
-	AbuseCHKeySet  bool              `json:"abuseCHKeySet"`
-	AbuseCHKeyHint string            `json:"abuseCHKeyHint,omitempty"`
-	Source         map[string]string `json:"source"`
+	ThreatBookKeySet  bool              `json:"threatBookKeySet"`
+	ThreatBookKeyHint string            `json:"threatBookKeyHint,omitempty"`
+	Providers         []ProviderView    `json:"providers"`
+	FallbackModels    string            `json:"fallbackModels"`
+	BaseURL           string            `json:"baseUrl"`
+	Model             string            `json:"model"`
+	PiModel           string            `json:"piModel"`
+	PTR               bool              `json:"ptr"`
+	VTAlertMin        int               `json:"vtAlertMin"`
+	APIKeySet         bool              `json:"apiKeySet"`
+	APIKeyHint        string            `json:"apiKeyHint,omitempty"`
+	VTKeySet          bool              `json:"vtKeySet"`
+	VTKeyHint         string            `json:"vtKeyHint,omitempty"`
+	AbuseCHKeySet     bool              `json:"abuseCHKeySet"`
+	AbuseCHKeyHint    string            `json:"abuseCHKeyHint,omitempty"`
+	Source            map[string]string `json:"source"`
 	// 没配 HOST_CREDENTIAL_KEY 时不能在控制台保存密钥
 	CanSaveSecrets bool `json:"canSaveSecrets"`
 }
@@ -190,6 +195,7 @@ func (s *Store) View(ctx context.Context) (View, error) {
 	}
 	c := s.merge(raw)
 	apiKey, vtKey := s.usable(raw.APIKey, "apiKey"), s.usable(raw.VTKey, "vtKey")
+	threatBookKey := s.usable(raw.ThreatBookKey, "threatBookKey")
 	abuseCHKey := s.usable(raw.AbuseCHKey, "abuseCHKey")
 	src := map[string]string{}
 	mark := func(name string, set bool) {
@@ -203,11 +209,13 @@ func (s *Store) View(ctx context.Context) (View, error) {
 	mark("vtAlertMin", raw.VTAlertMin != nil)
 	mark("apiKey", apiKey != nil)
 	mark("vtKey", vtKey != nil)
+	mark("threatBookKey", threatBookKey != nil)
 	mark("abuseCHKey", abuseCHKey != nil)
 	return View{
 		Providers:      providerViews(c),
 		FallbackModels: c.FallbackModels, BaseURL: c.BaseURL, Model: c.Model, PiModel: c.PiModel, PTR: c.PTR, VTAlertMin: c.VTAlertMin,
 		APIKeySet: c.APIKey != "", APIKeyHint: hintOf(apiKey, c.APIKey), VTKeySet: c.VTKey != "", VTKeyHint: hintOf(vtKey, c.VTKey),
+		ThreatBookKeySet: c.ThreatBookKey != "", ThreatBookKeyHint: hintOf(threatBookKey, c.ThreatBookKey),
 		AbuseCHKeySet: c.AbuseCHKey != "", AbuseCHKeyHint: hintOf(abuseCHKey, c.AbuseCHKey),
 		Source: src, CanSaveSecrets: s.Vault != nil,
 	}, nil
@@ -229,6 +237,7 @@ func tail(s string) string {
 
 // Patch 一次修改：nil 不动；Reset 里列出的项回到环境变量。密钥传空串表示清空
 type Patch struct {
+	ThreatBookKey  *string          `json:"threatBookKey"`
 	Providers      *[]ProviderPatch `json:"providers"`
 	FallbackModels *string          `json:"fallbackModels"`
 	BaseURL        *string          `json:"baseUrl"`
@@ -278,7 +287,7 @@ func (p Patch) Check() error {
 			return errors.New("模型名不超过 128 个字符且不含空白")
 		}
 	}
-	for _, k := range []*string{p.APIKey, p.VTKey, p.AbuseCHKey} {
+	for _, k := range []*string{p.APIKey, p.VTKey, p.AbuseCHKey, p.ThreatBookKey} {
 		if k != nil && (len(*k) > 512 || strings.ContainsAny(*k, " \t\r\n")) {
 			return errors.New("密钥不超过 512 个字符且不含空白")
 		}
@@ -294,7 +303,7 @@ func (p Patch) Check() error {
 	return nil
 }
 
-var resettable = map[string]bool{"fallbackModels": true, "baseUrl": true, "model": true, "piModel": true, "ptr": true, "vtAlertMin": true, "apiKey": true, "vtKey": true, "abuseCHKey": true}
+var resettable = map[string]bool{"fallbackModels": true, "baseUrl": true, "model": true, "piModel": true, "ptr": true, "vtAlertMin": true, "apiKey": true, "vtKey": true, "abuseCHKey": true, "threatBookKey": true}
 
 func (s *Store) Save(ctx context.Context, p Patch) error {
 	if err := p.Check(); err != nil {
@@ -333,7 +342,7 @@ func (s *Store) Save(ctx context.Context, p Patch) error {
 		in    *string
 		field string
 		out   **secret
-	}{{p.APIKey, "apiKey", &raw.APIKey}, {p.VTKey, "vtKey", &raw.VTKey}, {p.AbuseCHKey, "abuseCHKey", &raw.AbuseCHKey}} {
+	}{{p.APIKey, "apiKey", &raw.APIKey}, {p.VTKey, "vtKey", &raw.VTKey}, {p.AbuseCHKey, "abuseCHKey", &raw.AbuseCHKey}, {p.ThreatBookKey, "threatBookKey", &raw.ThreatBookKey}} {
 		if k.in == nil {
 			continue
 		}
@@ -366,6 +375,8 @@ func (s *Store) Save(ctx context.Context, p Patch) error {
 			raw.VTAlertMin = nil
 		case "apiKey":
 			raw.APIKey = nil
+		case "threatBookKey":
+			raw.ThreatBookKey = nil
 		case "vtKey":
 			raw.VTKey = nil
 		case "abuseCHKey":
@@ -422,13 +433,15 @@ func (s *Store) Preview(ctx context.Context, p Patch) (Config, error) {
 			c.FallbackModels = s.Default.FallbackModels
 		case "apiKey":
 			c.APIKey = s.Default.APIKey
+		case "threatBookKey":
+			c.ThreatBookKey = s.Default.ThreatBookKey
 		case "vtKey":
 			c.VTKey = s.Default.VTKey
 		case "abuseCHKey":
 			c.AbuseCHKey = s.Default.AbuseCHKey
 		}
 	}
-	for _, f := range []struct{ in, out *string }{{p.FallbackModels, &c.FallbackModels}, {p.BaseURL, &c.BaseURL}, {p.Model, &c.Model}, {p.PiModel, &c.PiModel}, {p.APIKey, &c.APIKey}, {p.VTKey, &c.VTKey}, {p.AbuseCHKey, &c.AbuseCHKey}} {
+	for _, f := range []struct{ in, out *string }{{p.FallbackModels, &c.FallbackModels}, {p.BaseURL, &c.BaseURL}, {p.Model, &c.Model}, {p.PiModel, &c.PiModel}, {p.APIKey, &c.APIKey}, {p.VTKey, &c.VTKey}, {p.AbuseCHKey, &c.AbuseCHKey}, {p.ThreatBookKey, &c.ThreatBookKey}} {
 		if f.in != nil {
 			*f.out = *f.in
 		}

@@ -76,3 +76,53 @@ func TestAPIEventSearch(t *testing.T) {
 		t.Errorf("%% 应按字面量匹配不命中，实际 %d", len(got))
 	}
 }
+
+func TestEventSearchRejectsInvalidBounds(t *testing.T) {
+	ts, _ := seed(t)
+	for _, query := range []string{"cursor=invalid", "from=garbage", "to=garbage", "from=2030-01-01T00:00:00Z&to=2020-01-01T00:00:00Z"} {
+		resp, body := get(t, ts, "/api/events?"+query)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", query, resp.StatusCode, body)
+		}
+	}
+}
+
+func TestEventSearchCursorAndStructuredFields(t *testing.T) {
+	ts, _ := seed(t)
+	resp, body := get(t, ts, "/api/events?limit=1")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	var page struct {
+		NextCursor string `json:"nextCursor"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.NextCursor == "" {
+		t.Fatal("满页应提供游标")
+	}
+	resp, body = get(t, ts, "/api/events?limit=1&cursor="+url.QueryEscape(page.NextCursor))
+	var next eventsResponseRaw
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	if err := json.Unmarshal(body, &next); err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Items) != 0 {
+		t.Fatal("边界事件不应在下一页重复")
+	}
+	for _, filter := range []string{"srcIp=192.0.2.1", "dstPort=443", "processName=missing", "username=missing"} {
+		resp, body = get(t, ts, "/api/events?"+filter)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %d %s", filter, resp.StatusCode, body)
+		}
+		if err := json.Unmarshal(body, &next); err != nil {
+			t.Fatal(err)
+		}
+		if len(next.Items) != 0 {
+			t.Fatalf("%s 不应匹配缺失的字段", filter)
+		}
+	}
+}

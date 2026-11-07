@@ -186,7 +186,7 @@ jobs:
           cp out/dist/* assets/
           # 安装脚本钉住本版本：用户拿到的哪个 Release 的脚本，就装哪个版本
           sed "s/__OPENXDR_VERSION__/$tag/" deploy/install/install.sh > assets/install.sh
-          cp deploy/install/docker-compose.yml deploy/nats.conf assets/
+          cp deploy/install/docker-compose.yml deploy/install/docker-compose.syslog.yml deploy/nats.conf assets/
           (cd assets && sha256sum -- * > SHA256SUMS)
       - name: 说明
         run: |

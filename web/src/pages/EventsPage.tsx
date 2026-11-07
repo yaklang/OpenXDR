@@ -34,7 +34,16 @@ export function EventsPage() {
   // 筛选条件放在 URL 里：刷新不丢，链接发给别人能看到同一份结果
   const [params, setParams] = useSearchParams()
   const filter = {
+    srcIp: params.get('srcIp') ?? '',
+    dstIp: params.get('dstIp') ?? '',
+    srcPort: params.get('srcPort') ?? '',
+    dstPort: params.get('dstPort') ?? '',
+    processName: params.get('processName') ?? '',
+    commandLine: params.get('commandLine') ?? '',
+    filePath: params.get('filePath') ?? '',
     q: params.get('q') ?? '',
+    cursor: params.get('cursor') ?? '',
+    username: params.get('username') ?? '',
     source: params.get('source') ?? '',
     classUid: Number(params.get('classUid') ?? 0),
     hours: Number(params.get('hours') ?? 24),
@@ -43,10 +52,20 @@ export function EventsPage() {
     to: params.get('to') ?? '',
   }
   const setFilter = (patch: Partial<typeof filter>) => {
-    const next = { ...filter, ...patch }
+    const next = { ...filter, cursor: '', ...patch }
     setParams(Object.fromEntries(Object.entries(next).filter(([k, v]) => v && !(k === 'hours' && v === 24)).map(([k, v]) => [k, String(v)])))
   }
   const [draft, setDraft] = useState(filter.q)
+  const [rangeFrom, setRangeFrom] = useState('')
+  const [rangeTo, setRangeTo] = useState('')
+  const nextPage = () => {
+    if (!data?.nextCursor) return
+    setFilter({
+      cursor: data.nextCursor,
+      from: data.from,
+      to: data.to,
+    })
+  }
   useEffect(() => setDraft(filter.q), [filter.q])
   const { data, isFetching, isError, error, refetch, dataUpdatedAt } = useQuery({ queryKey: ['events', filter], queryFn: () => searchEvents(filter) })
   const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
@@ -91,8 +110,16 @@ export function EventsPage() {
               style={{ width: 130 }}
               value={filter.source}
               onChange={source => setFilter({ source })}
-              options={[{ value: '', label: t('allSources') }, ...['agent', 'sensor', 'syslog', 'suricata'].map(s => ({ value: s, label: s }))]}
+              options={[{ value: '', label: t('allSources') }, ...['agent', 'sensor', 'syslog', 'suricata', 'ntopng', 'nprobe'].map(s => ({ value: s, label: s }))]}
             />
+            {(['srcIp', 'dstIp', 'srcPort', 'dstPort', 'processName', 'commandLine', 'filePath'] as const).map(field => (
+              <Input.Search key={`${field}:${filter[field]}`} allowClear style={{ width: 190 }}
+                aria-label={t(field)} placeholder={t(field)} defaultValue={filter[field]}
+                onSearch={value => setFilter({ [field]: value })} />
+            ))}
+            <Input.Search allowClear aria-label={t('thUser')} placeholder={t('eventUsernameFilter')}
+              key={filter.username} defaultValue={filter.username} style={{ width: 180 }}
+              onSearch={username => setFilter({ username })} />
             {filter.from ? (
               <Tag closable color="blue" onClose={() => setFilter({ from: '', to: '' })} style={{ padding: '4px 8px' }}>
                 {fmtTime(filter.from)} ~ {filter.to ? fmtTime(filter.to).slice(11) : t('now')}
@@ -104,11 +131,17 @@ export function EventsPage() {
               onChange={hours => setFilter({ hours })}
               options={[1, 6, 24, 72, 168].map(n => ({ value: n, label: t('lastHours', { n }) }))}
             />}
+            <Space wrap>
+              <Input type="datetime-local" step={1} aria-label={t('eventTimeFrom')} value={rangeFrom} onChange={e => setRangeFrom(e.target.value)} style={{ width: 210 }} />
+              <span>~</span>
+              <Input type="datetime-local" step={1} aria-label={t('eventTimeTo')} value={rangeTo} onChange={e => setRangeTo(e.target.value)} style={{ width: 210 }} />
+              <Button disabled={!rangeFrom || !rangeTo || rangeFrom > rangeTo} onClick={() => setFilter({ from: new Date(rangeFrom).toISOString(), to: new Date(rangeTo).toISOString() })}>{t('eventApplyRange')}</Button>
+            </Space>
           </Space>
         }
         extra={<Space wrap><Refreshed at={dataUpdatedAt} fetching={isFetching} onRefresh={() => refetch()} /><Typography.Text type="secondary">{t('eventCount', { n: data ? `${data.items.length}${data.truncated ? '+' : ''}` : 0 })}</Typography.Text></Space>}
       >
-        {data?.truncated && <Alert type="info" showIcon style={{ marginBottom: 14 }} title={t('listTruncated', { n: data.items.length })} />}
+        {data?.truncated && <Alert type="info" showIcon style={{ marginBottom: 14 }} title={t('eventPageLimit', { n: data.items.length })} />}
         {/* 覆盖缺口必须说清：零结果时它区分「没有」与「没搜到」；有结果时也如实标注。
             关键词查询不搜冷归档是常态缺口——提示这条历史可在恢复归档后重新搜索，不会自动恢复 */}
         {data?.coverage.reason && (
@@ -212,6 +245,10 @@ export function EventsPage() {
             },
           ]}
         />}
+        <Space style={{ marginTop: 16 }}>
+          {filter.cursor && <Button onClick={() => setFilter({ cursor: '' })}>{t('eventFirstPage')}</Button>}
+          <Button disabled={!data?.nextCursor || isFetching} onClick={nextPage}>{t('eventOlderPage')}</Button>
+        </Space>
       </FilterCard>
       <EventAIDrawer event={asking} onClose={() => setAsking(null)} onAsk={setAsking} />
     </Page>

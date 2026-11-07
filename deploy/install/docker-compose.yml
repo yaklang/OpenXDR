@@ -40,6 +40,9 @@ services:
       DATABASE_URL: postgres://openxdr:${POSTGRES_PASSWORD}@postgres:5432/openxdr?sslmode=disable
       NATS_URL: nats://nats:4222
       QUEUE_REPLICAS: 1
+      THREATBOOK_API_KEY: ${THREATBOOK_API_KEY:-}
+      THREATBOOK_PER_MINUTE: ${THREATBOOK_PER_MINUTE:-5}
+      THREATBOOK_PER_DAY: ${THREATBOOK_PER_DAY:-100}
       ABUSE_CH_AUTH_KEY: ${ABUSE_CH_AUTH_KEY:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # 文档导入的凭据与控制台保存的模型密钥都用它加密；丢了就解不开，和数据库一起备份

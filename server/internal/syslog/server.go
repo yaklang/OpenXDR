@@ -37,6 +37,7 @@ const (
 )
 
 type Server struct {
+	monitor     monitor
 	DB          *ent.Client
 	Rules       sigma.Catalog
 	Addr        string
@@ -67,10 +68,13 @@ func (s *Server) Run(ctx context.Context) {
 func (s *Server) listenUDP(ctx context.Context, queue chan<- incoming) {
 	conn, err := net.ListenPacket("udp", s.Addr)
 	if err != nil {
+		s.listening(false, false, err)
 		slog.Error("Syslog UDP 监听失败", "addr", s.Addr, "err", err)
 		return
 	}
 	defer conn.Close()
+	s.listening(false, true, nil)
+	defer s.listening(false, false, nil)
 	slog.Info("Syslog UDP 启动", "addr", s.Addr)
 	go func() { <-ctx.Done(); conn.Close() }()
 
@@ -81,20 +85,20 @@ func (s *Server) listenUDP(ctx context.Context, queue chan<- incoming) {
 			return
 		}
 		// 队列满时丢弃，绝不阻塞收包
-		select {
-		case queue <- incoming{line: string(buf[:n]), from: addrIP(addr)}:
-		default:
-		}
+		s.receive(queue, incoming{line: string(buf[:n]), from: addrIP(addr)})
 	}
 }
 
 func (s *Server) listenTCP(ctx context.Context, queue chan<- incoming) {
 	ln, err := net.Listen("tcp", s.Addr)
 	if err != nil {
+		s.listening(true, false, err)
 		slog.Error("Syslog TCP 监听失败", "addr", s.Addr, "err", err)
 		return
 	}
 	defer ln.Close()
+	s.listening(true, true, nil)
+	defer s.listening(true, false, nil)
 	slog.Info("Syslog TCP 启动", "addr", s.Addr)
 	go func() { <-ctx.Done(); ln.Close() }()
 
@@ -109,10 +113,7 @@ func (s *Server) listenTCP(ctx context.Context, queue chan<- incoming) {
 			scanner := bufio.NewScanner(conn)
 			scanner.Buffer(make([]byte, 4096), maxMessageLen)
 			for scanner.Scan() {
-				select {
-				case queue <- incoming{line: scanner.Text(), from: ip}:
-				default:
-				}
+				s.receive(queue, incoming{line: scanner.Text(), from: ip})
 			}
 		}()
 	}
@@ -155,7 +156,9 @@ func (s *Server) consume(ctx context.Context, queue <-chan incoming) {
 			flush()
 		case in := <-queue:
 			if s.Events != nil {
-				if err := s.enqueue(ctx, in); err != nil {
+				err := s.enqueue(ctx, in)
+				s.published(err)
+				if err != nil {
 					slog.Error("Syslog 事件入队失败", "err", err)
 				}
 				continue
@@ -174,6 +177,9 @@ func (s *Server) enqueue(ctx context.Context, in incoming) error {
 	msg := Parse(in.line, time.Now())
 	msg.Content = redact.String(msg.Content)
 	assetID, assetOS := s.resolveAsset(ctx, msg.Hostname, in.from)
+	if assetID == nil {
+		s.unassigned()
+	}
 	raw, _ := json.Marshal(map[string]any{
 		"activity_id": 1, "severity_id": msg.Severity, "message": msg.Content,
 		"metadata": map[string]any{"product": map[string]any{"name": msg.AppName}, "log_name": msg.MsgID},
@@ -201,6 +207,9 @@ func (s *Server) build(ctx context.Context, in incoming, deduper *dedup.Deduper)
 	msg := Parse(in.line, time.Now())
 	msg.Content = redact.String(msg.Content)
 	assetID, assetOS := s.resolveAsset(ctx, msg.Hostname, in.from)
+	if assetID == nil {
+		s.unassigned()
+	}
 
 	raw, _ := json.Marshal(map[string]any{
 		"activity_id": 1,

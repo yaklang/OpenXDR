@@ -49,6 +49,7 @@ import (
 	"openxdr/server/internal/feishuapproval"
 	"openxdr/server/internal/findingreview"
 	"openxdr/server/internal/findings"
+	"openxdr/server/internal/flowinput"
 	"openxdr/server/internal/fpstats"
 	"openxdr/server/internal/grpcsvc"
 	"openxdr/server/internal/hostimport"
@@ -77,6 +78,7 @@ import (
 	"openxdr/server/internal/syslog"
 	"openxdr/server/internal/telemetry"
 	"openxdr/server/internal/temporal"
+	"openxdr/server/internal/threatbook"
 	"openxdr/server/internal/triage"
 	"openxdr/server/internal/ueba"
 	"openxdr/server/internal/vuln"
@@ -145,7 +147,7 @@ func main() {
 		defer router.Close()
 	}
 	defer events.Close()
-	startSyslog(ctx, client, rules, dedupWindow, suppressions, intelStore, events)
+	syslogServer := startSyslog(ctx, client, rules, dedupWindow, suppressions, intelStore, events)
 	grpcServer, dists := startGRPC(db, client, rules, dedupWindow, hub, suppressions, intelStore, events)
 
 	if err := cluster.WithLock(ctx, db, "bootstrap", func() error { return auth.Bootstrap(ctx, client) }); err != nil {
@@ -190,6 +192,11 @@ func main() {
 	go cluster.RunLeader(ctx, db, "feishu-approval", feishu.Run)
 	registerSQLRoutes(routes, db)
 	routes.Handle("GET /api/trusted-sources/candidates", api.TrustedCandidates(client, db))
+	routes.Handle("POST /api/intel/threatbook/lookup", api.ThreatBookLookup(client, &threatbook.Service{
+		DB: db, Key: func(ctx context.Context) string { return aiConf.Get(ctx).ThreatBookKey },
+		PerMinute: getenvInt("THREATBOOK_PER_MINUTE", 5), PerDay: getenvInt("THREATBOOK_PER_DAY", 100),
+	}))
+	routes.Handle("GET /api/ingestion/syslog", api.SyslogStatus(syslogServer))
 	routes.Handle("GET /api/notify/health", api.NotifyHealth(client, notifySettings))
 	routes.Handle("GET /api/audit/chain", api.AuditChain(db, chainKey))
 	routes.Handle("/api/containments", api.Containments(client, hub, containmentEngine))
@@ -391,8 +398,9 @@ func newAIConf(client *ent.Client, credentialVault *hostimport.Vault) *aiconf.St
 	return &aiconf.Store{DB: client, Vault: credentialVault, Default: aiconf.Config{
 		BaseURL: getenv("AI_BASE_URL", "http://localhost:11434/v1"), APIKey: os.Getenv("AI_API_KEY"),
 		Model: os.Getenv("AI_MODEL"), PiModel: os.Getenv("PI_MODEL"),
-		AbuseCHKey: os.Getenv("ABUSE_CH_AUTH_KEY"),
-		PTR:        getenv("IPINFO_PTR", "true") == "true", VTKey: os.Getenv("VT_API_KEY"), VTAlertMin: getenvInt("VT_ALERT_MIN_ENGINES", 3),
+		AbuseCHKey:    os.Getenv("ABUSE_CH_AUTH_KEY"),
+		ThreatBookKey: os.Getenv("THREATBOOK_API_KEY"),
+		PTR:           getenv("IPINFO_PTR", "true") == "true", VTKey: os.Getenv("VT_API_KEY"), VTAlertMin: getenvInt("VT_ALERT_MIN_ENGINES", 3),
 	}}
 }
 
@@ -622,8 +630,8 @@ func startEventBus(ctx context.Context, db *sql.DB, rules sigma.Catalog, tempora
 }
 
 // startSyslog syslog 接入，与采集端共用同一事件管道。
-func startSyslog(ctx context.Context, client *ent.Client, rules sigma.Catalog, dedupWindow time.Duration, suppressions *suppress.Store, intelStore *intel.Store, events eventbus.Bus) {
-	go (&syslog.Server{
+func startSyslog(ctx context.Context, client *ent.Client, rules sigma.Catalog, dedupWindow time.Duration, suppressions *suppress.Store, intelStore *intel.Store, events eventbus.Bus) *syslog.Server {
+	receiver := &syslog.Server{
 		DB:          client,
 		Rules:       rules,
 		Addr:        os.Getenv("SYSLOG_ADDR"),
@@ -631,7 +639,9 @@ func startSyslog(ctx context.Context, client *ent.Client, rules sigma.Catalog, d
 		Suppress:    suppressions,
 		Intel:       intelStore,
 		Events:      events,
-	}).Run(ctx)
+	}
+	go receiver.Run(ctx)
+	return receiver
 }
 
 // startGRPC 监听 agent 与 sensor 接入，返回 gRPC 服务与采集端安装包目录。
@@ -915,6 +925,9 @@ func publicMux(app http.Handler, db *sql.DB, client *ent.Client, registry *prome
 		}
 	}
 	integrationAPI := &integration.Service{DB: client, CursorKey: cursorKey,
+		Flows: func(ctx context.Context, origin flowinput.Origin, event flowinput.Event) error {
+			return events.Publish(ctx, ingest.FlowEnvelope(origin, event))
+		},
 		Suricata: func(ctx context.Context, origin suricata.Origin, event suricata.Event) error {
 			return events.Publish(ctx, ingest.SuricataEnvelope(origin, event))
 		}}

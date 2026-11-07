@@ -25,6 +25,7 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | POST | `/api/findings/{id}/status` | `{"status":"open\|resolved\|ignored","note":"…"}`，需组内 analyst；resolved / ignored 必须写原因，忽略原因会交给巡检 AI，之后不再登记，写审计 `finding_status`；组管理员发起的 Pi 对话里 AI 可按用户明确要求代为忽略，口径相同（见 `docs/pi-backend.md`「运维待办」） |
 | GET | `/api/incidents/{id}/report` | 事件报告（Markdown 附件下载）：判定、攻击链、涉及实体、告警时间线、处置记录、处置建议 |
 | DELETE | `/api/incidents/{id}/closure-proposal` | analyst（可见范围内）；撤下 AI 结案建议，204，写审计 `incident_proposal_dismissed` |
+| GET | `/api/ingestion/syslog` | 当前节点 Syslog 监听、收包与入队计数（仅全局 admin，不返回日志内容） |
 | GET | `/api/events` | 原始事件检索，参数见下 |
 | GET | `/api/events/{id}/related` | 与这条日志有确定关联的日志，按关联方式分组：ancestor 父进程链 / process 同一进程 / child 子进程 / connection 同一连接 / peer 别的主机连同一远端 / nearby 同主机前后两分钟；只取调用者可见的资产 |
 | POST | `/api/events/{id}/explain?lang=&refresh=` | 问 AI（analyst）：发起后台解读并立即返回任务 `{id,status,result,error}`。模型读这条日志与上面的候选，`result` 含判定（benign / suspicious / malicious / unknown）、结论、依据、下一步，以及从候选里挑出的相关日志。已有在跑的或已有结果时直接返回它，`refresh=1` 才重新解读；未配置研判与标注模型时 503 |
@@ -40,8 +41,14 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 `GET /api/events` 参数：`from`/`to`（RFC3339，默认近 24h）、`assetId`、
 `classUid`（1001 文件 / 1007 进程 / 3002 认证 / 4001 网络 / 4003 DNS /
 201002 注册表 / 100001 日志）、
-`source`（agent/sensor/syslog）、`q`（对事件里的字段值做不区分大小写的子串匹配，通配符按字面量处理；不匹配字段名，口径见 [事件表分区](event-partitioning.md#关键词检索索引)）、
-`limit`（≤200，默认 100）。响应是对象 `{items, truncated, coverage}`：`items` 为事件行；
+`source`（agent/sensor/syslog/suricata/ntopng/nprobe）、`q`（对事件里的字段值做不区分大小写的子串匹配，通配符按字面量处理；不匹配字段名，口径见 [事件表分区](event-partitioning.md#关键词检索索引)）、
+`username`（用户名精确匹配）、`srcIp` / `dstIp` / `srcPort` / `dstPort`、
+`processName` / `commandLine` / `filePath`（归一化字段文本精确匹配，多个条件为 AND；字段缺失不匹配）、
+`cursor`（上次响应的 `nextCursor`，继续读取更早记录，须保持原起止时间及过滤条件）、
+`limit`（≤200，默认 100）。响应是对象 `{items, truncated, coverage, nextCursor?, from, to}`：`items` 为事件行；
+`from` / `to` 是本次实际查询时间窗，翻页须复用，避免相对时间漂移。结果按 `(ts, id)` 倒序；单页取满且查询覆盖完整时返回 `nextCursor`，否则省略。
+游标边界同时应用于热表和冷归档；范围扫描有缺口时不能继续翻页，应收窄查询条件。
+非法时间、起止时间倒置或非法游标返回 400。控制台支持本地时间起止选择，按 RFC3339 转换后查询。
 `truncated` 表示返回条数达到 `limit`（可能还有更早的，同时带响应头 `X-Truncated: 1`）；
 `coverage` 为 `{hot_searched, cold_searched, scan_complete, reason}`，`reason` 非空即本次没查全——
 `hot_keyword_degraded`（关键词检索超出时限，只覆盖最近数据）、`keyword_not_searched`（关键词不搜冷归档）、
@@ -52,6 +59,7 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| POST | `/api/intel/threatbook/lookup` | 微步公网 IP 分析（analyst/admin），body `{ip}`；成功返回供应商、标签、原始依据、查询时间、缓存到期和缓存命中标记。400 参数错误，429 本地额度耗尽，503 未配置密钥，502 上游/查询失败；不会自动加入 IOC 库 |
 | GET | `/api/intel` | IOC 清单（含命中计数） |
 | POST | `/api/intel` | 单条：`{"kind":"ip\|domain\|hash","value","source","severity","note","expiresInDays"}`，kind 缺省自动识别 |
 | POST | `/api/intel/import` | 批量：`{"text":"一行一条","source","severity","expiresInDays"}`，类型自动识别，重复跳过，`#` 行忽略 |
@@ -404,3 +412,10 @@ URL 更改默认保留旧积压目标；movePending=true 显式改投尚未发�
 不返回模型凭据、提示词或原始工具结果。仅有本版本上线后的记录。
 
 运行中记录的 `heartbeat_valid` 按事件当前执行身份与心跳判断；为 false 时界面显示未确认，不能据旧 running 记录断言任务仍在运行。
+
+### 外部流量接入
+
+集成 Token 授权 `flows:write` 且恰好一个组后，可 POST 一条标签式 JSON 到
+`/api/integration/v1/flows/ntopng/events` 或 `/api/integration/v1/flows/nprobe/events`。
+报文上限 256 KiB，持久队列确认后返回 202，失败保留原报文重试；重复提交幂等。
+字段、时间口径、导入工具与资产归属边界见 [流量接入](../integrations/flows/README.md)。
