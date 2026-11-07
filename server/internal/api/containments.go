@@ -20,11 +20,12 @@ import (
 	"openxdr/server/internal/response"
 )
 
-// Containments 自主响应的决策记录、熔断状态与人工解除。engine 为 nil 表示未开启（记录照样可查、可解除）
-func Containments(db *ent.Client, hub *response.Hub, engine *containment.Engine) http.Handler {
+// Containments 自主响应的决策记录、熔断状态、开关与人工解除。engine 为 nil 表示没开 RESPONSE_ENABLED（记录照样可查、可解除）
+func Containments(db *ent.Client, hub *response.Hub, engine *containment.Engine, config *containment.Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/containments", listContainments(db))
 	mux.HandleFunc("GET /api/containments/status", containmentStatus(db, engine))
+	mux.HandleFunc("PUT /api/containments/config", saveContainmentConfig(db, engine, config))
 	mux.HandleFunc("POST /api/containments/{id}/lift", liftContainment(db, hub))
 	return mux
 }
@@ -178,6 +179,33 @@ func containmentStatus(db *ent.Client, engine *containment.Engine) http.HandlerF
 			return
 		}
 		writeJSON(w, st)
+	}
+}
+
+// saveContainmentConfig 全局 admin 开关自主响应、改范围（门槛见 auth.minRole），各节点下一轮生效
+func saveContainmentConfig(db *ent.Client, engine *containment.Engine, config *containment.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var c containment.Config
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&c) != nil {
+			http.Error(w, "请求无效", http.StatusBadRequest)
+			return
+		}
+		if engine == nil && c.Enabled {
+			http.Error(w, "处置功能未开启（RESPONSE_ENABLED），自主响应无法启用", http.StatusConflict)
+			return
+		}
+		err := config.Save(r.Context(), c)
+		if errors.Is(err, containment.ErrLocked) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		detail, _ := json.Marshal(c)
+		audit.Log(r.Context(), db, r, "containment_config_updated", "containment", string(detail))
+		containmentStatus(db, engine)(w, r)
 	}
 }
 

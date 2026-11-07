@@ -216,6 +216,31 @@ func TestScopeLabSkipsProductionSource(t *testing.T) {
 	}
 }
 
+// 控制台开关：关闭时不做新处置，打开后下一轮按配置的范围生效
+func TestConsoleSwitch(t *testing.T) {
+	f := setup(t)
+	src := f.host(t, "range", "10.1.1.170", nil, "")
+	app := f.host(t, "app", "10.1.1.50", nil, "")
+	f.spray(t, src, "10.1.1.170", app)
+	e := f.engine(ScopeLab)
+	e.Config = &Store{DB: f.client}
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.client.Containment.Query().CountX(f.ctx); n != 0 {
+		t.Fatalf("默认关闭不应处置：%d", n)
+	}
+	if err := e.Config.Save(f.ctx, Config{Enabled: true, Scope: ScopeAll}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.received("app"); len(got) != 1 || got[0].Target != "10.1.1.170" {
+		t.Fatalf("开启并放开到 all 后应封锁来源：%v", got)
+	}
+}
+
 // 核心来源（跑着 openxdr-server）：不隔离；受害方也是核心时不封，免得两台平台节点互相切断
 func TestCoreSourceNeverPartitionsControlPlane(t *testing.T) {
 	f := setup(t)

@@ -46,7 +46,10 @@ type Engine struct {
 	Hub *response.Hub
 	// 隔离主机时放行的地址（ISOLATION_ALLOW），为空则不做隔离，同时用来挡住封锁 server 自己
 	AllowEndpoints []string
-	Scope          string
+	// 开关与范围，每轮从控制台配置读取；为 nil 时（测试）按 Scope 常开
+	Config *Store
+	// 本轮生效的范围，只在单活循环里读写
+	Scope string
 	// 租约长度：从最后一条证据算起
 	TTL time.Duration
 	// 一小时内最多执行的处置数，超出熔断
@@ -93,17 +96,34 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 }
 
+// Tick 关闭时只停新的处置；已生效的照常对账、到期复核或解除。
 func (e *Engine) Tick(ctx context.Context) error {
 	if err := e.reconcile(ctx); err != nil {
 		return err
 	}
-	if err := e.react(ctx); err != nil {
-		return err
+	if e.on(ctx) {
+		if err := e.react(ctx); err != nil {
+			return err
+		}
 	}
 	if err := e.expire(ctx); err != nil {
 		return err
 	}
 	return response.AutoVerifyCommands(ctx, e.SQL, e.now())
+}
+
+// on 读本轮开关与范围；读不到按关闭处理，拿不准就不动手
+func (e *Engine) on(ctx context.Context) bool {
+	if e.Config == nil {
+		return true
+	}
+	v, err := e.Config.Load(ctx)
+	if err != nil {
+		slog.Error("读取自主响应配置失败，本轮不做新处置", "err", err)
+		return false
+	}
+	e.Scope = v.Scope
+	return v.Enabled
 }
 
 func (e *Engine) reconcile(ctx context.Context) error {

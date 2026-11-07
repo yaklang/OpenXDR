@@ -148,6 +148,8 @@ P1 上线时 `CONTAINMENT_ENABLED` 默认关闭，生产先用 `CONTAINMENT_SCOP
 ## P1 实现说明
 
 代码在 `server/internal/containment`，单活循环每 5 秒一轮（`CONTAINMENT_*` 配置见 [部署文档](deployment.md)）。
+开关与范围在「自主响应」页由全局 admin 改，存 settings 表、每轮读取；`CONTAINMENT_ENABLED` / `CONTAINMENT_SCOPE` 设了就锁定。
+关闭只停新的处置，已生效的租约照常对账、到期复核或解除。
 平台指令与已知自动化引起的告警不处置。
 
 ### 信号与处置

@@ -20,9 +20,13 @@ type Status struct {
 	Active           int    `json:"active"`
 	// 熔断中：一小时内已生效与待确认的处置达到上限，新的决定只记录不执行
 	Tripped bool `json:"tripped"`
+	// 没开 RESPONSE_ENABLED，控制台开关无效
+	Unavailable   bool `json:"unavailable,omitempty"`
+	EnabledLocked bool `json:"enabledLocked,omitempty"`
+	ScopeLocked   bool `json:"scopeLocked,omitempty"`
 }
 
-// StatusOf engine 为 nil 表示没开启；计数照样给，开关之前留下的记录也要看得到
+// StatusOf engine 为 nil 表示没开 RESPONSE_ENABLED；计数照样给，开关之前留下的记录也要看得到
 func StatusOf(ctx context.Context, db *ent.Client, engine *Engine) (Status, error) {
 	hour := time.Now().Add(-time.Hour)
 	executed, err := db.Containment.Query().Where(entcontainment.CreatedAtGTE(hour),
@@ -47,10 +51,16 @@ func StatusOf(ctx context.Context, db *ent.Client, engine *Engine) (Status, erro
 	if err != nil {
 		return Status{}, err
 	}
-	st := Status{ExecutedLastHour: executed, Pending: pending, HeldLastHour: held, Active: active}
-	if engine != nil {
-		st.Enabled, st.Scope, st.TTLHours, st.MaxPerHour = true, engine.Scope, int(engine.TTL/time.Hour), engine.MaxPerHour
-		st.Tripped = (executed + pendingLastHour) >= engine.MaxPerHour
+	st := Status{ExecutedLastHour: executed, Pending: pending, HeldLastHour: held, Active: active, Unavailable: engine == nil}
+	if engine == nil {
+		return st, nil
 	}
+	v, err := engine.Config.Load(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	st.Enabled, st.Scope, st.EnabledLocked, st.ScopeLocked = v.Enabled, v.Scope, v.EnabledLocked, v.ScopeLocked
+	st.TTLHours, st.MaxPerHour = int(engine.TTL/time.Hour), engine.MaxPerHour
+	st.Tripped = v.Enabled && (executed+pendingLastHour) >= engine.MaxPerHour
 	return st, nil
 }

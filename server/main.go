@@ -126,7 +126,7 @@ func main() {
 	hub.Signer = commandSigner(hub.Enabled)
 	allowlist := isolationAllowlist()
 	triageEngine := startTriage(ctx, db, client, rules, llmFor, hub, allowlist)
-	containmentEngine := startContainment(ctx, db, client, hub, allowlist, llmFor("containment"))
+	containmentEngine, containmentConfig := startContainment(ctx, db, client, hub, allowlist, llmFor("containment"))
 	// 自身监控：平台节点的 agent 掉线；配了 SELFWATCH_PATRONI_URL（HA 部署）再盯 Patroni 动态配置
 	go cluster.RunLeader(ctx, db, "selfwatch", (&selfwatch.Watch{
 		DB: client, PatroniURL: os.Getenv("SELFWATCH_PATRONI_URL"), Interval: time.Minute,
@@ -199,8 +199,8 @@ func main() {
 	routes.Handle("GET /api/ingestion/syslog", api.SyslogStatus(syslogServer))
 	routes.Handle("GET /api/notify/health", api.NotifyHealth(client, notifySettings))
 	routes.Handle("GET /api/audit/chain", api.AuditChain(db, chainKey))
-	routes.Handle("/api/containments", api.Containments(client, hub, containmentEngine))
-	routes.Handle("/api/containments/", api.Containments(client, hub, containmentEngine))
+	routes.Handle("/api/containments", api.Containments(client, hub, containmentEngine, containmentConfig))
+	routes.Handle("/api/containments/", api.Containments(client, hub, containmentEngine, containmentConfig))
 	registerHostRoutes(ctx, routes, db, client, rules, credentialVault, enrollSvc, conf)
 	registerSettingsRoutes(routes, db, client, credentialVault, notifySettings, webhook, aiConf, intelFeeds, enrollSvc, dists)
 	// 冷归档读取默认关闭：EVENT_ARCHIVE_READ=1 才把连接交给 /api/events 与问 AI 入口，关着时行为与改动前一致
@@ -480,33 +480,32 @@ func startAuditChain(ctx context.Context, db *sql.DB, client *ent.Client, hub *r
 	return key
 }
 
-// startContainment 自主响应：确定性信号命中后按角色与处置等级直接遏制，显式开启才运行，仍受 RESPONSE_ENABLED 约束
-func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *response.Hub, allowlist []string, llm *triage.LLM) *containment.Engine {
-	if os.Getenv("CONTAINMENT_ENABLED") != "true" {
+// startContainment 自主响应：确定性信号命中后按角色与处置等级直接遏制。开关与范围在控制台改，
+// CONTAINMENT_ENABLED / CONTAINMENT_SCOPE 设了就是锁定值；仍受 RESPONSE_ENABLED 约束
+func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *response.Hub, allowlist []string, llm *triage.LLM) (*containment.Engine, *containment.Store) {
+	store := &containment.Store{DB: client, EnvOn: os.Getenv("CONTAINMENT_ENABLED"), EnvScope: os.Getenv("CONTAINMENT_SCOPE")}
+	if err := store.Validate(); err != nil {
+		slog.Error("自主响应配置错误", "err", err)
+		os.Exit(1)
+	}
+	if !hub.Enabled {
+		if store.EnvOn == "true" {
+			slog.Warn("CONTAINMENT_ENABLED 需要 RESPONSE_ENABLED=true，自主响应不启动")
+		}
 		go cluster.RunLeader(ctx, db, "command-verification", func(ctx context.Context) {
 			response.RunAutoVerification(ctx, db, 30*time.Second)
 		})
-		return nil
-	}
-	if !hub.Enabled {
-		slog.Warn("CONTAINMENT_ENABLED 需要 RESPONSE_ENABLED=true，自主响应不启动")
-		return nil
-	}
-	scope := getenv("CONTAINMENT_SCOPE", containment.ScopeLab)
-	if scope != containment.ScopeLab && scope != containment.ScopeAll {
-		slog.Error("CONTAINMENT_SCOPE 只能是 lab 或 all", "value", scope)
-		os.Exit(1)
+		return nil, store
 	}
 	engine := &containment.Engine{
-		DB: client, SQL: db, Hub: hub, AllowEndpoints: allowlist, Scope: scope,
+		DB: client, SQL: db, Hub: hub, AllowEndpoints: allowlist, Config: store,
 		TTL:        time.Duration(getenvInt("CONTAINMENT_TTL_HOURS", 24)) * time.Hour,
 		MaxPerHour: getenvInt("CONTAINMENT_MAX_PER_HOUR", 10),
 		Interval:   5 * time.Second,
 		LLM:        llm,
 	}
-	slog.Info("自主响应已开启", "scope", scope, "ttl", engine.TTL, "maxPerHour", engine.MaxPerHour)
 	go cluster.RunLeader(ctx, db, "containment", engine.Run)
-	return engine
+	return engine, store
 }
 
 // startNotify 推送目标以控制台保存的为准，环境变量只是首次部署的默认值

@@ -73,8 +73,8 @@ services:
       # 隔离主机时放行的 server 地址（IP:8081）；不配则不隔离主机，其余处置照常
       ISOLATION_ALLOW: ${ISOLATION_ALLOW:-}
       # 自主响应：确定性信号命中直接遏制，默认关闭；SCOPE=lab 只处置涉及实验等级主机的攻击，all 不限
-      CONTAINMENT_ENABLED: ${CONTAINMENT_ENABLED:-false}
-      CONTAINMENT_SCOPE: ${CONTAINMENT_SCOPE:-lab}
+      CONTAINMENT_ENABLED: ${CONTAINMENT_ENABLED:-}
+      CONTAINMENT_SCOPE: ${CONTAINMENT_SCOPE:-}
       RETENTION_DAYS: ${RETENTION_DAYS:-30}
       # 跨事件的计数与序列检测（开发中，默认关闭）：在 .env 写 TEMPORAL_RULES_PATH=/opt/openxdr/temporal-rules 开启，规则已随镜像带上
       TEMPORAL_RULES_PATH: ${TEMPORAL_RULES_PATH:-}

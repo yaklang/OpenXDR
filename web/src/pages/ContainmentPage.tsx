@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, App, Button, Card, Descriptions, Input, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
+import { Alert, App, Button, Card, Descriptions, Input, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, Typography } from 'antd'
 import { useState } from 'react'
 import { Link } from 'react-router'
-import { fetchContainments, fetchContainmentStatus, liftContainment, type Containment, type ContainmentState } from '../api'
+import { fetchContainments, fetchContainmentStatus, liftContainment, saveContainmentConfig, type Containment, type ContainmentState, type ContainmentStatus } from '../api'
 import { useSession } from '../app/session'
 import { EmptyHint } from '../components/Ago'
 import { HostLink } from '../components/HostLink'
@@ -41,7 +41,7 @@ export function ContainmentPage() {
   const wideTable = useWideTable()
   const { message } = App.useApp()
   const client = useQueryClient()
-  const { canWrite } = useSession()
+  const { canWrite, isAdmin } = useSession()
   const [state, setState] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -64,17 +64,36 @@ export function ContainmentPage() {
     }
   }
 
+  const save = async (enabled: boolean, scope: 'lab' | 'all') => {
+    try {
+      client.setQueryData(['containment-status'], await saveContainmentConfig(enabled, scope))
+      message.success(t('cmtConfigSaved'))
+    } catch (e) {
+      message.error(errText(e, t))
+    }
+  }
+
   const st = status.data
   return (
     <Page title={t('navContainment')} subtitle={t('containmentSubtitle')}>
       <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-        {st && !st.enabled && <Alert type="info" showIcon title={t('cmtDisabled')} />}
+        {st?.unavailable && <Alert type="info" showIcon title={t('cmtUnavailable')} />}
+        {st && !st.unavailable && !st.enabled && <Alert type="info" showIcon title={t(isAdmin && !st.enabledLocked ? 'cmtDisabledAdmin' : 'cmtDisabled')} />}
         {st?.tripped && <Alert type="warning" showIcon title={t('cmtTripped', { n: st.executedLastHour, max: st.maxPerHour ?? 0 })} />}
         {st && (
           <Card size="small">
             <Descriptions size="small" column={{ xs: 2, md: 3, xl: 6 }}>
-              <Descriptions.Item label={t('cmtStatus')}>{st.enabled ? <Tag color="green">{t('cmtOn')}</Tag> : <Tag>{t('cmtOff')}</Tag>}</Descriptions.Item>
-              <Descriptions.Item label={t('cmtScope')}>{st.scope ? t(st.scope === 'lab' ? 'cmtScopeLab' : 'cmtScopeAll') : '-'}</Descriptions.Item>
+              <Descriptions.Item label={t('cmtStatus')}>{isAdmin && !st.unavailable ? <EnabledSwitch st={st} onSave={save} /> : st.enabled ? <Tag color="green">{t('cmtOn')}</Tag> : <Tag>{t('cmtOff')}</Tag>}</Descriptions.Item>
+              <Descriptions.Item label={t('cmtScope')}>
+                {isAdmin && !st.unavailable && st.scope ? (
+                  <Tooltip title={st.scopeLocked ? t('cmtLocked', { name: 'CONTAINMENT_SCOPE' }) : undefined}>
+                    <Select size="small" aria-label={t('cmtScope')} style={{ minWidth: 220 }} value={st.scope} disabled={st.scopeLocked}
+                      onChange={v => save(st.enabled, v)}
+                      options={[{ value: 'lab', label: t('cmtScopeLab') }, { value: 'all', label: t('cmtScopeAll') }]}
+                    />
+                  </Tooltip>
+                ) : st.scope ? t(st.scope === 'lab' ? 'cmtScopeLab' : 'cmtScopeAll') : '-'}
+              </Descriptions.Item>
               <Descriptions.Item label={t('cmtTTL')}>{st.ttlHours ? t('cmtHours', { n: st.ttlHours }) : '-'}</Descriptions.Item>
               <Descriptions.Item label={t('cmtActiveCount')}>{st.active}</Descriptions.Item>
               <Descriptions.Item label={t('cmtLastHour')}>{st.maxPerHour ? `${st.executedLastHour} / ${st.maxPerHour}` : st.executedLastHour}</Descriptions.Item>
@@ -156,5 +175,20 @@ export function ContainmentPage() {
         </Card>
       </Space>
     </Page>
+  )
+}
+
+// 开启要确认（之后平台会直接动手），关闭立即生效
+function EnabledSwitch({ st, onSave }: { st: ContainmentStatus; onSave: (enabled: boolean, scope: 'lab' | 'all') => Promise<void> }) {
+  const { t } = useI18n()
+  const scope = st.scope ?? 'lab'
+  const sw = <Switch size="small" checked={st.enabled} disabled={st.enabledLocked} checkedChildren={t('cmtOn')} unCheckedChildren={t('cmtOff')}
+    onChange={on => { if (!on) void onSave(false, scope) }} />
+  if (st.enabledLocked) return <Tooltip title={t('cmtLocked', { name: 'CONTAINMENT_ENABLED' })}>{sw}</Tooltip>
+  if (st.enabled) return sw
+  return (
+    <Popconfirm title={t('cmtEnableConfirm')} description={<div style={{ maxWidth: 360 }}>{t('cmtEnableConfirmDesc')}</div>} onConfirm={() => onSave(true, scope)}>
+      {sw}
+    </Popconfirm>
   )
 }

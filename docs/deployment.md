@@ -454,8 +454,8 @@ server 全部通过环境变量配置，均有默认值：
 | `AUTO_RESPONSE_ENABLED` | `false` | AI 研判高置信度 malicious 时真实隔离涉事主机（依赖 `RESPONSE_ENABLED`，每次决策落审计） |
 | `AUTO_RESPONSE_MIN_CONFIDENCE` | `90` | 触发自动响应的置信度门槛 |
 | `AUTO_RESPONSE_EXEMPT` | 空 | 逗号分隔的主机名，绝不自动隔离 |
-| `CONTAINMENT_ENABLED` | `false` | 自主响应：内网横向喷洒、爆破得手、高级别情报命中等确定性信号命中后，按角色与处置等级直接遏制（隔离实验等级的来源、封锁来源、锁定被攻破的账号、结束恶意进程、隔离恶意文件），不等研判与人工。依赖 `RESPONSE_ENABLED`，见 [自主响应设计](autonomous-response-design.md) |
-| `CONTAINMENT_SCOPE` | `lab` | `lab` 只处置涉及实验等级主机的攻击（上线初期），`all` 不限 |
+| `CONTAINMENT_ENABLED` | 空（控制台决定，默认关） | 自主响应：内网横向喷洒、爆破得手、高级别情报命中等确定性信号命中后，按角色与处置等级直接遏制（隔离实验等级的来源、封锁来源、锁定被攻破的账号、结束恶意进程、隔离恶意文件），不等研判与人工。依赖 `RESPONSE_ENABLED`，见 [自主响应设计](autonomous-response-design.md)。平时在「自主响应」页由全局 admin 开关，各节点 5 秒内生效、记审计；设了这个变量（`true` / `false`）就是锁定值，控制台只读。关闭只停新处置，已生效的照常按租约到期复核或解除 |
+| `CONTAINMENT_SCOPE` | 空（控制台决定，默认 `lab`） | `lab` 只处置涉及实验等级主机的攻击（上线初期），`all` 不限；同样可在「自主响应」页改，设了即锁定 |
 | `CONTAINMENT_TTL_HOURS` | `24` | 处置租约长度，从最后一条证据算起；证据持续就续期。到期时配了模型先请 AI 复核（解除或续期，出错按续期、一小时后再问），没配模型直接解除；租约最长 7 天 |
 | `SELFWATCH_PATRONI_URL` | 空（HA 编排默认 `http://127.0.0.1:8008/config`） | 自身监控：每分钟读本机 Patroni 动态配置与基线比对，被改就出 `xdr:control-plane-change` 告警（改 pg_hba、`*_command`、预加载库等 5 级，其余 3 级）。不配只检查平台节点 agent 掉线（`xdr:core-agent-silent`，4 级） |
 | `CONTAINMENT_MAX_PER_HOUR` | `10` | 一小时内最多生效的自动处置数，超出熔断（只记录不执行）；另有组内同时隔离不超过纳管主机 20% 的上限 |

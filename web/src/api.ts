@@ -1812,10 +1812,15 @@ export interface ContainmentStatus {
   heldLastHour: number
   active: number
   tripped: boolean
+  unavailable?: boolean
+  enabledLocked?: boolean
+  scopeLocked?: boolean
 }
 export const fetchContainments = (page: number, pageSize: number, state: string) =>
   get<{ items: Containment[]; total: number }>(`/api/containments?page=${page}&pageSize=${pageSize}${state ? `&state=${state}` : ''}`)
 export const fetchContainmentStatus = () => get<ContainmentStatus>('/api/containments/status')
+export const saveContainmentConfig = async (enabled: boolean, scope: 'lab' | 'all'): Promise<ContainmentStatus> =>
+  (await send('PUT', '/api/containments/config', { enabled, scope })).json()
 export const liftContainment = (id: string, reason: string) => send('POST', `/api/containments/${id}/lift`, { reason })
 
 export interface SyslogStatus {

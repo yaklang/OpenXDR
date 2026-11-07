@@ -41,7 +41,8 @@ func TestContainmentsListAndLift(t *testing.T) {
 
 	hub := response.NewHub(client, true)
 	inbox := hub.Attach(agent)
-	h := Containments(client, hub, nil)
+	store := &containment.Store{DB: client}
+	h := Containments(client, hub, &containment.Engine{Config: store, TTL: 24 * time.Hour, MaxPerHour: 10}, store)
 	vi := httptest.NewServer(as(viewer, h))
 	t.Cleanup(vi.Close)
 	an := httptest.NewServer(as(ana, h))
@@ -102,5 +103,35 @@ func TestContainmentsListAndLift(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusOK || json.Unmarshal(body, &st) != nil || st.Enabled || st.Active != 1 {
 		t.Fatalf("未开启时状态照样可查: %s", body)
+	}
+
+	if code := send(t, admin, "PUT", "/api/containments/config", `{"enabled":true,"scope":"prod"}`); code != http.StatusBadRequest {
+		t.Errorf("非法范围应 400: %d", code)
+	}
+	if code := send(t, admin, "PUT", "/api/containments/config", `{"enabled":true,"scope":"all"}`); code != http.StatusOK {
+		t.Fatalf("admin 开启: %d", code)
+	}
+	if v, err := store.Load(ctx); err != nil || !v.Enabled || v.Scope != "all" {
+		t.Fatalf("开启后应读到新配置: %+v %v", v, err)
+	}
+	if _, body = get(t, vi, "/api/containments/status"); json.Unmarshal(body, &st) != nil || !st.Enabled {
+		t.Fatalf("开启后状态应为开: %s", body)
+	}
+
+	locked := &containment.Store{DB: client, EnvOn: "false"}
+	lh := asAdmin(Containments(client, hub, &containment.Engine{Config: locked}, locked))
+	ls := httptest.NewServer(lh)
+	t.Cleanup(ls.Close)
+	if code := send(t, ls, "PUT", "/api/containments/config", `{"enabled":true,"scope":"all"}`); code != http.StatusConflict {
+		t.Errorf("环境变量锁定时不能改开关: %d", code)
+	}
+	if v, _ := locked.Load(ctx); v.Enabled || !v.EnabledLocked {
+		t.Errorf("环境变量锁定值优先: %+v", v)
+	}
+
+	off := httptest.NewServer(asAdmin(Containments(client, hub, nil, store)))
+	t.Cleanup(off.Close)
+	if code := send(t, off, "PUT", "/api/containments/config", `{"enabled":true,"scope":"lab"}`); code != http.StatusConflict {
+		t.Errorf("没开 RESPONSE_ENABLED 不能开启: %d", code)
 	}
 }
