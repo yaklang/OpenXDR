@@ -107,7 +107,8 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
 每个包职责单一，按处理链顺序排列：
 
 - `grpcsvc`：gRPC 接入（agent/sensor 注册、事件上报、指令下发、TLS/身份绑定）
-- `sigma`：Sigma 兼容规则引擎（解析、修饰符、条件求值、热重载）
+- `sigma`：Sigma 兼容规则引擎（解析、修饰符、条件求值、热重载；`Overlay` 叠加控制台自定义规则）
+- `customrule`：控制台自定义 Sigma 规则的读库与各节点热加载
 - `intel`：威胁情报碰撞（IP / 域名 / 文件哈希）
 - `dedup` / `suppress`：告警去重与误报抑制
 - `fpstats`：误报统计——同规则同主机被人反复判误报时生成抑制草案（单活），交 AI 审计员评审

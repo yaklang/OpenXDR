@@ -94,6 +94,10 @@ sensor 与 syslog 路径结构相同，仅去重指纹与资产归属不同
 - **热重载**：周期扫描（`RULES_RELOAD_SECONDS` 默认 30s，0 关闭），指纹=
   全部 yml 文件的路径+内容 SHA-256，变化则整体重载、`atomic.Pointer` 原子
   切换；编译失败的规则只跳过该条，不影响旧规则集（`engine.go:399-439`）
+- **自定义规则**：控制台「检测规则 → 自定义规则」新建或导入的 Sigma 规则存 `custom_rules` 表，
+  由 `sigma.Overlay` 叠在规则目录之上（`internal/customrule` 各节点按同一周期读库，内容变了整体重编译、原子切换）。
+  准入与规则目录同一套编译口径，另要求显式 `id`、不得与规则目录重名、不收信号规则（时序快照只认规则目录）。
+  Elastic、Wazuh 规则不直接导入：查询语言与字段模型不同，部分转换会悄悄漏检，请先转成 Sigma
 - **严重度**：informational1/low2/medium3/high4/critical5，默认 3
   （`engine.go:130-132`）
 - **ATT&CK 标签**：解析 Sigma `tags` 的 `attack.` 前缀，技术匹配

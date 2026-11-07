@@ -33,6 +33,10 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | GET | `/api/stats` | 概览：24h 降噪漏斗、告警趋势、按级别的告警分布（`alertsBySeverity`）、Top 规则、资产在线率；`reviewIncidents` 为需人工复核的事件数（口径同 `status=review`） |
 | GET | `/api/rules` | 引擎当前加载的规则（热重载后即时反映），含数据源覆盖标记与 ATT&CK 标签 |
 | POST | `/api/rules/{id}/backtest?hours=` | viewer；在近期事件上回测单条基础规则（`hours` 默认 24，范围 1–168，最多扫 5000 条）；返回命中数、主机分布与样例。跨事件时序规则返回 400 |
+| GET | `/api/custom-rules` | 控制台自定义 Sigma 规则（含原文、启停、修改人；`error` 为本节点加载失败原因） |
+| POST | `/api/custom-rules` | 全局 admin；`{content, enabled}` 新建。原文须能编译、显式写 `id`、不是信号规则、不与规则目录重名，否则 400；同 id 已存在 409。本节点立即生效，其他节点下一个 `RULES_RELOAD_SECONDS` 周期生效 |
+| PUT / DELETE | `/api/custom-rules/{id}` | 全局 admin；修改（原文 id 须与路径一致）或删除，记审计 |
+| POST | `/api/custom-rules/check?hours=` | 全局 admin；`{content}` 草稿检查，可加载则按 `/api/rules/{id}/backtest` 同口径回测，不保存、不生效 |
 | GET | `/api/attack` | ATT&CK 覆盖矩阵：按杀伤链顺序的战术列与技术格，含未打标签、无数据源的规则数 |
 | GET | `/api/temporal-gaps?assetId=&from=&to=&limit=` | 该资产的时序检测缺口（`candidate_limit` / `late`），详见 [时序检测](temporal-detection.md#缺口查询接口) |
 | GET | `/api/temporal-rule-snapshots?limit=&alertId=` | 已归档的时序规则版本（**全局 admin / analyst**，角色每次从库里取），按首次使用时间倒序：`{items:[{revision,createdAt,format,baseRuleCount,temporalRules}],truncated}`；`limit` 默认 20、范围 1..100。带 `alertId` 时只返回该告警命中时的版本（单事件告警、旧版本告警或调用者看不到的告警返回空列表） |
@@ -157,7 +161,8 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | PUT | `/api/assets/{id}/zone` | 组 admin；`{zoneId}`，null 回到自动划分 |
 | GET | `/api/containments?state=&assetId=&page=&pageSize=` | viewer；自主响应决策记录 `{items,total}`，按组可见，来源主机在别组时不给主机名；`state` 可逗号分隔多个（active / executed / expired / lifted / held / skipped / failed） |
 | GET | `/api/audit/chain` | 平台 admin；完整核对审计链：`{enabled,sealedSeq,unsealed,ok,brokenAt,reason}`。没配指令签名私钥时 `enabled:false`，见 [自主响应设计](autonomous-response-design.md#p5-进展2026-11-05) |
-| GET | `/api/containments/status` | 登录用户；开关、范围、租约时长、近一小时处置与熔断计数、生效中数量 |
+| GET | `/api/containments/status` | 登录用户；开关、范围、租约时长、近一小时处置与熔断计数、生效中数量；`unavailable` 表示没开 `RESPONSE_ENABLED`，`enabledLocked` / `scopeLocked` 表示被环境变量锁定 |
+| PUT | `/api/containments/config` | 全局 admin；`{enabled, scope}` 开关自主响应、改范围（`lab` / `all`），各节点 5 秒内生效，记审计。被环境变量锁定的字段改动返回 409，没开 `RESPONSE_ENABLED` 时开启返回 409 |
 | POST | `/api/containments/{id}/lift` | 组 analyst；`{reason?}` 人工解除封锁、隔离主机、隔离容器，或恢复隔离文件、锁定账号：下发恢复动作，送达才记 lifted；解除之前的证据不再触发同一处置。结束进程撤不回、不在生效中的返回 409 |
 | PUT | `/api/assets/{id}/response-tier` | 组 admin；`{tier}` 人工指定自主响应处置等级并锁定（AI 不再覆盖），null 解锁并请 AI 重新定级；运行 OpenXDR server 的资产始终按核心处理，见 [自主响应设计](autonomous-response-design.md) |
 | POST | `/api/assets/{id}/annotate` | 组 analyst；请求 AI 重新标注，未配置模型返回 503 |

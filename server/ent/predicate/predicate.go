@@ -42,6 +42,9 @@ type CommandPolicy func(*sql.Selector)
 // Containment is the predicate function for containment builders.
 type Containment func(*sql.Selector)
 
+// CustomRule is the predicate function for customrule builders.
+type CustomRule func(*sql.Selector)
+
 // DecoyDeployment is the predicate function for decoydeployment builders.
 type DecoyDeployment func(*sql.Selector)
 

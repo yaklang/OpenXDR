@@ -29,6 +29,8 @@ type ruleRow struct {
 	Product       string   `json:"product"`
 	// Signal 信号规则：只作时序规则输入，命中不单独告警
 	Signal bool `json:"signal,omitempty"`
+	// Custom 控制台维护的自定义规则
+	Custom bool `json:"custom,omitempty"`
 	// 该类别是否有采集源在供数：false 表示规则加载了但撞不到事件
 	Ingested   bool     `json:"ingested"`
 	Source     string   `json:"source"`
@@ -87,7 +89,7 @@ func mapRules(api *http.ServeMux, db *ent.Client, rules sigma.Catalog) {
 			out[i] = ruleRow{
 				Kind: rule.Kind, WindowSeconds: rule.WindowSeconds, Threshold: rule.Threshold, References: rule.References,
 				ID: rule.ID, Title: rule.Title, Author: rule.Author, Severity: rule.Severity,
-				ClassUID: rule.ClassUID, Product: rule.Product, Signal: rule.Signal,
+				ClassUID: rule.ClassUID, Product: rule.Product, Signal: rule.Signal, Custom: rule.Custom,
 				Ingested: ingested, Source: source,
 				Tactics: rule.Tactics, Techniques: rule.Techniques,
 			}
@@ -123,100 +125,104 @@ func mapRules(api *http.ServeMux, db *ent.Client, rules sigma.Catalog) {
 			http.Error(w, "跨事件时序规则不支持单事件快速回测", http.StatusBadRequest)
 			return
 		}
+		backtest(w, r, db, s, target)
+	})
+}
 
-		hours := 24
-		if v, err := strconv.Atoi(r.URL.Query().Get("hours")); err == nil && v >= 1 && v <= 168 {
-			hours = v
-		}
-		const maxScan = 5000
-		q := db.Event.Query().
-			Where(s.event()...).
-			Where(event.TsGTE(time.Now().Add(-time.Duration(hours) * time.Hour))).
-			Order(ent.Desc(event.FieldTs)).
-			WithAsset().
-			Limit(maxScan + 1)
-		if target.ClassUID != 0 {
-			q = q.Where(event.ClassUID(target.ClassUID))
-		}
-		rows, err := q.All(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		truncated := len(rows) > maxScan
-		if truncated {
-			rows = rows[:maxScan]
-		}
+// backtest 在本组可见的近期热表事件上回测单条基础规则，评估命中率与主机分布。
+func backtest(w http.ResponseWriter, r *http.Request, db *ent.Client, s scope, target *sigma.Rule) {
+	hours := 24
+	if v, err := strconv.Atoi(r.URL.Query().Get("hours")); err == nil && v >= 1 && v <= 168 {
+		hours = v
+	}
+	const maxScan = 5000
+	q := db.Event.Query().
+		Where(s.event()...).
+		Where(event.TsGTE(time.Now().Add(-time.Duration(hours) * time.Hour))).
+		Order(ent.Desc(event.FieldTs)).
+		WithAsset().
+		Limit(maxScan + 1)
+	if target.ClassUID != 0 {
+		q = q.Where(event.ClassUID(target.ClassUID))
+	}
+	rows, err := q.All(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	truncated := len(rows) > maxScan
+	if truncated {
+		rows = rows[:maxScan]
+	}
 
-		hostMap := map[string]*backtestHost{}
-		samples := make([]backtestSample, 0, 8)
-		scanned := 0
-		matched := 0
+	hostMap := map[string]*backtestHost{}
+	samples := make([]backtestSample, 0, 8)
+	scanned := 0
+	matched := 0
 
-		for _, e := range rows {
-			var doc map[string]any
-			if err := json.Unmarshal(e.Raw, &doc); err != nil {
-				continue
-			}
-			// 平台指令拉起的进程树不进常规检测，回测口径保持一致
-			if _, tagged := cmdorigin.Tag(doc); tagged {
-				continue
-			}
-			scanned++
-			var osName, hostname, assetIDStr string
-			if a := e.Edges.Asset; a != nil {
-				hostname = a.Hostname
-				assetIDStr = a.ID.String()
-				if a.Os != nil {
-					osName = strings.ToLower(*a.Os)
-				}
-			}
-			if !target.Matches(e.ClassUID, osName, doc) {
-				continue
-			}
-			matched++
-			key := hostname
-			if key == "" {
-				key = "(未归属)"
-			}
-			entry, exists := hostMap[key]
-			if !exists {
-				entry = &backtestHost{Hostname: key, AssetID: assetIDStr}
-				hostMap[key] = entry
-			}
-			entry.Count++
-			if len(samples) < 8 {
-				samples = append(samples, backtestSample{
-					ID:       e.ID,
-					Ts:       e.Ts,
-					ClassUID: e.ClassUID,
-					Source:   e.Source,
-					AssetID:  e.AssetID,
-					Hostname: hostname,
-					Raw:      e.Raw,
-				})
+	for _, e := range rows {
+		var doc map[string]any
+		if err := json.Unmarshal(e.Raw, &doc); err != nil {
+			continue
+		}
+		// 平台指令拉起的进程树不进常规检测，回测口径保持一致
+		if _, tagged := cmdorigin.Tag(doc); tagged {
+			continue
+		}
+		scanned++
+		var osName, hostname, assetIDStr string
+		if a := e.Edges.Asset; a != nil {
+			hostname = a.Hostname
+			assetIDStr = a.ID.String()
+			if a.Os != nil {
+				osName = strings.ToLower(*a.Os)
 			}
 		}
-
-		hosts := make([]backtestHost, 0, len(hostMap))
-		for _, h := range hostMap {
-			hosts = append(hosts, *h)
+		if !target.Matches(e.ClassUID, osName, doc) {
+			continue
 		}
-		sort.Slice(hosts, func(i, j int) bool {
-			if hosts[i].Count != hosts[j].Count {
-				return hosts[i].Count > hosts[j].Count
-			}
-			return hosts[i].Hostname < hosts[j].Hostname
-		})
+		matched++
+		key := hostname
+		if key == "" {
+			key = "(未归属)"
+		}
+		entry, exists := hostMap[key]
+		if !exists {
+			entry = &backtestHost{Hostname: key, AssetID: assetIDStr}
+			hostMap[key] = entry
+		}
+		entry.Count++
+		if len(samples) < 8 {
+			samples = append(samples, backtestSample{
+				ID:       e.ID,
+				Ts:       e.Ts,
+				ClassUID: e.ClassUID,
+				Source:   e.Source,
+				AssetID:  e.AssetID,
+				Hostname: hostname,
+				Raw:      e.Raw,
+			})
+		}
+	}
 
-		writeJSON(w, backtestResult{
-			RuleID:        target.ID,
-			Hours:         hours,
-			ScannedEvents: scanned,
-			Truncated:     truncated,
-			MatchedCount:  matched,
-			Hosts:         hosts,
-			Samples:       samples,
-		})
+	hosts := make([]backtestHost, 0, len(hostMap))
+	for _, h := range hostMap {
+		hosts = append(hosts, *h)
+	}
+	sort.Slice(hosts, func(i, j int) bool {
+		if hosts[i].Count != hosts[j].Count {
+			return hosts[i].Count > hosts[j].Count
+		}
+		return hosts[i].Hostname < hosts[j].Hostname
+	})
+
+	writeJSON(w, backtestResult{
+		RuleID:        target.ID,
+		Hours:         hours,
+		ScannedEvents: scanned,
+		Truncated:     truncated,
+		MatchedCount:  matched,
+		Hosts:         hosts,
+		Samples:       samples,
 	})
 }

@@ -41,6 +41,7 @@ import (
 	"openxdr/server/internal/commandreview"
 	"openxdr/server/internal/containment"
 	"openxdr/server/internal/correlate"
+	"openxdr/server/internal/customrule"
 	"openxdr/server/internal/enroll"
 	"openxdr/server/internal/eventarchive"
 	"openxdr/server/internal/eventbus"
@@ -103,11 +104,13 @@ func main() {
 	intelStore, intelFeeds := startIntel(ctx, db, client, func(ctx context.Context) string { return aiConf.Get(ctx).AbuseCHKey })
 
 	rulesPath := getenv("RULES_PATH", "../rules")
-	rules, temporalRules, err := loadDetectionRules(ctx, rulesPath, os.Getenv("TEMPORAL_RULES_PATH"), time.Duration(getenvInt("RULES_RELOAD_SECONDS", 30))*time.Second)
+	rulesReload := time.Duration(getenvInt("RULES_RELOAD_SECONDS", 30)) * time.Second
+	baseRules, temporalRules, err := loadDetectionRules(ctx, rulesPath, os.Getenv("TEMPORAL_RULES_PATH"), rulesReload)
 	if err != nil {
 		slog.Error("检测规则快照加载失败", "err", err)
 		os.Exit(1)
 	}
+	rules, customRules := startCustomRules(ctx, client, baseRules, rulesReload)
 	if temporalRules != nil {
 		// 过期候选清理与 RETENTION_DAYS 无关：它决定候选表规模，不删原始事件或证据
 		go cluster.RunLeader(ctx, db, "temporal-candidates", func(ctx context.Context) {
@@ -199,6 +202,8 @@ func main() {
 	routes.Handle("GET /api/ingestion/syslog", api.SyslogStatus(syslogServer))
 	routes.Handle("GET /api/notify/health", api.NotifyHealth(client, notifySettings))
 	routes.Handle("GET /api/audit/chain", api.AuditChain(db, chainKey))
+	routes.Handle("/api/custom-rules", api.CustomRules(client, rules, customRules))
+	routes.Handle("/api/custom-rules/", api.CustomRules(client, rules, customRules))
 	routes.Handle("/api/containments", api.Containments(client, hub, containmentEngine, containmentConfig))
 	routes.Handle("/api/containments/", api.Containments(client, hub, containmentEngine, containmentConfig))
 	registerHostRoutes(ctx, routes, db, client, rules, credentialVault, enrollSvc, conf)
@@ -478,6 +483,17 @@ func startAuditChain(ctx context.Context, db *sql.DB, client *ent.Client, hub *r
 		return auditchain.SealedSeq(ctx, db)
 	}))
 	return key
+}
+
+// startCustomRules 控制台自定义规则叠在规则目录之上；各节点都要加载，读库失败先只用规则目录
+func startCustomRules(ctx context.Context, client *ent.Client, base sigma.Catalog, interval time.Duration) (*sigma.Overlay, *customrule.Loader) {
+	overlay := &sigma.Overlay{Base: base}
+	loader := &customrule.Loader{DB: client, Rules: overlay}
+	if err := loader.Reload(ctx); err != nil {
+		slog.Error("读取自定义规则失败，先只用规则目录", "err", err)
+	}
+	go loader.Run(ctx, interval)
+	return overlay, loader
 }
 
 // startContainment 自主响应：确定性信号命中后按角色与处置等级直接遏制。开关与范围在控制台改，

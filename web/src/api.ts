@@ -948,11 +948,30 @@ export interface RuleRow {
   classUid: number
   product: string
   signal?: boolean
+  custom?: boolean
   ingested: boolean
   source: string
 }
 
 export const fetchRules = () => get<RuleRow[]>('/api/rules')
+
+export interface CustomRule {
+  id: string
+  title: string
+  severity: number
+  enabled: boolean
+  content: string
+  createdBy: string
+  updatedBy: string
+  updatedAt: string
+  error?: string
+}
+export const fetchCustomRules = () => get<CustomRule[]>('/api/custom-rules')
+export const checkCustomRule = async (content: string, hours = 24): Promise<BacktestResult> =>
+  (await send('POST', `/api/custom-rules/check?hours=${hours}`, { content, enabled: true })).json()
+export const saveCustomRule = async (id: string | null, content: string, enabled: boolean): Promise<{ id: string }> =>
+  (await send(id ? 'PUT' : 'POST', id ? `/api/custom-rules/${encodeURIComponent(id)}` : '/api/custom-rules', { content, enabled })).json()
+export const deleteCustomRule = (id: string) => send('DELETE', `/api/custom-rules/${encodeURIComponent(id)}`)
 
 export interface BacktestSample {
   id: string

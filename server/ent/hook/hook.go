@@ -152,6 +152,18 @@ func (f ContainmentFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value,
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ContainmentMutation", m)
 }
 
+// The CustomRuleFunc type is an adapter to allow the use of ordinary
+// function as CustomRule mutator.
+type CustomRuleFunc func(context.Context, *ent.CustomRuleMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f CustomRuleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.CustomRuleMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.CustomRuleMutation", m)
+}
+
 // The DecoyDeploymentFunc type is an adapter to allow the use of ordinary
 // function as DecoyDeployment mutator.
 type DecoyDeploymentFunc func(context.Context, *ent.DecoyDeploymentMutation) (ent.Value, error)

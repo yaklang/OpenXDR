@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { backtestRule, fetchRules, type RuleRow } from '../api'
 import { AttackMatrix } from '../components/AttackMatrix'
+import { CustomRules } from '../components/CustomRules'
 import { EventKind } from '../components/EventKind'
 import { eventSummary } from '../components/eventSummary'
 import { CLASS_KEY, fmtTime, SeverityTag } from '../components/format'
@@ -92,7 +93,7 @@ export function RulesPage() {
           {
             title: t('thRule'), dataIndex: 'title',
             sorter: (a, b) => (a.title || a.id).localeCompare(b.title || b.id),
-            render: (v, r) => <><Tooltip title={r.id}><Typography.Text copyable={{ text: r.id, tooltips: [r.id, t('copied')] }}>{v || r.id}</Typography.Text></Tooltip>{r.signal && <Tooltip title={t('ruleSignalHint')}><Tag style={{ marginLeft: 8 }}>{t('ruleSignal')}</Tag></Tooltip>}{r.kind && <Space size={4} wrap style={{ display: 'flex', marginTop: 4 }}><Tag>{t(r.kind === 'event_count' ? 'temporalCount' : r.kind === 'temporal' ? 'temporalUnordered' : 'temporalSequence')}</Tag><Typography.Text type="secondary">{t('temporalRuleWindow', { seconds: r.windowSeconds ?? 0 })}{r.threshold ? ` · ${t('temporalRuleThreshold', { count: r.threshold })}` : ''}</Typography.Text></Space>}{r.author && <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>{t('ruleBy', { author: r.author })}</Typography.Text>}</>,
+            render: (v, r) => <><Tooltip title={r.id}><Typography.Text copyable={{ text: r.id, tooltips: [r.id, t('copied')] }}>{v || r.id}</Typography.Text></Tooltip>{r.custom && <Tag color="blue" style={{ marginLeft: 8 }}>{t('ruleCustomTag')}</Tag>}{r.signal && <Tooltip title={t('ruleSignalHint')}><Tag style={{ marginLeft: 8 }}>{t('ruleSignal')}</Tag></Tooltip>}{r.kind && <Space size={4} wrap style={{ display: 'flex', marginTop: 4 }}><Tag>{t(r.kind === 'event_count' ? 'temporalCount' : r.kind === 'temporal' ? 'temporalUnordered' : 'temporalSequence')}</Tag><Typography.Text type="secondary">{t('temporalRuleWindow', { seconds: r.windowSeconds ?? 0 })}{r.threshold ? ` · ${t('temporalRuleThreshold', { count: r.threshold })}` : ''}</Typography.Text></Space>}{r.author && <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>{t('ruleBy', { author: r.author })}</Typography.Text>}</>,
           },
           { title: t('thSeverity'), dataIndex: 'severity', width: 95, render: v => <SeverityTag value={v} />, sorter: (a, b) => a.severity - b.severity },
           { title: t('thClass'), dataIndex: 'classUid', width: 115, sorter: (a, b) => a.classUid - b.classUid, render: v => (CLASS_KEY[v] ? t(CLASS_KEY[v]) : v || t('allClasses')) },
@@ -116,10 +117,11 @@ export function RulesPage() {
   return (
     <Page title={t('navRules')} subtitle={t('rulesSummary', { n: data?.length ?? 0, nodata: noData })}>
       <Tabs
-        activeKey={params.get('tab') === 'attack' ? 'attack' : 'list'}
-        onChange={k => setParams(k === 'attack' ? { tab: 'attack' } : {}, { replace: true })}
+        activeKey={['attack', 'custom'].includes(params.get('tab') ?? '') ? params.get('tab')! : 'list'}
+        onChange={k => setParams(k === 'list' ? {} : { tab: k }, { replace: true })}
         items={[
           { key: 'list', label: t('rulesList'), children: list },
+          { key: 'custom', label: t('rulesCustom'), children: <CustomRules /> },
           { key: 'attack', label: t('navAttack'), children: <AttackMatrix /> },
         ]}
       />

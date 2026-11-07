@@ -15,6 +15,7 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/commandpolicy"
 	"openxdr/server/ent/containment"
+	"openxdr/server/ent/customrule"
 	"openxdr/server/ent/decoydeployment"
 	"openxdr/server/ent/decoyenginerelease"
 	"openxdr/server/ent/decoyobservation"
@@ -243,6 +244,26 @@ func init() {
 	containmentDescID := containmentFields[0].Descriptor()
 	// containment.DefaultID holds the default value on creation for the id field.
 	containment.DefaultID = containmentDescID.Default.(func() uuid.UUID)
+	customruleFields := schema.CustomRule{}.Fields()
+	_ = customruleFields
+	// customruleDescEnabled is the schema descriptor for enabled field.
+	customruleDescEnabled := customruleFields[2].Descriptor()
+	// customrule.DefaultEnabled holds the default value on creation for the enabled field.
+	customrule.DefaultEnabled = customruleDescEnabled.Default.(bool)
+	// customruleDescCreatedAt is the schema descriptor for created_at field.
+	customruleDescCreatedAt := customruleFields[5].Descriptor()
+	// customrule.DefaultCreatedAt holds the default value on creation for the created_at field.
+	customrule.DefaultCreatedAt = customruleDescCreatedAt.Default.(func() time.Time)
+	// customruleDescUpdatedAt is the schema descriptor for updated_at field.
+	customruleDescUpdatedAt := customruleFields[6].Descriptor()
+	// customrule.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	customrule.DefaultUpdatedAt = customruleDescUpdatedAt.Default.(func() time.Time)
+	// customrule.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	customrule.UpdateDefaultUpdatedAt = customruleDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// customruleDescID is the schema descriptor for id field.
+	customruleDescID := customruleFields[0].Descriptor()
+	// customrule.IDValidator is a validator for the "id" field. It is called by the builders before save.
+	customrule.IDValidator = customruleDescID.Validators[0].(func(string) error)
 	decoydeploymentFields := schema.DecoyDeployment{}.Fields()
 	_ = decoydeploymentFields
 	// decoydeploymentDescPort is the schema descriptor for port field.

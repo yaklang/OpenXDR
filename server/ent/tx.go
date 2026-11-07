@@ -36,6 +36,8 @@ type Tx struct {
 	CommandPolicy *CommandPolicyClient
 	// Containment is the client for interacting with the Containment builders.
 	Containment *ContainmentClient
+	// CustomRule is the client for interacting with the CustomRule builders.
+	CustomRule *CustomRuleClient
 	// DecoyDeployment is the client for interacting with the DecoyDeployment builders.
 	DecoyDeployment *DecoyDeploymentClient
 	// DecoyEngineRelease is the client for interacting with the DecoyEngineRelease builders.
@@ -255,6 +257,7 @@ func (tx *Tx) init() {
 	tx.Command = NewCommandClient(tx.config)
 	tx.CommandPolicy = NewCommandPolicyClient(tx.config)
 	tx.Containment = NewContainmentClient(tx.config)
+	tx.CustomRule = NewCustomRuleClient(tx.config)
 	tx.DecoyDeployment = NewDecoyDeploymentClient(tx.config)
 	tx.DecoyEngineRelease = NewDecoyEngineReleaseClient(tx.config)
 	tx.DecoyObservation = NewDecoyObservationClient(tx.config)

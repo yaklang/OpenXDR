@@ -464,6 +464,22 @@ var (
 			},
 		},
 	}
+	// CustomRulesColumns holds the columns for the "custom_rules" table.
+	CustomRulesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString},
+		{Name: "content", Type: field.TypeString, Size: 2147483647},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
+		{Name: "created_by", Type: field.TypeString},
+		{Name: "updated_by", Type: field.TypeString},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// CustomRulesTable holds the schema information for the "custom_rules" table.
+	CustomRulesTable = &schema.Table{
+		Name:       "custom_rules",
+		Columns:    CustomRulesColumns,
+		PrimaryKey: []*schema.Column{CustomRulesColumns[0]},
+	}
 	// DecoyDeploymentsColumns holds the columns for the "decoy_deployments" table.
 	DecoyDeploymentsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -1610,6 +1626,7 @@ var (
 		CommandsTable,
 		CommandPoliciesTable,
 		ContainmentsTable,
+		CustomRulesTable,
 		DecoyDeploymentsTable,
 		DecoyEngineReleasesTable,
 		DecoyObservationsTable,

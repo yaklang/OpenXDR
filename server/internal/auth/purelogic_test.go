@@ -23,6 +23,9 @@ func TestMinRoleRouteTable(t *testing.T) {
 		{"GET", "/api/intel/feeds", "viewer"},
 		{"PUT", "/api/containments/config", "admin"},
 		{"GET", "/api/containments/status", "viewer"},
+		{"POST", "/api/custom-rules", "admin"},
+		{"POST", "/api/custom-rules/check", "admin"},
+		{"GET", "/api/custom-rules", "viewer"},
 		// 接入令牌按组鉴权，由 handler 检查组 admin
 		{"POST", "/api/enroll-tokens", "viewer"},
 		{"GET", "/api/audit", "admin"},

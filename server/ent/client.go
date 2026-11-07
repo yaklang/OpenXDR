@@ -23,6 +23,7 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/commandpolicy"
 	"openxdr/server/ent/containment"
+	"openxdr/server/ent/customrule"
 	"openxdr/server/ent/decoydeployment"
 	"openxdr/server/ent/decoyenginerelease"
 	"openxdr/server/ent/decoyobservation"
@@ -98,6 +99,8 @@ type Client struct {
 	CommandPolicy *CommandPolicyClient
 	// Containment is the client for interacting with the Containment builders.
 	Containment *ContainmentClient
+	// CustomRule is the client for interacting with the CustomRule builders.
+	CustomRule *CustomRuleClient
 	// DecoyDeployment is the client for interacting with the DecoyDeployment builders.
 	DecoyDeployment *DecoyDeploymentClient
 	// DecoyEngineRelease is the client for interacting with the DecoyEngineRelease builders.
@@ -197,6 +200,7 @@ func (c *Client) init() {
 	c.Command = NewCommandClient(c.config)
 	c.CommandPolicy = NewCommandPolicyClient(c.config)
 	c.Containment = NewContainmentClient(c.config)
+	c.CustomRule = NewCustomRuleClient(c.config)
 	c.DecoyDeployment = NewDecoyDeploymentClient(c.config)
 	c.DecoyEngineRelease = NewDecoyEngineReleaseClient(c.config)
 	c.DecoyObservation = NewDecoyObservationClient(c.config)
@@ -339,6 +343,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		Command:                 NewCommandClient(cfg),
 		CommandPolicy:           NewCommandPolicyClient(cfg),
 		Containment:             NewContainmentClient(cfg),
+		CustomRule:              NewCustomRuleClient(cfg),
 		DecoyDeployment:         NewDecoyDeploymentClient(cfg),
 		DecoyEngineRelease:      NewDecoyEngineReleaseClient(cfg),
 		DecoyObservation:        NewDecoyObservationClient(cfg),
@@ -408,6 +413,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		Command:                 NewCommandClient(cfg),
 		CommandPolicy:           NewCommandPolicyClient(cfg),
 		Containment:             NewContainmentClient(cfg),
+		CustomRule:              NewCustomRuleClient(cfg),
 		DecoyDeployment:         NewDecoyDeploymentClient(cfg),
 		DecoyEngineRelease:      NewDecoyEngineReleaseClient(cfg),
 		DecoyObservation:        NewDecoyObservationClient(cfg),
@@ -477,14 +483,15 @@ func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.AIJob, c.AIUsage, c.AgentSession, c.Alert, c.Approval, c.Asset, c.AssetLink,
 		c.AuditLog, c.BeaconBaseline, c.Command, c.CommandPolicy, c.Containment,
-		c.DecoyDeployment, c.DecoyEngineRelease, c.DecoyObservation, c.DecoyRevision,
-		c.EnrollToken, c.Event, c.ExternalTicket, c.Finding, c.Group, c.GroupMember,
-		c.HostCredential, c.IPInfo, c.Incident, c.Integration, c.IntegrationAttempt,
-		c.IntegrationDelivery, c.IntegrationEvent, c.IntegrationGroup,
-		c.IntegrationIdempotency, c.IntegrationSubscription, c.IntegrationToken,
-		c.Intel, c.Memory, c.ProcessBaseline, c.Report, c.ReportRead, c.SSHLogin,
-		c.Session, c.SessionMessage, c.Setting, c.Suppression, c.Task, c.TaskRun,
-		c.TriageRun, c.TrustedSource, c.User, c.VulnRecord, c.Zone,
+		c.CustomRule, c.DecoyDeployment, c.DecoyEngineRelease, c.DecoyObservation,
+		c.DecoyRevision, c.EnrollToken, c.Event, c.ExternalTicket, c.Finding, c.Group,
+		c.GroupMember, c.HostCredential, c.IPInfo, c.Incident, c.Integration,
+		c.IntegrationAttempt, c.IntegrationDelivery, c.IntegrationEvent,
+		c.IntegrationGroup, c.IntegrationIdempotency, c.IntegrationSubscription,
+		c.IntegrationToken, c.Intel, c.Memory, c.ProcessBaseline, c.Report,
+		c.ReportRead, c.SSHLogin, c.Session, c.SessionMessage, c.Setting,
+		c.Suppression, c.Task, c.TaskRun, c.TriageRun, c.TrustedSource, c.User,
+		c.VulnRecord, c.Zone,
 	} {
 		n.Use(hooks...)
 	}
@@ -496,14 +503,15 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.AIJob, c.AIUsage, c.AgentSession, c.Alert, c.Approval, c.Asset, c.AssetLink,
 		c.AuditLog, c.BeaconBaseline, c.Command, c.CommandPolicy, c.Containment,
-		c.DecoyDeployment, c.DecoyEngineRelease, c.DecoyObservation, c.DecoyRevision,
-		c.EnrollToken, c.Event, c.ExternalTicket, c.Finding, c.Group, c.GroupMember,
-		c.HostCredential, c.IPInfo, c.Incident, c.Integration, c.IntegrationAttempt,
-		c.IntegrationDelivery, c.IntegrationEvent, c.IntegrationGroup,
-		c.IntegrationIdempotency, c.IntegrationSubscription, c.IntegrationToken,
-		c.Intel, c.Memory, c.ProcessBaseline, c.Report, c.ReportRead, c.SSHLogin,
-		c.Session, c.SessionMessage, c.Setting, c.Suppression, c.Task, c.TaskRun,
-		c.TriageRun, c.TrustedSource, c.User, c.VulnRecord, c.Zone,
+		c.CustomRule, c.DecoyDeployment, c.DecoyEngineRelease, c.DecoyObservation,
+		c.DecoyRevision, c.EnrollToken, c.Event, c.ExternalTicket, c.Finding, c.Group,
+		c.GroupMember, c.HostCredential, c.IPInfo, c.Incident, c.Integration,
+		c.IntegrationAttempt, c.IntegrationDelivery, c.IntegrationEvent,
+		c.IntegrationGroup, c.IntegrationIdempotency, c.IntegrationSubscription,
+		c.IntegrationToken, c.Intel, c.Memory, c.ProcessBaseline, c.Report,
+		c.ReportRead, c.SSHLogin, c.Session, c.SessionMessage, c.Setting,
+		c.Suppression, c.Task, c.TaskRun, c.TriageRun, c.TrustedSource, c.User,
+		c.VulnRecord, c.Zone,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -536,6 +544,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.CommandPolicy.mutate(ctx, m)
 	case *ContainmentMutation:
 		return c.Containment.mutate(ctx, m)
+	case *CustomRuleMutation:
+		return c.CustomRule.mutate(ctx, m)
 	case *DecoyDeploymentMutation:
 		return c.DecoyDeployment.mutate(ctx, m)
 	case *DecoyEngineReleaseMutation:
@@ -2322,6 +2332,139 @@ func (c *ContainmentClient) mutate(ctx context.Context, m *ContainmentMutation) 
 		return (&ContainmentDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown Containment mutation op: %q", m.Op())
+	}
+}
+
+// CustomRuleClient is a client for the CustomRule schema.
+type CustomRuleClient struct {
+	config
+}
+
+// NewCustomRuleClient returns a client for the CustomRule from the given config.
+func NewCustomRuleClient(c config) *CustomRuleClient {
+	return &CustomRuleClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `customrule.Hooks(f(g(h())))`.
+func (c *CustomRuleClient) Use(hooks ...Hook) {
+	c.hooks.CustomRule = append(c.hooks.CustomRule, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `customrule.Intercept(f(g(h())))`.
+func (c *CustomRuleClient) Intercept(interceptors ...Interceptor) {
+	c.inters.CustomRule = append(c.inters.CustomRule, interceptors...)
+}
+
+// Create returns a builder for creating a CustomRule entity.
+func (c *CustomRuleClient) Create() *CustomRuleCreate {
+	mutation := newCustomRuleMutation(c.config, OpCreate)
+	return &CustomRuleCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of CustomRule entities.
+func (c *CustomRuleClient) CreateBulk(builders ...*CustomRuleCreate) *CustomRuleCreateBulk {
+	return &CustomRuleCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *CustomRuleClient) MapCreateBulk(slice any, setFunc func(*CustomRuleCreate, int)) *CustomRuleCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &CustomRuleCreateBulk{err: fmt.Errorf("calling to CustomRuleClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*CustomRuleCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &CustomRuleCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for CustomRule.
+func (c *CustomRuleClient) Update() *CustomRuleUpdate {
+	mutation := newCustomRuleMutation(c.config, OpUpdate)
+	return &CustomRuleUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *CustomRuleClient) UpdateOne(_m *CustomRule) *CustomRuleUpdateOne {
+	mutation := newCustomRuleMutation(c.config, OpUpdateOne, withCustomRule(_m))
+	return &CustomRuleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *CustomRuleClient) UpdateOneID(id string) *CustomRuleUpdateOne {
+	mutation := newCustomRuleMutation(c.config, OpUpdateOne, withCustomRuleID(id))
+	return &CustomRuleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for CustomRule.
+func (c *CustomRuleClient) Delete() *CustomRuleDelete {
+	mutation := newCustomRuleMutation(c.config, OpDelete)
+	return &CustomRuleDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *CustomRuleClient) DeleteOne(_m *CustomRule) *CustomRuleDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *CustomRuleClient) DeleteOneID(id string) *CustomRuleDeleteOne {
+	builder := c.Delete().Where(customrule.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &CustomRuleDeleteOne{builder}
+}
+
+// Query returns a query builder for CustomRule.
+func (c *CustomRuleClient) Query() *CustomRuleQuery {
+	return &CustomRuleQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeCustomRule},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a CustomRule entity by its id.
+func (c *CustomRuleClient) Get(ctx context.Context, id string) (*CustomRule, error) {
+	return c.Query().Where(customrule.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *CustomRuleClient) GetX(ctx context.Context, id string) *CustomRule {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *CustomRuleClient) Hooks() []Hook {
+	return c.hooks.CustomRule
+}
+
+// Interceptors returns the client interceptors.
+func (c *CustomRuleClient) Interceptors() []Interceptor {
+	return c.inters.CustomRule
+}
+
+func (c *CustomRuleClient) mutate(ctx context.Context, m *CustomRuleMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&CustomRuleCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&CustomRuleUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&CustomRuleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&CustomRuleDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown CustomRule mutation op: %q", m.Op())
 	}
 }
 
@@ -7431,24 +7574,26 @@ func (c *ZoneClient) mutate(ctx context.Context, m *ZoneMutation) (Value, error)
 type (
 	hooks struct {
 		AIJob, AIUsage, AgentSession, Alert, Approval, Asset, AssetLink, AuditLog,
-		BeaconBaseline, Command, CommandPolicy, Containment, DecoyDeployment,
-		DecoyEngineRelease, DecoyObservation, DecoyRevision, EnrollToken, Event,
-		ExternalTicket, Finding, Group, GroupMember, HostCredential, IPInfo, Incident,
-		Integration, IntegrationAttempt, IntegrationDelivery, IntegrationEvent,
-		IntegrationGroup, IntegrationIdempotency, IntegrationSubscription,
-		IntegrationToken, Intel, Memory, ProcessBaseline, Report, ReportRead, SSHLogin,
-		Session, SessionMessage, Setting, Suppression, Task, TaskRun, TriageRun,
-		TrustedSource, User, VulnRecord, Zone []ent.Hook
+		BeaconBaseline, Command, CommandPolicy, Containment, CustomRule,
+		DecoyDeployment, DecoyEngineRelease, DecoyObservation, DecoyRevision,
+		EnrollToken, Event, ExternalTicket, Finding, Group, GroupMember,
+		HostCredential, IPInfo, Incident, Integration, IntegrationAttempt,
+		IntegrationDelivery, IntegrationEvent, IntegrationGroup,
+		IntegrationIdempotency, IntegrationSubscription, IntegrationToken, Intel,
+		Memory, ProcessBaseline, Report, ReportRead, SSHLogin, Session, SessionMessage,
+		Setting, Suppression, Task, TaskRun, TriageRun, TrustedSource, User,
+		VulnRecord, Zone []ent.Hook
 	}
 	inters struct {
 		AIJob, AIUsage, AgentSession, Alert, Approval, Asset, AssetLink, AuditLog,
-		BeaconBaseline, Command, CommandPolicy, Containment, DecoyDeployment,
-		DecoyEngineRelease, DecoyObservation, DecoyRevision, EnrollToken, Event,
-		ExternalTicket, Finding, Group, GroupMember, HostCredential, IPInfo, Incident,
-		Integration, IntegrationAttempt, IntegrationDelivery, IntegrationEvent,
-		IntegrationGroup, IntegrationIdempotency, IntegrationSubscription,
-		IntegrationToken, Intel, Memory, ProcessBaseline, Report, ReportRead, SSHLogin,
-		Session, SessionMessage, Setting, Suppression, Task, TaskRun, TriageRun,
-		TrustedSource, User, VulnRecord, Zone []ent.Interceptor
+		BeaconBaseline, Command, CommandPolicy, Containment, CustomRule,
+		DecoyDeployment, DecoyEngineRelease, DecoyObservation, DecoyRevision,
+		EnrollToken, Event, ExternalTicket, Finding, Group, GroupMember,
+		HostCredential, IPInfo, Incident, Integration, IntegrationAttempt,
+		IntegrationDelivery, IntegrationEvent, IntegrationGroup,
+		IntegrationIdempotency, IntegrationSubscription, IntegrationToken, Intel,
+		Memory, ProcessBaseline, Report, ReportRead, SSHLogin, Session, SessionMessage,
+		Setting, Suppression, Task, TaskRun, TriageRun, TrustedSource, User,
+		VulnRecord, Zone []ent.Interceptor
 	}
 )

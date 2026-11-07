@@ -164,6 +164,8 @@ type Rule struct {
 	// Signal 信号规则（openxdr_signal: true）：只作时序规则的输入，命中不单独产生告警。
 	// Evaluate 不返回它，只有 EvaluateSignals 返回，未启用时序检测时完全不生效。
 	Signal bool
+	// Custom 控制台维护的自定义规则（Overlay），不来自规则目录
+	Custom bool
 	// ATT&CK 标签，来自 Sigma tags。不影响匹配，用于覆盖矩阵
 	Tactics    []string
 	Techniques []string

@@ -49,6 +49,9 @@ func minRole(method, path string) string {
 	// 同意用户协议、结束首次引导代表整个安装，只有 admin 能做；读取对所有人开放
 	case strings.HasPrefix(path, "/api/setup") && method != http.MethodGet:
 		return "admin"
+	// 自定义规则影响全局检测
+	case strings.HasPrefix(path, "/api/custom-rules") && method != http.MethodGet:
+		return "admin"
 	// 自主响应开关影响全部主机
 	case path == "/api/containments/config":
 		return "admin"
