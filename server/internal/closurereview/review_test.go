@@ -34,3 +34,15 @@ func TestVerdictHash(t *testing.T) {
 		t.Fatal("拒绝无效JSON")
 	}
 }
+
+func TestParseDecisionStripsCodeFence(t *testing.T) {
+	body := `{"approve":false,"reason":"命令行不足以说明良性行为","positive_evidence":"","event_ids":[],"claims":[]}`
+	for _, text := range []string{body, "```json\n" + body + "\n```", "```\n" + body + "\n```"} {
+		if d, err := ParseDecision(text); err != nil || d.Approve {
+			t.Fatalf("%q: %v", text, err)
+		}
+	}
+	if _, err := ParseDecision("```json\n" + body); err == nil {
+		t.Fatal("围栏不完整应拒绝")
+	}
+}

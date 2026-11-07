@@ -68,7 +68,8 @@ func New(db *ent.Client, endpoint func() (string, string), model func() string, 
 		base, key := endpoint()
 		llm := triage.NewLLM(base, model, key, time.Minute)
 		llm.NoThinking = true
-		llm.MaxTokens = 1200
+		// 批准要逐条引用原始字段的完整原值，留足输出，截断的 JSON 只会被判不合格
+		llm.MaxTokens = 4000
 		llm.OnUsage = usage
 		msg, err := llm.Chat(ctx, []triage.Message{{Role: "system", Content: closurePrompt(material)}, {Role: "user", Content: material}}, nil)
 		if err != nil {
@@ -95,6 +96,14 @@ func ParseDecision(text string) (Decision, error) {
 	var d Decision
 	if len(text) > 16384 {
 		return d, errors.New("审计回复过长")
+	}
+	// 模型常把 JSON 包在代码块里；只剥外层围栏，正文仍按严格 JSON 解析
+	text = strings.TrimSpace(text)
+	if body, ok := strings.CutPrefix(text, "```"); ok {
+		body = strings.TrimPrefix(body, "json")
+		if body, ok = strings.CutSuffix(strings.TrimSpace(body), "```"); ok {
+			text = body
+		}
 	}
 	dec := json.NewDecoder(strings.NewReader(text))
 	dec.DisallowUnknownFields()
@@ -348,7 +357,12 @@ func loadProposal(ctx context.Context, db *ent.Client, inc *ent.Incident) (*mate
 	}
 	return m, nil
 }
-func fingerprint(m *material) string { b, _ := json.Marshal(m); return digest(b) }
+
+// fingerprint 材料与审计口径（提示词）一起决定快照：口径改了，已拒绝的事件按新口径重审一次。
+func fingerprint(m *material) string {
+	b, _ := json.Marshal(m)
+	return digest(append(append(b, 0), closurePrompt(string(b))...))
+}
 func validate(d Decision, m *material) bool {
 	// 已遏制与良性分支由服务端核验范围，提案分支要求每个事件都有平台只读来源链
 	serverScoped := m.Contained != nil || m.Benign != nil
