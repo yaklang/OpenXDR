@@ -31,7 +31,14 @@ fn run(cmd: &Command, isolate: bool) -> Outcome {
         return Outcome::failed("容器 ID 无效");
     }
     let ns = match netns_of(uid) {
-        Ok(ns) => ns,
+        Ok(Some(ns)) => ns,
+        // 隔离表建在容器自己的网络命名空间里，容器没有进程了命名空间随之销毁，隔离已不存在
+        Ok(None) if !isolate => return Outcome::ok(format!("容器 {uid} 已不在运行，隔离随之消失")),
+        Ok(None) => {
+            return Outcome::failed(format!(
+                "本机找不到容器 {uid} 的进程（已停止或不在这台主机上）"
+            ));
+        }
         Err(e) => return Outcome::failed(e),
     };
     let script = if isolate {
@@ -70,9 +77,9 @@ fn ruleset() -> String {
     )
 }
 
-/// 找容器里任意一个进程，打开它的网络命名空间。和宿主机（pid 1）同一个命名空间的拒绝
+/// 找容器里任意一个进程，打开它的网络命名空间；找不到返回 None。和宿主机（pid 1）同一个命名空间的拒绝
 #[cfg(target_os = "linux")]
-fn netns_of(uid: &str) -> Result<std::fs::File, String> {
+fn netns_of(uid: &str) -> Result<Option<std::fs::File>, String> {
     use std::os::unix::fs::MetadataExt;
     let entries = std::fs::read_dir("/proc").map_err(|e| e.to_string())?;
     for entry in entries.flatten() {
@@ -97,11 +104,9 @@ fn netns_of(uid: &str) -> Result<std::fs::File, String> {
                 "容器 {uid} 用的是宿主机网络，隔离它等于隔离宿主机，拒绝执行"
             ));
         }
-        return Ok(ns);
+        return Ok(Some(ns));
     }
-    Err(format!(
-        "本机找不到容器 {uid} 的进程（已停止或不在这台主机上）"
-    ))
+    Ok(None)
 }
 
 /// 在临时线程里切进容器的网络命名空间执行 nft：命名空间按线程生效，子进程继承这个线程的，
@@ -154,5 +159,16 @@ mod tests {
         let r = isolate(&cmd);
         assert_eq!(r.status, crate::pb::command_result::Status::Failed);
         assert!(r.detail.contains("找不到容器"), "{}", r.detail);
+    }
+
+    #[test]
+    fn unisolating_a_gone_container_succeeds() {
+        let cmd = Command {
+            target: "0123456789ab".into(),
+            ..Default::default()
+        };
+        let r = unisolate(&cmd);
+        assert_eq!(r.status, crate::pb::command_result::Status::Succeeded);
+        assert!(r.detail.contains("已不在运行"), "{}", r.detail);
     }
 }
