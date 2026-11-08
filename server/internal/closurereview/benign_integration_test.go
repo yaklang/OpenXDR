@@ -73,6 +73,22 @@ func TestBenignCloseWithoutProposal(t *testing.T) {
 	}
 }
 
+// 被拒后资产心跳更新不算新材料：同一快照不重复送审
+func TestBenignRejectedSnapshotStableAcrossAssetHeartbeat(t *testing.T) {
+	f := setupBenign(t)
+	f.r.Judge = func(context.Context, string, string) (Decision, error) {
+		f.calls++
+		return Decision{Reason: "命令行不足以证明这是授权运维行为"}, nil
+	}
+	if ok, err := f.r.Review(f.ctx, f.inc.ID); ok || err != nil || f.calls != 1 {
+		t.Fatal(ok, err, f.calls)
+	}
+	f.db.Asset.UpdateOneID(f.asset.ID).SetLastSeen(time.Now()).ExecX(f.ctx)
+	if ok, err := f.r.Review(f.ctx, f.inc.ID); ok || err != nil || f.calls != 1 {
+		t.Fatal("资产心跳不应触发重复审计", ok, err, f.calls)
+	}
+}
+
 // 任一门禁不满足都不调用模型
 func TestBenignDisqualifiers(t *testing.T) {
 	verdict := func(v string) func(*fixture) {

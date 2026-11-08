@@ -359,6 +359,18 @@ func loadProposal(ctx context.Context, db *ent.Client, inc *ent.Incident) (*mate
 }
 
 // fingerprint 材料与审计口径（提示词）一起决定快照：口径改了，已拒绝的事件按新口径重审一次。
+// bareAlerts 审计材料只放告警本身：加载时带出的资产记录随在线心跳变化，带进材料会让快照指纹每轮都变，
+// 同一事件被拒后仍每轮重新送审
+func bareAlerts(alerts []*ent.Alert) []*ent.Alert {
+	out := make([]*ent.Alert, len(alerts))
+	for i, a := range alerts {
+		c := *a
+		c.Edges = ent.AlertEdges{}
+		out[i] = &c
+	}
+	return out
+}
+
 func fingerprint(m *material) string {
 	b, _ := json.Marshal(m)
 	return digest(append(append(b, 0), closurePrompt(string(b))...))

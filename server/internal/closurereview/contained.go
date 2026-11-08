@@ -161,7 +161,7 @@ func loadContained(ctx context.Context, db *ent.Client, inc *ent.Incident) (*mat
 	if noisy {
 		return nil, ErrIneligible
 	}
-	m := &material{IncidentID: inc.ID, Verdict: inc.AiVerdict, TriagedAt: *inc.TriagedAt, Graph: inc.Graph, EvidenceKey: triage.IncidentEvidenceKey(inc), VerdictHash: VerdictHash(inc.AiVerdict), Contained: ce, Alerts: alerts}
+	m := &material{IncidentID: inc.ID, Verdict: inc.AiVerdict, TriagedAt: *inc.TriagedAt, Graph: inc.Graph, EvidenceKey: triage.IncidentEvidenceKey(inc), VerdictHash: VerdictHash(inc.AiVerdict), Contained: ce, Alerts: bareAlerts(alerts)}
 	for _, a := range alerts {
 		evs, err := db.Event.Query().Where(event.IDEQ(*a.EventID)).All(ctx)
 		if err != nil {

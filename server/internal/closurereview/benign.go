@@ -69,7 +69,7 @@ func loadBenign(ctx context.Context, db *ent.Client, inc *ent.Incident) (*materi
 		return nil, ErrIneligible
 	}
 	be := &benignEvidence{SettleHours: int(benignSettle / time.Hour)}
-	m := &material{IncidentID: inc.ID, Verdict: inc.AiVerdict, TriagedAt: *inc.TriagedAt, EvidenceKey: triage.IncidentEvidenceKey(inc), VerdictHash: VerdictHash(inc.AiVerdict), Benign: be, Alerts: alerts}
+	m := &material{IncidentID: inc.ID, Verdict: inc.AiVerdict, TriagedAt: *inc.TriagedAt, EvidenceKey: triage.IncidentEvidenceKey(inc), VerdictHash: VerdictHash(inc.AiVerdict), Benign: be, Alerts: bareAlerts(alerts)}
 	for _, a := range alerts {
 		if !benignAlert(a, *inc.TriagedAt) {
 			return nil, ErrIneligible
