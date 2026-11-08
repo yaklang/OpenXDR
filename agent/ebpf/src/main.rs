@@ -1,5 +1,6 @@
 //! eBPF 内核侧：tracepoint sched_process_exec 捕获所有 execve（含短命进程）；
 //! tracepoint sched_process_exit 捕获进程退出，sys_enter_exit_group 记下退出码；
+//! tracepoint sys_exit_dup / dup2 / dup3 报出标准输入输出被 dup 覆盖（反弹 shell 的本质动作）；
 //! tracepoint sock:inet_sock_set_state 捕获 TCP 出站发起（SYN_SENT）与入站建立（SYN_RECV → ESTABLISHED）；
 //! kprobe udp_sendmsg / udpv6_sendmsg 捕获 UDP 出站，内核里先按目标采样。
 
@@ -65,6 +66,54 @@ fn try_exec(ctx: &TracePointContext) -> Result<(), i64> {
 
     EVENTS.output(ctx, &event, 0);
     Ok(())
+}
+
+// 与 userspace collector/linux.rs 中的定义保持一致
+#[repr(C)]
+pub struct DupEvent {
+    pub pid: u32,
+    /// dup 系列调用的返回值：被覆盖的标准输入输出描述符号（0、1、2）
+    pub fd: u32,
+}
+
+#[map]
+static DUPS: PerfEventArray<DupEvent> = PerfEventArray::new(0);
+
+// /sys/kernel/tracing/events/syscalls/sys_exit_dup{,2,3}/format:
+//   field:long ret;  offset:16;  size:8
+const SYSCALL_RET_OFFSET: usize = 16;
+
+// 返回值是新描述符：落在 0~2 说明标准输入输出刚被换掉。是不是套接字、连着谁由用户态核对，
+// 内核侧只做这一个便宜的比较，shell 的重定向与管道大多也会走到这里
+#[tracepoint]
+pub fn sys_exit_dup(ctx: TracePointContext) -> u32 {
+    dup_exit(&ctx)
+}
+
+#[tracepoint]
+pub fn sys_exit_dup2(ctx: TracePointContext) -> u32 {
+    dup_exit(&ctx)
+}
+
+#[tracepoint]
+pub fn sys_exit_dup3(ctx: TracePointContext) -> u32 {
+    dup_exit(&ctx)
+}
+
+fn dup_exit(ctx: &TracePointContext) -> u32 {
+    // SAFETY: 偏移 16、宽 8 字节与 sys_exit_dup* 的 format（long ret）一致；读失败返回 Err
+    let Ok(ret) = (unsafe { ctx.read_at::<i64>(SYSCALL_RET_OFFSET) }) else {
+        return 1;
+    };
+    if !(0..=2).contains(&ret) {
+        return 0;
+    }
+    let event = DupEvent {
+        pid: (bpf_get_current_pid_tgid() >> 32) as u32,
+        fd: ret as u32,
+    };
+    DUPS.output(ctx, &event, 0);
+    0
 }
 
 // 与 userspace collector/linux.rs 中的定义保持一致

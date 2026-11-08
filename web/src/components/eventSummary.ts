@@ -10,6 +10,10 @@ const ACTIVITY: Record<number, Record<number, MsgKey>> = {
   201002: { 1: 'evCreate', 3: 'evUpdate', 4: 'evDelete' },
 }
 
+// 1007 的 Other（99）有两种：周期汇总与标准输入输出接到网络（stdio_socket），按负载区分
+const activityKey = (classUid: number, r: Raw): MsgKey | undefined =>
+  classUid === 1007 && r.activity_id === 99 && r.stdio_socket ? 'evStdioSocket' : ACTIVITY[classUid]?.[r.activity_id]
+
 const join = (...parts: unknown[]) => parts.filter(p => p !== undefined && p !== null && p !== '').join(' ')
 const endpoint = (e: Raw | undefined) => (e?.ip ? (e.port ? `${e.ip}:${e.port}` : e.ip) : undefined)
 
@@ -39,10 +43,10 @@ export const RCODE: Record<number, string> = { 1: 'FORMERR', 2: 'SERVFAIL', 3: '
 export function eventAction(classUid: number, raw: unknown, t: T): { label: string; tone: 'ok' | 'bad' | 'warn' | 'neutral' } | null {
   const r = (raw ?? {}) as Raw
   if (classUid === 3002 && r.activity_id < 10) return r.status_id === 1 ? { label: t('evLoginOk'), tone: 'ok' } : { label: t('evLoginFail'), tone: 'bad' }
-  const key = ACTIVITY[classUid]?.[r.activity_id]
+  const key = activityKey(classUid, r)
   if (!key) return null
   const exitCode = r.process?.exit_code
-  const tone = key === 'evDelete' || key === 'evUnload' ? 'bad' : classUid === 1007 && r.activity_id === 2 && exitCode != null && exitCode !== 0 ? 'warn' : 'neutral'
+  const tone = key === 'evDelete' || key === 'evUnload' || key === 'evStdioSocket' ? 'bad' : classUid === 1007 && r.activity_id === 2 && exitCode != null && exitCode !== 0 ? 'warn' : 'neutral'
   return { label: t(key), tone }
 }
 
@@ -50,11 +54,16 @@ export function eventAction(classUid: number, raw: unknown, t: T): { label: stri
 // withAction=false 时不带动作词（列表把动作单独画成标签）
 export function eventSummary(classUid: number, raw: unknown, t: T, withAction = true): string {
   const r = (raw ?? {}) as Raw
-  const key = ACTIVITY[classUid]?.[r.activity_id]
+  const key = activityKey(classUid, r)
   const act = key && withAction ? t(key) : undefined
   switch (classUid) {
     case 1007: {
       const p = r.process ?? {}
+      // 标准输入输出接到网络连接上：哪个进程、哪个描述符、连着谁
+      if (r.stdio_socket) {
+        return join(inContainer(r), act, p.name || p.file?.path, `fd ${r.stdio_socket.fd} →`, endpoint(r.dst_endpoint),
+          p.cmd_line && p.cmd_line !== p.name ? `· ${p.cmd_line}` : undefined)
+      }
       // 周期行为汇总：谁反复拉起了什么、这个窗口里多少次
       if (r.activity_id === 99) {
         return join(act, p.parent_process?.name ? `${p.parent_process.name} →` : undefined, p.name || p.file?.path,

@@ -15,7 +15,7 @@ use super::inventory_linux::Scanner;
 use super::netwatch::{self, ConnInfo, ConnSampler};
 use super::{
     ACTIVITY_LAUNCH, ACTIVITY_TERMINATE, EventSink, ProcessInfo, ProcessRegistry, container,
-    emit_process, netlink, poll, seeded_registry, username_of,
+    emit_process, netlink, poll, seeded_registry, stdio_socket_event, stdiosock, username_of,
 };
 use crate::pb::AgentEvent;
 
@@ -35,6 +35,14 @@ struct ExitEvent {
     pid: u32,
     code: i32,
     has_code: u32,
+}
+
+// 与 ebpf/src/main.rs 中的定义保持一致
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct DupEvent {
+    pid: u32,
+    fd: u32,
 }
 
 // 与 ebpf/src/main.rs 中的定义保持一致
@@ -60,6 +68,8 @@ unsafe trait Pod: Copy {}
 unsafe impl Pod for ExecEvent {}
 // SAFETY: 同上，字段为 u32 / i32 / u32
 unsafe impl Pod for ExitEvent {}
+// SAFETY: 同上，字段为两个 u32
+unsafe impl Pod for DupEvent {}
 // SAFETY: 同上，字段为 u32 / u16 与两个 [u8; 16]
 unsafe impl Pod for ConnEvent {}
 
@@ -310,12 +320,80 @@ fn start_process(
         });
     }
 
+    start_stdio(&mut bpf, &mut readers, agent_id, tx, registry)?;
+
     tx.capability("process", "ebpf", "active");
     Ok(Pipeline {
         _readers: readers,
         _bpf: bpf,
         udp: false,
     })
+}
+
+/// 标准输入输出被 dup 覆盖的事件（见 stdiosock）。没有 syscalls tracepoint（内核没开 FTRACE_SYSCALLS）
+/// 或某个系统调用不存在（arm64 没有 dup2）就跳过那一个，三个都挂不上时只是少这一类检测，进程采集照常
+fn start_stdio(
+    bpf: &mut aya::Ebpf,
+    readers: &mut tokio::task::JoinSet<()>,
+    agent_id: &str,
+    tx: &EventSink,
+    registry: &Shared<ProcessRegistry>,
+) -> Result<(), BoxError> {
+    use aya::maps::perf::AsyncPerfEventArray;
+    use aya::util::online_cpus;
+
+    let attached = ["sys_exit_dup", "sys_exit_dup2", "sys_exit_dup3"]
+        .into_iter()
+        .filter(|name| match attach_tracepoint(bpf, name, "syscalls") {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("{name} 不可用（{e}）");
+                false
+            }
+        })
+        .count();
+    if attached == 0 {
+        eprintln!("标准输入输出重定向检测不可用");
+        return Ok(());
+    }
+    let mut dups: AsyncPerfEventArray<_> =
+        bpf.take_map("DUPS").ok_or("DUPS map 缺失")?.try_into()?;
+    let seen: Shared<stdiosock::Seen> = Default::default();
+    for cpu in online_cpus().map_err(|(_, e)| e)? {
+        let mut buf = dups.open(cpu, None)?;
+        let (tx, agent_id) = (tx.clone(), agent_id.to_string());
+        let (registry, seen) = (registry.clone(), seen.clone());
+        readers.spawn(async move {
+            let mut bufs = (0..16)
+                .map(|_| bytes::BytesMut::with_capacity(64))
+                .collect::<Vec<_>>();
+            loop {
+                let Ok(batch) = buf.read_events(&mut bufs).await else {
+                    return;
+                };
+                for b in bufs.iter().take(batch.read) {
+                    let Some(ev) = decode::<DupEvent>(b) else {
+                        continue;
+                    };
+                    // 绝大多数是 shell 的管道与重定向，读一次 /proc 就排除，不碰注册表
+                    let Some(sock) = stdiosock::connected_tcp(ev.pid, ev.fd) else {
+                        continue;
+                    };
+                    if !lock(&seen).first(ev.pid, sock.inode) {
+                        continue;
+                    }
+                    let events =
+                        stdio_socket_event(&agent_id, &mut lock(&registry), ev.pid, ev.fd, &sock);
+                    for event in events {
+                        if !tx.send(event) {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+    }
+    Ok(())
 }
 
 fn attach_tracepoint(bpf: &mut aya::Ebpf, name: &str, category: &str) -> Result<(), BoxError> {
@@ -738,6 +816,9 @@ mod tests {
         assert_eq!(offset_of!(ExitEvent, code), 4);
         assert_eq!(offset_of!(ExitEvent, has_code), 8);
 
+        assert_eq!(size_of::<DupEvent>(), 8);
+        assert_eq!(offset_of!(DupEvent, fd), 4);
+
         assert_eq!(size_of::<ConnEvent>(), 44);
         assert_eq!(offset_of!(ConnEvent, family), 4);
         assert_eq!(offset_of!(ConnEvent, sport), 6);
@@ -745,6 +826,77 @@ mod tests {
         assert_eq!(offset_of!(ConnEvent, kind), 10);
         assert_eq!(offset_of!(ConnEvent, saddr), 12);
         assert_eq!(offset_of!(ConnEvent, daddr), 28);
+    }
+
+    /// 真内核验证：加载 eBPF、挂上 dup 退出 tracepoint，bash 子进程把一条 TCP 连接接到 0~2 号描述符，
+    /// 要收到它的 DupEvent，且 stdiosock 认出对端。CI 只编译不加载，这条要 root 在目标内核上跑：
+    /// `cargo test --features ebpf --no-run` 编出测试程序，`sudo <测试程序> --ignored kernel_reports_stdio_dup`
+    #[test]
+    #[ignore = "需要 root 与可加载 eBPF 的内核"]
+    fn kernel_reports_stdio_dup_to_socket() {
+        use aya::maps::perf::AsyncPerfEventArray;
+        use aya::util::online_cpus;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            ensure_memlock_rlimit();
+            let mut bpf = load().unwrap();
+            for name in ["sys_exit_dup", "sys_exit_dup2", "sys_exit_dup3"] {
+                if let Err(e) = attach_tracepoint(&mut bpf, name, "syscalls") {
+                    eprintln!("{name}: {e}");
+                }
+            }
+            let mut dups: AsyncPerfEventArray<_> =
+                bpf.take_map("DUPS").unwrap().try_into().unwrap();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            for cpu in online_cpus().unwrap() {
+                let mut buf = dups.open(cpu, None).unwrap();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let mut bufs = vec![bytes::BytesMut::with_capacity(64); 16];
+                    while let Ok(batch) = buf.read_events(&mut bufs).await {
+                        for b in bufs.iter().take(batch.read) {
+                            if let Some(ev) = decode::<DupEvent>(b) {
+                                let _ = tx.send((ev.pid, ev.fd));
+                            }
+                        }
+                    }
+                });
+            }
+            // 回环连接不报，连本机的非回环地址：路由选出的本端地址
+            let probe = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+            probe.connect("192.0.2.1:9").unwrap();
+            let ip = probe.local_addr().unwrap().ip();
+            let listener = std::net::TcpListener::bind((ip, 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let mut child = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(format!(
+                    "exec 3<>/dev/tcp/{ip}/{port}; exec 0<&3 1>&3 2>&3; sleep 3"
+                ))
+                .spawn()
+                .unwrap();
+            let _conn = listener.accept().unwrap();
+            let pid = child.id();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+            let (mut fds, mut others) = (Vec::new(), Vec::new());
+            while let Ok(Some((p, fd))) = tokio::time::timeout_at(deadline, rx.recv()).await {
+                if p != pid {
+                    others.push(p);
+                    continue;
+                }
+                fds.push(fd);
+                if let Some(s) = stdiosock::connected_tcp(pid, fd) {
+                    assert_eq!(s.remote.port(), port);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("没认出子进程 {pid} 接到套接字上的标准输入输出：它的描述符 {fds:?}，期间别的进程的 dup 事件：{others:?}");
+        });
     }
 
     fn exit_bytes(pid: u32, code: i32, has_code: u32) -> Vec<u8> {

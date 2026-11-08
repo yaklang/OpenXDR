@@ -71,7 +71,7 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
 
 | 路径 | 机制 | 前提 | 证据 |
 |---|---|---|---|
-| eBPF | tracepoint `sched_process_exec`（启动）+ `sched_process_exit`（退出），内核直接给路径 | `--features ebpf` + root | `collector/linux.rs`、`agent/ebpf/src/main.rs` |
+| eBPF | tracepoint `sched_process_exec`（启动）+ `sched_process_exit`（退出），内核直接给路径；`sys_exit_dup*` 报标准输入输出被覆盖 | `--features ebpf` + root | `collector/linux.rs`、`agent/ebpf/src/main.rs` |
 | netlink | proc connector，订阅 `PROC_EVENT_FORK`/`EXEC`/`EXIT`；fork 仅用于血缘登记不上报 | CAP_NET_ADMIN + 初始 pid 命名空间 | `collector/netlink.rs:20-24` |
 | 轮询 | 每秒进程表快照 diff，新 pid 报启动、消失 pid 报退出 | 无 | `collector/poll.rs` |
 
@@ -119,8 +119,22 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
   命令行被截断或经 shebang 脚本改写了 argv（`CMD` 写法直接执行脚本时）、fork 不 exec 的子 shell 再拉起的进程，都照常告警。
   server 怎么用这个标记见 [检测链路 · 容器健康检查](detection.md#容器健康检查)
 - **username**：eBPF/netlink 路径从 `/proc/<pid>/status` 读 real uid，
-  再查 `/etc/passwd` 解析成用户名（结果带缓存）；passwd 查不到退化为
-  uid 数字串，与轮询路径一致（`mod.rs:185` `username_of`）
+  再查 `/etc/passwd` 解析成用户名（结果按文件身份与 uid 缓存）；passwd 查不到退化为
+  uid 数字串，与轮询路径一致（`mod.rs` 的 `username_of`）。容器进程的启动事件改按容器自己的
+  `/proc/<pid>/root/etc/passwd` 解析：同一个 uid 在镜像里和宿主机上常常是两个用户
+- **exec 时补的事实**（`execfacts.rs`，启动事件，读不到就缺省）：
+  - `process.tty`：控制终端（`/proc/<pid>/stat` 的 tty_nr），如 `pts/0`；守护进程、cron、管道里的脚本没有
+  - 经 fd 执行（`fexecve`、`/proc/self/fd/N`）时内核记下的路径是 `/dev/fd/N`，`process.file.path` 改成
+    `/proc/<pid>/exe` 的真实目标：memfd 载荷是 `/memfd:名字 (deleted)`，runc 的自我克隆是
+    `/memfd:runc_cloned:/proc/self/exe (deleted)`，systemd-executor 是磁盘上的真实路径
+  - `process.file.upper_layer: true`：容器进程的程序在根 overlay 挂载的 upperdir 里，
+    即镜像里本来没有、运行时写入或改过（mountinfo 按挂载命名空间缓存）
+- **标准输入输出接到网络**（`stdiosock.rs`，仅 eBPF 构建）：`syscalls:sys_exit_dup / dup2 / dup3` 的返回值是 0~2 时，
+  用户态读 `/proc/<pid>/fd/<fd>` 看它是不是一条已连接的 TCP 套接字，在进程自己的 `/proc/<pid>/net/tcp(6)` 里查出两端，
+  报成 `activity_id: 99` 的进程事件，带 `stdio_socket: {fd, protocol}`、`src_endpoint`（本端）与 `dst_endpoint`（对端），
+  挂在进程启动时的 GUID 上。监听套接字、unix 套接字（systemd 把服务输出接到 journald）、回环连接不报；
+  同一进程同一条套接字只报一次。这是反弹 shell 的本质动作，`bash -i >& /dev/tcp/…`、python 的 `os.dup2` 都绕不开。
+  eBPF 的 pid 是初始 pid 命名空间里的，agent 也必须跑在初始命名空间（systemd 服务即是）
 
 ### 敏感文件监控（fswatch：fanotify 优先，inotify 兜底）
 

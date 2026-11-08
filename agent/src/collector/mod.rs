@@ -33,6 +33,10 @@ mod software;
 
 #[cfg(target_os = "linux")]
 mod container;
+#[cfg(target_os = "linux")]
+mod execfacts;
+#[cfg(all(target_os = "linux", any(feature = "ebpf", test)))]
+pub(crate) mod stdiosock;
 
 #[cfg(target_os = "linux")]
 mod dnswatch;
@@ -320,6 +324,9 @@ impl EventSink {
 pub const ACTIVITY_LAUNCH: u32 = 1;
 /// OCSF 1007 活动类型：进程退出
 pub const ACTIVITY_TERMINATE: u32 = 2;
+/// OCSF 1007 活动类型：其他（标准输入输出接到网络连接上，见 stdiosock）
+#[cfg(all(target_os = "linux", any(feature = "ebpf", test)))]
+pub const ACTIVITY_OTHER: u32 = 99;
 
 /// 一个进程的采集结果。用具名字段而非位置参数：
 /// exe 与 cmd_line 同为 Option<&str> 且相邻，位置传参很容易传反。
@@ -606,48 +613,11 @@ fn container_of(_pid: u32) -> Option<Arc<Container>> {
 /// Linux 进程采集路径共用：按 pid 解析进程属主。
 /// 先读 /proc/<pid>/status 的 real uid，再查 /etc/passwd 映射成用户名；
 /// passwd 里没有退化为 uid 数字串（与轮询路径一致），进程已退场则给空串。
-/// uid→用户名几乎不变，解析结果带缓存，不在事件路径上反复读 passwd。
+/// 容器进程在 process_event 里再按容器自己的 passwd 解析一遍。
 #[cfg(target_os = "linux")]
 fn username_of(pid: u32) -> String {
-    use std::sync::{Mutex, OnceLock};
-
-    fn uid_of(pid: u32) -> Option<u32> {
-        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-        status.lines().find_map(|l| {
-            l.strip_prefix("Uid:")?
-                .split_whitespace()
-                .next()?
-                .parse()
-                .ok()
-        })
-    }
-
-    fn name_of(uid: u32) -> Option<String> {
-        static CACHE: OnceLock<Mutex<std::collections::HashMap<u32, Option<String>>>> =
-            OnceLock::new();
-        let cache = CACHE.get_or_init(Default::default);
-        if let Some(hit) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&uid) {
-            return hit.clone();
-        }
-        let name = std::fs::read_to_string("/etc/passwd")
-            .ok()
-            .and_then(|passwd| {
-                passwd.lines().find_map(|line| {
-                    let mut fields = line.split(':');
-                    let name = fields.next()?;
-                    fields.next()?; // 口令占位
-                    (fields.next()?.parse::<u32>().ok()? == uid).then(|| name.to_string())
-                })
-            });
-        cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(uid, name.clone());
-        name
-    }
-
-    match uid_of(pid) {
-        Some(uid) => name_of(uid).unwrap_or_else(|| uid.to_string()),
+    match execfacts::uid_of(pid) {
+        Some(uid) => execfacts::username("/etc/passwd", uid).unwrap_or_else(|| uid.to_string()),
         None => String::new(),
     }
 }
@@ -781,6 +751,14 @@ fn process_event(
         username,
         exit_code,
     } = info;
+    // 经 fd 执行的程序换成真实目标，规则看到的 Image 才说得清执行了什么
+    #[cfg(target_os = "linux")]
+    let resolved = exe
+        .filter(|_| activity == ACTIVITY_LAUNCH)
+        .and_then(|e| execfacts::real_exe(pid, e));
+    #[cfg(not(target_os = "linux"))]
+    let resolved: Option<String> = None;
+    let exe = resolved.as_deref().or(exe);
 
     // 退出事件只认见过的进程，名字与路径从启动时的登记补上；没见过的退出
     // 配不上启动事件、也说不出是谁，只是噪声
@@ -850,21 +828,17 @@ fn process_event(
         None if activity != ACTIVITY_TERMINATE => ppid.and_then(live_parent),
         None => None,
     };
-    if let Some((name, exe, cmd_line)) = parent {
-        let pp = &mut raw["process"]["parent_process"];
-        if !name.is_empty() {
-            pp["name"] = name.into();
-        }
-        if let Some(exe) = exe {
-            pp["file"] = serde_json::json!({ "path": exe });
-        }
-        if let Some(cmd) = cmd_line {
-            pp["cmd_line"] = cmd.into();
-        }
+    if let Some(parent) = parent {
+        set_parent(&mut raw, parent);
     }
     if let Some(c) = &container {
         raw["container"] = c.to_json();
     }
+    #[cfg(target_os = "linux")]
+    let username = match activity {
+        ACTIVITY_LAUNCH => launch_facts(&mut raw, pid, container.is_some()).unwrap_or(username),
+        _ => username,
+    };
     if let Some(id) = &command {
         raw["platform_command"] = serde_json::json!({ "uid": id.as_ref() });
     }
@@ -894,6 +868,125 @@ fn process_event(
         raw_json: raw.to_string(),
         dropped_events: 0, // 由 EventSink 在发送时填当前累计值
     })
+}
+
+fn set_parent(
+    raw: &mut serde_json::Value,
+    (name, exe, cmd_line): (String, Option<String>, Option<String>),
+) {
+    let pp = &mut raw["process"]["parent_process"];
+    if !name.is_empty() {
+        pp["name"] = name.into();
+    }
+    if let Some(exe) = exe {
+        pp["file"] = serde_json::json!({ "path": exe });
+    }
+    if let Some(cmd) = cmd_line {
+        pp["cmd_line"] = cmd.into();
+    }
+}
+
+/// 启动事件补上 exec 那一刻才读得到的事实（见 execfacts）：控制终端；容器进程再看程序是否来自
+/// overlay 可写层，并返回按容器自己的 passwd 解析的用户名
+#[cfg(target_os = "linux")]
+fn launch_facts(raw: &mut serde_json::Value, pid: u32, in_container: bool) -> Option<String> {
+    if let Some(tty) = execfacts::tty(pid) {
+        raw["process"]["tty"] = tty.into();
+    }
+    if !in_container {
+        return None;
+    }
+    if execfacts::in_upper_layer(pid) {
+        raw["process"]["file"]["upper_layer"] = true.into();
+    }
+    container_username(pid)
+}
+
+#[cfg(target_os = "linux")]
+fn container_username(pid: u32) -> Option<String> {
+    let uid = execfacts::uid_of(pid)?;
+    execfacts::username(&format!("/proc/{pid}/root/etc/passwd"), uid)
+}
+
+/// 标准输入输出被接到 TCP 连接上（见 stdiosock）：报成一条 Other 活动的进程事件，挂在这个进程的血缘上。
+/// 进程被周期折叠压着的启动事件（连同祖先）先补发，返回值按发送顺序排好
+#[cfg(all(target_os = "linux", any(feature = "ebpf", test)))]
+pub(crate) fn stdio_socket_event(
+    agent_id: &str,
+    registry: &mut ProcessRegistry,
+    pid: u32,
+    fd: u32,
+    sock: &stdiosock::Socket,
+) -> Vec<AgentEvent> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    registry.reveal(pid);
+    let mut out = registry.take_outbox();
+    let known = registry.known(pid);
+    let (name, exe, cmd_line) = match &known {
+        Some(k) => (k.name.clone(), k.exe.clone(), k.cmd_line.clone()),
+        None => live_parent(pid).unwrap_or_default(),
+    };
+    let container = match &known {
+        Some(k) => k.container.clone(),
+        None => container_of(pid),
+    };
+    let ppid = container::ppid(pid);
+    let guid = known.as_ref().map(|k| k.guid);
+    let parent_guid = ppid.and_then(|p| registry.guid_of(p));
+    let endpoint =
+        |a: std::net::SocketAddr| serde_json::json!({ "ip": a.ip().to_string(), "port": a.port() });
+    let mut raw = serde_json::json!({
+        "activity_id": ACTIVITY_OTHER,
+        "process": {
+            "pid": pid,
+            "uid": guid.map(|g| g.to_string()),
+            "name": name,
+            "file": { "path": exe },
+            "cmd_line": cmd_line,
+            "parent_process": { "pid": ppid, "uid": parent_guid.map(|g| g.to_string()) },
+        },
+        "stdio_socket": { "fd": fd, "protocol": "tcp" },
+        "src_endpoint": endpoint(sock.local),
+        "dst_endpoint": endpoint(sock.remote),
+    });
+    let parent = ppid.and_then(|p| match registry.known(p) {
+        Some(k) => Some((k.name, k.exe, k.cmd_line)),
+        None => live_parent(p),
+    });
+    if let Some(parent) = parent {
+        set_parent(&mut raw, parent);
+    }
+    if let Some(c) = &container {
+        raw["container"] = c.to_json();
+    }
+    if let Some(k) = &known {
+        if let Some(id) = &k.command {
+            raw["platform_command"] = serde_json::json!({ "uid": id.as_ref() });
+        }
+        if let Some(login) = &k.login {
+            raw["login_session"] = login.as_ref().clone();
+        }
+    }
+    let username = container
+        .as_ref()
+        .and_then(|_| container_username(pid))
+        .unwrap_or_else(|| username_of(pid));
+    out.push(AgentEvent {
+        agent_id: agent_id.to_string(),
+        ts_unix_ns: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as i64,
+        class_uid: 1007,
+        process_guid: guid.map(|g| g.to_string()).unwrap_or_default(),
+        parent_process_guid: parent_guid.map(|g| g.to_string()).unwrap_or_default(),
+        username,
+        conn_tuple: String::new(),
+        raw_json: raw.to_string(),
+        dropped_events: 0,
+    });
+    out
 }
 
 #[cfg(test)]
@@ -946,6 +1039,44 @@ mod tests {
         assert_eq!(child.class_uid, 1007);
         assert!(!parent.process_guid.is_empty());
         assert!(!child.process_guid.is_empty());
+    }
+
+    /// 标准输入输出接到 TCP 上：Other 活动、挂在启动时登记的 GUID 上，带两端地址与被覆盖的描述符
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stdio_socket_event_joins_process_lineage() {
+        let mut reg = ProcessRegistry::default();
+        let launch = process_event(
+            "agent-1",
+            &mut reg,
+            ACTIVITY_LAUNCH,
+            ProcessInfo {
+                pid: 4_000_001,
+                name: "bash",
+                exe: Some("/usr/bin/bash"),
+                cmd_line: Some("bash -i"),
+                username: "u".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let sock = stdiosock::Socket {
+            inode: 7,
+            local: "10.0.2.15:50000".parse().unwrap(),
+            remote: "203.0.113.9:4444".parse().unwrap(),
+        };
+        let out = stdio_socket_event("agent-1", &mut reg, 4_000_001, 0, &sock);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].process_guid, launch.process_guid);
+        let v: Value = serde_json::from_str(&out[0].raw_json).unwrap();
+        assert_eq!(v["activity_id"], ACTIVITY_OTHER);
+        assert_eq!(v["process"]["name"], "bash");
+        assert_eq!(v["process"]["file"]["path"], "/usr/bin/bash");
+        assert_eq!(v["process"]["cmd_line"], "bash -i");
+        assert_eq!(v["stdio_socket"]["fd"], 0);
+        assert_eq!(v["dst_endpoint"]["ip"], "203.0.113.9");
+        assert_eq!(v["dst_endpoint"]["port"], 4444);
+        assert_eq!(v["src_endpoint"]["port"], 50000);
     }
 
     #[test]

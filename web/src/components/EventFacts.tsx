@@ -20,6 +20,8 @@ export function EventFacts({ classUid, raw, username }: { classUid: number; raw:
 
   if (p.name || p.pid) add('process', t('factProcess'), <>{p.name || '-'}{p.pid ? <Typography.Text type="secondary"> · pid {p.pid}</Typography.Text> : null}</>)
   add('path', t('factPath'), p.file?.path && mono(p.file.path))
+  add('origin', t('factUpperLayer'), p.file?.upper_layer && <Tag variant="filled" color="orange">{t('factUpperLayerValue')}</Tag>)
+  add('tty', t('factTty'), p.tty && mono(p.tty))
   add('cmd', t('factCmd'), p.cmd_line && p.cmd_line !== p.name && mono(p.cmd_line))
   add('user', t('factUser'), username)
   // SSH 登录归属：agent 按 sshd 认证日志与审计会话号打的，已知自动化据此认
@@ -30,6 +32,13 @@ export function EventFacts({ classUid, raw, username }: { classUid: number; raw:
   </>)
   const container = containerLabel(r.container)
   add('container', t('factContainer'), container && <><Tag variant="filled">{r.container.runtime}</Tag>{container}{r.container.name ? <Typography.Text type="secondary"> · {r.container.uid}</Typography.Text> : null}</>)
+  if (classUid === 1007 && r.stdio_socket) {
+    add('stdio', t('factStdioSocket'), <>
+      <Tag variant="filled" color="red">fd {r.stdio_socket.fd}</Tag>
+      <span className="mono">{endpoint(r.src_endpoint)} → {endpoint(r.dst_endpoint)}</span>
+    </>)
+    add('parent', t('factParent'), p.parent_process?.cmd_line && mono(p.parent_process.cmd_line))
+  }
   // 周期行为汇总：折叠了多少次、首末时间
   if (classUid === 1007 && r.activity_id === 99 && r.periodic) {
     const time = (ms?: number) => (ms ? new Date(ms).toLocaleTimeString() : '-')
