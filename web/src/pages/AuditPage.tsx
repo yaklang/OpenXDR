@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Alert, Input, Select, Space, Table, Tag, Typography } from 'antd'
+import { Alert, Input, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import { useMemo, useState } from 'react'
 import { fetchAudit, type AuditRow } from '../api'
 import { LoadError } from '../components/LoadError'
@@ -139,6 +139,14 @@ const ACTION: Record<string, { key: MsgKey; color?: string }> = {
   trusted_source_deleted: { key: 'actTrustedSourceDeleted' },
 }
 
+// 平台自身的操作者：审计里记的是身份代码，界面显示可读名称，悬停可看原值
+const ACTOR: Record<string, MsgKey> = {
+  system: 'actorSystem',
+  'system:closure-review': 'actorClosureReview',
+  'system:containment': 'actorContainment',
+  'system:maintenance': 'actorMaintenance',
+}
+
 export function AuditPage() {
   const { t } = useI18n()
   const [q, setQ] = useState('')
@@ -178,7 +186,7 @@ export function AuditPage() {
           pagination={{ defaultPageSize: 50, showSizeChanger: true, hideOnSinglePage: true }}
           columns={[
             { title: t('thTime'), dataIndex: 'ts', width: 180, sorter: (a, b) => a.ts.localeCompare(b.ts), render: fmtTime },
-            { title: t('thUser'), dataIndex: 'username', width: 120, sorter: (a, b) => a.username.localeCompare(b.username) },
+            { title: t('thUser'), dataIndex: 'username', width: 130, sorter: (a, b) => a.username.localeCompare(b.username), render: v => (ACTOR[v] ? <Tooltip title={v}>{t(ACTOR[v])}</Tooltip> : v) },
             { title: t('thAction'), dataIndex: 'action', width: 155, sorter: (a, b) => a.action.localeCompare(b.action), render: v => <Tag color={ACTION[v]?.color}>{ACTION[v] ? t(ACTION[v].key) : v}</Tag> },
             { title: t('thTarget'), dataIndex: 'target', width: 220, ellipsis: true, sorter: (a, b) => (a.target ?? '').localeCompare(b.target ?? ''), render: v => v ?? '-' },
             { title: t('thDetail'), dataIndex: 'detail', ellipsis: true, render: v => v ?? '-' },
