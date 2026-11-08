@@ -1,3 +1,4 @@
+import { Clamp } from '../components/Clamp'
 import { TableActions } from '../components/TableActions'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Input, Popconfirm, Popover, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
@@ -92,7 +93,7 @@ export function SuppressionsPage() {
           locale={{ emptyText: <EmptyHint title={t(hasFilters ? 'noMatch' : 'noSuppressions')} hint={hasFilters ? undefined : t('noSuppressionsHint')} /> }}
           columns={[
             {
-              title: t('thRule'), dataIndex: 'ruleTitle', width: 220, ellipsis: true,
+              title: t('thRule'), dataIndex: 'ruleTitle', width: 220,
               sorter: (a, b) => (a.ruleTitle ?? a.ruleId).localeCompare(b.ruleTitle ?? b.ruleId),
               render: (v, s) => <Tooltip title={s.ruleId}>{v ?? s.ruleId}</Tooltip>,
             },
@@ -108,7 +109,7 @@ export function SuppressionsPage() {
                 ? v.map(c => <div key={c.field + c.op + c.value} className="mono" style={{ fontSize: 12 }}>{c.field} {t(OP[c.op])} {c.value}</div>)
                 : <Tag color="warning">{t('supWholeRule')}</Tag>),
             },
-            { title: t('reason'), dataIndex: 'reason', ellipsis: true, render: v => v ?? '-' },
+            { title: t('reason'), dataIndex: 'reason', render: v => <Clamp text={v} /> },
             { title: t('thMatched'), dataIndex: 'matchedCount', width: 110, align: 'right', sorter: (a, b) => a.matchedCount - b.matchedCount },
             { title: t('thLastMatched'), dataIndex: 'lastMatchedAt', width: 165, sorter: (a, b) => (a.lastMatchedAt ?? '').localeCompare(b.lastMatchedAt ?? ''), render: fmtTime },
             { title: t('thExpires'), dataIndex: 'expiresAt', width: 165, sorter: (a, b) => (a.expiresAt ?? '9999').localeCompare(b.expiresAt ?? '9999'), render: v => (v ? fmtTime(v) : t('longTerm')) },

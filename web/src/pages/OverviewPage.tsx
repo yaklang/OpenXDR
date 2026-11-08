@@ -13,7 +13,7 @@ import { GettingStarted } from '../components/GettingStarted'
 import { LoadError } from '../components/LoadError'
 import { NotifyBanner } from '../components/NotifyBanner'
 import { GeminiSparkle } from '../components/Logo'
-import { Page, TableCard, WIDE_ONLY, useWideTable } from '../components/Page'
+import { Page, TableCard, WIDE_ONLY } from '../components/Page'
 import { saveQueue } from '../components/incidentQueue'
 import { useRowLink } from '../components/rowLink'
 import { BarList, ColumnChart, SEVERITY_COLOR, compact, useSeriesColor } from '../components/charts'
@@ -140,8 +140,6 @@ export function OverviewPage() {
   const incidents = useQuery({ queryKey: ['incidents', 'review', 'overview'], queryFn: () => fetchIncidents({ status: 'review', limit: 6 }), refetchInterval: 30_000 })
   const findings = useQuery({ queryKey: ['findings', 'count', 'open'], queryFn: () => fetchFindingsPage({ status: 'open', limit: 1 }), refetchInterval: 60_000 })
   const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets, refetchInterval: 30_000 })
-  // 手机上标题换行完整显示，不截断成看不出是什么的半句
-  const wideTable = useWideTable()
   const rowLink = useRowLink<IncidentSummary>(r => `/incidents/${r.id}`)
   useEffect(() => { if (incidents.data) saveQueue(incidents.data.items) }, [incidents.data])
   const isGroupAdmin = group?.role === 'admin'
@@ -222,7 +220,7 @@ export function OverviewPage() {
                 locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('noIncidents')} /> }}
                 columns={[
                   { title: t('thSeverity'), dataIndex: 'severity', width: 90, render: v => <SeverityTag value={v} /> },
-                  { title: t('thTitle'), dataIndex: 'title', ellipsis: wideTable, render: (v, r) => <Link to={`/incidents/${r.id}`}>{v ?? r.id}</Link> },
+                  { title: t('thTitle'), dataIndex: 'title', render: (v, r) => <Link to={`/incidents/${r.id}`} style={{ overflowWrap: 'anywhere' }}>{v ?? r.id}</Link> },
                   { title: t('thStatus'), dataIndex: 'status', width: 100, render: (v, r) => <Space size={4} wrap><IncidentStatusTag value={v} retriage={r.retriage} triageStartedAt={r.triageStartedAt} /></Space> },
                   { responsive: WIDE_ONLY, title: t('thAlerts'), dataIndex: 'alertCount', width: 80, align: 'right' },
                   { responsive: WIDE_ONLY, title: t('thCreatedAt'), dataIndex: 'createdAt', width: 110, render: v => <Ago iso={v} /> },
@@ -238,7 +236,7 @@ export function OverviewPage() {
         <Col xs={24} xl={16}>
           <Card title={t('topRules')} style={{ height: '100%' }}>
             {topRules.length ? (
-              <BarList items={topRules.map(r => ({ key: r.ruleId, label: <Typography.Text ellipsis title={r.ruleAuthor ? `${r.ruleId} · ${t('ruleBy', { author: r.ruleAuthor })}` : r.ruleId}>{r.ruleTitle ?? r.ruleId}</Typography.Text>, value: r.count, color: series, to: `/rules?q=${encodeURIComponent(r.ruleId)}` }))} />
+              <BarList items={topRules.map(r => ({ key: r.ruleId, label: <Typography.Text title={r.ruleAuthor ? `${r.ruleId} · ${t('ruleBy', { author: r.ruleAuthor })}` : r.ruleId} style={{ overflowWrap: 'anywhere', lineHeight: 1.4 }}>{r.ruleTitle ?? r.ruleId}</Typography.Text>, value: r.count, color: series, to: `/rules?q=${encodeURIComponent(r.ruleId)}` }))} />
             ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('noAlerts24h')} />}
           </Card>
         </Col>

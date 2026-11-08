@@ -112,6 +112,9 @@ type alertRow struct {
 	Automation *automationRef `json:"automation,omitempty"`
 	// 来自容器健康检查（能出现在 incident 里的只有高危例外）
 	Healthcheck bool `json:"healthcheck,omitempty"`
+	// 告警所在主机：跨主机的事件要看得出每条落在哪台上
+	AssetID  *uuid.UUID `json:"assetId,omitempty"`
+	Hostname string     `json:"hostname,omitempty"`
 }
 
 type incidentDetail struct {
@@ -294,6 +297,7 @@ func getIncident(db *ent.Client, rules sigma.Catalog) http.HandlerFunc {
 			Order(ent.Asc(alert.FieldTs)).
 			Limit(500).
 			WithEvent().
+			WithAsset(func(q *ent.AssetQuery) { q.Select(entasset.FieldID, entasset.FieldHostname) }).
 			All(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -331,6 +335,10 @@ func getIncident(db *ent.Client, rules sigma.Catalog) http.HandlerFunc {
 				row.RuleTitle = a.Detail
 			}
 			row.RuleAuthor = rules.AuthorOf(a.RuleID)
+			row.AssetID = a.AssetID
+			if a.Edges.Asset != nil {
+				row.Hostname = a.Edges.Asset.Hostname
+			}
 			if a.Edges.Event != nil {
 				row.Event = a.Edges.Event.Raw
 			}

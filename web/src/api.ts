@@ -106,6 +106,8 @@ export interface AlertRow {
   automation?: AutomationRef
   // 来自容器健康检查（同上，只有高危例外）
   healthcheck?: boolean
+  assetId?: string
+  hostname?: string
 }
 
 // 告警或事件标注的运维自动化；watch 为高危例外（仍进研判）

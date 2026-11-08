@@ -1,3 +1,4 @@
+import { Clamp } from '../components/Clamp'
 import { useQuery } from '@tanstack/react-query'
 import { Alert, Input, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import { useMemo, useState } from 'react'
@@ -188,8 +189,8 @@ export function AuditPage() {
             { title: t('thTime'), dataIndex: 'ts', width: 180, sorter: (a, b) => a.ts.localeCompare(b.ts), render: fmtTime },
             { title: t('thUser'), dataIndex: 'username', width: 130, sorter: (a, b) => a.username.localeCompare(b.username), render: v => (ACTOR[v] ? <Tooltip title={v}>{t(ACTOR[v])}</Tooltip> : v) },
             { title: t('thAction'), dataIndex: 'action', width: 155, sorter: (a, b) => a.action.localeCompare(b.action), render: v => <Tag color={ACTION[v]?.color}>{ACTION[v] ? t(ACTION[v].key) : v}</Tag> },
-            { title: t('thTarget'), dataIndex: 'target', width: 220, ellipsis: true, sorter: (a, b) => (a.target ?? '').localeCompare(b.target ?? ''), render: v => v ?? '-' },
-            { title: t('thDetail'), dataIndex: 'detail', ellipsis: true, render: v => v ?? '-' },
+            { title: t('thTarget'), dataIndex: 'target', width: 220, sorter: (a, b) => (a.target ?? '').localeCompare(b.target ?? ''), render: v => <Clamp mono text={v} /> },
+            { title: t('thDetail'), dataIndex: 'detail', render: v => <Clamp text={v} /> },
             { title: t('thIP2'), dataIndex: 'remoteAddr', width: 150, sorter: (a, b) => (a.remoteAddr ?? '').localeCompare(b.remoteAddr ?? '') },
           ]}
         />}

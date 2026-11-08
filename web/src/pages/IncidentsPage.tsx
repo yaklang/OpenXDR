@@ -256,7 +256,7 @@ export function IncidentsPage() {
             } : undefined}
             columns={[
               { title: t('thSeverity'), dataIndex: 'severity', width: 95, sorter: (a, b) => a.severity - b.severity, render: v => <SeverityTag value={v} /> },
-              { title: t('thTitle'), dataIndex: 'title', ellipsis: wideTable, sorter: (a, b) => (a.title ?? a.id).localeCompare(b.title ?? b.id), render: (v, r) => <Link to={`/incidents/${r.id}`}>{v ?? r.id}</Link> },
+              { title: t('thTitle'), dataIndex: 'title', sorter: (a, b) => (a.title ?? a.id).localeCompare(b.title ?? b.id), render: (v, r) => <Link to={`/incidents/${r.id}`}>{v ?? r.id}</Link> },
               {
                 responsive: WIDE_ONLY, title: t('group'), dataIndex: 'groupId', width: 140, ellipsis: true,
                 sorter: (a, b) => (groups.find(g => g.id === a.groupId)?.name ?? '').localeCompare(groups.find(g => g.id === b.groupId)?.name ?? ''),

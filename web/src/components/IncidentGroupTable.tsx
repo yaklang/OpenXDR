@@ -72,7 +72,7 @@ export function IncidentGroupTable({ groups, loading, emptyText, actable, onReso
       columns={[
         { responsive: WIDE_ONLY, title: t('thSeverity'), dataIndex: 'severity', width: 95, sorter: (a, b) => a.severity - b.severity, render: v => <SeverityTag value={v} /> },
         {
-          title: t('thRule'), dataIndex: 'ruleId', ellipsis: wideTable,
+          title: t('thRule'), dataIndex: 'ruleId',
           sorter: (a, b) => (a.ruleTitle ?? a.ruleId).localeCompare(b.ruleTitle ?? b.ruleId),
           render: (v, g) => <>
             <Tooltip title={g.ruleTitle ? `${g.ruleTitle} · ${v}` : v}><Typography.Text>{g.ruleTitle ?? (v || '-')}</Typography.Text></Tooltip>
@@ -80,7 +80,7 @@ export function IncidentGroupTable({ groups, loading, emptyText, actable, onReso
             {!wideTable && <div><SeverityTag value={g.severity} /> <HostLink id={g.assetId} fallback={g.hostname ?? '-'} /> · {g.count}</div>}
           </>,
         },
-        { responsive: WIDE_ONLY, title: t('thHostname'), dataIndex: 'assetId', width: 150, ellipsis: true, sorter: (a, b) => (a.hostname ?? '').localeCompare(b.hostname ?? ''), render: (v, g) => <HostLink id={v} fallback={g.hostname ?? '-'} /> },
+        { responsive: WIDE_ONLY, title: t('thHostname'), dataIndex: 'assetId', width: 150, sorter: (a, b) => (a.hostname ?? '').localeCompare(b.hostname ?? ''), render: (v, g) => <HostLink id={v} fallback={g.hostname ?? '-'} /> },
         { responsive: WIDE_ONLY, title: t('thIncidentCount'), dataIndex: 'count', width: 105, align: 'right', sorter: (a, b) => a.count - b.count },
         {
           responsive: WIDE_ONLY, title: t('thVerdictMix'), width: 230,

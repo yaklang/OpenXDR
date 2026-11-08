@@ -2,7 +2,7 @@ import { IncidentWorkCard } from '../components/IncidentWorkCard'
 import { TriageHistory } from '../components/TriageHistory'
 import { ArrowLeftOutlined, DownOutlined, DownloadOutlined, EllipsisOutlined, RobotOutlined, UpOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, App, Button, Card, Col, Descriptions, Dropdown, Result, Row, Segmented, Skeleton, Space, Table, Timeline, Tooltip, Typography } from 'antd'
+import { Alert, App, Button, Card, Col, Descriptions, Dropdown, Result, Row, Segmented, Skeleton, Space, Table, Tag, Timeline, Tooltip, Typography } from 'antd'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { HttpError, dismissClosureProposal, downloadReport, fetchIncident, setIncidentStatus, type AlertRow } from '../api'
@@ -11,7 +11,7 @@ import { useRemember } from '../app/recent'
 import { useKeys } from '../app/shortcuts'
 import { AutomationTag, HealthcheckTag } from '../components/AutomationTag'
 import { useCanChat, useHandoff } from '../components/Handoff'
-import { HostLink } from '../components/HostLink'
+import { IncidentFacts } from '../components/IncidentFacts'
 import { IncidentGraph } from '../components/IncidentGraph'
 import { neighbors, type QueueItem } from '../components/incidentQueue'
 import { LoadError } from '../components/LoadError'
@@ -45,8 +45,11 @@ function AlertTimeline({ alerts }: { alerts: AlertRow[] }) {
         content: (
           <div style={{ paddingBottom: 4 }}>
             <Space size={8} wrap>
-              <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>{fmtTime(a.ts).slice(11)}</Typography.Text>
+              <Tooltip title={a.lastTs && a.lastTs !== a.ts ? `${fmtTime(a.ts)} → ${fmtTime(a.lastTs)}` : fmtTime(a.ts)}>
+                <span className="timeline-when">{fmtTime(a.ts).slice(5)}</span>
+              </Tooltip>
               <SeverityTag value={a.severity} />
+              {(a.assetId || a.hostname) && <Tag variant="outlined" style={{ marginInlineEnd: 0 }}>{a.assetId ? <Link to={`/assets/${a.assetId}`}>{a.hostname || a.assetId.slice(-8)}</Link> : a.hostname}</Tag>}
               <Link to={`/rules?q=${encodeURIComponent(a.ruleId)}`}><Typography.Text strong>{a.ruleTitle ?? a.ruleId}</Typography.Text></Link>
               {a.count > 1 && <Typography.Text type="secondary">×{a.count}</Typography.Text>}
               {a.ruleAuthor && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t('ruleBy', { author: a.ruleAuthor })}</Typography.Text>}
@@ -184,6 +187,7 @@ export function IncidentDetailPage() {
         </>
       }
     >
+      <IncidentFacts inc={inc} />
       <Row gutter={[20, 20]}>
         <Col xs={24} xl={16}>
           <Space orientation="vertical" size={20} style={{ width: '100%' }}>
@@ -205,8 +209,6 @@ export function IncidentDetailPage() {
                 )} />
             )}
             <VerdictCard verdict={inc.aiVerdict} />
-            <TriageHistory key={inc.id} id={inc.id} />
-            <Card title={t('graphTitle')}><IncidentGraph graph={inc.graph} assetId={inc.assetId} incidentId={inc.id} canAct={canAct} /></Card>
             <Card title={t('alertsTitle', { n: inc.alerts.length })} styles={{ body: { padding: alertView === 'timeline' ? '20px 24px 4px' : 0 } }}
               extra={<Segmented size="small" value={alertView} onChange={v => setAlertView(v as 'table' | 'timeline')}
                 options={[{ value: 'timeline', label: t('viewTimeline') }, { value: 'table', label: t('viewTable') }]} />}>
@@ -229,7 +231,8 @@ export function IncidentDetailPage() {
                 columns={[
                   { title: t('thFirst'), dataIndex: 'ts', render: fmtTime, width: 170 },
                   { title: t('thLast'), dataIndex: 'lastTs', render: fmtTime, width: 170 },
-                  { title: t('thRule'), dataIndex: 'ruleTitle', render: (v, a) => <Space size={4}><Tooltip title={a.ruleAuthor && t('ruleBy', { author: a.ruleAuthor })}><Link to={`/rules?q=${encodeURIComponent(a.ruleId)}`}>{v ?? a.ruleId}</Link></Tooltip><AutomationTag value={a.automation} /><HealthcheckTag value={a.healthcheck} /></Space>, ellipsis: true },
+                  { title: t('thHostname'), dataIndex: 'hostname', width: 150, render: (v, a) => (a.assetId ? <Link to={`/assets/${a.assetId}`}>{v || a.assetId.slice(-8)}</Link> : v || '-') },
+                  { title: t('thRule'), dataIndex: 'ruleTitle', render: (v, a) => <Space size={4} wrap><Tooltip title={a.ruleAuthor && t('ruleBy', { author: a.ruleAuthor })}><Link to={`/rules?q=${encodeURIComponent(a.ruleId)}`}>{v ?? a.ruleId}</Link></Tooltip><AutomationTag value={a.automation} /><HealthcheckTag value={a.healthcheck} /></Space> },
                   { title: t('thSeverity'), dataIndex: 'severity', render: v => <SeverityTag value={v} />, width: 90 },
                   { title: t('thCount'), dataIndex: 'count', align: 'right', width: 70 },
                   {
@@ -248,30 +251,27 @@ export function IncidentDetailPage() {
               </div>
               )}
             </Card>
+            <Card title={t('graphTitle')}><IncidentGraph graph={inc.graph} assetId={inc.assetId} incidentId={inc.id} canAct={canAct} /></Card>
+            <TriageHistory key={inc.id} id={inc.id} />
           </Space>
         </Col>
         <Col xs={24} xl={8}>
           <Space orientation="vertical" size={20} style={{ width: '100%' }}>
             {queue.total > 1 && queue.index >= 0 && <QueueCard items={queue.items} index={queue.index} />}
             {!done && inc.work && <IncidentWorkCard work={inc.work} nextCheckAt={inc.workNextCheckAt} />}
+            <ResponsePanel incidentId={inc.id} assetId={inc.assetId} canAct={canAct} />
+            <ExternalTickets incidentId={inc.id} />
             <Card title={t('basicInfo')}>
               <Descriptions column={1} size="small">
-                <Descriptions.Item label="ID"><Typography.Text className="mono" copyable ellipsis style={{ maxWidth: 220 }}>{inc.id}</Typography.Text></Descriptions.Item>
-                <Descriptions.Item label={t('thStatus')}><Space size={4} wrap><IncidentStatusTag value={inc.status} retriage={inc.retriage} triageStartedAt={inc.triageStartedAt} /></Space></Descriptions.Item>
+                <Descriptions.Item label="ID"><Typography.Text className="mono" copyable style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{inc.id}</Typography.Text></Descriptions.Item>
                 {inc.triageStartedAt && <Descriptions.Item label={t('triageRunning')}>{t('triageStartedDetail', { at: fmtTime(inc.triageStartedAt) })}</Descriptions.Item>}
                 {inc.triagedAt && <Descriptions.Item label={t('lastTriaged')}>{fmtTime(inc.triagedAt)} · {t('triageRounds', { n: inc.triageCount })}</Descriptions.Item>}
                 {!inc.triageStartedAt && !!inc.triageFailures && <Descriptions.Item label={t('triageFailed')}>{t('triageFailedDetail', { n: inc.triageFailures, at: fmtTime(inc.triageRetryAt) })}</Descriptions.Item>}
-                <Descriptions.Item label={t('thSeverity')}><SeverityTag value={inc.severity} /></Descriptions.Item>
-                <Descriptions.Item label={t('thCreatedAt')}>{fmtTime(inc.createdAt)}</Descriptions.Item>
-                <Descriptions.Item label={t('thAlerts')}>{inc.alerts.length}</Descriptions.Item>
-                <Descriptions.Item label={t('thHostname')}><HostLink id={inc.assetId} /></Descriptions.Item>
                 <Descriptions.Item label={t('group')}>{groups.find(g => g.id === inc.groupId)?.name ?? '-'}</Descriptions.Item>
                 {inc.resolvedAt && <Descriptions.Item label={t('resolution')}>{inc.resolution}</Descriptions.Item>}
                 {inc.resolvedAt && <Descriptions.Item label={t('resolvedBy')}>{inc.resolvedBy} · {fmtTime(inc.resolvedAt)}</Descriptions.Item>}
               </Descriptions>
             </Card>
-            <ExternalTickets incidentId={inc.id} />
-            <ResponsePanel incidentId={inc.id} assetId={inc.assetId} canAct={canAct} />
           </Space>
         </Col>
       </Row>

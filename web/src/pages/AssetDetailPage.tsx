@@ -1,3 +1,4 @@
+import { Clamp } from '../components/Clamp'
 import { ArrowLeftOutlined, LayoutOutlined, RobotOutlined, SearchOutlined } from '@ant-design/icons'
 import { AssetVulns } from '../components/AssetVulns'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -378,7 +379,7 @@ function AssetDetail() {
                         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('noIncidents')} /> }}
                         columns={[
                           { title: t('thSeverity'), dataIndex: 'severity', width: 95, sorter: (a, b) => a.severity - b.severity, render: v => <SeverityTag value={v} /> },
-                          { title: t('thTitle'), dataIndex: 'title', ellipsis: wideTable, render: (v, r) => <Link to={`/incidents/${r.id}`} style={{ overflowWrap: 'anywhere' }}>{v ?? r.id}</Link> },
+                          { title: t('thTitle'), dataIndex: 'title', render: (v, r) => <Link to={`/incidents/${r.id}`} style={{ overflowWrap: 'anywhere' }}>{v ?? r.id}</Link> },
                           { title: t('thStatus'), dataIndex: 'status', width: 110, sorter: (a, b) => a.status.localeCompare(b.status), render: (v, r) => <Space size={4} wrap><IncidentStatusTag value={v} retriage={r.retriage} triageStartedAt={r.triageStartedAt} /></Space> },
                           { responsive: WIDE_ONLY, title: t('thCreatedAt'), dataIndex: 'createdAt', width: 170, sorter: (a, b) => a.createdAt.localeCompare(b.createdAt), render: fmtTime },
                         ]} />
@@ -411,7 +412,7 @@ function AssetDetail() {
                         expandable={{ expandedRowRender: f => <div className="ev-expand"><pre className="json-block" style={{ whiteSpace: 'pre-wrap' }}>{f.detail || '-'}</pre></div> }}
                         columns={[
                           { title: t('thSeverity'), dataIndex: 'severity', width: 95, sorter: (a, b) => FINDING_SEVERITY[a.severity] - FINDING_SEVERITY[b.severity], render: v => <SeverityTag value={FINDING_SEVERITY[v as FindingRow['severity']]} /> },
-                          { title: t('thTitle'), dataIndex: 'title', ellipsis: wideTable, render: v => <span style={{ overflowWrap: 'anywhere' }}>{v}</span> },
+                          { title: t('thTitle'), dataIndex: 'title', render: v => <span style={{ overflowWrap: 'anywhere' }}>{v}</span> },
                           { title: t('thStatus'), dataIndex: 'status', width: 100, sorter: (a, b) => a.status.localeCompare(b.status), render: v => <Tag>{t(FINDING_STATUS_KEY[v as FindingRow['status']])}</Tag> },
                           { title: t('thLastConfirmed'), dataIndex: 'lastSeen', width: 170, sorter: (a, b) => a.lastSeen.localeCompare(b.lastSeen), render: fmtTime },
                         ]} />
@@ -447,7 +448,7 @@ function AssetDetail() {
                         columns={[
                           { title: t('thTime'), dataIndex: 'ts', sorter: (a, b) => a.ts.localeCompare(b.ts), render: fmtTime, width: 170 },
                           { title: t('thClass'), dataIndex: 'classUid', width: 100, sorter: (a, b) => a.classUid - b.classUid, render: v => (CLASS_KEY[v] ? t(CLASS_KEY[v]) : v) },
-                          { title: t('thDetail'), ellipsis: true, render: (_, r) => <span className="mono">{eventSummary(r.classUid, r.raw, t) || r.connTuple || '-'}</span> },
+                          { title: t('thDetail'), render: (_, r) => <Clamp mono text={eventSummary(r.classUid, r.raw, t) || r.connTuple} /> },
                           { title: t('thUser'), dataIndex: 'username', width: 120, sorter: (a, b) => (a.username ?? '').localeCompare(b.username ?? ''), render: v => v ?? '-' },
                         ]} />
                     </>

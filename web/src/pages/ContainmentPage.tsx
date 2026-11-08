@@ -1,3 +1,4 @@
+import { Clamp } from '../components/Clamp'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, App, Button, Card, Descriptions, Input, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, Typography } from 'antd'
 import { useState } from 'react'
@@ -131,7 +132,7 @@ export function ContainmentPage() {
               },
               { title: t('cmtRole'), dataIndex: 'role', width: 100, render: (v: Containment['role'], c) => <Tooltip title={c.sourceHostname ? t('cmtSourceIs', { host: c.sourceHostname }) : undefined}>{t(ROLE[v])}</Tooltip> },
               { title: t('thStatus'), dataIndex: 'state', width: 110, render: (v: ContainmentState) => <Tag color={STATE[v].color}>{t(STATE[v].key)}</Tag> },
-              { title: t('reason'), dataIndex: 'reason', ellipsis: { showTitle: false }, render: v => <Tooltip title={v} placement="topLeft">{v}</Tooltip> },
+              { title: t('reason'), dataIndex: 'reason', render: v => <Clamp text={v} /> },
               {
                 title: t('cmtCommand'), dataIndex: 'commandStatus', width: 120,
                 render: (v: string | undefined, c) => (v ? <Tooltip title={c.commandDetail}><span><CommandStatusTag value={v} /></span></Tooltip> : '-'),
@@ -141,7 +142,7 @@ export function ContainmentPage() {
                 render: (v: string | null, c) => (c.endedAt ? <Tooltip title={c.liftedBy ? t('cmtLiftedBy', { who: c.liftedBy }) : undefined}>{fmtTime(c.endedAt)}</Tooltip> : v ? fmtTime(v) : '-'),
               },
               {
-                title: t('cmtSignal'), dataIndex: 'signal', width: 200, ellipsis: true,
+                title: t('cmtSignal'), dataIndex: 'signal', width: 200,
                 render: (v: string, c) => (c.incidentId ? <Link to={`/incidents/${c.incidentId}`}>{v}</Link> : v),
               },
               ...(canWrite
