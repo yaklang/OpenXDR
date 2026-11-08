@@ -1,0 +1,45 @@
+title: Shell Standard I/O Redirected to Network Connection
+id: 43ade2ed-38aa-486c-8629-cd561cf9787e
+status: experimental
+description: |
+  shell、脚本解释器或 netcat 类工具把一条 TCP 连接接到自己的标准输入输出上（dup / dup2 / dup3 到 0~2），
+  即反弹 shell：bash -i >& /dev/tcp/…、python 的 os.dup2、nc -e 都绕不开这一步，与命令行怎么写、怎么混淆无关。
+  依赖 agent 的 stdio_socket 事件：只报已连接的非回环 TCP，监听套接字、unix 套接字不报。
+  sshd 每接一个连接都会把套接字接到 0/1 上再重新执行自己，不在名单里；生产上 sshd 以外 12 小时内零次。
+author: OpenXDR
+tags:
+  - attack.execution
+  - attack.t1059.004
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  stdio:
+    stdio_socket.protocol: tcp
+  interpreter:
+    Image|endswith:
+      - /sh
+      - /bash
+      - /dash
+      - /zsh
+      - /ksh
+      - /csh
+      - /tcsh
+      - /ash
+      - /busybox
+      - /python
+      - /python2
+      - /python3
+      - /perl
+      - /ruby
+      - /php
+      - /node
+      - /lua
+      - /nc
+      - /ncat
+      - /netcat
+      - /socat
+  interpreter_versioned:
+    Image|re: '/(python3\.[0-9]+|php[0-9.]+|lua[0-9.]+)$'
+  condition: stdio and (interpreter or interpreter_versioned)
+level: high

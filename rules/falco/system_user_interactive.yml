@@ -1,0 +1,33 @@
+title: System User Interactive
+id: 29a1a49a-29b5-47c7-bedc-29a37bbb63bf
+status: experimental
+description: |
+  移植自 Falco「System user interactive」（maturity_stable）：www-data、nobody、daemon 这类系统账号
+  不该有人交互使用，出现带控制终端的进程多半是服务被打穿后拿到了交互 shell。
+  Falco 按祖先进程是 sshd / login 判断交互，本平台按进程有控制终端（process.tty）判断。
+author: The Falco Authors (ported by OpenXDR)
+references:
+  - https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml
+tags:
+  - attack.execution
+  - attack.t1059
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  system_user:
+    User:
+      - bin
+      - daemon
+      - games
+      - lp
+      - mail
+      - nobody
+      - sshd
+      - sync
+      - uucp
+      - www-data
+  tty:
+    process.tty|re: '.'
+  condition: system_user and tty
+level: informational

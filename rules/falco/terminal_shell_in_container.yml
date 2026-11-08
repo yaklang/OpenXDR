@@ -1,0 +1,47 @@
+title: Terminal Shell in Container
+id: 9625ad24-b63b-46f6-9e45-c4208e7d144d
+status: experimental
+description: |
+  移植自 Falco「Terminal shell in container」（maturity_stable）：容器里由容器运行时直接拉起、带控制终端的 shell，
+  即有人 docker exec -it / kubectl exec -it 进了容器。本身未必是攻击，作为审计线索。
+  父进程按 Falco 的 container_entrypoint 判断（runc、containerd-shim、conmon 等）；依赖 agent 采集的 process.tty。
+author: The Falco Authors (ported by OpenXDR)
+references:
+  - https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml
+tags:
+  - attack.execution
+  - attack.t1059
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  in_container:
+    container.runtime:
+      - docker
+      - podman
+      - containerd
+      - cri-o
+      - lxc
+      - nspawn
+  shell:
+    Image|endswith:
+      - /sh
+      - /bash
+      - /dash
+      - /zsh
+      - /ksh
+      - /csh
+      - /tcsh
+      - /ash
+  tty:
+    process.tty|re: '.'
+  entrypoint:
+    ParentImage|endswith:
+      - /runc
+      - /docker-runc
+      - /crun
+      - /conmon
+      - /containerd-shim
+      - /containerd-shim-runc-v2
+  condition: in_container and shell and tty and entrypoint
+level: low

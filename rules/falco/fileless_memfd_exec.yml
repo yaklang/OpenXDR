@@ -1,0 +1,25 @@
+title: Fileless Execution via memfd
+id: 89a76954-4ab3-4653-b495-7f794f708dfb
+status: experimental
+description: |
+  移植自 Falco「Fileless execution via memfd_create」（maturity_stable）：执行的程序来自 memfd_create 建的匿名内存文件，
+  磁盘上没有对应文件。agent 把经 fd 执行的路径解析成 /proc/<pid>/exe 的真实目标，memfd 载荷形如 /memfd:名字 (deleted)。
+  容器运行时会克隆自身到 memfd 再执行：runc（Falco 原规则即排除）与 PVE 执行 pct exec 时的 lxc-attach，生产实测只有这两类。
+author: The Falco Authors (ported by OpenXDR)
+references:
+  - https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml
+tags:
+  - attack.defense_evasion
+  - attack.t1620
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  memfd:
+    Image|startswith: '/memfd:'
+  runtime:
+    Image|startswith:
+      - '/memfd:runc_cloned:'
+      - '/memfd:lxc-attach'
+  condition: memfd and not runtime
+level: critical

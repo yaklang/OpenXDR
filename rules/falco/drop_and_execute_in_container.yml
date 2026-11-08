@@ -1,0 +1,32 @@
+title: Drop and Execute New Binary in Container
+id: fc47e45c-4ec9-4cf4-b909-69ee8b69dd16
+status: experimental
+description: |
+  移植自 Falco「Drop and execute new binary in container」（maturity_stable）：容器里执行的程序在 overlay 可写层，
+  即镜像里本来没有、运行时才写进去（或改过）的程序——不可变容器里出现这种事，多是攻击者落地了工具。
+  依赖 agent 采集的 process.file.upper_layer。在容器里编译并运行测试的 CI 会命中：生产实测只有 go test
+  编出的 /tmp/go-build*/ 测试程序，按路径排除；其他构建容器照 Falco 的建议按镜像或路径补排除。
+author: The Falco Authors (ported by OpenXDR)
+references:
+  - https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml
+tags:
+  - attack.persistence
+  - attack.t1105
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  in_container:
+    container.runtime:
+      - docker
+      - podman
+      - containerd
+      - cri-o
+      - lxc
+      - nspawn
+  upper:
+    process.file.upper_layer: 'true'
+  go_test:
+    Image|contains: '/go-build'
+  condition: in_container and upper and not go_test
+level: critical

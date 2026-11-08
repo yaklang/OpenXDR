@@ -6,7 +6,7 @@
 
 ## 已移植
 
-只取本平台现有采集（进程路径、命令行、父进程、容器归属）能判断的部分：
+只取本平台采集能判断的部分（进程路径、命令行、父进程、容器归属，以及 agent 补的 tty、真实可执行文件、overlay 来源、stdio 套接字）：
 
 | 规则 | Falco 原规则 | 与原规则的差异 |
 |---|---|---|
@@ -18,14 +18,18 @@
 | `debugfs_in_container` | Debugfs Launched in Privileged Container | 容器信息没有特权标记，对所有容器生效 |
 | `link_over_sensitive_files` | Create Symlink / Hardlink Over Sensitive Files | 按 `ln` 命令行判断，原规则看系统调用参数 |
 | `release_agent_container_escape` | Detect release_agent File Container Escapes | 按容器内命令行提到 release_agent 判断，原规则看写打开与进程能力；容器内读取它也会命中 |
+| `terminal_shell_in_container` | Terminal shell in container | 依赖 agent 采集的 `process.tty`；父进程按 container_entrypoint 判断 |
+| `system_user_interactive` | System user interactive | 按进程有控制终端判断交互，原规则看祖先是否 sshd / login |
+| `fileless_memfd_exec` | Fileless execution via memfd_create | agent 把 fd 执行路径解析成 `/memfd:…`；除 runc 外还排除 PVE `pct exec` 的 lxc-attach（生产实测只有这两类） |
+| `drop_and_execute_in_container` | Drop and execute new binary in container | 依赖 `process.file.upper_layer`；排除 go test 编出的 `/tmp/go-build*/` 测试程序（生产实测） |
+| `redirect_stdio_to_network_in_container` | Redirect STDOUT/STDIN to Network Connection in Container | 依赖 agent 的 `stdio_socket` 事件；排除容器里 sshd 接受连接（生产实测 LXC 容器） |
 
-## 待采集补齐后移植
+## 尚未移植
 
-这些要先给 agent 加数据源：`Terminal shell in container` 与 `System user interactive`（进程的 tty、用户）、
-`Redirect STDOUT/STDIN to Network Connection in Container`（dup 系统调用）、`Drop and execute new binary in container`
-（可执行文件是否来自 overlay 上层）、`PTRACE attached to process` / `PTRACE anti-debug attempt`、
-`Packet socket created in container`、`Fileless execution via memfd_create`（经 fexecve 执行时记下的路径是 `/dev/fd/N`，
-runc、systemd-executor 每天成千上万次这样执行，要 agent 解析 `/proc/<pid>/exe` 的真实目标才分得出 memfd 载荷）、`Read sensitive file untrusted` 等文件读取类。
+`PTRACE attached to process` / `PTRACE anti-debug attempt`、`Packet socket created in container` 要再给 agent 加系统调用钩子；
+`Read sensitive file untrusted` 等文件读取类要文件打开事件。
+
+新采集上线后的规则，用上线以来的生产数据回测：2026-11-08 起 12 小时、约 2600 条带新字段的事件，排除上面实测到的正常行为后命中为零。
 
 ## 更新
 
