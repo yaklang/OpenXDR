@@ -755,7 +755,7 @@ fn process_event(
     #[cfg(target_os = "linux")]
     let resolved = exe
         .filter(|_| activity == ACTIVITY_LAUNCH)
-        .and_then(|e| execfacts::real_exe(pid, e));
+        .and_then(|e| execfacts::real_exe(pid, e, name));
     #[cfg(not(target_os = "linux"))]
     let resolved: Option<String> = None;
     let exe = resolved.as_deref().or(exe);

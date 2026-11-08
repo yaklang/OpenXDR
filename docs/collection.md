@@ -126,7 +126,8 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
   - `process.tty`：控制终端（`/proc/<pid>/stat` 的 tty_nr），如 `pts/0`；守护进程、cron、管道里的脚本没有
   - 经 fd 执行（`fexecve`、`/proc/self/fd/N`）时内核记下的路径是 `/dev/fd/N`，`process.file.path` 改成
     `/proc/<pid>/exe` 的真实目标：memfd 载荷是 `/memfd:名字 (deleted)`，runc 的自我克隆是
-    `/memfd:runc_cloned:/proc/self/exe (deleted)`，systemd-executor 是磁盘上的真实路径
+    `/memfd:runc_cloned:/proc/self/exe (deleted)`，systemd-executor 是磁盘上的真实路径。读的时候进程可能已经又 exec 成了下一个程序（runc init 转去执行容器入口），
+    所以要 `/proc/<pid>/comm` 还是事件里的进程名才改；进程已退场、改了名（包括启动即 `prctl` 改名伪装的程序）就保留 fd 路径
   - `process.file.upper_layer: true`：容器进程的程序在根 overlay 挂载的 upperdir 里，
     即镜像里本来没有、运行时写入或改过（mountinfo 按挂载命名空间缓存）
 - **标准输入输出接到网络**（`stdiosock.rs`，仅 eBPF 构建）：`syscalls:sys_exit_dup / dup2 / dup3` 的返回值是 0~2 时，

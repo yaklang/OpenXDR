@@ -36,13 +36,16 @@ fn tty_name(nr: u32) -> Option<String> {
 
 /// 经 fexecve / execveat(AT_EMPTY_PATH) 或 /proc/self/fd/N 执行时，内核记下的是 fd 路径，看不出执行了什么。
 /// 这时读 /proc/<pid>/exe 的真实目标：memfd 载荷是 `/memfd:名字 (deleted)`，runc 的自我克隆是
-/// `/memfd:runc_cloned:/proc/self/exe (deleted)`，systemd-executor 是磁盘上的真实路径。不是 fd 路径返回 None
-pub fn real_exe(pid: u32, exe: &str) -> Option<String> {
+/// `/memfd:runc_cloned:/proc/self/exe (deleted)`，systemd-executor 是磁盘上的真实路径。不是 fd 路径返回 None。
+/// 读到时进程可能已经又 exec 成了别的程序（runc init 转去执行容器入口），那时 exe 是下一个程序的：
+/// 进程名（comm）还是事件里的那个才算数，否则不改，免得把下一个程序安到这条事件上
+pub fn real_exe(pid: u32, exe: &str, comm: &str) -> Option<String> {
     if !is_fd_path(exe) {
         return None;
     }
     let target = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
-    Some(target.to_string_lossy().into_owned())
+    let now = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    (now.trim_end() == comm).then(|| target.to_string_lossy().into_owned())
 }
 
 fn is_fd_path(exe: &str) -> bool {
@@ -187,11 +190,19 @@ mod tests {
         assert!(is_fd_path("/proc/1234/fd/4"));
         assert!(!is_fd_path("/proc/sys/fd/1"));
         assert!(!is_fd_path("/usr/bin/bash"));
-        assert_eq!(real_exe(std::process::id(), "/usr/bin/bash"), None);
+        let pid = std::process::id();
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap();
+        let comm = comm.trim_end();
+        assert_eq!(real_exe(pid, "/usr/bin/bash", comm), None);
         let me = std::fs::read_link("/proc/self/exe").unwrap();
         assert_eq!(
-            real_exe(std::process::id(), "/dev/fd/3").as_deref(),
+            real_exe(pid, "/dev/fd/3", comm).as_deref(),
             Some(me.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            real_exe(pid, "/dev/fd/3", "6"),
+            None,
+            "进程已换了程序（comm 对不上）就不改"
         );
     }
 
