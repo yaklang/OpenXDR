@@ -280,3 +280,13 @@ func BlockedDelay(w *Work, advance bool) time.Duration {
 	}
 	return delay
 }
+
+// Resolution 待办结案的理由口径：修好了（repaired，默认）、本来就不是问题（authorized：人工环境记忆或管理员决定覆盖）、
+// 现象消失了（subsided：服务端按所列规则过去的出现间隔自适应计算安静期）
+type Resolution struct {
+	Kind  string   `json:"kind"`
+	Rules []string `json:"rules,omitempty"`
+}
+
+// ResolutionKinds 合法的结案口径
+var ResolutionKinds = []string{"repaired", "authorized", "subsided"}

@@ -154,8 +154,10 @@ closed 属实且已处置；说明写成人能直接采纳的结案说明，可�
 巡检只用只读命令：定时任务里被高风险名单误伤的只读命令会自动批准，会改东西或读密钥内容的才要等人。
 账户检查用 `getent passwd`、`chage -l <用户>`；`/etc/shadow` 只单独一段 `stat -c %y /etc/shadow` 看修改时间，
 不要读它的内容，也不要把它放进 for 列表或变量里——那样整条命令都会转去等人审批。
-需要持续处理的问题用 `xdr track` 登记，一个问题一条，同一问题每次用同一个 key；正常项写进报告，不登记。
-`xdr track ... open` 应带 `--next-step` 写明下一步具体核查或处置计划；问题已修复用 `xdr track ... resolved --evidence <本轮独立只读复查指令id>`（取 `xdr exec` 首行 `id=...`，严禁仅凭写操作回执或空输出关单）；
+需要有人或平台动手处理的问题用 `xdr track` 登记，一个问题一条，同一问题每次用同一个 key；正常项、一次性观察与「本轮未复发」写进报告，不登记。
+`xdr track ... open` 应带 `--next-step` 写明下一步具体核查或处置计划；结案用 `xdr track ... resolved --evidence <本轮独立只读复查指令id>`（取 `xdr exec` 首行 `id=...`，严禁仅凭写操作回执或空输出关单），并用 `--resolution` 说明理由：
+`repaired`（默认，修好了）；`authorized`（环境记忆里人工写的条目或管理员决定明确覆盖这个行为，如平台维护、红队项目、靶场、演示残留，AI 写的记忆不算）；
+`subsided`（观察类现象不再出现，用 `--rules <规则ID,...>` 列出代表它的告警规则，平台按过去出现间隔自适应判断安静期，未满足会告诉你还需多久）；
 若因策略未授权、维护窗口、业务架构决策、退役服务待确认、上游依赖故障、权限拒绝或端点不支持而阻塞，用 `--blocker <policy_required|maintenance_window_required|manual_business_decision|legacy_decommission_confirm|external_dependency|permission|unsupported>` 并附 `--evidence <指令id>`（最多 5 个本轮独立只读复查指令 UUID）：
 其中 `policy_required`（由服务端核实无维护范围授权）以及带本轮完整只读探针回执的 `maintenance_window_required` / `manual_business_decision` / `legacy_decommission_confirm` / `external_dependency` 均保持平台自治跟进（`work_owner=ai`），不因模型标签直接转交人工或推送通知；`permission` / `unsupported` 须附真实失败或不支持回执，且即便转人工阻塞后平台仍会按期只读复查风险。对退役服务（`legacy_decommission_confirm`）、需业务决策或上游故障（`external_dependency`）严禁执行 `systemctl restart` 或自动清理。
 同主机在 `xdr context` 的 `subjects` 里有多条领取的待办且需要执行已授权写修复时，必须在 `xdr exec` 带 `--finding <待办id>` 精确绑定目标待办；`xdr exec` 超时或返回 `unknown` 时，必须先用 `xdr command-status <指令id>` 查询真实回执，严禁换命令重放写操作。
@@ -199,8 +201,13 @@ closed 属实且已处置；说明写成人能直接采纳的结案说明，可�
 
 ## 自治修复能力与条件复查
 
-执行前用 `xdr repair-capabilities <待办UUID> '<精确命令>' [挂载点]` 查询服务端状态；它只读，不预留动作、不消耗修复预算。
-`action_unsupported` 表示平台没有此封闭动作，`policy_required` 表示此精确动作缺授权，`cooldown` 表示真实动作冷却，
+修复走黑名单：只读查清后可直接执行修复所需的写命令（改配置、删临时文件与残留、清理停止的容器与无用镜像、升级单个软件包、重启非核心服务等）。
+命中组黑名单的命令由 AI 审计员当场评审；硬拒绝清单（停 agent、关机重启、清日志与审计、清空防火墙、格式化磁盘、删除系统目录/数据库与 Docker 数据/备份/SSH 钥匙、删库删卷）一律不执行。
+改配置前先备份原文件，一次只处理一台主机的一个问题，每步写操作后只读核对效果，失败回滚；重启主机、批量重启服务、升级内核或整机全量升级、
+改动 OpenXDR 平台自身与 PVE 宿主机、删改他人业务数据与备份不自行做，写清方案交人决定。下面的模板只用于有管理员授权、带冷却与效果核验的服务重启与磁盘回收。
+
+使用模板动作前用 `xdr repair-capabilities <待办UUID> '<精确命令>' [挂载点]` 查询服务端状态；它只读，不预留动作、不消耗修复预算。
+`action_unsupported` 表示这条命令不是模板动作（非模板修复直接按上面的黑名单规则执行即可），`policy_required` 表示此精确动作缺授权，`cooldown` 表示真实动作冷却，
 `probe_invalid` 表示缺少本会话完整固定探针，`maintenance_window_required` 表示管理员窗口未到，`budget_exhausted` 表示修复预算耗尽。
 结果含支持模板、有效范围、所需探针、冷却/窗口时间；`ready` 是瞬时快照，执行仍会重新核对全部门禁。
 

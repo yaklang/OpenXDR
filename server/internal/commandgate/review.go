@@ -26,7 +26,12 @@ var hardDeny = []struct {
 	why string
 	re  *regexp.Regexp
 }{
-	{"删除文件或回收缓存", regexp.MustCompile(`(?i)` + cmdPos + `rm\b|` + cmdPos + `find\b[^;&|\n]*-delete\b|` + cmdPos + `docker\s+(?:image|builder)\s+prune\b|` + cmdPos + `apt-get\s+clean\b`)},
+	// 删普通文件交 AI 审计员评审（默认名单 fileDeny）；系统目录、数据库与 Docker 数据、备份、SSH 钥匙、平台目录、
+	// 数据卷与删库删表一律不执行。日志与 agent 目录各有专门条目
+	{"删除系统目录、数据或备份", regexp.MustCompile(`(?i)` + cmdPos + `(?:rm|shred|unlink)\b[^;&|\n]*` + protectedPath + `|` +
+		cmdPos + `find(?:\s+-\S+)*` + protectedPath + `[^;&|\n]*-delete\b|` +
+		cmdPos + `docker\s+(?:volume\s+(?:rm|prune)\b|system\s+prune\b[^;&|\n]*--volumes)|` +
+		`\bdrop\s+(?:database|schema|table)\b|` + cmdPos + `dropdb\b`)},
 	{"停止或卸载 OpenXDR agent", regexp.MustCompile(`(?i)` + cmdPos + `(?:systemctl|service)\s+(?:stop|disable|mask|kill)\b[^;&|\n]*openxdr|` +
 		cmdPos + `(?:pkill|killall|taskkill)\b[^;&|\n]*openxdr|` + cmdPos + `rm\b[^;&|\n]*(?:/usr/local/bin/openxdr|/var/lib/openxdr|/etc/systemd/system/openxdr)|` +
 		`(?:Stop|Remove)-Service\b[^;&|\n]*openxdr`)},
@@ -40,6 +45,9 @@ var hardDeny = []struct {
 	{"格式化或覆写磁盘", regexp.MustCompile(`(?i)` + cmdPos + `mkfs(?:\.\w+)?\b|` + cmdPos + `dd\b[^;&|\n]*\bof=/dev/|` +
 		`--no-preserve-root|` + cmdPos + `rm\s+-[a-z]*r[a-z]*\s+/(?:\s|$|\*)`)},
 }
+
+// protectedPath 删除类命令参数里的受保护路径：系统目录、/var/lib（数据库与 Docker 数据）、备份、SSH 钥匙目录、平台部署目录
+const protectedPath = `(?:\s|["'=])["']?(?:/(?:etc|usr|bin|sbin|lib(?:32|64)?|boot|var/lib|var/backups|root/\.ssh|home/[^/\s]+/\.ssh|opt/openxdr[^/\s]*)(?:[/\s"'*]|$)|[^\s;&|]*backups?(?:[/\s"'*.]|$))`
 
 // hardDenied 命中硬拒绝清单时返回原因
 func hardDenied(cmd string) string {

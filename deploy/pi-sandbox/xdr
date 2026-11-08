@@ -60,7 +60,7 @@ usage() {
   xdr verify-command <指令 id> <effective|ineffective|inconclusive> <telemetry_post_action|exec_probe|receipt_correlation|context_only|ai_investigation> <预期效果> <实测证据> [--events <事件id,...>] [--context-events <事件id,...>]  记录指令效果验证
   xdr sql [--json] <只读SQL|->           查本组只读视图，默认 TSV（首行列名）；--json 每行一个 JSON 对象，
                                          jsonb 列保持原样，适合交给 jq；- 表示从 stdin 读 SQL
-  xdr track <主机名> <key> <low|medium|high> <open|resolved|withdrawn> <标题> <详情|-> [--next-step <下一步>] [--blocker <阻塞原因>] [--evidence <指令id,...>]  登记或复查待办；--evidence 传 1–5 个本轮独立只读复查指令 UUID（严禁单凭修复命令 exit=0 关单）；--blocker 支持 policy_required / maintenance_window_required / manual_business_decision / legacy_decommission_confirm / external_dependency / permission / unsupported
+  xdr track <主机名> <key> <low|medium|high> <open|resolved|withdrawn> <标题> <详情|-> [--next-step <下一步>] [--blocker <阻塞原因>] [--evidence <指令id,...>] [--resolution repaired|authorized|subsided] [--rules <规则ID,...>]  登记或复查待办；resolved 时 --resolution 说明结案理由：repaired 修好了（默认）、authorized 人工环境记忆或管理员决定已确认属授权/良性、subsided 现象不再出现（须 --rules 列出代表该现象的规则 ID，平台按其过去出现间隔自适应判断安静期）；--evidence 传 1–5 个本轮独立只读复查指令 UUID（严禁单凭修复命令 exit=0 关单）；--blocker 支持 policy_required / maintenance_window_required / manual_business_decision / legacy_decommission_confirm / external_dependency / permission / unsupported
   xdr ignore <主机名> <key> <理由>        用户在对话里明确要求时忽略待办（同待办页人工忽略；仅组管理员发起的对话可用）
   xdr identify <主机名> <tcp/端口|udp/端口> <high|medium|low> <服务名> <依据与结论>
   xdr egress <主机名> <公网地址> <high|medium|low> <用途> <依据与结论>
@@ -217,8 +217,19 @@ case "$cmd" in
     evidence='[]'
     has_evidence=0
     repair_command="";repair_mount="";depends_on='[]';wake_at="";has_conditions=0;has_depends=0
+    resolution="";rules='[]';has_rules=0
     while [ $# -gt 0 ]; do
       case "$1" in
+        --resolution|--resolution=*)
+          if [ "$1" = --resolution ]; then [ $# -ge 2 ] || { echo "缺少 --resolution 参数值" >&2; exit 2; }; val=$2; shift 2; else val=${1#*=}; shift; fi
+          case "$val" in repaired|authorized|subsided) ;; *) echo "resolution 必须是 repaired / authorized / subsided：$val" >&2; exit 2 ;; esac
+          resolution=$val ;;
+        --rules|--rules=*)
+          if [ "$1" = --rules ]; then [ $# -ge 2 ] || { echo "缺少 --rules 参数值" >&2; exit 2; }; val=$2; shift 2; else val=${1#*=}; shift; fi
+          rules=$(printf '%s' "$val" | jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
+          n=$(printf '%s' "$rules" | jq 'length')
+          [ "$n" -ge 1 ] && [ "$n" -le 10 ] || { echo "--rules 需要 1–10 个规则 ID，逗号分隔" >&2; exit 2; }
+          has_rules=1 ;;
         --repair-command|--repair-mount|--depends-on|--wake-at)
           [ $# -ge 2 ] || { echo "缺少 $1 参数值" >&2; exit 2; }
           case "$1" in
@@ -275,7 +286,10 @@ case "$cmd" in
       --argjson hn "$has_next" --arg ns "$next_step" \
       --argjson hb "$has_blocker" --arg bl "$blocker" \
       --argjson he "$has_evidence" --argjson ev "$evidence" \
+      --arg rs "$resolution" --argjson hr "$has_rules" --argjson ru "$rules" \
       '{host:$h,key:$k,severity:$sv,status:$st,title:$t,detail:$d}
+      + (if $rs != "" then {resolution:$rs} else {} end)
+      + (if $hr == 1 then {recurrence_rules:$ru} else {} end)
       + (if $rc != "" then {repair_command:$rc} else {} end)
       + (if $rm != "" then {repair_mount:$rm} else {} end)
       + (if $wa != "" then {wake_at:$wa} else {} end)

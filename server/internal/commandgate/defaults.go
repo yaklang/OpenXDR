@@ -75,7 +75,7 @@ var DefaultAIDeny = append([]string{
 	`(?i)\b(?:Stop-Process|taskkill)\b`,
 	`(?i)\bnetsh(?:\.exe)?\s+advfirewall\s+(?:firewall\s+)?(?:set|add|delete|reset|import)\b`,
 	`(?i)\b(?:New|Set|Remove|Disable|Enable)-NetFirewall\w+`,
-}, containerDeny...)
+}, append(containerDeny, fileDeny...)...)
 
 // containerDeny 容器重建、拉起与删除：compose 编排、docker / podman 的容器与镜像生命周期、写 compose 文件。
 // 非锚定搜索，套在 pct exec、docker exec、lxc-attach、sh -c 里照样命中；ps、logs、inspect 这类查看不命中
@@ -85,9 +85,17 @@ var containerDeny = []string{
 	`(?:>|\btee\s+(?:-\S+\s+)*)\s*["']?[^\s;&|'"<>]*compose[^\s;&|'"<>]*\.ya?ml\b`,
 }
 
+// fileDeny 删文件与回收缓存：曾在硬拒绝清单里，改为交 AI 审计员评审；系统目录、数据与备份仍硬拒绝（review.go）
+var fileDeny = []string{
+	cmdPos + `(?:rm|unlink|shred|truncate)\b`,
+	`\bfind\b[^;&|]*\s-delete\b`,
+	`\bdocker\s+(?:image|builder|system|container)\s+prune\b`,
+	`\bapt(?:-get)?\s+(?:-\S+\s+)*(?:clean|autoclean)\b`,
+}
+
 // defaultsAdded 已上线后才加进默认名单的条目，下标 + 1 是默认名单版本号，只许往后追加。
 // 老库里已有默认名单的组由 UpgradeDefaults 按版本补上，每个版本只补一次
-var defaultsAdded = [][]string{containerDeny}
+var defaultsAdded = [][]string{containerDeny, fileDeny}
 
 // defaultsVersionKey settings 表里记已补到第几版默认名单
 const defaultsVersionKey = "commandgate.defaults_version"

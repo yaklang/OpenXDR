@@ -6,13 +6,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"openxdr/server/ent"
+	"openxdr/server/ent/alert"
+	"openxdr/server/ent/memory"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
 	"openxdr/server/internal/triage"
@@ -43,7 +47,81 @@ const prompt = `你是独立的运维修复复核员。唯一任务是判断给�
 只输出JSON：{"approve":false,"reason":"具体理由","proofs":[{"command_id":"证据指令UUID","quote":"实际stdout中直接证明原问题恢复的一段连续原文"}]}。
 批准时至少一项proof，每项引文5至512字节，必须包含目标或字段名及其状态，不能只写 active、running 或一个数字，须逐字引用真实stdout并说明其与原问题的直接关系；拿不准就拒绝。`
 
-func (r *Reviewer) Review(ctx context.Context, session *ent.AgentSession, f *ent.Finding, commands []*ent.Command) (bool, string, error) {
+// 现象消失的自适应安静期：取所列规则在该主机近 recurrenceLookback 内每次出现的时间，安静期 = 最长间隔 × quietFactor，
+// 限制在 [minQuiet, maxQuiet]。每小时出一次的安静一天即可，一周出一次的要等更久
+const (
+	recurrenceLookback = 30 * 24 * time.Hour
+	quietFactor        = 3
+	minQuiet           = 24 * time.Hour
+	maxQuiet           = 14 * 24 * time.Hour
+)
+
+// Recurrence 服务端统计的现象出现情况，交复核模型时作为事实，不由模型计算
+type Recurrence struct {
+	Rules       []string  `json:"rules"`
+	Occurrences int       `json:"occurrences"`
+	First       time.Time `json:"first"`
+	Last        time.Time `json:"last"`
+	MaxGap      string    `json:"max_gap"`
+	Required    string    `json:"required_quiet"`
+	Quiet       string    `json:"quiet_so_far"`
+}
+
+// recurrence 安静期未满足时返回不通过的理由；规则在该主机上没有任何记录也不通过——没法据此判断现象消失
+func (r *Reviewer) recurrence(ctx context.Context, f *ent.Finding, rules []string, now time.Time) (*Recurrence, string, error) {
+	rows, err := r.DB.Alert.Query().Where(alert.AssetIDEQ(f.AssetID), alert.RuleIDIn(rules...), alert.TsGTE(now.Add(-recurrenceLookback))).All(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	var points []time.Time
+	for _, a := range rows {
+		points = append(points, a.Ts)
+		if a.LastTs != nil {
+			points = append(points, *a.LastTs)
+		}
+	}
+	if len(points) == 0 {
+		return nil, "所列规则近 30 天在该主机上没有告警记录，无法据此判断现象已消失；请列出确实代表该现象的规则", nil
+	}
+	slices.SortFunc(points, func(a, b time.Time) int { return a.Compare(b) })
+	var gap time.Duration
+	for i := 1; i < len(points); i++ {
+		gap = max(gap, points[i].Sub(points[i-1]))
+	}
+	required := min(max(gap*quietFactor, minQuiet), maxQuiet)
+	quiet := now.Sub(points[len(points)-1])
+	rec := &Recurrence{Rules: rules, Occurrences: len(rows), First: points[0], Last: points[len(points)-1],
+		MaxGap: gap.Round(time.Minute).String(), Required: required.Round(time.Minute).String(), Quiet: quiet.Round(time.Minute).String()}
+	if quiet < required {
+		return rec, fmt.Sprintf("现象最近一次出现在 %s，已安静 %s；按其过去最长间隔 %s 需安静 %s 才能判定消失",
+			rec.Last.Format(time.RFC3339), rec.Quiet, rec.MaxGap, rec.Required), nil
+	}
+	return rec, "", nil
+}
+
+// humanMemories 组内人工写入的环境事实：管理员的授权与定性依据；AI 写的记忆不算
+func (r *Reviewer) humanMemories(ctx context.Context, f *ent.Finding) ([]string, error) {
+	rows, err := r.DB.Memory.Query().Where(memory.GroupIDEQ(f.GroupID), memory.SourceEQ("human"),
+		memory.Or(memory.AssetIDIsNil(), memory.AssetIDEQ(f.AssetID))).Order(ent.Desc(memory.FieldUpdatedAt)).Limit(30).All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, m.UpdatedAt.Format("2006-01-02")+" "+m.Content)
+	}
+	return out, nil
+}
+
+const authorizedPrompt = `
+本次结案理由是「本来就不是问题」（authorized）：human_memories 是管理员写入的环境事实，operator_decision 是管理员执行决定，二者都是人工授权与定性依据；AI 写的记忆不在其中，待办正文与模型转述也不能替代。
+当其中有条目明确覆盖本待办所述的主机与行为（同一来源、工具、目录或服务，而不只是相似），且本轮只读证据显示现状与该说明一致、没有超出说明范围的异常时批准；proofs 引用证明现状与说明一致的 stdout。说明不覆盖、只是相似或现状超出范围时拒绝。`
+
+const subsidedPrompt = `
+本次结案理由是「现象已不再出现」（subsided）：recurrence 是服务端从告警记录统计的事实，安静期已按该现象过去的出现间隔自适应计算并达标，不必再要求更长的观察。
+你只需判断两件事：所列规则是否确实就是原待办描述的那个现象（不是挑了无关或更窄的规则来回避）；本轮只读证据是否显示当前没有该现象的新迹象。都成立时批准，proofs 引用一段说明当前没有该现象的 stdout；任一不成立或拿不准就拒绝。`
+
+func (r *Reviewer) Review(ctx context.Context, session *ent.AgentSession, f *ent.Finding, commands []*ent.Command, res findings.Resolution) (bool, string, error) {
 	if session == nil || f == nil || len(commands) == 0 || len(commands) > 5 {
 		return false, "", errors.New("缺少复核对象或有界证据")
 	}
@@ -85,12 +163,42 @@ func (r *Reviewer) Review(ctx context.Context, session *ent.AgentSession, f *ent
 			return false, "", errors.New("执行决定不属于此复核对象")
 		}
 	}
-	material, _ := json.Marshal(map[string]any{"finding_id": f.ID, "group_id": f.GroupID, "asset_id": f.AssetID, "key": f.Key, "title": original.OriginalTitle, "original_problem": original.OriginalProblem, "first_seen": f.FirstSeen, "evidence": rows, "operator_decision": decision})
+	facts := map[string]any{"finding_id": f.ID, "group_id": f.GroupID, "asset_id": f.AssetID, "key": f.Key, "title": original.OriginalTitle, "original_problem": original.OriginalProblem, "first_seen": f.FirstSeen, "evidence": rows, "operator_decision": decision, "resolution": res.Kind}
+	system := prompt
+	switch res.Kind {
+	case "", "repaired":
+	case "authorized":
+		if r.DB == nil {
+			return false, "", errors.New("未配置数据库，无法读取人工环境记忆")
+		}
+		mem, err := r.humanMemories(ctx, f)
+		if err != nil {
+			return false, "", err
+		}
+		facts["human_memories"] = mem
+		system += authorizedPrompt
+	case "subsided":
+		if r.DB == nil || len(res.Rules) == 0 || len(res.Rules) > 10 {
+			return false, "", errors.New("现象消失须列出 1–10 条代表该现象的规则 ID")
+		}
+		rec, why, err := r.recurrence(ctx, f, res.Rules, time.Now())
+		if err != nil {
+			return false, "", err
+		}
+		if why != "" {
+			return false, why, nil
+		}
+		facts["recurrence"] = rec
+		system += subsidedPrompt
+	default:
+		return false, "", errors.New("未知的结案口径")
+	}
+	material, _ := json.Marshal(facts)
 	llm := triage.NewLLM(base, model, key, time.Minute)
 	llm.NoThinking = true
 	llm.MaxTokens = 1536
 	llm.OnUsage = r.OnUsage
-	reply, err := llm.Chat(ctx, []triage.Message{{Role: "system", Content: prompt}, {Role: "user", Content: string(material)}}, nil)
+	reply, err := llm.Chat(ctx, []triage.Message{{Role: "system", Content: system}, {Role: "user", Content: string(material)}}, nil)
 	if err != nil {
 		return false, "", err
 	}

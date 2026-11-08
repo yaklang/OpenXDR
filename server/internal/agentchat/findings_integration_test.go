@@ -15,6 +15,7 @@ import (
 	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/finding"
 	"openxdr/server/internal/commandgate"
+	"openxdr/server/internal/findings"
 	"openxdr/server/internal/testdb"
 )
 
@@ -27,7 +28,7 @@ func TestTrackFindings(t *testing.T) {
 	stranger := db.Asset.Create().SetHostname("x").SetGroupID(other.ID).SaveX(ctx)
 	session := db.AgentSession.Create().SetKind("task").SetGroupID(group.ID).SetInitiator(commandgate.SystemActor).
 		SetModel("m").SetStatus("running").SetTitle("巡检").SaveX(ctx)
-	s := &Service{DB: db, ReviewFinding: func(context.Context, *ent.AgentSession, *ent.Finding, []*ent.Command) (bool, string, error) {
+	s := &Service{DB: db, ReviewFinding: func(context.Context, *ent.AgentSession, *ent.Finding, []*ent.Command, findings.Resolution) (bool, string, error) {
 		return true, "服务 active，与原故障直接对应", nil
 	}}
 	track := func(host, status string) (string, error) {

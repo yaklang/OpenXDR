@@ -259,6 +259,23 @@ test('xdr track supports legacy 6-arg call, full optional metadata, and strict n
       evidence_commands: [CMD_UUID_1],
     });
 
+    // 3b. 结案理由：subsided 带代表规则，authorized 不带
+    calls.length = 0;
+    await execXdr([
+      'track', 'pve1', 'dns-noise', 'medium', 'resolved', 'DNS 噪声已消失', '近 3 天零命中',
+      '--evidence', CMD_UUID_1, '--resolution', 'subsided', '--rules', 'rule-a, rule-b',
+    ]);
+    assert.deepEqual(calls[0].args.resolution, 'subsided');
+    assert.deepEqual(calls[0].args.recurrence_rules, ['rule-a', 'rule-b']);
+    calls.length = 0;
+    await execXdr(['track', 'pve1', 'kei-bt', 'medium', 'resolved', '回测工具属平台维护', '已删除', '--evidence', CMD_UUID_1, '--resolution=authorized']);
+    assert.equal(calls[0].args.resolution, 'authorized');
+    assert.equal(calls[0].args.recurrence_rules, undefined);
+    await assert.rejects(
+      () => execXdr(['track', 'pve1', 'x', 'low', 'resolved', 't', 'd', '--resolution', 'fixed']),
+      /resolution 必须是 repaired/,
+    );
+
     // 4. Strict negative validations (must fail before calling socket)
     calls.length = 0;
     await assert.rejects(

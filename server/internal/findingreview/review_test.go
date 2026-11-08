@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"openxdr/server/ent"
+	"openxdr/server/internal/findings"
 )
 
 func TestFindingReviewGroundedProofs(t *testing.T) {
@@ -72,13 +73,13 @@ func TestFindingReviewerRealModelAndIndependentContext(t *testing.T) {
 	reviewer := &Reviewer{Endpoint: func() (string, string, string) { return server.URL, "", current }}
 	for _, model := range []string{"real-model-a", "real-model-b"} {
 		current = model
-		ok, _, err := reviewer.Review(context.Background(), session, f, []*ent.Command{c})
+		ok, _, err := reviewer.Review(context.Background(), session, f, []*ent.Command{c}, findings.Resolution{})
 		if err != nil || !ok {
 			t.Fatalf("%v %v", ok, err)
 		}
 	}
 	c.Status = "unknown"
-	if ok, _, err := reviewer.Review(context.Background(), session, f, []*ent.Command{c}); err == nil || ok {
+	if ok, _, err := reviewer.Review(context.Background(), session, f, []*ent.Command{c}, findings.Resolution{}); err == nil || ok {
 		t.Fatal("unknown proof accepted")
 	}
 	if calls != 2 {
@@ -86,7 +87,7 @@ func TestFindingReviewerRealModelAndIndependentContext(t *testing.T) {
 	}
 	current = ""
 	c.Status = "succeeded"
-	if ok, _, err := reviewer.Review(context.Background(), session, f, []*ent.Command{c}); err == nil || ok {
+	if ok, _, err := reviewer.Review(context.Background(), session, f, []*ent.Command{c}, findings.Resolution{}); err == nil || ok {
 		t.Fatal("empty model accepted")
 	}
 }

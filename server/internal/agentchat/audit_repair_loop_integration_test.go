@@ -66,7 +66,7 @@ func TestAuditFindingReviewCannotOverwriteConcurrentRepairBudget(t *testing.T) {
 	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service").SetTitle("service failed").SetWork(findings.EncodeWork(findings.Work{Version: 2, OriginalTitle: "service failed", OriginalProblem: "service failed", RepairAttempts: 1})).SaveX(ctx)
 	now := time.Now()
 	c := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl show --property=ActiveState -- worker.service").SetStatus("succeeded").SetExitCode(0).SetStdout("ActiveState=active").SetCreatedAt(now.Add(-time.Second)).SetCompletedAt(now).SaveX(ctx)
-	svc := &Service{DB: db, ReviewFinding: func(_ context.Context, _ *ent.AgentSession, _ *ent.Finding, _ []*ent.Command) (bool, string, error) {
+	svc := &Service{DB: db, ReviewFinding: func(_ context.Context, _ *ent.AgentSession, _ *ent.Finding, _ []*ent.Command, _ findings.Resolution) (bool, string, error) {
 		current := db.Finding.GetX(ctx, f.ID)
 		var work findings.Work
 		if err := json.Unmarshal(current.Work, &work); err != nil {

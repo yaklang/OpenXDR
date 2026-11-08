@@ -5,11 +5,18 @@ import "testing"
 // 硬拒绝只认命令位置上的写法：切断平台、毁证据的拦下，查询里出现同样的词不受影响
 func TestHardDenied(t *testing.T) {
 	denied := []string{
-		"rm -rf /tmp/openxdr-test-xyz",
-		"find -- /tmp/cache -xdev -type f -mtime +7 -delete",
-		"docker image prune -f",
-		"docker builder prune -f",
-		"apt-get clean",
+		"rm -rf /etc/nginx",
+		"rm /var/lib/postgresql/16/main/postmaster.pid",
+		"sudo rm -rf /var/lib/docker/volumes/pgdata",
+		"find /opt/openxdr-ha -name '*.log' -delete",
+		"rm -rf /root/backup/",
+		"rm -rf /opt/soulraid/backups",
+		"shred -u /root/.ssh/id_ed25519",
+		"unlink /usr/local/bin/python3",
+		"docker volume rm pgdata",
+		"docker system prune -af --volumes",
+		`psql -c "DROP DATABASE openxdr"`,
+		"dropdb openxdr",
 		"systemctl stop openxdr-agent",
 		"sudo systemctl disable --now openxdr-agent.service",
 		"pkill -f openxdr-agent",
@@ -52,6 +59,15 @@ func TestHardDenied(t *testing.T) {
 		"cp /etc/sudoers.d/90-cloud /root/backup/ && visudo -cf /etc/sudoers.d/90-cloud",
 		"df -h /",
 		"Get-Service OpenXDRAgent",
+		// 删普通文件与回收缓存不再硬拒绝，交 AI 审计员评审（默认名单 fileDeny）
+		"rm -rf /tmp/openxdr-test-xyz",
+		"rm /tmp/kei-bt/backtest",
+		"find -- /tmp/cache -xdev -type f -mtime +7 -delete",
+		"docker image prune -f",
+		"docker builder prune -f",
+		"apt-get clean",
+		"docker rm -f demo-attacker",
+		"rm /tmp/backup_old.txt",
 	}
 	for _, cmd := range allowed {
 		if why := hardDenied(cmd); why != "" {

@@ -58,8 +58,9 @@ func TestFindingAutonomyClaimsBudgetAndScope(t *testing.T) {
 	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl restart -- test.service"); err == nil {
 		t.Fatal("write without trusted maintenance scope accepted")
 	}
-	if _, err := svc.findingExecTarget(ctx, session, a.ID, "docker exec x ls", uuid.MustParse(strings.TrimPrefix(session.Subjects[0], "finding:"))); err == nil || !strings.Contains(err.Error(), "自治跟进只允许只读命令") {
-		t.Fatalf("unexpected denial: %v", err)
+	// 黑名单：非模板写操作归属到待办后交通用命令闸门（硬拒绝 → 组黑名单 → AI 审计员），不在这里拒绝
+	if target, templated, err := svc.findingExecTarget(ctx, session, a.ID, "docker exec x ls", uuid.MustParse(strings.TrimPrefix(session.Subjects[0], "finding:"))); err != nil || target == nil || templated {
+		t.Fatalf("非模板写操作应归属待办并交通用闸门: %v %v %v", target, templated, err)
 	}
 	called := 0
 	svc.RevalidateFindingRepair = func(context.Context, *ent.AgentSession, *ent.Finding, string) error { return nil }
@@ -70,11 +71,11 @@ func TestFindingAutonomyClaimsBudgetAndScope(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := svc.findingExecTarget(ctx, session, a.ID, "systemctl restart -- test.service", uuid.MustParse(strings.TrimPrefix(session.Subjects[0], "finding:"))); err != nil || called != 1 {
+	if _, templated, err := svc.findingExecTarget(ctx, session, a.ID, "systemctl restart -- test.service", uuid.MustParse(strings.TrimPrefix(session.Subjects[0], "finding:"))); err != nil || called != 1 || !templated {
 		t.Fatalf("trusted scope not consulted: %v %d", err, called)
 	}
-	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl restart production.service"); err == nil {
-		t.Fatal("out of scope write accepted")
+	if _, templated, err := svc.findingExecTarget(ctx, session, a.ID, "systemctl restart production.service", uuid.MustParse(strings.TrimPrefix(session.Subjects[0], "finding:"))); err != nil || templated || called != 1 {
+		t.Fatalf("非模板写法不走模板授权，交通用闸门: %v %v %d", templated, err, called)
 	}
 	// 未知写操作不能补发，独立只读观察仍可继续。
 	db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl restart app").SetStatus("unknown").SaveX(ctx)
@@ -170,13 +171,13 @@ func TestFindingIndependentReviewRequiredAndManualFence(t *testing.T) {
 	if err := call(); err == nil || db.Finding.GetX(ctx, f.ID).Status != "open" {
 		t.Fatal("missing independent reviewer closed finding")
 	}
-	svc.ReviewFinding = func(_ context.Context, _ *ent.AgentSession, _ *ent.Finding, _ []*ent.Command) (bool, string, error) {
+	svc.ReviewFinding = func(_ context.Context, _ *ent.AgentSession, _ *ent.Finding, _ []*ent.Command, _ findings.Resolution) (bool, string, error) {
 		return false, "evidence does not cover dependency", nil
 	}
 	if err := call(); err == nil || db.Finding.GetX(ctx, f.ID).Status != "open" {
 		t.Fatal("review rejection closed finding")
 	}
-	svc.ReviewFinding = func(_ context.Context, _ *ent.AgentSession, _ *ent.Finding, _ []*ent.Command) (bool, string, error) {
+	svc.ReviewFinding = func(_ context.Context, _ *ent.AgentSession, _ *ent.Finding, _ []*ent.Command, _ findings.Resolution) (bool, string, error) {
 		db.Finding.UpdateOneID(f.ID).SetStatus("ignored").SetNote("human ignored during review").ExecX(ctx)
 		return true, "active", nil
 	}
@@ -257,7 +258,7 @@ func TestFindingReclaimTemplatesReachGrantAndRequireVerification(t *testing.T) {
 	db.TaskRun.Create().SetTaskID(findings.FollowupTask).SetGroupID(g.ID).SetSessionID(session.ID).SetScheduledAt(time.Now()).SetStatus("running").ExecX(ctx)
 	count := 0
 	svc := &Service{DB: db, AuthorizeFindingRepair: func(context.Context, *ent.AgentSession, *ent.Finding, string) error { count++; return nil }, RevalidateFindingRepair: func(context.Context, *ent.AgentSession, *ent.Finding, string) error { return nil }}
-	if _, err := svc.findingExecTarget(ctx, session, a.ID, "apt-get clean", f.ID); err == nil || count != 0 {
+	if _, _, err := svc.findingExecTarget(ctx, session, a.ID, "apt-get clean", f.ID); err == nil || count != 0 {
 		t.Fatal("缺少验证仍预留回收")
 	}
 	svc.RecordFindingProbe = func(context.Context, *ent.AgentSession, *ent.Command) error { return nil }
@@ -265,18 +266,22 @@ func TestFindingReclaimTemplatesReachGrantAndRequireVerification(t *testing.T) {
 		return fmt.Errorf("空间尚未增加")
 	}
 	for _, cmd := range []string{"docker image prune -f", "docker builder prune -f", "apt-get clean", "find -- /srv/cache -xdev -type f -mtime +7 -delete"} {
-		target, err := svc.findingExecTarget(ctx, session, a.ID, cmd, f.ID)
-		if err != nil || target == nil || target.ID != f.ID {
+		target, templated, err := svc.findingExecTarget(ctx, session, a.ID, cmd, f.ID)
+		if err != nil || target == nil || target.ID != f.ID || !templated {
 			t.Fatal(cmd, target, err)
 		}
 	}
 	if count != 4 {
 		t.Fatal("回收模板未走真实授权入口", count)
 	}
+	// 偏离模板写法的回收命令不再拒绝，也不走模板授权：交通用闸门由组黑名单送 AI 审计员
 	for _, cmd := range []string{"apt-get clean; id", "find -- /srv/cache -xdev -type f -mtime +6 -delete", "docker image prune -af"} {
-		if _, err := svc.findingExecTarget(ctx, session, a.ID, cmd, f.ID); err == nil || !strings.Contains(err.Error(), "docker image prune -f") {
-			t.Fatal("非模板命令未拒绝或缺少可用模板提示", err)
+		if target, templated, err := svc.findingExecTarget(ctx, session, a.ID, cmd, f.ID); err != nil || target == nil || templated {
+			t.Fatal("非模板命令应交通用闸门", cmd, templated, err)
 		}
+	}
+	if count != 4 {
+		t.Fatal("非模板命令不应走模板授权", count)
 	}
 	probe := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("df -P /").SetCreatedAt(time.Now()).SetStatus("succeeded").SetExitCode(0).SetStdout("fresh probe").SetCompletedAt(time.Now()).SaveX(ctx)
 	if err := svc.findingEvidence(ctx, session, f, []uuid.UUID{probe.ID}, true, ""); err == nil || !strings.Contains(err.Error(), "空间尚未增加") {

@@ -8,7 +8,7 @@ var denySamples = []struct {
 	miss []string
 }{
 	{[]string{"rm -rf /", "rm -r /tmp/x", "sudo rm -f /var/log/a", "rm --recursive x", "rm x --force", "ls && /bin/rm -Rf /opt", "find . | xargs rm -rf"},
-		[]string{"rm /tmp/a.txt", "rm -i a", "rmdir -p a/b", "terraform -r", "rm a; ls -la"}},
+		[]string{"rmdir -p a/b", "terraform -r"}},
 	{[]string{"mkfs.ext4 /dev/sdb1", "mkfs -t xfs /dev/sdb", "wipefs -a /dev/sdb", "fdisk /dev/sda", "parted /dev/sda rm 1", "sgdisk -Z /dev/sda"},
 		[]string{"lsblk -f", "blkid", "df -hT"}},
 	{[]string{"dd if=/dev/zero of=/dev/sda bs=1M", "dd of=/dev/sda if=x"},
@@ -92,6 +92,12 @@ var denySamples = []struct {
 	{containerHits[0], []string{"docker compose ps", "docker compose logs --tail 200 server", "docker-compose config", "docker compose -f /opt/up/docker-compose.yml ps", "docker compose ls"}},
 	{containerHits[1], []string{"docker ps -a", "docker inspect authentik-server-1", "docker logs --tail 100 authentik-server-1", "docker images", "docker container ls", "docker image ls", "systemctl status docker", "journalctl -u docker --no-pager | grep -i restart"}},
 	{containerHits[2], []string{"cat /opt/authentik/docker-compose.yml", "grep image docker-compose.override.yml", "ls compose.yaml > /tmp/x"}},
+	// 删文件与回收缓存：从硬拒绝改为评审
+	{[]string{"rm /tmp/openxdr-test.json", "sudo rm -f /var/tmp/x", "unlink /tmp/sock", "shred -u /tmp/key", "truncate -s 0 /tmp/big.log", "cd /tmp && rm a"},
+		[]string{"ls -la /tmp", "echo firmware", "grep -c rm /tmp/x.txt"}},
+	{[]string{"find /tmp -name '*.tmp' -mtime +7 -delete", "find -- /var/tmp -xdev -type f -delete"}, []string{"find /tmp -name '*.tmp' -mtime +7"}},
+	{[]string{"docker image prune -f", "docker builder prune -f", "docker container prune -f"}, []string{"docker image ls --filter dangling=true"}},
+	{[]string{"apt-get clean", "apt autoclean", "apt-get -y clean"}, []string{"apt list --upgradable", "apt-cache policy openssl"}},
 }
 
 // containerHits 容器条目的正例，嵌在 pct exec / docker exec / lxc-attach / sh -c 里同样要命中

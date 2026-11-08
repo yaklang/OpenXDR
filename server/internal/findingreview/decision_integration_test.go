@@ -55,14 +55,14 @@ func TestRetirementReviewUsesVerifiedDecisionWithoutReplacingEvidence(t *testing
 	}))
 	defer server.Close()
 	r := &Reviewer{DB: db, Endpoint: func() (string, string, string) { return server.URL, "", "m" }}
-	if ok, _, err := r.Review(ctx, s, f, []*ent.Command{c}); err != nil || !ok {
+	if ok, _, err := r.Review(ctx, s, f, []*ent.Command{c}, findings.Resolution{}); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
 	revoke = true
-	if ok, _, err := r.Review(ctx, s, f, []*ent.Command{c}); err == nil || ok {
+	if ok, _, err := r.Review(ctx, s, f, []*ent.Command{c}, findings.Resolution{}); err == nil || ok {
 		t.Fatal("复核期间撤销未阻断批准", ok, err)
 	}
-	if ok, _, err := r.Review(ctx, s, f, []*ent.Command{c}); err == nil || ok || calls != 2 {
+	if ok, _, err := r.Review(ctx, s, f, []*ent.Command{c}, findings.Resolution{}); err == nil || ok || calls != 2 {
 		t.Fatal("撤销后仍送审", ok, err, calls)
 	}
 }

@@ -64,22 +64,25 @@ func (s *Service) isFindingFollowup(ctx context.Context, session *ent.AgentSessi
 }
 
 func (s *Service) guardFindingExec(ctx context.Context, session *ent.AgentSession, host uuid.UUID, cmd string) error {
-	_, err := s.findingExecTarget(ctx, session, host, cmd)
+	_, _, err := s.findingExecTarget(ctx, session, host, cmd)
 	return err
 }
 
-func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSession, host uuid.UUID, cmd string, requested ...uuid.UUID) (*ent.Finding, error) {
+// findingExecTarget 自治跟进会话里的命令归属到领取的待办。写操作走黑名单：模板动作（重启服务、磁盘回收）
+// 返回 templated=true，继续走管理员授权、冷却与效果核验；其他写操作只做归属与安全前置检查，
+// 再交通用命令闸门（硬拒绝清单 → 组黑名单 → AI 审计员）。
+func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSession, host uuid.UUID, cmd string, requested ...uuid.UUID) (*ent.Finding, bool, error) {
 	bound, err := s.isFindingFollowup(ctx, session)
 	if err != nil || !bound {
-		return nil, err
+		return nil, false, err
 	}
 
 	rows, err := s.DB.Finding.Query().Where(finding.WorkSessionIDEQ(session.ID), finding.StatusEQ("open"), finding.GroupIDEQ(session.GroupID), finding.WorkLeaseUntilGT(time.Now())).All(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(rows) == 0 {
-		return nil, errors.New("本轮已无有效领取的待办，禁止继续执行")
+		return nil, false, errors.New("本轮已无有效领取的待办，禁止继续执行")
 	}
 	readOnly := commandgate.ReadOnly(cmd)
 	selected := uuid.Nil
@@ -92,66 +95,55 @@ func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSessi
 		if f.AssetID == host && (selected == uuid.Nil || f.ID == selected) {
 			allowed = true
 			if !readOnly && f.WorkOwner != "ai" {
-				return nil, errors.New("人工决策阻塞中的待办仅允许自动只读复查")
+				return nil, false, errors.New("人工决策阻塞中的待办仅允许自动只读复查")
 			}
 			if !readOnly && target != nil {
-				return nil, errors.New("同主机有多个领取的待办，写动作必须指定 finding_id")
+				return nil, false, errors.New("同主机有多个领取的待办，写动作必须指定 finding_id")
 			}
 			target = f
 			var work findings.Work
 			if err := json.Unmarshal(f.Work, &work); err != nil && len(f.Work) > 0 {
-				return nil, errors.New("待办计划损坏，拒绝自动修复")
+				return nil, false, errors.New("待办计划损坏，拒绝自动修复")
 			}
 			if work.RepairAttempts >= findings.RepairBudget && !readOnly {
-				return nil, errors.New("主动修复预算已用尽，本轮只允许只读观察")
+				return nil, false, errors.New("主动修复预算已用尽，本轮只允许只读观察")
 			}
 		}
 	}
 	if !allowed {
-		return nil, errors.New("自主待办会话只能操作本轮领取的主机")
+		return nil, false, errors.New("自主待办会话只能操作本轮领取的主机")
 	}
 	if readOnly {
-		return nil, nil
+		return nil, false, nil
 	}
 	_, reclaim := repaircmd.Parse(cmd)
-	if !findingRestart.MatchString(cmd) && !reclaim {
-		err := errors.New("自治跟进只允许只读命令：这条命令没有被认定为只读（含命令替换、cd、docker exec 等写入或无法确定的片段）。请拆成单条简单的只读命令；写操作只允许已授权的 systemctl restart -- <服务>、docker image prune -f、docker builder prune -f、apt-get clean 或 find -- <授权目录> -xdev -type f -mtime +<7..3650> -delete。")
-		logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		defer cancel()
-		if auditErr := audit.Checked(logCtx, s.DB.AuditLog.Create(), "system", "server", "repair_action_denied", session.ID.String(), err.Error()); auditErr != nil {
-			return nil, fmt.Errorf("%w；拒绝审计落库失败", err)
-		}
-		if s.FindingRepairCapabilities != nil {
-			denied := &findings.RepairError{State: findings.RepairCapabilities{Status: "action_unsupported"}}
-			if recordErr := s.recordRepairBlocker(ctx, session, target, cmd, denied); recordErr != nil {
-				return nil, fmt.Errorf("%w；保存动作能力缺口失败: %v", err, recordErr)
-			}
-		}
-		return nil, err
-	}
+	templated := findingRestart.MatchString(cmd) || reclaim
 	// 无法确认归属到某次待办的旧写操作也不能冒险重放；先只读查清或由人确认。
 	unknown, err := s.DB.Command.Query().Where(command.AssetIDEQ(host), command.StatusIn("pending", "sent", "unknown")).All(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	for _, c := range unknown {
 		if c.Kind != "exec" || c.Cmd == nil || !commandgate.ReadOnly(*c.Cmd) {
-			return nil, errors.New("主机存在未确认的写操作，禁止自动新增修复指令；先查回执与只读效果")
+			return nil, false, errors.New("主机存在未确认的写操作，禁止自动新增修复指令；先查回执与只读效果")
 		}
 	}
+	if !templated {
+		return target, false, nil
+	}
 	if s.AuthorizeFindingRepair == nil || s.RevalidateFindingRepair == nil {
-		return nil, errors.New("未配置明确的自主修复维护范围，本任务只读跟进；不能自行重启生产服务、删除数据、安装补丁或修改 HA/数据库/安全采集/网络")
+		return nil, false, errors.New("未配置明确的自主修复维护范围，本任务只读跟进；不能自行重启生产服务、删除数据、安装补丁或修改 HA/数据库/安全采集/网络")
 	}
 	if reclaim && (s.RecordFindingProbe == nil || s.VerifyFindingRepair == nil) {
-		return nil, errors.New("未配置磁盘回收指令关联与独立效果验证，本任务仅允许只读跟进")
+		return nil, false, errors.New("未配置磁盘回收指令关联与独立效果验证，本任务仅允许只读跟进")
 	}
 	if err := s.AuthorizeFindingRepair(ctx, session, target, cmd); err != nil {
 		if recordErr := s.recordRepairBlocker(ctx, session, target, cmd, err); recordErr != nil {
-			return nil, fmt.Errorf("%w；保存阻塞状态失败: %v", err, recordErr)
+			return nil, false, fmt.Errorf("%w；保存阻塞状态失败: %v", err, recordErr)
 		}
-		return nil, err
+		return nil, false, err
 	}
-	return target, nil
+	return target, true, nil
 }
 
 // findingEvidence 以新鲜、同资产的真实只读回执支撑复查，不接受单凭执行成功宣称问题已解决。

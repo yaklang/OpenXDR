@@ -69,7 +69,7 @@ func TestUpgradeDefaults(t *testing.T) {
 			t.Fatal(err)
 		}
 		// 在 Go 里排序再比：库里的排序随 collation 变（CI 的 en_US 与本地的 C 对标点排法不同）；按版本补上的新条目另测
-		got := db.CommandPolicy.Query().Where(commandpolicy.PatternNotIn(containerDeny...)).Select(commandpolicy.FieldPattern).StringsX(ctx)
+		got := db.CommandPolicy.Query().Where(commandpolicy.PatternNotIn(slices.Concat(containerDeny, fileDeny)...)).Select(commandpolicy.FieldPattern).StringsX(ctx)
 		want := []string{pattern, old + "x"}
 		slices.Sort(got)
 		slices.Sort(want)
@@ -99,10 +99,10 @@ func TestUpgradeDefaultsAddsNewEntries(t *testing.T) {
 		if err := UpgradeDefaults(ctx, db); err != nil {
 			t.Fatal(err)
 		}
-		if n := aiDeny(kept); n != 3+len(containerDeny) {
-			t.Fatalf("kept 应补上容器条目：%d 条", n)
+		if n := aiDeny(kept); n != 3+len(containerDeny)+len(fileDeny) {
+			t.Fatalf("kept 应补上容器与删文件条目：%d 条", n)
 		}
-		if n := aiDeny(partial); n != len(containerDeny) {
+		if n := aiDeny(partial); n != len(containerDeny)+len(fileDeny) {
 			t.Fatalf("partial 已有的条目不应重复：%d 条", n)
 		}
 		if n := aiDeny(cleared); n != 0 {
@@ -112,7 +112,7 @@ func TestUpgradeDefaultsAddsNewEntries(t *testing.T) {
 			t.Fatalf("人工名单不应变动：%d", n)
 		}
 	}
-	db.CommandPolicy.Delete().Where(commandpolicy.GroupIDEQ(kept.ID), commandpolicy.PatternIn(containerDeny...)).ExecX(ctx)
+	db.CommandPolicy.Delete().Where(commandpolicy.GroupIDEQ(kept.ID), commandpolicy.PatternIn(slices.Concat(containerDeny, fileDeny)...)).ExecX(ctx)
 	if err := UpgradeDefaults(ctx, db); err != nil {
 		t.Fatal(err)
 	}

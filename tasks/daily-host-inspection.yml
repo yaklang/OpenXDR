@@ -22,7 +22,9 @@ prompt: |
   3. 平台告警用 query 按主机拆开：近 24 小时每台主机命中了哪些规则、级别与次数，
      以及仍处于 triaged（未人工结案）的 incident 标题与 AI 结论。
   4. 待办闭环（本任务全量复查）：先逐条复查 open_findings（遗留待办），已修复的须引用本轮独立只读复查回执 evidence_commands 后 track 标 resolved，仍存在的 track 标 open；
-     本次新发现、需要持续处理的问题逐个用 track 登记，默认由平台负责，不因普通缺证交人。ignored_findings 是人工忽略的，不再报。
+     本次新发现、需要有人或平台动手处理的问题逐个用 track 登记，默认由平台负责，不因普通缺证交人；一次性的观察、告警排查结论、
+     「本轮未复发」写进报告，不登记成待办。复查遗留待办时按 resolution 区分结案理由（repaired 修好了 / authorized 人工记忆或管理员决定
+     确认属授权或良性 / subsided 现象不再出现并用 --rules 列出代表规则）。ignored_findings 是人工忽略的，不再报。
   5. 先看 memories：标了「待复核」的 AI 记忆可能已过时。其中「无法核实 / 查不了 / 没有工具」这类否定性结论每轮都要重新试——
      用一两条廉价的只读命令（command -v 若干同类工具、dpkg -l | grep 关键词、ls 常见安装目录、dmesg / /sys 里的同类信息），
      试出新手段就 forget 旧的、remember 新的（写清用什么命令能查到），并按新手段把本轮该查的查完；仍做不到就原样再 remember 一次刷新复核时间。

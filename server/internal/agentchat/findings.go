@@ -24,9 +24,9 @@ import (
 )
 
 const trackDescription = "登记或复查一条运维待办。登记需要持续调查、修复或监测的具体问题，默认由平台负责，一个问题一条；" +
-	"正常项、正向确认、改进建议、对平台或对自己登记的说明都不登记，写进报告即可。" +
+	"正常项、正向确认、改进建议、对平台或对自己登记的说明、一次性的观察与「本轮未复发」都不登记，写进报告即可。" +
 	"同一主机同一问题每轮用同一个 key（小写字母、数字、. _ -），如 backup-service-failed。" +
-	"status=open 写具体 next_step；resolved 须附 evidence_commands 的本轮独立只读复查回执，不能仅凭修复回执或空日志关单；withdrawn 撤回本轮登记错的条目。blocker 区分缺策略、维护窗口、业务决定、退役确认、上游依赖、权限拒绝与能力不支持。policy_required由服务端查询真实授权；其他阻塞须引用本轮真实只读证据，不能猜测。" +
+	"status=open 写具体 next_step；resolved 须附 evidence_commands 的本轮独立只读复查回执，不能仅凭修复回执或空日志关单；resolution 说明结案理由：repaired 修好了（默认）、authorized 人工环境记忆或管理员决定确认属授权或良性、subsided 现象不再出现（须 recurrence_rules 列出代表该现象的规则 ID，平台按过去出现间隔自适应判断安静期）；withdrawn 撤回本轮登记错的条目。blocker 区分缺策略、维护窗口、业务决定、退役确认、上游依赖、权限拒绝与能力不支持。policy_required由服务端查询真实授权；其他阻塞须引用本轮真实只读证据，不能猜测。" +
 	"人工忽略的待办会返回 ignored，不要再登记，也不要列进报告的待处理事项。每轮最多新登记 10 条。"
 
 // maxNewFindings 一轮会话最多新登记的待办数：超出说明在把报告内容往待办里倒
@@ -41,7 +41,8 @@ var trackParameters = json.RawMessage(`{"type":"object","properties":{` +
 	`"status":{"type":"string","enum":["open","resolved","withdrawn"]},` +
 	`"next_step":{"type":"string","maxLength":1000},"blocker":{"type":"string","enum":["policy_required","maintenance_window_required","manual_business_decision","legacy_decommission_confirm","external_dependency","permission","unsupported","cooldown","probe_invalid","action_unsupported","budget_exhausted","none"]},` +
 	`"repair_command":{"type":"string","maxLength":512},"repair_mount":{"type":"string","maxLength":256},"depends_on":{"type":"array","maxItems":5,"items":{"type":"string","format":"uuid"}},"wake_at":{"type":"string","format":"date-time"},` +
-	`"evidence_commands":{"type":"array","maxItems":5,"items":{"type":"string","format":"uuid"}}},` +
+	`"evidence_commands":{"type":"array","maxItems":5,"items":{"type":"string","format":"uuid"}},` +
+	`"resolution":{"type":"string","enum":["repaired","authorized","subsided"]},"recurrence_rules":{"type":"array","minItems":1,"maxItems":10,"items":{"type":"string","maxLength":128}}},` +
 	`"required":["host","key","title","detail","severity","status"],"additionalProperties":false}`)
 
 var findingKey = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
@@ -59,6 +60,8 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 		NextStep         string      `json:"next_step"`
 		Blocker          string      `json:"blocker"`
 		EvidenceCommands []uuid.UUID `json:"evidence_commands"`
+		Resolution       string      `json:"resolution"`
+		RecurrenceRules  []string    `json:"recurrence_rules"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(args))
 	decoder.DisallowUnknownFields()
@@ -78,6 +81,12 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 		return "", errors.New("severity 必须是 low / medium / high")
 	case !slices.Contains([]string{"open", "resolved", "withdrawn"}, body.Status):
 		return "", errors.New("status 必须是 open / resolved / withdrawn")
+	case body.Resolution != "" && (body.Status != "resolved" || !slices.Contains(findings.ResolutionKinds, body.Resolution)):
+		return "", errors.New("resolution 只用于 status=resolved，取 repaired / authorized / subsided")
+	case body.Resolution == "subsided" && (len(body.RecurrenceRules) == 0 || len(body.RecurrenceRules) > 10):
+		return "", errors.New("resolution=subsided 须用 recurrence_rules 列出 1–10 条代表该现象的规则 ID")
+	case body.Resolution != "subsided" && len(body.RecurrenceRules) > 0:
+		return "", errors.New("recurrence_rules 只用于 resolution=subsided")
 	}
 	inGroup, err := s.DB.Asset.Query().Where(asset.IDEQ(body.Host), asset.GroupIDEQ(session.GroupID)).Exist(ctx)
 	if err != nil {
@@ -154,7 +163,7 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 			if err != nil {
 				return "", err
 			}
-			approved, reason, err := s.ReviewFinding(ctx, session, f, commands)
+			approved, reason, err := s.ReviewFinding(ctx, session, f, commands, findings.Resolution{Kind: body.Resolution, Rules: body.RecurrenceRules})
 			if err != nil {
 				return "", err
 			}

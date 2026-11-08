@@ -84,7 +84,8 @@ func TestReclaimExceptionRequiresInternalAuthorizationAndExactTemplate(t *testin
 			f := setup(t)
 			task := f.db.AgentSession.Create().SetKind("task").SetGroupID(f.req.GroupID).SetInitiator(SystemActor).SetModel("m").SaveX(f.ctx)
 			f.req.System, f.req.SessionID = true, &task.ID
-			cmd := "find -- /srv/cache -xdev -type f -mtime +7 -delete"
+			// 受保护路径（/var/lib）上的回收：只有内部授权 + 精确模板能绕过硬拒绝；普通目录的删除本来就只交审计员
+			cmd := "find -- /var/lib/apt/lists -xdev -type f -mtime +7 -delete"
 			f.req.Command.Cmd = &cmd
 			f.db.CommandPolicy.Create().SetGroupID(f.req.GroupID).SetOrigin(commandpolicy.OriginAi).SetMode(commandpolicy.ModeDeny).SetPattern("find").ExecX(f.ctx)
 			reviews, finals := 0, 0
