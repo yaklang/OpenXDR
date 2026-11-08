@@ -163,7 +163,7 @@ export function SurfaceGraph({ surface, hideLow, onPick }: { surface: AttackSurf
                       {unknown ? <><QuestionCircleOutlined /> {e.process || t('serviceUnknown')}</> : e.service.name}
                     </span>
                     {e.note && <Tooltip title={e.note.note}><Tag style={{ marginInlineEnd: 0, fontSize: 11 }} variant="filled" color={e.note.source === 'ai' ? 'purple' : 'cyan'}>{t(SOURCE_KEY[e.note.source])}</Tag></Tooltip>}
-                    <Tag style={{ marginInlineEnd: 0, fontSize: 11 }} variant="filled" color={e.service.risk === 'high' ? 'red' : e.service.risk === 'medium' ? 'orange' : 'default'}>{t(RISK_KEY[e.service.risk])}</Tag>
+                    <Tag style={{ marginInlineEnd: 0, fontSize: 11 }} variant="filled" color={e.service.risk === 'high' ? 'orange' : e.service.risk === 'medium' ? 'gold' : 'blue'}>{t(RISK_KEY[e.service.risk])}</Tag>
                   </div>
                 )
               })}

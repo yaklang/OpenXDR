@@ -71,6 +71,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
             colorError: c.error,
             colorWarning: c.warning,
             colorSuccess: c.success,
+            // antd 由 #1e8e3e 推导的浅色底是灰绿（#c2cfc4），成功类标签与研判卡发浊；亮色显式给 Material 的浅绿
+            ...(dark ? {} : { colorSuccessBg: '#e6f4ea', colorSuccessBgHover: '#ceead6', colorSuccessBorder: '#a8dab5' }),
             colorText: c.text,
             colorTextSecondary: c.text2,
             colorTextTertiary: c.text3,

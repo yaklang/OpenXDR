@@ -41,6 +41,17 @@ function splitVerdictSummary(summary?: string): { headline: string; detail: stri
 }
 
 // 研判结论放在详情页最上面：首屏看一句话核心结论、AI 自治取证进度与动作标签，详细依据与证据边界按需展开
+// 研判调查工具的显示名：工具标识是给模型用的，界面上展示人能看懂的名字
+const TOOL_LABELS: Record<string, MsgKey> = {
+  query_event_raw: 'toolEventRaw',
+  query_event_context: 'toolEventContext',
+  query_events: 'toolQueryEvents',
+  process_lineage: 'toolProcessLineage',
+  process_baseline: 'toolProcessBaseline',
+  host_alerts: 'toolHostAlerts',
+  collect_endpoint_evidence: 'toolEndpointEvidence',
+}
+
 export function VerdictCard({ verdict }: { verdict: Verdict | null }) {
   const { t, locale } = useI18n()
   const { token } = theme.useToken()
@@ -91,7 +102,7 @@ export function VerdictCard({ verdict }: { verdict: Verdict | null }) {
             {queries.length > 0 && (
               <Tag color="blue" style={{ margin: 0, padding: '2px 10px', fontSize: 12 }}>
                 {t('triageAutonomyBadge', { n: queries.length, r: totalRecords })}
-                {Object.keys(toolCounts).length > 0 && ` · ${Object.entries(toolCounts).map(([k, c]) => `${k}×${c}`).join(' / ')}`}
+                {Object.keys(toolCounts).length > 0 && ` · ${Object.entries(toolCounts).map(([k, c]) => `${TOOL_LABELS[k] ? t(TOOL_LABELS[k]) : k}×${c}`).join(' / ')}`}
               </Tag>
             )}
             {actionCodes.map(code => {

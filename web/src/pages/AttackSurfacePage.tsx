@@ -18,10 +18,11 @@ import { Page, TableCard } from '../components/Page'
 import { errText, fmtTime } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
 
+// 与告警级别同一套颜色（SeverityTag：低危蓝、中危金、高危橙），同一个词在各页颜色一致
 const RISK: Record<string, { key: MsgKey; color: string; rank: number }> = {
-  high: { key: 'riskHigh', color: 'red', rank: 3 },
-  medium: { key: 'riskMedium', color: 'orange', rank: 2 },
-  low: { key: 'riskLow', color: 'default', rank: 1 },
+  high: { key: 'riskHigh', color: 'orange', rank: 3 },
+  medium: { key: 'riskMedium', color: 'gold', rank: 2 },
+  low: { key: 'riskLow', color: 'blue', rank: 1 },
 }
 
 const LEVEL_RANK: Record<string, number> = { internet: 3, dmz: 2, internal: 1 }

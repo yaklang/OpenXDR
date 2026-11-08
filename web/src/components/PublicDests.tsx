@@ -48,7 +48,7 @@ export function PublicDestList({ items, host, limit = 8 }: {
                     <Space size={4} wrap>
                       <Typography.Text strong>{d.note.name}</Typography.Text>
                       <Tag color={d.note.source === 'human' ? 'green' : 'blue'} variant="filled">{t(d.note.source === 'human' ? 'egressHuman' : 'egressInvestigated')}</Tag>
-                      {d.note.risk && d.note.risk !== 'low' && <Tag color={d.note.risk === 'high' ? 'error' : 'warning'}>{t(d.note.risk === 'high' ? 'riskHigh' : 'riskMedium')}</Tag>}
+                      {d.note.risk && d.note.risk !== 'low' && <Tag color={d.note.risk === 'high' ? 'orange' : 'gold'}>{t(d.note.risk === 'high' ? 'riskHigh' : 'riskMedium')}</Tag>}
                     </Space>
                   </Tooltip>
                 ) : d.purpose ? <Typography.Text strong>{d.purpose}</Typography.Text> : <Typography.Text type="secondary">{t('egressUnknown')}</Typography.Text>}

@@ -42,7 +42,7 @@ function FindingWorkSummary({ finding: f }: { finding: FindingRow }) {
   }
   return <Space orientation="vertical" size={2}>
     <Space size={4} wrap>
-      <Tag color={f.workOwner === 'ai' ? 'blue' : f.workOwner === 'human' ? 'orange' : 'default'}>{f.workOwner === 'ai' ? t('incidentWorkAI') : f.workOwner === 'human' ? t('incidentWorkHuman') : '—'}</Tag>
+      <Tag color={f.workOwner === 'ai' ? 'purple' : f.workOwner === 'human' ? 'orange' : 'default'}>{f.workOwner === 'ai' ? t('incidentWorkAI') : f.workOwner === 'human' ? t('incidentWorkHuman') : '—'}</Tag>
       {f.status === 'open' && f.work?.stage && <Typography.Text type="secondary">{stages[f.work.stage] ?? f.work.stage}</Typography.Text>}
     </Space>
     {f.status === 'open' && f.work?.evidence_stale && <Tag color="warning">{t('findingWorkEvidenceStale')}</Tag>}

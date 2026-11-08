@@ -8,7 +8,7 @@ import { useSession } from '../app/session'
 import { LoadError } from '../components/LoadError'
 import { Page, STICKY_HEADER, TableCard } from '../components/Page'
 import { SeverityTag, fmtTime, errText } from '../components/format'
-import { useI18n } from '../i18n'
+import { useI18n, type MsgKey } from '../i18n'
 
 // 情报订阅：开关即时生效（开的马上拉、关的马上清），命中过的订阅情报直接列出来
 function FeedsCard() {
@@ -57,11 +57,11 @@ function FeedsCard() {
         dataSource={data?.feeds ?? []}
         renderItem={f => (
           <List.Item
-            actions={[<Switch key="on" checked={f.enabled} aria-label={f.name} disabled={!isAdmin || !!busy} loading={busy === f.id}
+            actions={[<Switch key="on" checked={f.enabled} aria-label={feedName(f, t)} disabled={!isAdmin || !!busy} loading={busy === f.id}
               onChange={on => update(f.id, on)} />]}
           >
             <List.Item.Meta
-              title={<Space wrap><span>{f.name}</span><SeverityTag value={f.severity} /></Space>}
+              title={<Space wrap><span>{feedName(f, t)}</span><SeverityTag value={f.severity} /></Space>}
               description={
                 <Space wrap size={12}>
                   <span>{t('intelFeedCount', { n: f.count })}</span>
@@ -84,7 +84,7 @@ function FeedsCard() {
         pagination={{ pageSize: 10, hideOnSinglePage: true }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('intelFeedNoHits')} /> }}
         columns={[
-          { title: t('thKind'), dataIndex: 'kind', width: 95, sorter: (a, b) => a.kind.localeCompare(b.kind), render: v => <Tag>{v}</Tag> },
+          { title: t('thKind'), dataIndex: 'kind', width: 95, sorter: (a, b) => a.kind.localeCompare(b.kind), render: v => <Tag>{kindLabel(v, t)}</Tag> },
           { title: t('thValue'), dataIndex: 'value', sorter: (a, b) => a.value.localeCompare(b.value), render: (v, r) => <Typography.Text className="mono" copyable title={r.note ?? ''}>{v}</Typography.Text> },
           { title: t('thSource'), dataIndex: 'source', width: 160, sorter: (a, b) => (a.source ?? '').localeCompare(b.source ?? '') },
           { title: t('thHits'), dataIndex: 'matchedCount', width: 95, align: 'right', sorter: (a, b) => a.matchedCount - b.matchedCount },
@@ -97,6 +97,14 @@ function FeedsCard() {
 }
 
 // 威胁情报：命中数让每条 IOC 的价值可见，长期零命中的陈年情报该清理
+// 内置订阅源名称按 ID 走前端翻译，服务端名称只作未知源的兜底
+const FEED_KEY: Record<string, MsgKey> = { feodo: 'feedFeodo', threatfox: 'feedThreatFox', urlhaus: 'feedURLhaus', 'et-compromised': 'feedETCompromised' }
+const feedName = (f: { id: string; name: string }, t: (key: MsgKey) => string) => (FEED_KEY[f.id] ? t(FEED_KEY[f.id]) : f.name)
+
+// 情报类型：ip / domain / hash 是存储值，界面上显示成可读名称
+const KIND_KEY: Record<string, MsgKey> = { ip: 'intelKindIP', domain: 'intelKindDomain', hash: 'intelKindHash' }
+const kindLabel = (k: string, t: (key: MsgKey) => string) => (KIND_KEY[k] ? t(KIND_KEY[k]) : k)
+
 export function IntelPage() {
   const { t } = useI18n()
   const { message } = App.useApp()
@@ -161,7 +169,7 @@ export function IntelPage() {
             {hasFilters && data && <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>{t('filteredCount', { n: rows.length, total: data.length })}</Typography.Text>}
             <Input.Search allowClear style={{ width: 240 }} placeholder={t('searchIntel')} value={q} onChange={e => setQ(e.target.value)} />
             <Select aria-label={t('thKind')} style={{ width: 130 }} value={kindFilter} onChange={setKindFilter}
-              options={[{ value: '', label: t('allKinds') }, ...kinds.map(k => ({ value: k, label: k }))]} />
+              options={[{ value: '', label: t('allKinds') }, ...kinds.map(k => ({ value: k, label: kindLabel(k, t) }))]} />
             <Select aria-label={t('thSeverity')} style={{ width: 130 }} value={sevFilter} onChange={setSevFilter}
               options={[{ value: 0, label: t('allSeverities') }, ...[5, 4, 3, 2, 1].map(n => ({ value: n, label: t(`sev${n}` as 'sev1') }))]} />
             {hasFilters && <Button type="link" onClick={() => { setQ(''); setKindFilter(''); setSevFilter(0) }}>{t('resetFilters')}</Button>}
@@ -177,7 +185,7 @@ export function IntelPage() {
           pagination={{ defaultPageSize: 20, showSizeChanger: true, hideOnSinglePage: true }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t(hasFilters ? 'noMatch' : 'noIntel')} /> }}
           columns={[
-            { title: t('thKind'), dataIndex: 'kind', width: 95, sorter: (a, b) => a.kind.localeCompare(b.kind), render: v => <Tag>{v}</Tag> },
+            { title: t('thKind'), dataIndex: 'kind', width: 95, sorter: (a, b) => a.kind.localeCompare(b.kind), render: v => <Tag>{kindLabel(v, t)}</Tag> },
             { title: t('thValue'), dataIndex: 'value', sorter: (a, b) => a.value.localeCompare(b.value), render: (v, r) => <Typography.Text className="mono" copyable title={r.note ?? ''}>{v}</Typography.Text> },
             { title: t('thSource'), dataIndex: 'source', width: 140, sorter: (a, b) => (a.source ?? '').localeCompare(b.source ?? '') },
             { title: t('thSeverity'), dataIndex: 'severity', width: 95, sorter: (a, b) => a.severity - b.severity, render: v => <SeverityTag value={v} /> },

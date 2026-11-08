@@ -12,11 +12,18 @@ import { CLASS_KEY, fmtTime, SeverityTag } from '../components/format'
 import { HostLink } from '../components/HostLink'
 import { LoadError } from '../components/LoadError'
 import { FilterCard, Page, STICKY_HEADER } from '../components/Page'
-import { useI18n } from '../i18n'
+import { useI18n, type MsgKey } from '../i18n'
 
 // 检测规则：规则库热重载，这里看到的就是引擎里正在跑的版本；
 // "无数据源"提醒运营：规则加载了，但没有采集面供数，纯摆设。
 // ATT&CK 矩阵是同一份规则按战术排开，作为第二个标签放在这里
+// 数据源：类别名走前端翻译，括号里的采集端（agent / sensor / syslog）沿用服务端；服务端原文是中文，直接显示英文界面会漏中文
+function sourceLabel(r: RuleRow, t: (k: MsgKey) => string) {
+  if (r.classUid === 0) return t('allClasses')
+  const collector = /（(.+)）$/.exec(r.source)?.[1]
+  return CLASS_KEY[r.classUid] ? [t(CLASS_KEY[r.classUid]), collector].filter(Boolean).join(' · ') : r.source
+}
+
 export function RulesPage() {
   const { t } = useI18n()
   const [params, setParams] = useSearchParams()
@@ -98,7 +105,7 @@ export function RulesPage() {
           { title: t('thSeverity'), dataIndex: 'severity', width: 95, render: v => <SeverityTag value={v} />, sorter: (a, b) => a.severity - b.severity },
           { title: t('thClass'), dataIndex: 'classUid', width: 115, sorter: (a, b) => a.classUid - b.classUid, render: v => (CLASS_KEY[v] ? t(CLASS_KEY[v]) : v || t('allClasses')) },
           { title: t('thPlatform'), dataIndex: 'product', width: 115, sorter: (a, b) => (a.product ?? '').localeCompare(b.product ?? ''), render: v => v || '-' },
-          { title: t('thDataSource'), width: 190, sorter: (a, b) => Number(a.ingested) - Number(b.ingested), render: (_, r) => (r.ingested ? <Tag>{r.kind ? t('temporalRuleSource') : r.source}</Tag> : <Tag color="warning">{t('noDataSource')}</Tag>) },
+          { title: t('thDataSource'), width: 190, sorter: (a, b) => Number(a.ingested) - Number(b.ingested), render: (_, r) => (r.ingested ? <Tag>{r.kind ? t('temporalRuleSource') : sourceLabel(r, t)}</Tag> : <Tag color="warning">{t('noDataSource')}</Tag>) },
           {
             title: '', width: 92, align: 'right',
             render: (_, r) => r.kind ? (
