@@ -1,0 +1,29 @@
+title: Debugfs Launched in Container
+id: 1e203522-9b68-41ae-958a-e224f296b726
+status: experimental
+description: |
+  移植自 Falco「Debugfs Launched in Privileged Container」（maturity_stable）：容器里跑 debugfs，
+  可以直接读写宿主机块设备上的文件系统，是特权容器逃逸手法。
+  Falco 原规则只看特权容器，本平台的容器信息没有特权标记，这里对所有容器生效。
+author: The Falco Authors (ported by OpenXDR)
+references:
+  - https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml
+tags:
+  - attack.privilege_escalation
+  - attack.t1611
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  in_container:
+    container.runtime:
+      - docker
+      - podman
+      - containerd
+      - cri-o
+      - lxc
+      - nspawn
+  debugfs:
+    Image|endswith: '/debugfs'
+  condition: in_container and debugfs
+level: medium

@@ -1,0 +1,23 @@
+title: Link Created over Sensitive Files
+id: 81a5dc2a-c02a-456a-bafa-f436e1433b36
+status: experimental
+description: |
+  移植自 Falco「Create Symlink Over Sensitive Files」与「Create Hardlink Over Sensitive Files」（maturity_stable）：
+  给 /etc/shadow、/etc/sudoers 等敏感文件或根目录、/etc、/root 建软链接或硬链接，常用来绕过路径校验读写它们。
+  Falco 看 symlink / link 系统调用的目标参数，本平台按 ln 的命令行判断。
+author: The Falco Authors (ported by OpenXDR)
+references:
+  - https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml
+tags:
+  - attack.credential_access
+  - attack.t1555
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  ln:
+    Image|endswith: '/ln'
+  target:
+    CommandLine|re: '\s(/etc/shadow|/etc/sudoers|/etc/pam\.conf|/etc/security/pwquality\.conf|/|/etc/?|/root/?)(\s|$)'
+  condition: ln and target
+level: medium

@@ -1,0 +1,32 @@
+title: Shell Script Executed from /dev/shm
+id: dd10b136-cc67-4dca-a3c1-3b28cf4a8ea3
+status: experimental
+description: |
+  移植自 Falco「Execution from /dev/shm」（maturity_stable）中 shell 解释执行 /dev/shm 下脚本的部分。
+  /dev/shm 是内存文件系统、重启即清，攻击者常把载荷落在这里；可执行文件本身位于 /dev/shm 的情形
+  已由 SigmaHQ 的 proc_creation_lnx_susp_exec_from_dev_shm 覆盖，这里不重复。
+  Falco 原规则另有按工作目录判断的分支，本平台进程事件没有工作目录字段，未移植。
+author: The Falco Authors (ported by OpenXDR)
+references:
+  - https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml
+tags:
+  - attack.execution
+  - attack.t1059.004
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  shell:
+    Image|endswith:
+      - '/sh'
+      - '/bash'
+      - '/dash'
+      - '/zsh'
+      - '/ksh'
+      - '/csh'
+      - '/tcsh'
+      - '/ash'
+  script:
+    CommandLine|re: '^\S+\s+(-[ci]\s+)?/dev/shm/'
+  condition: shell and script
+level: medium

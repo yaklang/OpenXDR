@@ -1,0 +1,39 @@
+title: Netcat Remote Code Execution in Container
+id: 40b0fd47-5705-438e-a5ed-70b9ebb38f3a
+status: experimental
+description: |
+  移植自 Falco「Netcat Remote Code Execution in Container」（maturity_stable）：容器里用 nc / ncat 带执行参数，
+  把 shell 接到网络上，是反弹或正向 shell 的典型形态。
+author: The Falco Authors (ported by OpenXDR)
+references:
+  - https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml
+tags:
+  - attack.execution
+  - attack.t1059
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  in_container:
+    container.runtime:
+      - docker
+      - podman
+      - containerd
+      - cri-o
+      - lxc
+      - nspawn
+  nc:
+    Image|endswith: '/nc'
+    CommandLine|contains:
+      - ' -e'
+      - ' -c'
+  ncat:
+    Image|endswith: '/ncat'
+    CommandLine|contains:
+      - '--sh-exec'
+      - '--exec'
+      - '--lua-exec'
+      - '-e '
+      - '-c '
+  condition: in_container and (nc or ncat)
+level: medium

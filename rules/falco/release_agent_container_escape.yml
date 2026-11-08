@@ -1,0 +1,29 @@
+title: Container Escape via cgroup release_agent
+id: 3ec71c9e-7980-4f8f-bc27-74b171ca602e
+status: experimental
+description: |
+  移植自 Falco「Detect release_agent File Container Escapes」（maturity_stable）：容器里改写 cgroup v1 的 release_agent，
+  让宿主机内核以 root 身份执行攻击者指定的程序，是经典的特权容器逃逸。
+  Falco 看对 release_agent 的写打开与进程能力，本平台按容器内命令行提到 release_agent 判断。
+author: The Falco Authors (ported by OpenXDR)
+references:
+  - https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml
+tags:
+  - attack.privilege_escalation
+  - attack.t1611
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  in_container:
+    container.runtime:
+      - docker
+      - podman
+      - containerd
+      - cri-o
+      - lxc
+      - nspawn
+  release_agent:
+    CommandLine|contains: 'release_agent'
+  condition: in_container and release_agent
+level: critical

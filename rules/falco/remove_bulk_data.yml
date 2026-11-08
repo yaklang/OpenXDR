@@ -1,0 +1,23 @@
+title: Remove Bulk Data from Disk
+id: f072e3f7-1b19-4fa7-9c91-6708f78280f6
+status: experimental
+description: |
+  移植自 Falco「Remove Bulk Data from Disk」（maturity_stable）：shred 粉碎文件、mkfs / mke2fs 格式化，
+  是破坏数据、阻碍恢复的手法。
+author: The Falco Authors (ported by OpenXDR)
+references:
+  - https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    Image|endswith:
+      - '/shred'
+      - '/mkfs'
+      - '/mke2fs'
+  condition: selection
+level: medium

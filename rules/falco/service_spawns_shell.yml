@@ -1,0 +1,44 @@
+title: Shell Spawned by Network Service
+id: 0ea18b73-a8d7-49be-ab01-e263a371b50c
+status: experimental
+description: |
+  移植自 Falco「Run shell untrusted」（maturity_stable）：Web、缓存、消息、邮件等网络服务进程直接拉起 shell，
+  多是被打进来后的命令执行（Webshell、RCE）。
+  Falco 原规则看全部祖先进程，本平台事件只带直接父进程，这里只看父进程；
+  数据库拉起 shell 已由 lnx_database_spawns_shell 覆盖，这里不重复。
+author: The Falco Authors (ported by OpenXDR)
+references:
+  - https://github.com/falcosecurity/rules/blob/main/rules/falco_rules.yaml
+tags:
+  - attack.execution
+  - attack.t1059.004
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  service:
+    ParentImage|endswith:
+      - '/nginx'
+      - '/httpd'
+      - '/lighttpd'
+      - '/apache'
+      - '/apache2'
+      - '/couchdb'
+      - '/memcached'
+      - '/rabbitmq-server'
+      - '/sendmail'
+      - '/exim4'
+      - '/dovecot'
+      - '/smbd'
+  shell:
+    Image|endswith:
+      - '/sh'
+      - '/bash'
+      - '/dash'
+      - '/zsh'
+      - '/ksh'
+      - '/csh'
+      - '/tcsh'
+      - '/ash'
+  condition: service and shell
+level: low
