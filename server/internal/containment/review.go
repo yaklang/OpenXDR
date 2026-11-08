@@ -19,8 +19,12 @@ const maxLease = 7 * 24 * time.Hour
 // reviewRetry 复核出错（模型不可用、输出认不出）时续期多久再问
 const reviewRetry = time.Hour
 
+// baseline 租约开始前这段时间里就在主机上报过的规则算背景活动（cron、logrotate 之类），不当作攻击仍在继续的迹象。
+// 紧挨租约的一天不算基线：那可能就是这次攻击的前奏
+const baselineFrom, baselineTo = 7 * 24 * time.Hour, 24 * time.Hour
+
 const reviewPrompt = `你是自主响应的复核员。平台在没有人参与的情况下自动做了一条封锁或隔离，现在租约到期，你决定解除还是续期。
-只依据给出的事实判断：
+只依据给出的事实判断，now 是当前时间，告警只统计本租约期（periodStart 起）、已去掉租约前就在例行出现的规则：
 - 解除（lift）：租约期间来源与被处置主机上都没有新的攻击迹象，或事实表明这是误报、来源已经清理（容器已不在活动）；
 - 续期（extend）：攻击还在继续、来源仍在活动，或事实不足以判断。拿不准一律续期。
 你只能二选一，不能建议更重的动作。只输出一个 JSON 对象，不要其他文字：
@@ -38,8 +42,10 @@ type reviewFacts struct {
 		Since   time.Time `json:"since"`
 		Reviews int       `json:"previousExtensions"`
 	} `json:"lease"`
-	HostAlerts   []alertBrief `json:"alertsOnHostSinceLease"`
-	SourceAlerts []alertBrief `json:"alertsOnSourceSinceLease,omitempty"`
+	Now          time.Time    `json:"now"`
+	PeriodStart  time.Time    `json:"periodStart"`
+	HostAlerts   []alertBrief `json:"alertsOnHostThisPeriod"`
+	SourceAlerts []alertBrief `json:"alertsOnSourceThisPeriod,omitempty"`
 	// 来源最近 24 小时还在别的纳管主机上留下的喷洒证据数
 	SourceSpray24h *int `json:"sourceSprayEvidence24h,omitempty"`
 	// 被隔离的容器最近一小时还有没有事件（隔离后进程仍在跑说明容器还在）
@@ -107,11 +113,17 @@ func (e *Engine) reviewFacts(ctx context.Context, c *ent.Containment) (reviewFac
 	}
 	f.Lease.Kind, f.Lease.Target, f.Lease.Role, f.Lease.Host = c.Kind, c.Target, string(c.Role), host.Hostname
 	f.Lease.Signal, f.Lease.Reason, f.Lease.Since, f.Lease.Reviews = c.Signal, c.Reason, c.CreatedAt, c.Reviews
-	if f.HostAlerts, err = e.briefs(ctx, c.AssetID, c.CreatedAt); err != nil {
+	// 只看本租约期：上一期的告警上一次复核已经看过，一直带着会让一次性的命中永远像是刚发生
+	f.Now = e.now()
+	f.PeriodStart = c.CreatedAt
+	if p := f.Now.Add(-e.TTL); p.After(f.PeriodStart) {
+		f.PeriodStart = p
+	}
+	if f.HostAlerts, err = e.briefs(ctx, c, c.AssetID, f.PeriodStart); err != nil {
 		return f, err
 	}
 	if c.SourceAssetID != nil {
-		if f.SourceAlerts, err = e.briefs(ctx, *c.SourceAssetID, c.CreatedAt); err != nil {
+		if f.SourceAlerts, err = e.briefs(ctx, c, *c.SourceAssetID, f.PeriodStart); err != nil {
 			return f, err
 		}
 		var n int
@@ -132,11 +144,19 @@ func (e *Engine) reviewFacts(ctx context.Context, c *ent.Containment) (reviewFac
 	return f, nil
 }
 
-// briefs 某台主机自租约开始以来 3 级及以上的告警摘要，最多 20 条；平台指令与已知自动化的不算
-func (e *Engine) briefs(ctx context.Context, asset uuid.UUID, since time.Time) ([]alertBrief, error) {
+// briefs 某台主机 since 以来 3 级及以上的告警摘要，最多 20 条；平台指令与已知自动化的不算，
+// 租约前就在这台主机上例行出现的规则也不算（触发这条处置的信号规则除外）
+func (e *Engine) briefs(ctx context.Context, c *ent.Containment, asset uuid.UUID, since time.Time) ([]alertBrief, error) {
+	background, err := e.DB.Alert.Query().
+		Where(alert.AssetIDEQ(asset), alert.RuleIDNEQ(c.Signal),
+			alert.TsGTE(c.CreatedAt.Add(-baselineFrom)), alert.TsLT(c.CreatedAt.Add(-baselineTo))).
+		Unique(true).Select(alert.FieldRuleID).Strings(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := e.DB.Alert.Query().
 		Where(alert.AssetIDEQ(asset), alert.SeverityGTE(3), alert.CommandIDIsNil(), alert.AutomationIDIsNil(),
-			alert.Or(alert.LastTsGTE(since), alert.TsGTE(since))).
+			alert.RuleIDNotIn(background...), alert.Or(alert.LastTsGTE(since), alert.TsGTE(since))).
 		Order(ent.Desc(alert.FieldSeverity)).Limit(20).All(ctx)
 	if err != nil {
 		return nil, err

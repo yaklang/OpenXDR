@@ -877,3 +877,35 @@ func TestClassifyFailurePidfdDoesNotFalsePositiveOnEpermOrEnosys(t *testing.T) {
 		t.Fatalf("pidfd ESRCH (No such process) 应被判定为目标已退出: %s", cause)
 	}
 }
+
+// 复核事实只看本租约期：上一期的命中不再带着；租约前就在例行出现的规则（cron 之类）不算攻击迹象
+func TestReviewFactsCoverThisPeriodWithoutBackground(t *testing.T) {
+	f := setup(t)
+	src := f.host(t, "range", "10.1.1.170", tierPtr(entasset.ResponseTierLab), "")
+	v := f.host(t, "web", "10.1.1.183", nil, "")
+	alertAt := func(rule string, ts, last time.Time) {
+		f.client.Alert.Create().SetRuleID(rule).SetSeverity(3).SetAssetID(v.ID).SetTs(ts).SetLastTs(last).SaveX(f.ctx)
+	}
+	start := f.now
+	alertAt("hourly-cron", start.Add(-3*24*time.Hour), start.Add(48*time.Hour))
+	f.spray(t, src, "10.1.1.170", v)
+	e := f.engine(ScopeLab)
+	if err := e.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	block := f.client.Containment.Query().Where(entcontainment.KindEQ("block_network")).OnlyX(f.ctx)
+	alertAt("first-period", start.Add(time.Hour), start.Add(time.Hour))
+	f.now = start.Add(49 * time.Hour)
+	alertAt("this-period", f.now.Add(-time.Hour), f.now.Add(-time.Hour))
+
+	facts, err := e.reviewFacts(f.ctx, block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !facts.Now.Equal(f.now) || !facts.PeriodStart.Equal(f.now.Add(-24*time.Hour)) {
+		t.Fatalf("事实要带当前时间与本期起点：%v %v", facts.Now, facts.PeriodStart)
+	}
+	if len(facts.HostAlerts) != 1 || facts.HostAlerts[0].Rule != "this-period" {
+		t.Fatalf("只应剩本期的新告警：%+v", facts.HostAlerts)
+	}
+}
