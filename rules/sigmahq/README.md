@@ -21,4 +21,7 @@ cd server && go run ./cmd/sigmacheck --strict ../rules && go run ./cmd/detectche
 DATABASE_URL=<只读副本> go run ./cmd/backtest -days 3 ../rules/sigmahq   # 新增规则命中过多的加进 excluded.txt
 ```
 
+中文标题不改规则文件，写在 `rules/titles.zh.json`（规则 ID → 中文）；同步新增的规则要在那里补译名，
+`go test ./internal/sigma` 会检查译名表里的 ID 都对应真实规则。
+
 本平台的引擎不支持的写法（统计型条件、未实现的修饰符）会被拒绝加载，`sigmacheck --strict` 会报出来。

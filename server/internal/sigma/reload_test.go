@@ -196,3 +196,50 @@ detection:
 	}
 	workers.Wait()
 }
+
+// 中文译名：标题换成译名、原文留在 TitleEn；译名文件改了算目录变更，热重载会生效；坏文件不影响加载
+func TestTitleTranslations(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.yml"), []byte(reloadRuleA), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := dirFingerprint(dir)
+	if err := os.WriteFile(filepath.Join(dir, titlesFile), []byte(`{"r-a":"规则甲"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if dirFingerprint(dir) == before {
+		t.Fatal("译名文件变化应改变目录指纹")
+	}
+	e, report := LoadDirReport(dir)
+	if report.Total != 1 || report.Loaded != 1 {
+		t.Fatalf("译名文件不应被当成规则：%+v", report)
+	}
+	if r := e.Rules()[0]; r.Title != "规则甲" || r.TitleEn != "Rule A" || e.TitleOf("r-a") != "规则甲" {
+		t.Fatalf("译名未生效：%+v", r)
+	}
+	if err := os.WriteFile(filepath.Join(dir, titlesFile), []byte(`{坏`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e, _ = LoadDirReport(dir)
+	if r := e.Rules()[0]; r.Title != "Rule A" || r.TitleEn != "" {
+		t.Fatalf("坏译名文件应退回原文：%+v", r)
+	}
+}
+
+// 仓库译名表的每个 ID 都要对应一条真实规则，规则删了或改了 ID 要同步清理
+func TestRepoTitleTranslationsMatchRules(t *testing.T) {
+	titles := loadTitles("../../../rules")
+	if len(titles) == 0 {
+		t.Fatal("没读到仓库的规则译名表")
+	}
+	e, _ := LoadDirReport("../../../rules")
+	known := map[string]bool{}
+	for _, r := range e.Rules() {
+		known[r.ID] = true
+	}
+	for id := range titles {
+		if !known[id] {
+			t.Errorf("译名表里的 %s 没有对应规则", id)
+		}
+	}
+}

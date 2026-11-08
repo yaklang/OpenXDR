@@ -13,6 +13,7 @@ package sigma
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -156,6 +157,8 @@ type Rule struct {
 	digest        string // 编译时读取的原文哈希，避免版本指纹与加载内容发生竞态
 	ID            string
 	Title         string
+	// TitleEn 规则原文标题；有中文译名（titles.zh.json）时 Title 换成译名，原文留在这里给英文界面
+	TitleEn string
 	// Author 规则作者。社区规则（DRL 1.1）要求基于命中产生的消息保留作者，告警、规则页与通知都带上
 	Author   string
 	Severity int16
@@ -462,8 +465,34 @@ func loadState(dir string) (*engineState, Report) {
 		slog.Warn("Sigma 规则目录不可读", "dir", dir, "err", err)
 		report.Skipped["规则目录读取失败"] = append(report.Skipped["规则目录读取失败"], err.Error())
 	}
+	translate(s.rules, loadTitles(dir))
 	s.index()
 	return s, report
+}
+
+// titlesFile 规则标题中文译名（规则 ID → 中文）。社区规则按许可原样保留文件，译名单独放，同步上游不会冲掉
+const titlesFile = "titles.zh.json"
+
+// loadTitles 读不到或格式不对就不翻译：规则照常加载，只是显示原文标题
+func loadTitles(dir string) map[string]string {
+	b, err := os.ReadFile(filepath.Join(dir, titlesFile))
+	if err != nil {
+		return nil
+	}
+	var titles map[string]string
+	if err := json.Unmarshal(b, &titles); err != nil {
+		slog.Warn("规则中文译名文件格式错误，使用原文标题", "file", titlesFile, "err", err)
+		return nil
+	}
+	return titles
+}
+
+func translate(rules []*Rule, titles map[string]string) {
+	for _, r := range rules {
+		if t := strings.TrimSpace(titles[r.ID]); t != "" && t != r.Title {
+			r.TitleEn, r.Title = r.Title, t
+		}
+	}
 }
 
 // Watch 周期扫描规则目录，文件集合或修改时间变化时整体重载并原子切换。
@@ -520,6 +549,9 @@ func dirFingerprint(dir string) string {
 		_, _ = h.Write([]byte{0})
 		return nil
 	})
+	if body, err := os.ReadFile(filepath.Join(dir, titlesFile)); err == nil {
+		_, _ = h.Write(body)
+	}
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
@@ -662,13 +694,13 @@ const RuleCoreAgentSilent = "xdr:core-agent-silent"
 const RuleAuditTamper = "xdr:audit-tamper"
 
 var syntheticTitles = map[string]string{
-	RuleAuditTamper:        "Audit Log Tampered (审计记录被改或被删)",
-	RuleControlPlaneChange: "OpenXDR Control Plane Config Changed (平台控制面配置被改)",
-	RuleCoreAgentSilent:    "Core Node Agent Silent (平台节点 agent 停止上报)",
-	RuleBruteforceSuccess:  "Brute Force Success (多次失败后登录成功)",
-	RuleLateralSpray:       "Internal Lateral Password Spray (纳管主机对多台纳管主机口令喷洒)",
-	RuleNewProcess:         "New Process First Seen (新进程首次出现)",
-	RuleBeacon:             "Periodic Beacon to New Destination (新出现的周期外联)",
+	RuleAuditTamper:        "审计记录被改或被删",
+	RuleControlPlaneChange: "平台控制面配置被改",
+	RuleCoreAgentSilent:    "平台节点 agent 停止上报",
+	RuleBruteforceSuccess:  "多次失败后登录成功（爆破得手）",
+	RuleLateralSpray:       "纳管主机对多台纳管主机口令喷洒",
+	RuleNewProcess:         "新进程首次出现",
+	RuleBeacon:             "新出现的周期外联",
 }
 
 // AuthorOf 规则作者，没有写或规则已不在返回空
@@ -696,11 +728,11 @@ func intelTitle(ruleID string) string {
 	if !ok || !strings.HasPrefix(ruleID, "intel:") || value == "" {
 		return ""
 	}
-	label := map[string]string{"ip": "IP", "domain": "Domain", "hash": "File Hash"}[kind]
+	label := map[string]string{"ip": "IP", "domain": "域名", "hash": "文件哈希"}[kind]
 	if label == "" {
 		return ""
 	}
-	return fmt.Sprintf("Threat Intel Match: %s %s (威胁情报命中)", label, value)
+	return fmt.Sprintf("威胁情报命中：%s %s", label, value)
 }
 
 func compileFile(path string) (*Rule, error) {

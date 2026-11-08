@@ -593,9 +593,9 @@ detection:
 	}
 	// 情报命中没有规则文件，按 intel:<类别>:<值> 给可读标题；认不出的类别仍为空
 	for id, want := range map[string]string{
-		"intel:ip:176.120.22.61": "Threat Intel Match: IP 176.120.22.61 (威胁情报命中)",
-		"intel:domain:evil.test": "Threat Intel Match: Domain evil.test (威胁情报命中)",
-		"intel:hash:ab12":        "Threat Intel Match: File Hash ab12 (威胁情报命中)",
+		"intel:ip:176.120.22.61": "威胁情报命中：IP 176.120.22.61",
+		"intel:domain:evil.test": "威胁情报命中：域名 evil.test",
+		"intel:hash:ab12":        "威胁情报命中：文件哈希 ab12",
 		"intel:url:http://x":     "",
 		"intel:ip:":              "",
 		"notintel:ip:1.2.3.4":    "",

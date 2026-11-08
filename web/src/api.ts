@@ -945,6 +945,8 @@ export interface RuleRow {
   references?: string[]
   id: string
   title: string
+  // 规则原文标题（有中文译名时才有），英文界面显示它
+  titleEn?: string
   author?: string
   severity: number
   classUid: number

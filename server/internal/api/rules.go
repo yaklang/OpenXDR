@@ -23,10 +23,12 @@ type ruleRow struct {
 	References    []string `json:"references,omitempty"`
 	ID            string   `json:"id"`
 	Title         string   `json:"title"`
-	Author        string   `json:"author,omitempty"`
-	Severity      int16    `json:"severity"`
-	ClassUID      int      `json:"classUid"`
-	Product       string   `json:"product"`
+	// TitleEn 规则原文标题，有中文译名时才有
+	TitleEn  string `json:"titleEn,omitempty"`
+	Author   string `json:"author,omitempty"`
+	Severity int16  `json:"severity"`
+	ClassUID int    `json:"classUid"`
+	Product  string `json:"product"`
 	// Signal 信号规则：只作时序规则输入，命中不单独告警
 	Signal bool `json:"signal,omitempty"`
 	// Custom 控制台维护的自定义规则
@@ -88,7 +90,7 @@ func mapRules(api *http.ServeMux, db *ent.Client, rules sigma.Catalog) {
 			}
 			out[i] = ruleRow{
 				Kind: rule.Kind, WindowSeconds: rule.WindowSeconds, Threshold: rule.Threshold, References: rule.References,
-				ID: rule.ID, Title: rule.Title, Author: rule.Author, Severity: rule.Severity,
+				ID: rule.ID, Title: rule.Title, TitleEn: rule.TitleEn, Author: rule.Author, Severity: rule.Severity,
 				ClassUID: rule.ClassUID, Product: rule.Product, Signal: rule.Signal, Custom: rule.Custom,
 				Ingested: ingested, Source: source,
 				Tactics: rule.Tactics, Techniques: rule.Techniques,

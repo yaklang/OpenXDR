@@ -25,7 +25,7 @@ function sourceLabel(r: RuleRow, t: (k: MsgKey) => string) {
 }
 
 export function RulesPage() {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [params, setParams] = useSearchParams()
   // 搜索词放 URL：事件详情里点规则名会带着规则 ID 跳过来
   const q = params.get('q') ?? ''
@@ -59,7 +59,7 @@ export function RulesPage() {
   const activeQ = (draft || q).trim().toLowerCase()
   const hasFilters = Boolean(activeQ || sev || classFilter || platformFilter || dataSourceFilter)
   const rows = (data ?? []).filter(r =>
-    (!activeQ || (r.title + ' ' + r.id + ' ' + (r.author ?? '') + ' ' + (r.source ?? '')).toLowerCase().includes(activeQ)) &&
+    (!activeQ || (r.title + ' ' + (r.titleEn ?? '') + ' ' + r.id + ' ' + (r.author ?? '') + ' ' + (r.source ?? '')).toLowerCase().includes(activeQ)) &&
     (!sev || r.severity === sev) &&
     (!classFilter || r.classUid === classFilter) &&
     (!platformFilter || r.product === platformFilter) &&
@@ -99,8 +99,8 @@ export function RulesPage() {
         columns={[
           {
             title: t('thRule'), dataIndex: 'title',
-            sorter: (a, b) => (a.title || a.id).localeCompare(b.title || b.id),
-            render: (v, r) => <><Tooltip title={r.id}><Typography.Text copyable={{ text: r.id, tooltips: [r.id, t('copied')] }}>{v || r.id}</Typography.Text></Tooltip>{r.custom && <Tag color="blue" style={{ marginLeft: 8 }}>{t('ruleCustomTag')}</Tag>}{r.signal && <Tooltip title={t('ruleSignalHint')}><Tag style={{ marginLeft: 8 }}>{t('ruleSignal')}</Tag></Tooltip>}{r.kind && <Space size={4} wrap style={{ display: 'flex', marginTop: 4 }}><Tag>{t(r.kind === 'event_count' ? 'temporalCount' : r.kind === 'temporal' ? 'temporalUnordered' : 'temporalSequence')}</Tag><Typography.Text type="secondary">{t('temporalRuleWindow', { seconds: r.windowSeconds ?? 0 })}{r.threshold ? ` · ${t('temporalRuleThreshold', { count: r.threshold })}` : ''}</Typography.Text></Space>}{r.author && <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>{t('ruleBy', { author: r.author })}</Typography.Text>}</>,
+            sorter: (a, b) => (a.title || a.id).localeCompare(b.title || b.id, 'zh-CN'),
+            render: (v, r) => <><Tooltip title={r.titleEn ? `${r.titleEn} · ${r.id}` : r.id}><Typography.Text copyable={{ text: r.id, tooltips: [r.id, t('copied')] }}>{(locale === 'en' && r.titleEn) || v || r.id}</Typography.Text></Tooltip>{r.custom && <Tag color="blue" style={{ marginLeft: 8 }}>{t('ruleCustomTag')}</Tag>}{r.signal && <Tooltip title={t('ruleSignalHint')}><Tag style={{ marginLeft: 8 }}>{t('ruleSignal')}</Tag></Tooltip>}{r.kind && <Space size={4} wrap style={{ display: 'flex', marginTop: 4 }}><Tag>{t(r.kind === 'event_count' ? 'temporalCount' : r.kind === 'temporal' ? 'temporalUnordered' : 'temporalSequence')}</Tag><Typography.Text type="secondary">{t('temporalRuleWindow', { seconds: r.windowSeconds ?? 0 })}{r.threshold ? ` · ${t('temporalRuleThreshold', { count: r.threshold })}` : ''}</Typography.Text></Space>}{r.author && <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>{t('ruleBy', { author: r.author })}</Typography.Text>}</>,
           },
           { title: t('thSeverity'), dataIndex: 'severity', width: 95, render: v => <SeverityTag value={v} />, sorter: (a, b) => a.severity - b.severity },
           { title: t('thClass'), dataIndex: 'classUid', width: 115, sorter: (a, b) => a.classUid - b.classUid, render: v => (CLASS_KEY[v] ? t(CLASS_KEY[v]) : v || t('allClasses')) },
