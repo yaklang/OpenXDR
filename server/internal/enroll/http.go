@@ -39,6 +39,7 @@ func (s *Service) Public(dists Dists) http.Handler {
 	})
 	mux.Handle("GET /api/enroll/agent/{platform}", serveDist(dists.Agent, "agent"))
 	mux.Handle("GET /api/enroll/sensor/{platform}", serveDist(dists.Sensor, "sensor"))
+	mux.Handle("GET /api/enroll/tray/{platform}", serveDist(dists.Tray, "tray"))
 	mux.HandleFunc("POST /api/enroll/register", func(w http.ResponseWriter, r *http.Request) {
 		token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		var req Request

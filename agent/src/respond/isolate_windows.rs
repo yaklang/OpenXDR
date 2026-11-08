@@ -85,7 +85,7 @@ fn check(code: u32) -> Result<(), String> {
         Err(format!("WFP 操作失败: 0x{code:08x}"))
     }
 }
-fn replace(allowed: Option<&[Endpoint]>) -> Result<(), String> {
+fn open_engine() -> Result<Engine, String> {
     let mut handle = null_mut();
     // 所有指针仅在同步调用期间借用，WFP 复制规则数据。
     // SAFETY: 服务器名、认证标识与会话参数传空指针表示本机、当前身份、默认会话，是 API 允许的用法；
@@ -99,7 +99,29 @@ fn replace(allowed: Option<&[Endpoint]>) -> Result<(), String> {
             &mut handle,
         ))?;
     }
-    let engine = Engine(handle);
+    Ok(Engine(handle))
+}
+
+/// 本机当前是否处于隔离：隔离时建子层，解除时连子层一起删，子层在就是隔离着
+pub fn active() -> bool {
+    let Ok(engine) = open_engine() else {
+        return false;
+    };
+    let mut sublayer: *mut FWPM_SUBLAYER0 = null_mut();
+    // SAFETY: engine.0 有效；&SUBLAYER 指向静态 GUID；sublayer 是栈上出参，成功时由系统分配
+    let code = unsafe { FwpmSubLayerGetByKey0(engine.0, &SUBLAYER, &mut sublayer) };
+    if code != 0 {
+        return false;
+    }
+    // SAFETY: 调用成功时 sublayer 指向系统分配的内存，只在这里释放一次，之后不再使用
+    unsafe {
+        FwpmFreeMemory0(&mut sublayer as *mut _ as *mut _);
+    }
+    true
+}
+
+fn replace(allowed: Option<&[Endpoint]>) -> Result<(), String> {
+    let engine = open_engine()?;
     // SAFETY: engine.0 是上面成功打开、由 engine 持有的会话句柄，在本函数内一直有效。
     unsafe {
         check(FwpmTransactionBegin0(engine.0, 0))?;

@@ -8,6 +8,10 @@ pub fn isolate(_cmd: &Command) -> Outcome {
     Outcome::unsupported("本平台未实现主机隔离")
 }
 
+pub fn active() -> bool {
+    false
+}
+
 pub fn unisolate(_cmd: &Command) -> Outcome {
     Outcome::unsupported("本平台未实现主机隔离")
 }

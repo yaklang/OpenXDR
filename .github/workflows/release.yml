@@ -48,6 +48,9 @@ jobs:
           mkdir -p out/dist
           cp agent/target/x86_64-unknown-linux-musl/release/openxdr-agent out/dist/openxdr-agent-linux-amd64
           cp agent/target/x86_64-pc-windows-gnu/release/openxdr-agent.exe out/dist/openxdr-agent-windows-amd64.exe
+          # 托盘与 agent 同一个 crate、同一次构建产出；安装脚本顺带下载，不随 agent 自动升级
+          cp agent/target/x86_64-unknown-linux-musl/release/openxdr-tray out/dist/openxdr-tray-linux-amd64
+          cp agent/target/x86_64-pc-windows-gnu/release/openxdr-tray.exe out/dist/openxdr-tray-windows-amd64.exe
           # sensor 与 agent 同目录：一行安装从这里下载，在线探针按这里的哈希自动升级
           cp sensor/target/x86_64-unknown-linux-musl/release/openxdr-sensor out/dist/openxdr-sensor-linux-amd64
       - uses: actions/upload-artifact@v4
@@ -93,6 +96,7 @@ jobs:
         run: |
           mkdir -p out/dist
           cp agent/target/aarch64-unknown-linux-musl/release/openxdr-agent out/dist/openxdr-agent-linux-arm64
+          cp agent/target/aarch64-unknown-linux-musl/release/openxdr-tray out/dist/openxdr-tray-linux-arm64
           cp sensor/target/aarch64-unknown-linux-musl/release/openxdr-sensor out/dist/openxdr-sensor-linux-arm64
       - uses: actions/upload-artifact@v4
         with:

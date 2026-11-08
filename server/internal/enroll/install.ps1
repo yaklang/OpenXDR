@@ -53,6 +53,20 @@ Get-Process openxdr-agent -ErrorAction SilentlyContinue | Stop-Process -Force
 if (Test-Path $bin) { Move-Item -Force $bin "$bin.prev" }
 Move-Item -Force $new $bin
 
+# 托盘（只显示防护状态）装到 Program Files：agent 目录放着私钥、普通用户进不去，Program Files 普通用户能执行、
+# 只有管理员能改。agent 启动时在 HKLM Run 里登记，用户下次登录出现。分发目录里没有托盘程序就跳过，不影响接入
+$trayDir = Join-Path $env:ProgramFiles 'OpenXDR'
+$tray = Join-Path $trayDir 'openxdr-tray.exe'
+try {
+    New-Item -ItemType Directory -Force -Path $trayDir | Out-Null
+    Invoke-WebRequest -UseBasicParsing -Uri "$Base/api/enroll/tray/windows-amd64" -OutFile "$tray.new"
+    Get-Process openxdr-tray -ErrorAction SilentlyContinue | Stop-Process -Force
+    Move-Item -Force "$tray.new" $tray
+} catch {
+    Remove-Item -Force "$tray.new" -ErrorAction SilentlyContinue
+    Write-Host '分发目录没有托盘程序，跳过'
+}
+
 $action = New-ScheduledTaskAction -Execute $bin
 # 「失败时重新启动」只管任务没拉起来，进程以非零码退出（升级后的 75）不会触发，实机验证过；
 # 升级后的重启全靠这个检查：通常 1 分钟内拉起；碰上旧进程还在排空（最多约 40 秒）的那一次被跳过，最坏约 2 分钟

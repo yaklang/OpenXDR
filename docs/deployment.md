@@ -155,6 +155,23 @@ sudo env SENSOR_IFACE=eth0 OPENXDR_SERVER=http://<server>:8081 ./target/release/
 worker 号即网卡队列号，数量不应超过网卡实际队列数。`SENSOR_GRPC_COMPRESSION=gzip`
 让上行 gRPC 消息走 gzip（默认关闭，server 侧已注册编码器，清空该变量重启即回滚）。
 
+### 受管主机上看到的状态
+
+主机使用者只看得到有限信息：防护在不在运行、和管理平台联不联得上、本机有没有被隔离。看不到告警、规则与配置，
+也没有停止防护的入口——主机上的任何人（包括入侵者）读到的都只有这些。
+
+- agent 在本机开一个只读端点（Linux `/run/openxdr-agent.sock`，所有用户可连；Windows 命名管道 `\\.\pipe\openxdr-agent`，
+  只出不进、拒绝远程客户端），连上写一行 JSON 就关闭，不读任何输入。隔离状态查的是内核里的规则本身
+- `openxdr-agent status`：在终端里看状态；退出码 0 正常、1 需要留意（失联、采集降级）、2 要紧（被隔离、防护没在跑）。
+  agent 启动时写 `/etc/profile.d/openxdr-agent.sh`，交互式登录打印一行状态，`ssh 主机 命令` 这类非交互执行不打印
+- 托盘 `openxdr-tray`：安装脚本顺带装上（Linux 只在有桌面、即存在 `/etc/xdg/autostart` 的主机上装到 `/usr/local/bin`；
+  Windows 装到 `%ProgramFiles%\OpenXDR`——agent 目录放着私钥、普通用户进不去），agent 启动时布置自启
+  （XDG autostart / HKLM `Run`），托盘程序删掉后下次启动撤掉自启。图标随状态变化，失联、降级、被隔离时弹一次通知。
+  Linux 走 StatusNotifierItem（KDE、Xfce 原生支持，GNOME 要装 AppIndicator 扩展），不依赖 GTK
+- 托盘不随 agent 自动升级，更新它要重跑安装脚本；状态协议只增不改，旧托盘读新 agent 照样能用
+- 程序没有代码签名（开源构建不依赖证书）：经安装脚本、SSH、组策略分发不会触发 SmartScreen；
+  Windows 11 开启「智能应用控制」的主机会拦截未签名程序
+
 ### 按主机下发采集配置
 
 采集范围不必编译期写死，可按主机调整：

@@ -25,6 +25,8 @@ mod process_identity;
 mod receipts;
 mod respond;
 mod spool;
+mod status;
+mod status_proto;
 mod tls;
 mod upgrade;
 
@@ -34,6 +36,8 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["version"] => println!("{}", env!("CARGO_PKG_VERSION")),
+        ["status"] => std::process::exit(status::print(false)),
+        ["status", "--brief"] => std::process::exit(status::print(true)),
         ["enroll-request", dir] => match enroll::request(dir.as_ref()) {
             Ok(json) => println!("{json}"),
             Err(e) => exit(&format!("生成接入请求失败：{e}")),
@@ -68,6 +72,8 @@ async fn agent() {
 
     let queue = delivery::open(&server, health::Health::new())
         .unwrap_or_else(|err| exit(&format!("无法打开事件缓存：{err}")));
+    status::provision();
+    tokio::spawn(status::serve(queue.health.clone()));
     let cached = delivery::access(&queue, |spool| spool.session())
         .await
         .unwrap_or_else(|err| exit(&format!("无法恢复注册身份：{err}")));

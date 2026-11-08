@@ -87,6 +87,11 @@ pub(crate) fn powershell(script: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// 本机当前是否处于主机隔离（查的是内核里的规则本身，不是内存里的记录：agent 重启后照样说得准）
+pub fn host_isolated() -> bool {
+    isolate::active()
+}
+
 pub async fn execute(agent_id: &str, cmd: &Command) -> CommandResult {
     let outcome = match cmd.kind() {
         CommandKind::KillProcess => process::kill(cmd),

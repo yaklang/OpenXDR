@@ -39,6 +39,11 @@ pub fn unisolate(_cmd: &Command) -> Outcome {
 }
 
 /// 生成完整规则集。每次隔离都先删后建，保证规则是确定的而不是叠加的。
+/// 本机当前是否处于隔离：隔离表还在
+pub fn active() -> bool {
+    run_nft(&["list", "table", "inet", TABLE]).is_ok()
+}
+
 fn build_ruleset(allow: &[String]) -> String {
     let mut s = String::new();
     s.push_str(&format!("add table inet {TABLE}\n"));

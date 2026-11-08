@@ -61,6 +61,8 @@ pub struct Health {
     batches: AtomicU64,
     limit: AtomicU64,
     pub write_blocked: AtomicBool,
+    /// 最近一次健康状态上报成功的时间（Unix 毫秒），本机状态端点据此说联没联上管理平台
+    last_contact_ms: AtomicU64,
     capabilities: Mutex<Capabilities>,
     receipts: Mutex<ReceiptHealth>,
 }
@@ -90,10 +92,29 @@ impl Health {
             batches: AtomicU64::new(0),
             limit: AtomicU64::new(0),
             write_blocked: AtomicBool::new(false),
+            last_contact_ms: AtomicU64::new(0),
             capabilities: Mutex::new(Capabilities::default()),
             receipts: Mutex::new(ReceiptHealth::default()),
         })
     }
+    pub fn last_contact_ms(&self) -> u64 {
+        self.last_contact_ms.load(Ordering::Relaxed)
+    }
+
+    /// 给主机使用者的采集概况：还没有任何通道报状态是启动中；有通道降级（自报或活性检测）就是降级。
+    /// unavailable 是本平台或本配置下本来就没有的能力，不算降级
+    pub fn collection(&self) -> crate::status_proto::Collection {
+        use crate::status_proto::Collection;
+        let caps = self.capabilities();
+        if caps.is_empty() {
+            Collection::Starting
+        } else if caps.values().any(|c| c.state == "degraded") {
+            Collection::Degraded
+        } else {
+            Collection::Ok
+        }
+    }
+
     pub fn queued_batches(&self) -> u64 {
         self.batches.load(Ordering::Relaxed)
     }
@@ -197,7 +218,13 @@ pub async fn report(
             health_json: health.json(),
         });
         request.set_timeout(Duration::from_secs(5));
-        if let Err(err) = client.report_health(request).await {
+        let result = client.report_health(request).await;
+        if result.is_ok() {
+            health
+                .last_contact_ms
+                .store(crate::status_proto::now_ms(), Ordering::Relaxed);
+        }
+        if let Err(err) = result {
             if err.code() == tonic::Code::Unimplemented {
                 eprintln!("服务端尚不支持采集状态上报");
                 return;

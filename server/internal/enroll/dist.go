@@ -46,10 +46,20 @@ func SensorDist(dir string) *Dist {
 	}}
 }
 
-// Dists 同一个分发目录里的两类安装包。
-type Dists struct{ Agent, Sensor *Dist }
+// TrayDist 受管主机上的托盘程序（只显示防护状态），安装脚本顺带装上；不随 agent 自动升级，
+// 状态协议只增不改，旧托盘读新 agent 照样能用。
+func TrayDist(dir string) *Dist {
+	return &Dist{Dir: dir, Files: map[string]string{
+		"linux-amd64":   "openxdr-tray-linux-amd64",
+		"linux-arm64":   "openxdr-tray-linux-arm64",
+		"windows-amd64": "openxdr-tray-windows-amd64.exe",
+	}}
+}
 
-func NewDists(dir string) Dists { return Dists{AgentDist(dir), SensorDist(dir)} }
+// Dists 同一个分发目录里的三类安装包。
+type Dists struct{ Agent, Sensor, Tray *Dist }
+
+func NewDists(dir string) Dists { return Dists{AgentDist(dir), SensorDist(dir), TrayDist(dir)} }
 
 // arches Rust std::env::consts::ARCH 到分发平台后缀。
 var arches = map[string]string{"x86_64": "amd64", "aarch64": "arm64"}

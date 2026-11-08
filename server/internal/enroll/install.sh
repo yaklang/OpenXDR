@@ -51,6 +51,19 @@ mv "$TMP" "$BIN"
 rm -f "$GRANT"
 trap - EXIT
 
+# 有桌面的主机顺带装托盘（只显示防护状态），agent 启动时布置桌面自启。
+# 分发目录里没有托盘程序就跳过，不影响接入
+if [ -d /etc/xdg/autostart ]; then
+  TRAY=$(mktemp)
+  if curl -fsSL "$BASE/api/enroll/tray/linux-$ARCH" -o "$TRAY"; then
+    chmod 755 "$TRAY"
+    mv "$TRAY" /usr/local/bin/openxdr-tray
+  else
+    rm -f "$TRAY"
+    echo "分发目录没有托盘程序，跳过"
+  fi
+fi
+
 cat >"$UNIT" <<'UNIT'
 [Unit]
 Description=OpenXDR endpoint agent
