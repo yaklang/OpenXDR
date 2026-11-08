@@ -24,13 +24,25 @@ const intelMinSeverity = 4
 // 数据库正常运行不派生这些进程，确定性足够进快路径
 const RuleDatabaseShell = "8b0f2e64-5c1a-4d7e-9a35-2f6c1d8e4b70"
 
+// RuleContainerEscape rules/lnx_container_namespace_escape.yml：容器里的进程用 nsenter / unshare 或经 /proc/1/root
+// 跳进宿主机命名空间。2026-11-02~03 uos-server 靶场容器失陷时 7 次命中都是真阳性
+const RuleContainerEscape = "f14885ca-a2d8-4fca-987f-03d994d85d1a"
+
+// RuleReleaseAgent rules/falco/release_agent_container_escape.yml：容器里改写或探查 cgroup release_agent
+const RuleReleaseAgent = "3ec71c9e-7980-4f8f-bc27-74b171ca602e"
+
+// RuleShellStdio rules/lnx_shell_stdio_to_network.yml：shell / 解释器的标准输入输出被 dup 成一条 TCP 连接，
+// 即反弹 shell。看的是 dup 系统调用的结果，与命令行怎么写无关；生产上除 sshd 外没有正常程序这样做
+const RuleShellStdio = "43ade2ed-38aa-486c-8629-cd561cf9787e"
+
 // pgClient PostgreSQL 后端的进程标题「postgres: 用户 库 客户端地址(端口) 命令」里的客户端地址
 var pgClient = regexp.MustCompile(`^postgres: \S+ \S+ ([0-9A-Fa-f.:]+)\(\d+\)`)
 
 // signalAlerts 快路径的信号：只认确定性的合成检测与高级别情报命中，不认 Sigma 规则与 AI 结论
 func signalAlerts() predicate.Alert {
 	return alert.Or(
-		alert.RuleIDIn(sigma.RuleLateralSpray, sigma.RuleBruteforceSuccess, RuleDatabaseShell),
+		alert.RuleIDIn(sigma.RuleLateralSpray, sigma.RuleBruteforceSuccess, RuleDatabaseShell,
+			RuleContainerEscape, RuleReleaseAgent, RuleShellStdio),
 		alert.And(alert.RuleIDHasPrefix("intel:"), alert.SeverityGTE(intelMinSeverity)),
 	)
 }
@@ -43,6 +55,10 @@ func (e *Engine) planFor(ctx context.Context, al *ent.Alert) (plan, error) {
 		return e.planBruteforce(ctx, al)
 	case al.RuleID == RuleDatabaseShell:
 		return e.planDatabaseShell(ctx, al)
+	case al.RuleID == RuleContainerEscape || al.RuleID == RuleReleaseAgent:
+		return e.planContainerEscape(ctx, al)
+	case al.RuleID == RuleShellStdio:
+		return e.planReverseShell(ctx, al)
 	default:
 		return e.planIntel(ctx, al)
 	}
@@ -279,6 +295,74 @@ func (e *Engine) planDatabaseShell(ctx context.Context, al *ent.Alert) (plan, er
 	return p, nil
 }
 
+// planContainerEscape 容器逃逸：隔离发起逃逸的那个容器，宿主机与其他容器不受影响。
+// 核心资产上记一条跳过（平台节点上的数据库容器隔离了就是自己停服），QEMU 虚拟机进程不算容器
+func (e *Engine) planContainerEscape(ctx context.Context, al *ent.Alert) (plan, error) {
+	host, err := e.DB.Asset.Get(ctx, *al.AssetID)
+	if err != nil {
+		return plan{}, err
+	}
+	ev, err := e.eventOf(ctx, al)
+	if err != nil || ev == nil {
+		return plan{}, err
+	}
+	var doc eventDoc
+	_ = json.Unmarshal(ev.Raw, &doc)
+	c := doc.Container
+	if c.UID == "" || c.Runtime == "qemu" {
+		return plan{}, nil
+	}
+	outOfScope, err := e.scoped(ctx, host)
+	if err != nil {
+		return plan{}, err
+	}
+	t, _, err := e.tier(ctx, host)
+	if err != nil {
+		return plan{}, err
+	}
+	a := action{asset: host, kind: "isolate_container", target: c.UID, role: "host", skip: outOfScope,
+		why: "容器 " + container{uid: c.UID, name: c.Name}.label() + " 试图逃逸到宿主机，隔离该容器（宿主机与其他容器不受影响）"}
+	if a.skip == "" && t == TierCore {
+		a.skip = "核心资产上的容器不自动隔离，平台自身的服务容器隔离了就是停服"
+	}
+	return plan{actions: []action{a}}, nil
+}
+
+// planReverseShell 反弹 shell：结束接上网络的那个进程，在本机封锁对端地址（租约到期复核解除）。
+// 核心资产只告警：结束错进程或封错地址都可能切断控制面
+func (e *Engine) planReverseShell(ctx context.Context, al *ent.Alert) (plan, error) {
+	host, err := e.DB.Asset.Get(ctx, *al.AssetID)
+	if err != nil {
+		return plan{}, err
+	}
+	ev, err := e.eventOf(ctx, al)
+	if err != nil || ev == nil {
+		return plan{}, err
+	}
+	var doc eventDoc
+	_ = json.Unmarshal(ev.Raw, &doc)
+	outOfScope, err := e.scoped(ctx, host)
+	if err != nil {
+		return plan{}, err
+	}
+	t, _, err := e.tier(ctx, host)
+	if err != nil {
+		return plan{}, err
+	}
+	skip := outOfScope
+	if skip == "" && t == TierCore {
+		skip = "核心资产只告警不自动处置，结束错进程或封错地址可能切断控制面"
+	}
+	peer := doc.Dst.IP
+	p := plan{actions: []action{e.killProcess(host, ev, doc, skip,
+		"进程 "+doc.Process.Name+" 的标准输入输出接到了 "+peer+" 的 TCP 连接（反弹 shell），结束该进程")}}
+	if peer != "" {
+		p.actions = append(p.actions, action{asset: host, kind: "block_network", target: peer, role: "host", skip: skip,
+			why: "反弹 shell 连向 " + peer + "，封锁该地址"})
+	}
+	return p, nil
+}
+
 // bruteforceLookback 爆破得手时往前找来源容器外连记录的范围，与爆破序列的判定窗口一致
 const bruteforceLookback = 10 * time.Minute
 
@@ -408,6 +492,11 @@ type eventDoc struct {
 	Dst struct {
 		IP string `json:"ip"`
 	} `json:"dst_endpoint"`
+	Container struct {
+		UID     string `json:"uid"`
+		Name    string `json:"name"`
+		Runtime string `json:"runtime"`
+	} `json:"container"`
 }
 
 type fileInfo struct {

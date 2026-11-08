@@ -31,7 +31,8 @@
 |---|---|---|
 | 内网横向喷洒 | `xdr:internal-lateral-spray`（P0 已上线） | 有 |
 | 数据库进程拉起 shell | postgres / mysqld / redis-server / sqlservr 的子进程是 sh / bash / python 等（`COPY FROM PROGRAM`、UDF） | 有（`lnx_database_spawns_shell.yml`，2026-11-04） |
-| 容器内试探逃逸 | 容器里访问 docker.sock、挂载宿主机设备、nsenter、写 cgroup release_agent | 部分 SigmaHQ 规则覆盖，需梳理 |
+| 容器逃逸 | 容器里 nsenter / unshare / 经 /proc/1/root 跳进宿主机命名空间（`lnx_container_namespace_escape`），或改写、探查 cgroup release_agent（`falco/release_agent_container_escape`）。只隔离那个容器；核心资产记跳过 | 有（2026-11-09；回测：uos-server 靶场失陷 7 次真阳性，node1 patroni 容器里的运维操作落在核心资产上跳过） |
+| 反弹 shell | shell、解释器或 netcat 类工具的标准输入输出被 dup 成一条 TCP 连接（`lnx_shell_stdio_to_network`，依赖 agent 的 stdio_socket 事件）。结束该进程、本机封锁对端；核心资产只告警 | 有（2026-11-09；回测：上线 12 小时除 sshd 外没有进程这样做，sshd 不在名单里） |
 | 爆破得手 | `xdr:bruteforce-success` | 有 |
 | 高置信情报命中 | 情报库 C2 / 恶意 IP 的出站连接 | 有 |
 

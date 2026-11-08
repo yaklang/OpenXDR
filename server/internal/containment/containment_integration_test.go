@@ -909,3 +909,62 @@ func TestReviewFactsCoverThisPeriodWithoutBackground(t *testing.T) {
 		t.Fatalf("只应剩本期的新告警：%+v", facts.HostAlerts)
 	}
 }
+
+// 容器逃逸：只隔离发起逃逸的容器；核心资产记跳过不下发；QEMU 虚拟机进程不算容器
+func TestContainerEscapeIsolatesOnlyThatContainer(t *testing.T) {
+	f := setup(t)
+	server := `[{"process":"openxdr-server","port":8081}]`
+	lab := f.host(t, "raid-server-test", "10.1.1.192", tierPtr(entasset.ResponseTierLab), "")
+	core := f.host(t, "openxdr-node1", "10.1.1.198", nil, server)
+	pve := f.host(t, "pve1", "10.1.1.2", tierPtr(entasset.ResponseTierLab), "")
+	escape := func(name, runtime string) string {
+		return `{"process":{"pid":4242,"name":"nsenter","file":{"path":"/usr/bin/nsenter"},"cmd_line":"nsenter -t 1 -n true"},` +
+			`"container":{"runtime":"` + runtime + `","uid":"e09c4b52ae02","name":"` + name + `"}}`
+	}
+	f.alertOn(t, lab, RuleContainerEscape, 1007, "", escape("metis-dispatch", "docker"))
+	f.alertOn(t, core, RuleReleaseAgent, 1007, "", escape("openxdr-ha-patroni-1", "docker"))
+	f.alertOn(t, pve, RuleContainerEscape, 1007, "", escape("vm-101", "qemu"))
+	if err := f.engine(ScopeAll).Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := f.received("raid-server-test")
+	if len(got) != 1 || got[0].Kind != pb.CommandKind_ISOLATE_CONTAINER || got[0].Target != "e09c4b52ae02" {
+		t.Fatalf("应只隔离发起逃逸的容器：%v", got)
+	}
+	if got := f.received("openxdr-node1"); len(got) != 0 {
+		t.Fatalf("核心资产上的容器不自动隔离：%v", got)
+	}
+	skipped := f.client.Containment.Query().Where(entcontainment.AssetIDEQ(core.ID)).OnlyX(f.ctx)
+	if skipped.State != entcontainment.StateSkipped || !strings.Contains(skipped.Reason, "核心资产") {
+		t.Fatalf("核心资产要留一条跳过的决定，说明为什么没处置：%+v", skipped)
+	}
+	if got := f.received("pve1"); len(got) != 0 {
+		t.Fatalf("QEMU 虚拟机进程不是容器：%v", got)
+	}
+}
+
+// 反弹 shell：结束进程并在本机封锁对端；核心资产只告警
+func TestReverseShellKillsProcessAndBlocksPeer(t *testing.T) {
+	f := setup(t)
+	server := `[{"process":"openxdr-server","port":8081}]`
+	web := f.host(t, "web", "10.1.1.183", nil, "")
+	core := f.host(t, "openxdr-node1", "10.1.1.198", nil, server)
+	shell := `{"activity_id":99,"process":{"pid":31337,"name":"bash","file":{"path":"/usr/bin/bash"},"cmd_line":"bash -i"},` +
+		`"stdio_socket":{"fd":0,"protocol":"tcp"},"src_endpoint":{"ip":"10.1.1.183","port":50000},"dst_endpoint":{"ip":"203.0.113.9","port":4444}}`
+	f.alertOn(t, web, RuleShellStdio, 1007, "", shell)
+	f.alertOn(t, core, RuleShellStdio, 1007, "", shell)
+	if err := f.engine(ScopeAll).Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := f.received("web")
+	if len(got) != 2 || got[0].Kind != pb.CommandKind_KILL_PROCESS || got[0].Pid != 31337 ||
+		got[1].Kind != pb.CommandKind_BLOCK_NETWORK || got[1].Target != "203.0.113.9" {
+		t.Fatalf("应结束反弹 shell 并封锁对端：%v", got)
+	}
+	if got := f.received("openxdr-node1"); len(got) != 0 {
+		t.Fatalf("核心资产只告警：%v", got)
+	}
+	if n := f.client.Containment.Query().Where(entcontainment.AssetIDEQ(core.ID), entcontainment.StateEQ(entcontainment.StateSkipped)).CountX(f.ctx); n != 2 {
+		t.Fatalf("核心资产上的两条处置都应记为跳过：%d", n)
+	}
+}
