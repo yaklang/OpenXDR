@@ -324,6 +324,49 @@ mod tests {
         assert!(rule.digest().is_err());
     }
 
+    // 规则生效后，容器照常能起、能 exec：runc 从内存文件（memfd）执行自身副本，容器里的程序在 overlayfs 上，
+    // 两者只要有一个算不出内容哈希，整台主机的容器都会被拒绝执行。
+    // 需要 docker 与一个正在运行的容器：OPENXDR_TEST_CONTAINER=<容器名> OPENXDR_TEST_IMAGE=<本地已有镜像>
+    #[test]
+    #[ignore = "需要专用 Linux 测试主机的 root、BPF LSM、BTF、IMA 与 docker"]
+    fn containers_still_run_while_a_rule_is_active() {
+        let container = std::env::var("OPENXDR_TEST_CONTAINER").expect("OPENXDR_TEST_CONTAINER");
+        let image = std::env::var("OPENXDR_TEST_IMAGE").expect("OPENXDR_TEST_IMAGE");
+        let dir = std::env::temp_dir().join(format!("openxdr-lsm-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let sample = dir.join("sample");
+        fs::copy("/bin/true", &sample).unwrap();
+        OpenOptions::new()
+            .append(true)
+            .open(&sample)
+            .unwrap()
+            .write_all(uuid::Uuid::new_v4().as_bytes())
+            .unwrap();
+        let state = dir.join("state.json");
+        let mut manager = Manager {
+            rules: Vec::new(),
+            _bpf: None,
+        };
+        update_manager(&mut manager, sample.to_str().unwrap(), true, &state).unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("docker")
+                .args(args)
+                .output()
+                .unwrap();
+            (
+                out.status.success(),
+                String::from_utf8_lossy(&out.stderr).into_owned(),
+            )
+        };
+        let exec = run(&["exec", &container, "true"]);
+        let fresh = run(&["run", "--rm", "--entrypoint", "true", &image]);
+        update_manager(&mut manager, sample.to_str().unwrap(), false, &state).unwrap();
+        drop(manager);
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(exec.0, "规则生效时 docker exec 失败：{}", exec.1);
+        assert!(fresh.0, "规则生效时 docker run 失败：{}", fresh.1);
+    }
+
     // 专用测试主机运行：给 ELF 副本追加唯一尾部数据，只拦截测试样本的内容。
     // 不使用平台状态路径，不修改系统启动参数，不挂后台服务。
     #[test]

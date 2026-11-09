@@ -339,7 +339,7 @@ curl -X POST http://localhost:8080/api/intel/import \
 
 启用规则后，内核无法计算执行文件的哈希时按 EACCES 拒绝执行；应先在同内核、同文件系统的专用测试主机验证，避免影响正常程序。真机回归命令：`cargo test --features execblock respond::execblock_linux::tests::kernel_blocks_copies_and_restores -- --ignored --exact`，测试给 ELF 副本追加唯一尾部数据，仅拦截该测试样本及其副本，并验证原 `/bin/true` 仍可运行。该测试不在开发机自动执行。
 
-2026-11-09 已在 `6.1.0-53-cloud-amd64`、BPF LSM + IMA SHA-256 内核上通过此真机回归：复制前后、重命名、软硬链接均按内容拦截，内容改变与原版系统程序可执行；重复下发、状态保存失败保留旧策略、同内容多路径引用、原文件删除后的恢复和解除均通过。测试结束后枚举内核 BPF 程序，确认没有 `deny_execution` / `probe_hash` 残留，并清理临时文件。其他内核与文件系统仍需运行同一回归验证。
+2026-11-09 已在 `6.1.0-53-cloud-amd64`、BPF LSM + IMA SHA-256 内核上通过此真机回归：复制前后、重命名、软硬链接均按内容拦截，内容改变与原版系统程序可执行；重复下发、状态保存失败保留旧策略、同内容多路径引用、原文件删除后的恢复和解除均通过。测试结束后枚举内核 BPF 程序，确认没有 `deny_execution` / `probe_hash` 残留，并清理临时文件。同日在同一内核、Docker overlayfs 存储驱动上验证：规则生效期间 `docker exec` 与 `docker run`（runc 经 memfd 执行自身副本、容器程序在 overlayfs 上）都能正常执行，回归命令 `OPENXDR_TEST_CONTAINER=<运行中的容器> OPENXDR_TEST_IMAGE=<本地镜像> cargo test --features execblock containers_still_run_while_a_rule_is_active -- --ignored`。其他内核与文件系统仍需运行同一回归验证。
 
 ```bash
 RESPONSE_ENABLED=true COMMAND_SIGNING_KEY_FILE=/certs/command-signing.key \
