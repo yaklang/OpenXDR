@@ -36,6 +36,12 @@ func TestCanonicalPath(t *testing.T) {
 		{"/binx/y", "/binx/y", "/binx/y"},
 		{"/opt/app/server", "/opt/app/server", "/opt/app/server"},
 		{`C:\Windows\System32\cmd.exe`, `C:\Windows\System32\cmd.exe`, `C:\Windows\System32\cmd.exe`},
+		{"/tmp/go-build10312128/b361/config.test", "/tmp/go-buildN/bN/config.test", "/tmp/go-buildN/bN/config.test"},
+		{"/tmp/TestHostedCodeOutputLimit1401744958/001/docker-fixture", "/tmp/TestHostedCodeOutputLimitN/N/docker-fixture", "/tmp/TestHostedCodeOutputLimitN/N/docker-fixture"},
+		{"/tmp/pytest-of-runner/pytest-150/x/bin/awk", "/tmp/pytest-of-runner/pytest-N/x/bin/awk", "/tmp/pytest-of-runner/pytest-N/x/bin/awk"},
+		{"/var/tmp/d-20261108T024043Z-a6b8ed8f6f9a/run", "/var/tmp/d-NTNZ-N/run", "/var/tmp/d-NTNZ-N/run"},
+		{"/tmp/x12345678", "/tmp/x12345678", "/tmp/x12345678"},
+		{"/opt/build123/app", "/opt/build123/app", "/opt/build123/app"},
 	}
 	for _, c := range cases {
 		if got := canonicalPath(c.in); got != c.canon {

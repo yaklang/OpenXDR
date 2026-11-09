@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -235,6 +236,24 @@ func canonicalPath(p string) string {
 	for _, d := range usrMerged {
 		if strings.HasPrefix(p, d) {
 			return "/usr" + p
+		}
+	}
+	return tempDirs(p)
+}
+
+// scratch 临时目录：构建与测试每次在这里新建随机命名的目录（go-build123/b001、TestFoo456/001、pytest-150）
+var scratch = []string{"/tmp/", "/var/tmp/"}
+
+// randomPart 目录名里的随机部分：长数字串与独立成段的长十六进制串（go-build 的 d 不算进去）
+var randomPart = regexp.MustCompile(`\b[0-9a-f]{8,}\b|[0-9]{3,}`)
+
+// tempDirs 把临时目录下各级目录名里的随机部分归成 N，文件名不动：同一个程序换个随机目录重跑不算首次出现，
+// 换了名字的程序照样算。CI 主机的 go test 每天因此多出两千条「首次出现」
+func tempDirs(p string) string {
+	i := strings.LastIndexByte(p, '/')
+	for _, d := range scratch {
+		if strings.HasPrefix(p, d) && i >= len(d) {
+			return d + randomPart.ReplaceAllString(p[len(d):i], "N") + p[i:]
 		}
 	}
 	return p
