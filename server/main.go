@@ -544,6 +544,9 @@ func startNotify(ctx context.Context, db *sql.DB, client *ent.Client, rules sigm
 		Interval:   time.Duration(getenvInt("WEBHOOK_INTERVAL_SECONDS", 30)) * time.Second,
 		WaitTriage: waitTriage,
 		Rules:      rules,
+		// 等研判结论的上限跟着模型超时走：调大 AI_TIMEOUT_SECONDS 的部署不用再记着改这个
+		MaxTriageWait: time.Duration(getenvInt("NOTIFY_TRIAGE_WAIT_MINUTES",
+			max(30, 2*getenvInt("AI_TIMEOUT_SECONDS", 300)/60))) * time.Minute,
 	}
 	go cluster.RunLeader(ctx, db, "notify", notifier.Run)
 	return notifySettings, webhook

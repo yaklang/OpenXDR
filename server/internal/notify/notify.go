@@ -37,6 +37,8 @@ type Notifier struct {
 	Client     *http.Client
 	// Rules 查规则作者：社区规则（DRL 1.1）要求基于命中的消息保留作者
 	Rules interface{ AuthorOf(id string) string }
+	// MaxTriageWait 等研判结论最多这么久，零值按 maxTriageWait
+	MaxTriageWait time.Duration
 
 	// 推送目标启用的时刻；未配置目标时为零值
 	start time.Time
@@ -148,7 +150,7 @@ func (n *Notifier) decide(inc *ent.Incident, severity int16) (bool, string) {
 	// 研判连续失败到 giveUpAfter 次就不等了，AI 未启用也不等——照推，不拿旧结论静默掉升级。
 	// 普通新证据待重研判（冷却中）不在此列：旧结论仍可用，照它决定，不把通知卡在冷却上
 	if !usable(inc) {
-		if n.WaitTriage != nil && n.WaitTriage() && inc.TriageFailures < giveUpAfter && time.Since(waitingSince(inc)) < maxTriageWait {
+		if n.WaitTriage != nil && n.WaitTriage() && inc.TriageFailures < giveUpAfter && time.Since(waitingSince(inc)) < n.triageWait() {
 			return false, "wait"
 		}
 		return true, ""
@@ -177,9 +179,16 @@ func needsHumanEscalation(v verdict) bool {
 // giveUpAfter 研判连续失败这么多次后通知不再等结论
 const giveUpAfter = 3
 
-// maxTriageWait 等研判结论最多这么久。推理慢不计失败次数（见 triage.retryLater），没有这道上限，
+// maxTriageWait 等研判结论的默认上限。推理慢不计失败次数（见 triage.retryLater），没有这道上限，
 // 推理一直慢时通知会一直压着
 const maxTriageWait = 30 * time.Minute
+
+func (n *Notifier) triageWait() time.Duration {
+	if n.MaxTriageWait > 0 {
+		return n.MaxTriageWait
+	}
+	return maxTriageWait
+}
 
 // waitingSince 从什么时候开始等结论：升级类证据从升级时刻算，其余从事件创建算
 func waitingSince(inc *ent.Incident) time.Time {
@@ -248,8 +257,8 @@ func (n *Notifier) message(ctx context.Context, inc *ent.Incident, linkBase stri
 		}
 	} else if inc.TriageFailures > 0 {
 		m.Summary = fmt.Sprintf("AI 研判连续失败 %d 次，未等结论先推送", inc.TriageFailures)
-	} else if time.Since(waitingSince(inc)) >= maxTriageWait {
-		m.Summary = fmt.Sprintf("AI 研判 %d 分钟内还没出结论（推理较慢），未等结论先推送", int(maxTriageWait.Minutes()))
+	} else if wait := n.triageWait(); time.Since(waitingSince(inc)) >= wait {
+		m.Summary = fmt.Sprintf("AI 研判 %d 分钟内还没出结论（推理较慢），未等结论先推送", int(wait.Minutes()))
 	}
 	if linkBase != "" {
 		m.Link = linkBase + "/?incident=" + m.IncidentID
