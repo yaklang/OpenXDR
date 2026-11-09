@@ -11,7 +11,7 @@ mod account;
 mod container;
 mod exec;
 mod execblock;
-mod netblock;
+pub mod netblock;
 mod process;
 mod quarantine;
 pub mod signed;

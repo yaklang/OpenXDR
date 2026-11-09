@@ -73,6 +73,7 @@ async fn agent() {
     let queue = delivery::open(&server, health::Health::new())
         .unwrap_or_else(|err| exit(&format!("无法打开事件缓存：{err}")));
     status::provision();
+    respond::netblock::restore();
     tokio::spawn(status::serve(queue.health.clone()));
     let cached = delivery::access(&queue, |spool| spool.session())
         .await

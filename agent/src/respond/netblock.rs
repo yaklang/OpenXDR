@@ -162,7 +162,7 @@ pub fn block(cmd: &Command) -> Outcome {
     }
     let list = nets.iter().map(Net::render).collect::<Vec<_>>().join(", ");
     match platform::add(&target, &nets) {
-        Ok(()) => Outcome::ok(format!("已封锁 {target}（{list}）的进出通信")),
+        Ok(()) => Outcome::ok(format!("已封锁 {target}（{list}）的进出通信{}", platform::save())),
         Err(e) => Outcome::failed(format!("封锁失败：{e}")),
     }
 }
@@ -180,8 +180,15 @@ pub fn unblock(cmd: &Command) -> Outcome {
     }
     match platform::remove(&target) {
         Ok(0) => Outcome::ok(format!("{target} 当前未被封锁")),
-        Ok(n) => Outcome::ok(format!("已解除 {target} 的封锁（{n} 条规则）")),
+        Ok(n) => Outcome::ok(format!("已解除 {target} 的封锁（{n} 条规则）{}", platform::save())),
         Err(e) => Outcome::failed(format!("解除封锁失败：{e}")),
+    }
+}
+
+/// 开机后恢复封锁：内核规则重启即丢，平台却还当它在生效。agent 启动时调用一次
+pub fn restore() {
+    if let Some(msg) = platform::restore() {
+        eprintln!("{msg}");
     }
 }
 
@@ -193,6 +200,53 @@ mod platform {
     use super::Net;
 
     const TABLE: &str = "openxdr_block";
+
+    /// 封锁表的落盘副本：nft 的文本格式能原样恢复，元素注释（原始目标）也在里面
+    fn saved() -> std::path::PathBuf {
+        crate::enroll::default_env_file().with_file_name("netblock.nft")
+    }
+
+    /// 每次封锁、解除后把整张表存下来。存不下不影响这次处置，但要在结果里说明重启后不会保留
+    pub fn save() -> String {
+        let write = || -> Result<(), String> {
+            let table = nft(&["list", "table", "inet", TABLE], None)?;
+            let path = saved();
+            let tmp = path.with_extension("nft.tmp");
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                let mut f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&tmp)
+                    .map_err(|e| e.to_string())?;
+                f.write_all(table.as_bytes()).map_err(|e| e.to_string())?;
+                f.sync_all().map_err(|e| e.to_string())?;
+            }
+            std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+        };
+        match write() {
+            Ok(()) => String::new(),
+            Err(e) => format!("；规则未能落盘（{e}），主机重启后不会保留"),
+        }
+    }
+
+    /// 内核里没有封锁表、落盘副本在：原样载入。表已存在（agent 重启而主机没重启）不动它
+    pub fn restore() -> Option<String> {
+        let path = saved();
+        if !path.exists() || nft(&["list", "table", "inet", TABLE], None).is_ok() {
+            return None;
+        }
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => return Some(format!("读不到封锁副本 {}：{e}", path.display())),
+        };
+        Some(match nft(&["-f", "-"], Some(&text)) {
+            Ok(_) => format!("已从 {} 恢复开机前的网络封锁", path.display()),
+            Err(e) => format!("恢复网络封锁失败：{e}"),
+        })
+    }
 
     /// 表、集合与规则只在表不存在时建一次：nft 的 add rule 会叠加，不能每次都跑
     fn ensure() -> Result<(), String> {
@@ -318,6 +372,15 @@ mod platform {
 #[cfg(target_os = "windows")]
 mod platform {
     use super::Net;
+
+    /// Windows 防火墙规则本身就持久，重启后仍在
+    pub fn save() -> String {
+        String::new()
+    }
+
+    pub fn restore() -> Option<String> {
+        None
+    }
     use crate::respond::powershell;
 
     const GROUP: &str = "OpenXDR Block";
@@ -355,6 +418,12 @@ mod platform {
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 mod platform {
     use super::Net;
+    pub fn save() -> String {
+        String::new()
+    }
+    pub fn restore() -> Option<String> {
+        None
+    }
     pub fn add(_: &str, _: &[Net]) -> Result<(), String> {
         Err("本平台不支持网络封锁".into())
     }
