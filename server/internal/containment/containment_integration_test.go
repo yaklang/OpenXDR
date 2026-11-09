@@ -476,6 +476,22 @@ func TestOwnOperationsAreNotContained(t *testing.T) {
 	}
 }
 
+// 已知自动化来源上出现反弹 shell：运维不会这样做，钥匙或来源已经失守，照样处置
+func TestTrustedSourceDoesNotExemptReverseShell(t *testing.T) {
+	f := setup(t)
+	web := f.host(t, "web", "10.1.1.183", nil, "")
+	shell := `{"activity_id":99,"process":{"pid":31337,"name":"bash","file":{"path":"/usr/bin/bash"}},` +
+		`"stdio_socket":{"fd":0,"protocol":"tcp"},"dst_endpoint":{"ip":"203.0.113.9","port":4444}}`
+	al := f.alertOn(t, web, RuleShellStdio, 1007, "", shell)
+	f.client.Alert.UpdateOneID(al.ID).SetAutomationID(uuid.New()).ExecX(f.ctx)
+	if err := f.engine(ScopeAll).Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.received("web"); len(got) != 2 || got[0].Kind != pb.CommandKind_KILL_PROCESS {
+		t.Fatalf("可信来源上的反弹 shell 应照样处置：%v", got)
+	}
+}
+
 // 人工解除：下发恢复动作；解除之前的证据（包括同一批的另一条告警）不再触发同一处置，之后的新证据照样触发
 func TestManualLiftSticksUntilNewEvidence(t *testing.T) {
 	f := setup(t)

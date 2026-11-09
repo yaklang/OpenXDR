@@ -151,7 +151,7 @@ P1 上线时 `CONTAINMENT_ENABLED` 默认关闭，生产先用 `CONTAINMENT_SCOP
 代码在 `server/internal/containment`，单活循环每 5 秒一轮（`CONTAINMENT_*` 配置见 [部署文档](deployment.md)）。
 开关与范围在「自主响应」页由全局 admin 改，存 settings 表、每轮读取；`CONTAINMENT_ENABLED` / `CONTAINMENT_SCOPE` 设了就锁定。
 关闭只停新的处置，已生效的租约照常对账、到期复核或解除。
-平台指令与已知自动化引起的告警不处置。
+平台指令与已知自动化引起的告警不处置。例外是数据库拉起 shell、反弹 shell、容器逃逸：运维不会这样做，出现在可信来源（登记过的运维钥匙、来源网段）上说明钥匙或来源已经失守，照样处置。
 
 ### 信号与处置
 

@@ -38,6 +38,11 @@ const RuleShellStdio = "43ade2ed-38aa-486c-8629-cd561cf9787e"
 // pgClient PostgreSQL 后端的进程标题「postgres: 用户 库 客户端地址(端口) 命令」里的客户端地址
 var pgClient = regexp.MustCompile(`^postgres: \S+ \S+ ([0-9A-Fa-f.:]+)\(\d+\)`)
 
+// noTrustSignals 可信自动化来源（登记过的运维钥匙、来源网段）也照样处置的信号：正常运维不会让数据库拉起 shell、
+// 把 shell 接到网络上或从容器里逃出来，出现了就是钥匙或来源已经落到别人手里。横向喷洒、爆破与情报命中
+// 运维脚本会正常触发（批量 SSH、扫描），仍然豁免
+var noTrustSignals = []string{RuleDatabaseShell, RuleContainerEscape, RuleReleaseAgent, RuleShellStdio}
+
 // signalAlerts 快路径的信号：只认确定性的合成检测与高级别情报命中，不认 Sigma 规则与 AI 结论
 func signalAlerts() predicate.Alert {
 	return alert.Or(

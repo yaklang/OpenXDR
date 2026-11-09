@@ -477,11 +477,13 @@ type plan struct {
 	actions []action
 }
 
-// react 对回看窗口内有新证据的信号告警逐条做决定。平台指令、已知自动化与容器健康检查引起的告警不处置
+// react 对回看窗口内有新证据的信号告警逐条做决定。平台指令、已知自动化与容器健康检查引起的告警不处置，
+// 但已知自动化不豁免 noTrustSignals
 func (e *Engine) react(ctx context.Context) error {
 	now := e.now()
 	alerts, err := e.DB.Alert.Query().
-		Where(signalAlerts(), alert.AssetIDNotNil(), alert.CommandIDIsNil(), alert.AutomationIDIsNil(), alert.HealthcheckEQ(false),
+		Where(signalAlerts(), alert.AssetIDNotNil(), alert.CommandIDIsNil(), alert.HealthcheckEQ(false),
+			alert.Or(alert.AutomationIDIsNil(), alert.RuleIDIn(noTrustSignals...)),
 			alert.Or(alert.LastTsGTE(now.Add(-lookback)), alert.And(alert.LastTsIsNil(), alert.TsGTE(now.Add(-lookback)))),
 			alert.TsLTE(now)).
 		All(ctx)
