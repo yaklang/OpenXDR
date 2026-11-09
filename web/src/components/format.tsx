@@ -148,6 +148,8 @@ const COMMAND_KIND: Record<string, MsgKey> = {
   restore_file: 'restoreFile',
   disable_account: 'disableAccount',
   enable_account: 'enableAccount',
+  disable_sso_account: 'disableSSOAccount',
+  enable_sso_account: 'enableSSOAccount',
   isolate_container: 'isolateContainer',
   unisolate_container: 'unisolateContainer',
   block_execution: 'blockExecution',

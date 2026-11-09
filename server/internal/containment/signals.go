@@ -182,7 +182,11 @@ func (e *Engine) planBruteforce(ctx context.Context, al *ent.Alert) (plan, error
 		p.actions = append(p.actions, action{asset: victim, kind: "block_network", target: ip, role: "victim", skip: outOfScope,
 			why: "来自 " + ip + " 的口令爆破已经登录成功，封锁该地址"})
 	}
-	if ev.Username != nil && *ev.Username != "" {
+	if ev.Username != nil && *ev.Username != "" && ev.Source == "authentik" {
+		// SSO 账号在 Authentik 上停用，与能不能登上这台主机无关，核心资产照样处置；超级管理员由 Authentik 侧保护
+		p.actions = append(p.actions, action{asset: victim, kind: KindSSO, target: *ev.Username, role: "victim", skip: outOfScope,
+			why: "SSO 账号 " + *ev.Username + " 的口令被爆破得手，在 Authentik 停用该账号（需改密后人工恢复）"})
+	} else if ev.Username != nil && *ev.Username != "" {
 		a := action{asset: victim, kind: "disable_account", target: *ev.Username, role: "victim", skip: outOfScope,
 			why: "账号 " + *ev.Username + " 的口令被爆破得手，锁定账号（需改密后人工解锁）"}
 		if a.skip == "" && vt == TierCore {

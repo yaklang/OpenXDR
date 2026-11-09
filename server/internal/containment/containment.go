@@ -62,6 +62,8 @@ type Engine struct {
 	// 慢路径：研判结论驱动的处置门槛（见 verdict.go）；Notify 推送待审批处置，nil 不推
 	Verdicts VerdictPolicy
 	Notify   func(ctx context.Context, title, text, path string) error
+	// SSO 账号的停用与恢复（Authentik），nil 时不停用 SSO 账号
+	SSO SSOAccounts
 	// 边界网关的主机名（CONTAINMENT_EDGE_HOSTS）：公网地址的封锁在这些主机上一并执行，见 edge.go
 	EdgeHosts []string
 	// 已处理过的结论：事件 → 研判时刻，只在单活循环里读写
@@ -586,6 +588,9 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a
 			return err
 		}
 		return nil
+	}
+	if a.kind == KindSSO {
+		return e.disableSSO(ctx, create, a, al)
 	}
 	cmdID := initialCommandID(al.ID, key)
 	req, skip, err := e.request(ctx, a, cmdID, al.IncidentID, al.Ts)

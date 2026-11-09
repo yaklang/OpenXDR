@@ -26,7 +26,7 @@ func Containments(db *ent.Client, hub *response.Hub, engine *containment.Engine,
 	mux.HandleFunc("GET /api/containments", listContainments(db))
 	mux.HandleFunc("GET /api/containments/status", containmentStatus(db, engine))
 	mux.HandleFunc("PUT /api/containments/config", saveContainmentConfig(db, engine, config))
-	mux.HandleFunc("POST /api/containments/{id}/lift", liftContainment(db, hub))
+	mux.HandleFunc("POST /api/containments/{id}/lift", liftContainment(db, hub, engine))
 	mux.HandleFunc("POST /api/containments/{id}/approve", decideContainment(db, engine, true))
 	mux.HandleFunc("POST /api/containments/{id}/decline", decideContainment(db, engine, false))
 	return mux
@@ -213,7 +213,7 @@ func saveContainmentConfig(db *ent.Client, engine *containment.Engine, config *c
 }
 
 // liftContainment 组 analyst 人工解除或恢复一条处置；解除时间之前的证据不再触发同一处置
-func liftContainment(db *ent.Client, hub *response.Hub) http.HandlerFunc {
+func liftContainment(db *ent.Client, hub *response.Hub, engine *containment.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, ok := getByPath(w, r, "id", "containment", db.Containment.Get)
 		if !ok || !assetInScope(w, r, db, c.AssetID, "analyst") {
@@ -227,7 +227,18 @@ func liftContainment(db *ent.Client, hub *response.Hub) http.HandlerFunc {
 			return
 		}
 		actor := auth.From(r.Context()).Username
-		lifted, err := containment.Lift(r.Context(), db, hub, c, actor, strings.TrimSpace(body.Reason))
+		var lifted *ent.Containment
+		var err error
+		switch {
+		case c.Kind == containment.KindSSO && engine == nil:
+			http.Error(w, "未开启 RESPONSE_ENABLED，SSO 账号请在 Authentik 后台恢复", http.StatusConflict)
+			return
+		case c.Kind == containment.KindSSO:
+			// SSO 账号由 server 直接调 Authentik 恢复，不经 agent
+			lifted, err = engine.LiftSSO(r.Context(), c, actor, strings.TrimSpace(body.Reason))
+		default:
+			lifted, err = containment.Lift(r.Context(), db, hub, c, actor, strings.TrimSpace(body.Reason))
+		}
 		if errors.Is(err, containment.ErrNotLiftable) {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return

@@ -90,6 +90,11 @@ services:
       CONTAINMENT_SCOPE: ${CONTAINMENT_SCOPE:-}
       # 边界网关的主机名（逗号分隔）：公网地址的封锁在这些主机上一并执行，不配不启用
       CONTAINMENT_EDGE_HOSTS: ${CONTAINMENT_EDGE_HOSTS:-}
+      # SSO（Authentik）：登录事件接入与爆破得手时停用账号，四项见 docs/deployment.md
+      AUTHENTIK_URL: ${AUTHENTIK_URL:-}
+      AUTHENTIK_RESPONSE_TOKEN: ${AUTHENTIK_RESPONSE_TOKEN:-}
+      AUTHENTIK_ASSET: ${AUTHENTIK_ASSET:-}
+      AUTHENTIK_PROTECTED: ${AUTHENTIK_PROTECTED:-}
       ISOLATION_ALLOW: ${ISOLATION_ALLOW:-10.1.1.199:8081}
       TLS_CA_FILE: /certs/ca.crt
       TLS_CERT_FILE: /certs/server.crt

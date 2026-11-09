@@ -32,6 +32,7 @@ import (
 	"openxdr/server/internal/api"
 	"openxdr/server/internal/assetmap"
 	"openxdr/server/internal/auditchain"
+	"openxdr/server/internal/authentik"
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/automation"
 	"openxdr/server/internal/beacon"
@@ -151,6 +152,7 @@ func main() {
 	}
 	defer events.Close()
 	syslogServer := startSyslog(ctx, client, rules, dedupWindow, suppressions, intelStore, events)
+	startAuthentik(ctx, db, client, events)
 	grpcServer, dists := startGRPC(db, client, rules, dedupWindow, hub, suppressions, intelStore, events)
 
 	if err := cluster.WithLock(ctx, db, "bootstrap", func() error { return auth.Bootstrap(ctx, client) }); err != nil {
@@ -522,6 +524,8 @@ func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *
 			Exempt:            hostSet(os.Getenv("AUTO_RESPONSE_EXEMPT")),
 		},
 		Notify: notify,
+		// SSO 账号停用：配了 Authentik 处置令牌才有；AUTHENTIK_PROTECTED 里的账号与超级管理员、服务账号永远不停用
+		SSO: authentikAccounts(),
 		// 边界网关：公网地址的封锁在这些主机上一并执行（逗号分隔的主机名，不配就不启用）
 		EdgeHosts: strings.FieldsFunc(os.Getenv("CONTAINMENT_EDGE_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' }),
 	}
@@ -650,6 +654,37 @@ func startEventBus(ctx context.Context, db *sql.DB, rules sigma.Catalog, tempora
 	hub.Router = router
 	slog.Info("事件队列已启用", "url", natsURL, "shards", getenvInt("QUEUE_SHARDS", 32), "batch_size", queued.BatchSize())
 	return queued, router
+}
+
+// authentikAPI Authentik 处置用的客户端：实例地址与最小权限令牌都配了才有（查看事件、查看与修改用户）
+func authentikAPI() *authentik.Client {
+	base, token := os.Getenv("AUTHENTIK_URL"), os.Getenv("AUTHENTIK_RESPONSE_TOKEN")
+	if base == "" || token == "" || !strings.HasPrefix(base, "https://") {
+		return nil
+	}
+	return &authentik.Client{BaseURL: base, Token: token}
+}
+
+func authentikAccounts() containment.SSOAccounts {
+	api := authentikAPI()
+	if api == nil {
+		return nil
+	}
+	return &authentik.Accounts{API: api, Protected: hostSet(os.Getenv("AUTHENTIK_PROTECTED"))}
+}
+
+// startAuthentik 把 SSO 登录事件接进检测管线：挂在运行 Authentik 的资产（AUTHENTIK_ASSET）上
+func startAuthentik(ctx context.Context, db *sql.DB, client *ent.Client, events eventbus.Bus) {
+	api, host := authentikAPI(), os.Getenv("AUTHENTIK_ASSET")
+	if api == nil || host == "" {
+		return
+	}
+	if events == nil {
+		slog.Warn("Authentik 登录事件需要事件总线（NATS），不接入")
+		return
+	}
+	p := &authentik.Poller{API: api, DB: client, SQL: db, Events: events, Host: host, Interval: 30 * time.Second}
+	go cluster.RunLeader(ctx, db, "authentik-events", p.Run)
 }
 
 // startSyslog syslog 接入，与采集端共用同一事件管道。

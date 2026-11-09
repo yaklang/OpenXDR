@@ -20,6 +20,8 @@ var reverse = map[string]string{
 	"block_network":     "unblock_network",
 	"quarantine_file":   "restore_file",
 	"disable_account":   "enable_account",
+	// SSO 账号由 server 直接调 Authentik 恢复，不经 agent（见 sso.go 的 LiftSSO）
+	KindSSO: "enable_sso_account",
 }
 
 // ErrNotLiftable 这条处置不在生效中，或动作撤不回（结束进程）
