@@ -78,7 +78,39 @@ func (a *Accounts) Disable(ctx context.Context, username string) (string, error)
 	if err := a.set(ctx, u, false); err != nil {
 		return "", err
 	}
-	return "已在 Authentik 停用 SSO 账号 " + username + "（改密后人工恢复）", nil
+	msg := "已在 Authentik 停用 SSO 账号 " + username + "（改密后人工恢复）"
+	n, err := a.revokeSessions(ctx, username)
+	switch {
+	case err != nil:
+		msg += "；已登录的会话未能作废（" + err.Error() + "），请在 Authentik 后台手动清理"
+	case n > 0:
+		msg += fmt.Sprintf("；作废 %d 个已登录会话", n)
+	}
+	return msg, nil
+}
+
+// revokeSessions 作废账号已登录的会话：停用只挡住新登录，攻击者手里登着的浏览器会话还能用
+func (a *Accounts) revokeSessions(ctx context.Context, username string) (int, error) {
+	var resp struct {
+		Results []struct {
+			UUID string `json:"uuid"`
+		} `json:"results"`
+	}
+	q := url.Values{"user__username": {username}, "page_size": {"100"}}
+	if err := a.API.do(ctx, http.MethodGet, "core/authenticated_sessions/?"+q.Encode(), nil, &resp); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, s := range resp.Results {
+		if s.UUID == "" {
+			continue
+		}
+		if err := a.API.do(ctx, http.MethodDelete, "core/authenticated_sessions/"+url.PathEscape(s.UUID)+"/", nil, nil); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 // Enable 恢复账号

@@ -50,9 +50,11 @@ func TestEnvelopeMapsLoginsWithoutSecrets(t *testing.T) {
 }
 
 type fakeAuthentik struct {
-	mu      sync.Mutex
-	users   map[int]*user
-	patches []string
+	mu       sync.Mutex
+	users    map[int]*user
+	patches  []string
+	sessions map[string][]string
+	deleted  []string
 }
 
 func (f *fakeAuthentik) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +73,15 @@ func (f *fakeAuthentik) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"results": out})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v3/core/authenticated_sessions/":
+		var out []map[string]string
+		for _, s := range f.sessions[r.URL.Query().Get("user__username")] {
+			out = append(out, map[string]string{"uuid": s})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": out})
+	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/core/authenticated_sessions/"):
+		f.deleted = append(f.deleted, strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v3/core/authenticated_sessions/"), "/"))
+		w.WriteHeader(204)
 	case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v3/core/users/"):
 		var body struct {
 			IsActive bool `json:"is_active"`
@@ -111,8 +122,12 @@ func TestAccountsNeverDisableAdminsOrServiceAccounts(t *testing.T) {
 	if len(f.patches) != 0 {
 		t.Fatalf("被拒绝的账号不能发修改请求：%v", f.patches)
 	}
-	if _, err := a.Disable(ctx, "alice"); err != nil || f.users[1].IsActive {
-		t.Fatalf("普通账号应停用：%v", err)
+	f.sessions = map[string][]string{"alice": {"s1", "s2"}, "bob": {"s3"}}
+	if msg, err := a.Disable(ctx, "alice"); err != nil || f.users[1].IsActive || !strings.Contains(msg, "作废 2 个") {
+		t.Fatalf("普通账号应停用并作废会话：%v %s", err, msg)
+	}
+	if strings.Join(f.deleted, ",") != "s1,s2" {
+		t.Fatalf("只作废这个账号的会话：%v", f.deleted)
 	}
 	if msg, err := a.Disable(ctx, "alice"); err != nil || !strings.Contains(msg, "原本就是停用") {
 		t.Fatalf("重复停用算达成：%v %s", err, msg)

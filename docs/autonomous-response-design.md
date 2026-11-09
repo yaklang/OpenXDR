@@ -181,7 +181,7 @@ P1 上线时 `CONTAINMENT_ENABLED` 默认关闭，生产先用 `CONTAINMENT_SCOP
 - **到期**：直接下发解除，不做 AI 复核（P4 再加）。解除下发失败（agent 离线）就推迟 5 分钟重试，租约保持生效。
 - **范围**：`CONTAINMENT_SCOPE=lab` 时，攻击涉及的主机（来源、受害方或失陷主机）里没有实验等级的就只记 skipped。
 - **边界网关**：配了 `CONTAINMENT_EDGE_HOSTS` 时，任何自动执行的公网地址封锁都在网关上再封一份（角色 edge，同一租约）；批准的待审批封锁在批准时一并上边界。内网地址不上边界，原动作被跳过时边界也跳过。生产上网关是 gateway（10.1.1.100，核心等级，2026-11-09 接入）
-- **SSO 账号**：配了 Authentik 时，SSO 登录事件（成功、失败）每 30 秒拉一次，挂在运行 Authentik 的资产上进检测；爆破得手时由 server 直接调 Authentik 停用该账号（`disable_sso_account`，一次性，不自动恢复，在自主响应页人工恢复），核心资产也照样执行，因为停用发生在 Authentik 上、与能否登上主机无关。超级管理员、服务账号与 `AUTHENTIK_PROTECTED` 里的账号永远不停用，被拒记为失败。生产上 2026-11-09 接入，服务账号 `openxdr-response`
+- **SSO 账号**：配了 Authentik 时，SSO 登录事件（成功、失败）每 30 秒拉一次，挂在运行 Authentik 的资产上进检测；爆破得手时由 server 直接调 Authentik 停用该账号并作废它已登录的会话（`disable_sso_account`，一次性，不自动恢复，在自主响应页人工恢复），核心资产也照样执行，因为停用发生在 Authentik 上、与能否登上主机无关。超级管理员、服务账号与 `AUTHENTIK_PROTECTED` 里的账号永远不停用，被拒记为失败。生产上 2026-11-09 接入，服务账号 `openxdr-response`
 - **熔断**：按滑动窗口数生效过的处置，挡下的记 held，不会补执行。手动恢复等 P3 的页面。
 - **受保护目标**：目标都经 `response.NormalizeTarget` 校验，`ISOLATION_ALLOW` 里的 server 地址不封、内置账号不锁。
   未配置 `ISOLATION_ALLOW` 时不隔离。

@@ -485,7 +485,7 @@ server 全部通过环境变量配置，均有默认值：
 | `CONTAINMENT_SCOPE` | 空（控制台决定，默认 `lab`） | `lab` 只处置涉及实验等级主机的攻击（上线初期），`all` 不限；同样可在「自主响应」页改，设了即锁定 |
 | `CONTAINMENT_EDGE_HOSTS` | 空（不启用） | 边界网关的主机名，逗号分隔（如 `gateway`）：自主响应封锁公网地址时，在这些主机上一并封锁。网关须装 agent，建议处置等级设为核心 |
 | `AUTHENTIK_URL` | 空 | Authentik 实例根地址（HTTPS），与下面的处置令牌一起配才启用 SSO 接入 |
-| `AUTHENTIK_RESPONSE_TOKEN` | 空 | Authentik 服务账号的 API 令牌，只需「查看事件、查看用户、修改用户」三项权限：拉登录事件、爆破得手时停用账号 |
+| `AUTHENTIK_RESPONSE_TOKEN` | 空 | Authentik 服务账号的 API 令牌，只需「查看事件、查看用户、修改用户、查看与删除会话」：拉登录事件、爆破得手时停用账号并作废它已登录的会话 |
 | `AUTHENTIK_ASSET` | 空 | 运行 Authentik 的资产主机名（如 `gateway`）：SSO 登录事件挂在它名下，进爆破得手等检测 |
 | `AUTHENTIK_PROTECTED` | 空 | 逗号分隔的用户名：永远不自动停用（超级管理员与服务账号本来就不停用） |
 | `CONTAINMENT_TTL_HOURS` | `24` | 处置租约长度，从最后一条证据算起；证据持续就续期。到期时配了模型先请 AI 复核（解除或续期，出错按续期、一小时后再问），没配模型直接解除；租约最长 7 天 |
