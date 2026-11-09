@@ -45,8 +45,8 @@ const (
 	// 宿主机与其他容器不受影响；用宿主机网络的容器拒绝执行。仅 Linux
 	CommandKind_ISOLATE_CONTAINER   CommandKind = 11
 	CommandKind_UNISOLATE_CONTAINER CommandKind = 12
-	// 禁止执行：target 是文件绝对路径。用系统自带的 WDAC 按文件内容（Authenticode 与页哈希）拒绝执行，
-	// 同一内容的所有拷贝一起拦；有有效数字签名的文件拒绝执行此动作。解除按原路径删掉对应规则。仅 Windows
+	// 禁止执行：target 是文件绝对路径。Windows 用 WDAC，Linux 用 BPF LSM + IMA 按内容拒绝执行，
+	// 同一内容的所有拷贝一起拦；Windows 拒绝拦截有效签名文件，Linux 保护系统目录与关键程序。解除按原路径删掉规则。
 	CommandKind_BLOCK_EXECUTION   CommandKind = 13
 	CommandKind_UNBLOCK_EXECUTION CommandKind = 14
 )
@@ -280,7 +280,7 @@ type Command struct {
 	TimeoutMs uint32 `protobuf:"varint,8,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
 	// BLOCK_NETWORK / UNBLOCK_NETWORK：IP、网段（CIDR）或域名；QUARANTINE_FILE / RESTORE_FILE：文件绝对路径；
 	// DISABLE_ACCOUNT / ENABLE_ACCOUNT：本机账号名；ISOLATE_CONTAINER / UNISOLATE_CONTAINER：容器 ID；
-	// BLOCK_EXECUTION / UNBLOCK_EXECUTION：Windows 文件绝对路径
+	// BLOCK_EXECUTION / UNBLOCK_EXECUTION：与目标系统匹配的 Linux / Windows 文件绝对路径
 	Target string `protobuf:"bytes,9,opt,name=target,proto3" json:"target,omitempty"`
 	// 签名信封：序列化的 SignedCommand 与 server 指令签名私钥对它的 Ed25519 签名。
 	// agent 只执行验签通过的信封里的指令，上面的明文字段仅供 server 内部投递与回写，agent 不采信。

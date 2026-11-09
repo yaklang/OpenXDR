@@ -43,9 +43,9 @@ func TestNormalizeTarget(t *testing.T) {
 		{"disable_account", "root"}:              "内置",
 		{"disable_account", "a b"}:               "账号名",
 		{"isolate_container", "abc"}:             "容器 ID",
-		{"block_execution", "/tmp/x.sh"}:         "Windows 文件绝对路径",
-		{"block_execution", `relative\a.exe`}:    "Windows 文件绝对路径",
-		{"block_execution", "C:\\a.exe\nC:\\b"}:  "Windows 文件绝对路径",
+		{"block_execution", "/tmp/../x"}:         "规范文件绝对路径",
+		{"block_execution", `relative\a.exe`}:    "规范文件绝对路径",
+		{"block_execution", "C:\\a.exe\nC:\\b"}:  "规范文件绝对路径",
 		{"isolate_container", "4f173e0d45b0;id"}: "容器 ID",
 		{"disable_account", "-e"}:                "账号名",
 		{"kill_process", "x"}:                    "不需要目标",
@@ -57,5 +57,30 @@ func TestNormalizeTarget(t *testing.T) {
 	}
 	if _, err := NormalizeTarget("block_network", "10.1.0.0/16", []netip.Addr{}); err != nil {
 		t.Errorf("没有放行地址时只按范围检查: %v", err)
+	}
+}
+
+func TestExecutionTargetOS(t *testing.T) {
+	for _, kind := range []string{"block_execution", "unblock_execution"} {
+		for _, tc := range []struct {
+			os, target string
+			valid      bool
+		}{
+			{"linux", "/tmp/evil", true},
+			{"windows", `C:\tmp\evil.exe`, true},
+			{"linux", `C:\tmp\evil.exe`, false},
+			{"windows", "/tmp/evil", false},
+			{"", "/tmp/evil", false},
+			{"darwin", "/tmp/evil", false},
+			{"linux", "/", false},
+			{"linux", "/tmp/../evil", false},
+			{"linux", "relative", false},
+			{"linux", "/tmp/a\x00b", false},
+		} {
+			_, err := validateExecutionTarget(tc.os, kind, tc.target)
+			if (err == nil) != tc.valid {
+				t.Errorf("%s %s %q: %v", kind, tc.os, tc.target, err)
+			}
+		}
 	}
 }

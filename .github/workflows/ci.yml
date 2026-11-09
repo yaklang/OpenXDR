@@ -215,7 +215,7 @@ jobs:
       matrix:
         include:
           - crate: agent
-            feature: ebpf
+            feature: ebpf,execblock
           - crate: sensor
             feature: xdp
     steps:
@@ -227,6 +227,9 @@ jobs:
         with:
           workspaces: ${{ matrix.crate }}
           key: ${{ matrix.feature }}
+      - name: 安装 BPF Clang
+        if: matrix.crate == 'agent'
+        run: sudo apt-get update && sudo apt-get install -y clang
       - name: 安装 bpf-linker
         # pin 版本：0.10.4 默认用 nightly 自带 LLVM（rust-llvm-22），不依赖 runner 预装 LLVM。
         # 0.11 起默认改为 llvm-23，cargo install 不 pin 会被悄悄拉新打断构建。
@@ -234,6 +237,10 @@ jobs:
       - name: 构建
         working-directory: ${{ matrix.crate }}
         run: cargo build --features ${{ matrix.feature }}
+      - name: 执行拦截状态测试
+        if: matrix.crate == 'agent'
+        working-directory: agent
+        run: cargo test --locked --features execblock execblock_linux
 
   # 采集端要能交叉编译到 Windows：ETW 代码平时在 Linux CI 上编不到
   windows-target:

@@ -47,10 +47,10 @@ func TestIssueGateways(t *testing.T) {
 		t.Fatal("无 agent 的资产应拒绝下发")
 	}
 
-	// 闸门：只有 Windows 实现的动作，别的主机下发前就拒绝且不落库
+	// 闸门：未知操作系统下发前就拒绝且不落库
 	if _, err := on.Issue(ctx, Request{AssetID: asset.ID, Kind: "block_execution", Target: `C:\x\a.exe`, IssuedBy: "admin"}); err == nil ||
 		!strings.Contains(err.Error(), "Windows") {
-		t.Fatalf("非 Windows 主机应拒绝禁止执行：%v", err)
+		t.Fatalf("未知系统应拒绝禁止执行：%v", err)
 	}
 	if n, _ := client.Command.Query().Count(ctx); n != 0 {
 		t.Fatalf("被拒绝的指令不应落库，实际 %d 条", n)
@@ -201,7 +201,7 @@ func TestAllActionsUnknownDelivery(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			ctx, db := testdb.New(t)
 			id := uuid.New()
-			// Windows 主机才收得下全部动作（禁止执行只在 Windows 上实现）
+			// 使用 Windows 资产与对应文件路径验证全部动作。
 			a := db.Asset.Create().SetHostname("remote").SetOs("windows").SetAgentID(id).SaveX(ctx)
 			h := NewHub(db, true)
 			h.Router = completingRouter{hub: h, fail: true}
@@ -210,7 +210,7 @@ func TestAllActionsUnknownDelivery(t *testing.T) {
 			if kind == "exec" {
 				issue = h.IssueExec
 			}
-			cmd, err := issue(ctx, Request{AssetID: a.ID, Kind: kind, Cmd: &line})
+			cmd, err := issue(ctx, Request{AssetID: a.ID, Kind: kind, Cmd: &line, Target: `C:\tmp\evil.exe`})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -300,6 +300,45 @@ func TestTargetedActionsCarryTarget(t *testing.T) {
 		sent := <-ch
 		if sent.Kind != Kinds[kind] || sent.Target != target || h.ToProto(cmd).Target != target {
 			t.Fatalf("%s 送到 agent 的指令不对: %+v", kind, sent)
+		}
+	}
+}
+
+func TestLinuxExecutionReceipts(t *testing.T) {
+	ctx, db := testdb.New(t)
+	id := uuid.New()
+	a := db.Asset.Create().SetHostname("linux").SetOs("linux").SetAgentID(id).SaveX(ctx)
+	h := NewHub(db, true)
+	ch := h.Attach(id)
+	for _, kind := range []string{"block_execution", "unblock_execution"} {
+		for receipt, want := range map[pb.CommandResult_Status]string{
+			pb.CommandResult_SUCCEEDED:   "succeeded",
+			pb.CommandResult_FAILED:      "failed",
+			pb.CommandResult_UNSUPPORTED: "unsupported",
+		} {
+			cmd, err := h.Issue(ctx, Request{AssetID: a.ID, Kind: kind, Target: "/tmp/evil"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sent := <-ch
+			var envelope pb.SignedCommand
+			if !ed25519.Verify(h.SignerPublic(), append([]byte(signContext), sent.Envelope...), sent.Signature) || proto.Unmarshal(sent.Envelope, &envelope) != nil {
+				t.Fatal("Linux 执行拦截的签名无效")
+			}
+			if envelope.AgentId != id.String() || envelope.Command == nil || envelope.Command.Target != "/tmp/evil" || envelope.Command.Kind != Kinds[kind] {
+				t.Fatalf("签名信封未绑定正确的资产、目标和动作：%+v", &envelope)
+			}
+			if stored := db.Command.GetX(ctx, cmd.ID); stored.Status == "succeeded" || stored.CompletedAt != nil {
+				t.Fatal("下发成功不能当成执行成功")
+			}
+			h.Complete(ctx, uuid.New(), &pb.CommandResult{CommandId: cmd.ID.String(), Status: receipt})
+			if db.Command.GetX(ctx, cmd.ID).CompletedAt != nil {
+				t.Fatal("其他 agent 不能替目标主机回执")
+			}
+			h.Complete(ctx, id, &pb.CommandResult{CommandId: cmd.ID.String(), Status: receipt})
+			if stored := db.Command.GetX(ctx, cmd.ID); stored.Status != want || stored.CompletedAt == nil {
+				t.Fatalf("%s 回执应为 %s，实际 %+v", kind, want, stored)
+			}
 		}
 	}
 }

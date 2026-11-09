@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v6
       # musl 静态链接：一个二进制跑遍新老发行版（CentOS 7 也行）；mingw 给 Windows 目标
       - name: 安装交叉编译工具
-        run: sudo apt-get update && sudo apt-get install -y musl-tools gcc-mingw-w64-x86-64
+        run: sudo apt-get update && sudo apt-get install -y musl-tools clang gcc-mingw-w64-x86-64
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl,x86_64-pc-windows-gnu
@@ -35,7 +35,7 @@ jobs:
         working-directory: agent
         # 默认构建没有 Linux 网络采集，分发包必须是 eBPF 构建；拿不到 eBPF 时它自己退到 netlink / 轮询
         run: |
-          cargo build --release --locked --features ebpf --target x86_64-unknown-linux-musl
+          cargo build --release --locked --features ebpf,execblock --target x86_64-unknown-linux-musl
           strings target/x86_64-unknown-linux-musl/release/openxdr-agent | grep -c inet_sock_set_state
       - name: agent（Windows）
         working-directory: agent
@@ -71,7 +71,7 @@ jobs:
       - uses: actions/checkout@v6
       # file / strings 用于产物检查，arm runner 镜像比 x86 精简，显式装上
       - name: 安装 musl 工具
-        run: sudo apt-get update && sudo apt-get install -y musl-tools file binutils
+        run: sudo apt-get update && sudo apt-get install -y musl-tools clang file binutils
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-unknown-linux-musl
@@ -83,7 +83,7 @@ jobs:
       - name: agent（Linux arm64，带 eBPF）
         working-directory: agent
         run: |
-          cargo build --release --locked --features ebpf --target aarch64-unknown-linux-musl
+          cargo build --release --locked --features ebpf,execblock --target aarch64-unknown-linux-musl
           bin=target/aarch64-unknown-linux-musl/release/openxdr-agent
           # grep 读完整个输入再退出：-q 提前退出会让 strings 吃 SIGPIPE，pipefail 下误判失败
           strings "$bin" | grep -c inet_sock_set_state

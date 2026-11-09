@@ -161,8 +161,15 @@ func (h *Hub) issue(ctx context.Context, req Request) (*ent.Command, error) {
 	if a.AgentID == nil {
 		return nil, fmt.Errorf("该资产没有 agent，无法下发指令")
 	}
-	if windowsOnly[req.Kind] && (a.Os == nil || *a.Os != "windows") {
-		return nil, fmt.Errorf("%s 只支持 Windows 主机（靠系统自带的 WDAC）", req.Kind)
+	if req.Kind == "block_execution" || req.Kind == "unblock_execution" {
+		os := ""
+		if a.Os != nil {
+			os = *a.Os
+		}
+		req.Target, err = validateExecutionTarget(os, req.Kind, req.Target)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	cmdID := req.CommandID
@@ -324,9 +331,6 @@ var Kinds = map[string]pb.CommandKind{
 	"block_execution":   pb.CommandKind_BLOCK_EXECUTION,
 	"unblock_execution": pb.CommandKind_UNBLOCK_EXECUTION,
 }
-
-// windowsOnly 只有 Windows agent 实现的动作，别的主机上在下发前就拒绝
-var windowsOnly = map[string]bool{"block_execution": true, "unblock_execution": true}
 
 func kindToProto(kind string) pb.CommandKind {
 	return Kinds[kind]

@@ -11,6 +11,8 @@ mod account;
 mod container;
 mod exec;
 mod execblock;
+#[cfg(all(target_os = "linux", feature = "execblock"))]
+pub(crate) mod execblock_linux;
 pub mod netblock;
 mod process;
 mod quarantine;

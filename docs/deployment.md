@@ -329,7 +329,17 @@ curl -X POST http://localhost:8080/api/intel/import \
 内核的代码完整性模块执行拦截，不需要驱动或证书；策略放进 `CiPolicies\Active` 经 WMI 刷新，免重启生效
 （Windows 10 1903 / Server 2019 起）。本机只维护一份 OpenXDR 自己的「允许全部 + 拒绝规则」基础策略
 （策略 ID `{A61AFF97-CF54-413D-875E-3E204EA34241}`，状态在 `%ProgramData%\OpenXDR\exec-block.xml`），
-不影响别的程序；解除按原路径删掉对应规则再刷新，不卸载策略（老系统卸载要重启）。Linux 主机可下发同名指令，目标使用规范绝对路径；当前 Linux agent 尚未实现 BPF LSM 执行拦截，会回报 unsupported，不代表已受保护。未知系统与路径不匹配在 server 下发前拒绝。
+不影响别的程序；解除按原路径删掉对应规则再刷新，不卸载策略（老系统卸载要重启）。Linux 主机可下发同名指令，目标使用规范绝对路径；Linux agent 需带 `execblock` 特性，并在支持 BPF LSM、BTF 与 IMA 文件哈希的内核上运行；缺少构建特性返回 unsupported，加载或哈希失败返回 failed。未知系统与路径不匹配在 server 下发前拒绝。
+
+**Linux 执行拦截**：`cargo build --locked --features execblock`（可与 `ebpf` 组合），构建机需支持 BPF target 的 Clang，可通过 `BPF_CLANG` 指定。发布包启用此特性。运行时需要 root 或相应 BPF 权限、内核 BTF、启用 BPF LSM（`/sys/kernel/security/lsm` 包含 `bpf`）以及 `bpf_ima_file_hash` helper 与 IMA 支持。agent 不自动修改内核启动参数。
+
+执行前在 sleepable `bprm_check_security` hook 按 IMA 内容哈希匹配，覆盖复制、重命名后的同内容文件；安装规则前通过完整打开文件后的只读 `file_ioctl` 探测真实内核哈希。系统目录和 agent、shell、env、systemctl 的内容副本拒绝封锁。它不是完整的软件包信任数据库，管理员仍须确认目标不是业务依赖。解释器直接读取脚本（如 `bash script.sh`）、现有进程和动态库加载不属于此 hook 的拦截范围。
+
+规则保存在 agent 配置旁的 `exec-block.json`（0600），解除按下发时的原路径删除该路径的全部历史摘要，无需原文件仍存在。同内容还有其他路径规则时继续拦截。启动时从持久状态恢复；内核哈希算法改变或状态损坏会明确报错，不宣称恢复成功。当前 link 随 agent 进程退出释放，agent 停机至恢复完成之间没有此项保护，重启前不能把历史 succeeded 回执当成实时防护状态。
+
+启用规则后，内核无法计算执行文件的哈希时按 EACCES 拒绝执行；应先在同内核、同文件系统的专用测试主机验证，避免影响正常程序。真机回归命令：`cargo test --features execblock respond::execblock_linux::tests::kernel_blocks_copies_and_restores -- --ignored --exact`，测试给 ELF 副本追加唯一尾部数据，仅拦截该测试样本及其副本，并验证原 `/bin/true` 仍可运行。该测试不在开发机自动执行。
+
+2026-11-09 已在 `6.1.0-53-cloud-amd64`、BPF LSM + IMA SHA-256 内核上通过此真机回归：复制前后、重命名、软硬链接均按内容拦截，内容改变与原版系统程序可执行；重复下发、状态保存失败保留旧策略、同内容多路径引用、原文件删除后的恢复和解除均通过。测试结束后枚举内核 BPF 程序，确认没有 `deny_execution` / `probe_hash` 残留，并清理临时文件。其他内核与文件系统仍需运行同一回归验证。
 
 ```bash
 RESPONSE_ENABLED=true COMMAND_SIGNING_KEY_FILE=/certs/command-signing.key \

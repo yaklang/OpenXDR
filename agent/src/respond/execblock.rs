@@ -1,4 +1,5 @@
-//! 禁止执行（仅 Windows）：用系统自带的 WDAC（App Control for Business）按文件内容（Authenticode 与页哈希）拒绝执行。
+//! 禁止执行：Linux 实现见 execblock_linux；下文为 Windows。
+//! Windows：用系统自带的 WDAC（App Control for Business）按文件内容（Authenticode 与页哈希）拒绝执行。
 //! 内核的代码完整性模块执行拦截，不需要自研驱动或证书；策略编译后放进 CiPolicies\Active，经 WMI 刷新免重启生效
 //! （Windows 10 1903 起、Server 2019 起都有这个刷新接口，Win11 的 CiTool 不是必需）。
 //!
@@ -22,9 +23,9 @@ pub fn unblock(cmd: &Command) -> Outcome {
     run(cmd, false)
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, all(target_os = "linux", feature = "execblock"))))]
 fn run(_cmd: &Command, _block: bool) -> Outcome {
-    Outcome::unsupported("禁止执行目前只支持 Windows（WDAC）")
+    Outcome::unsupported("当前构建不支持执行拦截；Linux 需要 execblock 特性与 BPF LSM/IMA 内核支持")
 }
 
 #[cfg(windows)]
@@ -122,6 +123,11 @@ if ($r.ReturnValue -ne 0) {{ 'REFRESH ' + $r.ReturnValue; return }}
     )
 }
 
+#[cfg(all(target_os = "linux", feature = "execblock"))]
+fn run(cmd: &Command, block: bool) -> Outcome {
+    super::execblock_linux::run(cmd.target.trim(), block)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,7 +200,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, all(target_os = "linux", feature = "execblock"))))]
     #[test]
     fn other_platforms_say_unsupported() {
         let r = block(&Command::default());

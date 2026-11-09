@@ -17,6 +17,8 @@ path = "src/tray/main.rs"
 # 关闭时 Linux 侧走 netlink proc connector（失败再退轮询），构建不依赖任何外部二进制
 default = []
 ebpf = ["dep:aya", "dep:bytes", "dep:aya-build"]
+# 执行拦截独立于采集；CO-RE 程序用支持 BPF target 的 clang 构建。
+execblock = ["dep:aya"]
 
 [dependencies]
 # 本地事件缓存的批次压缩。只用纯 Rust 后端（miniz_oxide）：CI 要交叉编译到

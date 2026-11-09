@@ -68,6 +68,8 @@ fn exit(msg: &str) -> ! {
 
 #[tokio::main]
 async fn agent() {
+    #[cfg(all(target_os = "linux", feature = "execblock"))]
+    respond::execblock_linux::restore();
     let server = std::env::var("OPENXDR_SERVER").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
 
     let queue = delivery::open(&server, health::Health::new())

@@ -72,8 +72,9 @@ func NormalizeTarget(kind, target string, protected []netip.Addr) (string, error
 		return target, nil
 	case "block_execution", "unblock_execution":
 		windows := len(target) > 3 && target[1] == ':' && target[2] == '\\'
-		if !windows || len(target) > 4096 || strings.ContainsAny(target, "\x00\n\r") {
-			return "", errors.New("禁止执行的目标必须是 Windows 文件绝对路径（如 C:\\Users\\x\\a.exe）")
+		linux := len(target) > 1 && strings.HasPrefix(target, "/") && path.Clean(target) == target
+		if (!windows && !linux) || len(target) > 4096 || strings.ContainsAny(target, "\x00\n\r") {
+			return "", errors.New("禁止执行的目标必须是 Linux 或 Windows 的规范文件绝对路径")
 		}
 		return target, nil
 	case "disable_account", "enable_account":
@@ -124,4 +125,19 @@ func ProtectedAddrs(endpoints []string) []netip.Addr {
 		}
 	}
 	return out
+}
+
+// validateExecutionTarget 在下发前按资产系统校验，避免跨系统路径进入 agent。
+func validateExecutionTarget(os, kind, target string) (string, error) {
+	if os != "linux" && os != "windows" {
+		return "", errors.New("禁止执行仅接受 Linux 或 Windows 主机")
+	}
+	target, err := NormalizeTarget(kind, target, nil)
+	if err != nil {
+		return "", err
+	}
+	if (os == "linux") != strings.HasPrefix(target, "/") {
+		return "", errors.New("禁止执行的文件路径与资产操作系统不匹配")
+	}
+	return target, nil
 }

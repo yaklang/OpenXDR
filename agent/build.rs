@@ -6,6 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=../proto/agent.proto");
     // 发布公钥在编译时嵌入（见 upgrade.rs），换了要重新编译
     println!("cargo:rerun-if-env-changed=OPENXDR_RELEASE_PUBKEY");
+    build_execblock()?;
     build_ebpf()
 }
 
@@ -32,5 +33,45 @@ fn build_ebpf() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(not(feature = "ebpf"))]
 fn build_ebpf() -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+
+#[cfg(feature = "execblock")]
+fn build_execblock() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
+        return Ok(());
+    }
+    println!("cargo:rerun-if-changed=lsm/execblock.bpf.c");
+    println!("cargo:rerun-if-env-changed=BPF_CLANG");
+    let clang = std::env::var("BPF_CLANG").unwrap_or_else(|_| "clang".into());
+    let target = match std::env::var("CARGO_CFG_TARGET_ENDIAN")?.as_str() {
+        "little" => "bpfel",
+        "big" => "bpfeb",
+        other => return Err(format!("未知目标字节序：{other}").into()),
+    };
+    let output = std::path::PathBuf::from(std::env::var("OUT_DIR")?).join("execblock.bpf.o");
+    let status = std::process::Command::new(clang)
+        .args([
+            "-target",
+            target,
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-c",
+            "lsm/execblock.bpf.c",
+            "-o",
+        ])
+        .arg(output)
+        .status()?;
+    if !status.success() {
+        return Err("BPF LSM 构建失败，需要支持 BPF target 的 clang".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "execblock"))]
+fn build_execblock() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
