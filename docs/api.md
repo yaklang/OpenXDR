@@ -106,7 +106,7 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | POST | `/api/commands/{id}/verifications` | 组 analyst（或全局 admin）；提交人工复核判断，固定 human 来源并留存证据，见 [响应复核](response-verification.md) |
 | GET | `/api/commands/{id}/verifications/{verificationId}` | 同指令可见范围；单条复核的完整留存快照，包括事件原文 |
 | GET | `/api/commands/{id}` | 指令详情，按资产组校验权限，包含完整命令与输出 |
-| POST | `/api/commands` | `{"kind":"kill_process\|isolate_host\|unisolate_host\|exec\|block_network\|unblock_network\|quarantine_file\|restore_file\|disable_account\|enable_account\|isolate_container\|unisolate_container","assetId","incidentId","pid","target"}`（一律真执行，没有演练模式）；封锁、隔离文件、锁定账号、隔离容器必须带 `target`（IP / 网段 / 域名、文件绝对路径、账号名、容器 ID：docker 系 12–64 位十六进制或 LXC VMID），不合法或会封到 server 自己时 400；`exec` 另带 `"cmd"`（必填）与 `"timeoutMs"`（0 = agent 默认 60s），结果回写 `exitCode` / `stdout` / `stderr` / `truncated`（各截断到 64KB） |
+| POST | `/api/commands` | `{"kind":"kill_process\|isolate_host\|unisolate_host\|exec\|block_network\|unblock_network\|quarantine_file\|restore_file\|disable_account\|enable_account\|isolate_container\|unisolate_container\|block_execution\|unblock_execution","assetId","incidentId","pid","target"}`（一律真执行，没有演练模式）；封锁、隔离文件、锁定账号、隔离容器、禁止执行必须带 `target`（IP / 网段 / 域名、文件绝对路径、账号名、容器 ID：docker 系 12–64 位十六进制或 LXC VMID；禁止执行是 Windows 文件绝对路径，只能下发给 Windows 主机），不合法或会封到 server 自己时 400；`exec` 另带 `"cmd"`（必填）与 `"timeoutMs"`（0 = agent 默认 60s），结果回写 `exitCode` / `stdout` / `stderr` / `truncated`（各截断到 64KB） |
 
 需 server 配置 `RESPONSE_ENABLED=true`；隔离要求 `ISOLATION_ALLOW` 包含 server
 的 gRPC 端点，否则 agent 拒绝执行。

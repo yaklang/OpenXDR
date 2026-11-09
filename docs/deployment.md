@@ -323,6 +323,13 @@ curl -X POST http://localhost:8080/api/intel/import \
 | 全局开关 | `RESPONSE_ENABLED` 默认 false，不开则一律拒绝下发 |
 | 指令签名 | 每条指令用 `COMMAND_SIGNING_KEY_FILE` 的 Ed25519 私钥签进绑定目标 agent、一小时有效的信封；agent 只执行验签通过的指令 |
 | 隔离自保 | 未配置 `ISOLATION_ALLOW` 时 agent 拒绝隔离——隔离后收不到解除指令只能人工上机 |
+| 禁止执行的签名闸门 | Windows 的「禁止执行」按文件内容拦截（同一内容的所有拷贝一起拦），agent 拒绝拦截有有效数字签名的文件，以免把 powershell.exe 这类系统程序封掉 |
+
+**禁止执行（仅 Windows）**：用系统自带的 WDAC（App Control for Business）按 Authenticode 与页哈希拒绝执行，
+内核的代码完整性模块执行拦截，不需要驱动或证书；策略放进 `CiPolicies\Active` 经 WMI 刷新，免重启生效
+（Windows 10 1903 / Server 2019 起）。本机只维护一份 OpenXDR 自己的「允许全部 + 拒绝规则」基础策略
+（策略 ID `{A61AFF97-CF54-413D-875E-3E204EA34241}`，状态在 `%ProgramData%\OpenXDR\exec-block.xml`），
+不影响别的程序；解除按原路径删掉对应规则再刷新，不卸载策略（老系统卸载要重启）。非 Windows 主机在 server 下发前就拒绝。
 
 ```bash
 RESPONSE_ENABLED=true COMMAND_SIGNING_KEY_FILE=/certs/command-signing.key \

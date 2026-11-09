@@ -45,6 +45,10 @@ const (
 	// 宿主机与其他容器不受影响；用宿主机网络的容器拒绝执行。仅 Linux
 	CommandKind_ISOLATE_CONTAINER   CommandKind = 11
 	CommandKind_UNISOLATE_CONTAINER CommandKind = 12
+	// 禁止执行：target 是文件绝对路径。用系统自带的 WDAC 按文件内容（Authenticode 与页哈希）拒绝执行，
+	// 同一内容的所有拷贝一起拦；有有效数字签名的文件拒绝执行此动作。解除按原路径删掉对应规则。仅 Windows
+	CommandKind_BLOCK_EXECUTION   CommandKind = 13
+	CommandKind_UNBLOCK_EXECUTION CommandKind = 14
 )
 
 // Enum value maps for CommandKind.
@@ -63,6 +67,8 @@ var (
 		10: "ENABLE_ACCOUNT",
 		11: "ISOLATE_CONTAINER",
 		12: "UNISOLATE_CONTAINER",
+		13: "BLOCK_EXECUTION",
+		14: "UNBLOCK_EXECUTION",
 	}
 	CommandKind_value = map[string]int32{
 		"COMMAND_KIND_UNSPECIFIED": 0,
@@ -78,6 +84,8 @@ var (
 		"ENABLE_ACCOUNT":           10,
 		"ISOLATE_CONTAINER":        11,
 		"UNISOLATE_CONTAINER":      12,
+		"BLOCK_EXECUTION":          13,
+		"UNBLOCK_EXECUTION":        14,
 	}
 )
 
@@ -271,7 +279,8 @@ type Command struct {
 	Cmd       string `protobuf:"bytes,7,opt,name=cmd,proto3" json:"cmd,omitempty"`
 	TimeoutMs uint32 `protobuf:"varint,8,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
 	// BLOCK_NETWORK / UNBLOCK_NETWORK：IP、网段（CIDR）或域名；QUARANTINE_FILE / RESTORE_FILE：文件绝对路径；
-	// DISABLE_ACCOUNT / ENABLE_ACCOUNT：本机账号名；ISOLATE_CONTAINER / UNISOLATE_CONTAINER：容器 ID
+	// DISABLE_ACCOUNT / ENABLE_ACCOUNT：本机账号名；ISOLATE_CONTAINER / UNISOLATE_CONTAINER：容器 ID；
+	// BLOCK_EXECUTION / UNBLOCK_EXECUTION：Windows 文件绝对路径
 	Target string `protobuf:"bytes,9,opt,name=target,proto3" json:"target,omitempty"`
 	// 签名信封：序列化的 SignedCommand 与 server 指令签名私钥对它的 Ed25519 签名。
 	// agent 只执行验签通过的信封里的指令，上面的明文字段仅供 server 内部投递与回写，agent 不采信。
@@ -1095,7 +1104,7 @@ const file_agent_proto_rawDesc = "" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1f\n" +
 	"\vhealth_json\x18\x02 \x01(\tR\n" +
 	"healthJson\"\v\n" +
-	"\tHealthAck*\x95\x02\n" +
+	"\tHealthAck*\xc1\x02\n" +
 	"\vCommandKind\x12\x1c\n" +
 	"\x18COMMAND_KIND_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fKILL_PROCESS\x10\x01\x12\x10\n" +
@@ -1110,7 +1119,9 @@ const file_agent_proto_rawDesc = "" +
 	"\x0eENABLE_ACCOUNT\x10\n" +
 	"\x12\x15\n" +
 	"\x11ISOLATE_CONTAINER\x10\v\x12\x17\n" +
-	"\x13UNISOLATE_CONTAINER\x10\f2\xf8\x03\n" +
+	"\x13UNISOLATE_CONTAINER\x10\f\x12\x13\n" +
+	"\x0fBLOCK_EXECUTION\x10\r\x12\x15\n" +
+	"\x11UNBLOCK_EXECUTION\x10\x0e2\xf8\x03\n" +
 	"\fAgentService\x12Q\n" +
 	"\bRegister\x12!.openxdr.agent.v1.RegisterRequest\x1a\".openxdr.agent.v1.RegisterResponse\x12L\n" +
 	"\fReportHealth\x12\x1f.openxdr.agent.v1.HealthRequest\x1a\x1b.openxdr.agent.v1.HealthAck\x12K\n" +

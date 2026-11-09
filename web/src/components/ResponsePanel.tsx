@@ -15,6 +15,8 @@ const TARGETED: { kind: string; placeholder: MsgKey; hint: MsgKey }[] = [
   { kind: 'restore_file', placeholder: 'targetFile', hint: 'actionFileHint' },
   { kind: 'disable_account', placeholder: 'targetAccount', hint: 'actionAccountHint' },
   { kind: 'enable_account', placeholder: 'targetAccount', hint: 'actionAccountHint' },
+  { kind: 'block_execution', placeholder: 'targetWindowsFile', hint: 'actionBlockExecHint' },
+  { kind: 'unblock_execution', placeholder: 'targetWindowsFile', hint: 'actionBlockExecHint' },
 ]
 
 // 响应处置：每个动作都在主机上真实生效，下发前必须二次确认，避免手滑隔离生产主机

@@ -59,15 +59,15 @@ func TestKindToProto(t *testing.T) {
 }
 
 func TestKinds(t *testing.T) {
-	if len(Kinds) != 12 {
-		t.Fatalf("Kinds 应恰好含十二种动作，got %d", len(Kinds))
+	if len(Kinds) != 14 {
+		t.Fatalf("Kinds 应恰好含十四种动作，got %d", len(Kinds))
 	}
 	for kind := range TargetKinds {
 		if _, ok := Kinds[kind]; !ok {
 			t.Errorf("需要目标的动作 %q 没有登记", kind)
 		}
 	}
-	for _, kind := range []string{"kill_process", "isolate_host", "unisolate_host", "exec", "block_network", "unblock_network", "quarantine_file", "restore_file", "disable_account", "enable_account", "isolate_container", "unisolate_container"} {
+	for _, kind := range []string{"kill_process", "isolate_host", "unisolate_host", "exec", "block_network", "unblock_network", "quarantine_file", "restore_file", "disable_account", "enable_account", "isolate_container", "unisolate_container", "block_execution", "unblock_execution"} {
 		if _, ok := Kinds[kind]; !ok {
 			t.Errorf("Kinds 缺 %q", kind)
 		}

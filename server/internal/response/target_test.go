@@ -12,15 +12,17 @@ func TestNormalizeTarget(t *testing.T) {
 		t.Fatalf("放行地址解析不对: %v", server)
 	}
 	ok := map[[2]string]string{
-		{"block_network", " 45.9.148.10 "}:      "45.9.148.10",
-		{"block_network", "45.9.148.0/24"}:      "45.9.148.0/24",
-		{"block_network", "C2.Example.COM."}:    "c2.example.com",
-		{"unblock_network", "10.0.0.0/8"}:       "10.0.0.0/8",
-		{"quarantine_file", "/tmp/x.sh"}:        "/tmp/x.sh",
-		{"restore_file", `C:\Users\a\evil.exe`}: `C:\Users\a\evil.exe`,
-		{"disable_account", "deploy"}:           "deploy",
-		{"isolate_container", "4F173E0D45B0"}:   "4f173e0d45b0",
-		{"unisolate_container", "101"}:          "101",
+		{"block_network", " 45.9.148.10 "}:         "45.9.148.10",
+		{"block_network", "45.9.148.0/24"}:         "45.9.148.0/24",
+		{"block_network", "C2.Example.COM."}:       "c2.example.com",
+		{"unblock_network", "10.0.0.0/8"}:          "10.0.0.0/8",
+		{"quarantine_file", "/tmp/x.sh"}:           "/tmp/x.sh",
+		{"restore_file", `C:\Users\a\evil.exe`}:    `C:\Users\a\evil.exe`,
+		{"disable_account", "deploy"}:              "deploy",
+		{"isolate_container", "4F173E0D45B0"}:      "4f173e0d45b0",
+		{"unisolate_container", "101"}:             "101",
+		{"block_execution", `C:\Users\a\evil.exe`}: `C:\Users\a\evil.exe`,
+		{"unblock_execution", `D:\x y\a.exe`}:      `D:\x y\a.exe`,
 	}
 	for in, want := range ok {
 		got, err := NormalizeTarget(in[0], in[1], server)
@@ -41,6 +43,9 @@ func TestNormalizeTarget(t *testing.T) {
 		{"disable_account", "root"}:              "内置",
 		{"disable_account", "a b"}:               "账号名",
 		{"isolate_container", "abc"}:             "容器 ID",
+		{"block_execution", "/tmp/x.sh"}:         "Windows 文件绝对路径",
+		{"block_execution", `relative\a.exe`}:    "Windows 文件绝对路径",
+		{"block_execution", "C:\\a.exe\nC:\\b"}:  "Windows 文件绝对路径",
 		{"isolate_container", "4f173e0d45b0;id"}: "容器 ID",
 		{"disable_account", "-e"}:                "账号名",
 		{"kill_process", "x"}:                    "不需要目标",

@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -44,6 +45,15 @@ func TestIssueGateways(t *testing.T) {
 	on := NewHub(client, true)
 	if _, err := on.Issue(ctx, Request{AssetID: noAgent.ID, Kind: "kill_process", IssuedBy: "admin"}); err == nil {
 		t.Fatal("无 agent 的资产应拒绝下发")
+	}
+
+	// 闸门：只有 Windows 实现的动作，别的主机下发前就拒绝且不落库
+	if _, err := on.Issue(ctx, Request{AssetID: asset.ID, Kind: "block_execution", Target: `C:\x\a.exe`, IssuedBy: "admin"}); err == nil ||
+		!strings.Contains(err.Error(), "Windows") {
+		t.Fatalf("非 Windows 主机应拒绝禁止执行：%v", err)
+	}
+	if n, _ := client.Command.Query().Count(ctx); n != 0 {
+		t.Fatalf("被拒绝的指令不应落库，实际 %d 条", n)
 	}
 
 	// 闸门三：agent 在线但未连接指令通道（无 Router）→ 记 failed 而不是假装成功
@@ -191,7 +201,8 @@ func TestAllActionsUnknownDelivery(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			ctx, db := testdb.New(t)
 			id := uuid.New()
-			a := db.Asset.Create().SetHostname("remote").SetAgentID(id).SaveX(ctx)
+			// Windows 主机才收得下全部动作（禁止执行只在 Windows 上实现）
+			a := db.Asset.Create().SetHostname("remote").SetOs("windows").SetAgentID(id).SaveX(ctx)
 			h := NewHub(db, true)
 			h.Router = completingRouter{hub: h, fail: true}
 			line := "whoami"

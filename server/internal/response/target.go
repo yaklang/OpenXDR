@@ -29,6 +29,7 @@ var TargetKinds = map[string]bool{
 	"quarantine_file": true, "restore_file": true,
 	"disable_account": true, "enable_account": true,
 	"isolate_container": true, "unisolate_container": true,
+	"block_execution": true, "unblock_execution": true,
 }
 
 // NormalizeTarget 校验并规范化动作目标。protected 是 server 自己的地址：封锁不能覆盖它们，
@@ -67,6 +68,12 @@ func NormalizeTarget(kind, target string, protected []netip.Addr) (string, error
 		}
 		if len(target) > 4096 || strings.ContainsAny(target, "\x00\n\r") {
 			return "", errors.New("文件路径无效")
+		}
+		return target, nil
+	case "block_execution", "unblock_execution":
+		windows := len(target) > 3 && target[1] == ':' && target[2] == '\\'
+		if !windows || len(target) > 4096 || strings.ContainsAny(target, "\x00\n\r") {
+			return "", errors.New("禁止执行的目标必须是 Windows 文件绝对路径（如 C:\\Users\\x\\a.exe）")
 		}
 		return target, nil
 	case "disable_account", "enable_account":

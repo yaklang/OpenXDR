@@ -145,6 +145,8 @@ const COMMAND_KIND: Record<string, MsgKey> = {
   enable_account: 'enableAccount',
   isolate_container: 'isolateContainer',
   unisolate_container: 'unisolateContainer',
+  block_execution: 'blockExecution',
+  unblock_execution: 'unblockExecution',
 }
 
 export const commandKind = (kind: string, t: (k: MsgKey) => string) => (COMMAND_KIND[kind] ? t(COMMAND_KIND[kind]) : kind)
