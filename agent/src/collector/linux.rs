@@ -1031,7 +1031,8 @@ format:
         assert_eq!(ev.cmd_line().as_deref(), Some("sh -c curl x | sh …"));
     }
 
-    /// 真内核验证：起一个转瞬即逝的 sh 子进程，exec 事件里要有它的命令行，父进程指向本测试进程。
+    /// 真内核验证：起一个转瞬即逝的 sh 子进程，exec 事件里要有它的命令行，父进程指向本测试进程；
+    /// 它的子 shell（fork 不 exec）再拉起的 echo，父进程跳过子 shell 记成这个 sh。
     /// 需要 root：`cargo test --features ebpf --no-run` 后 `sudo <测试程序> --ignored kernel_captures_short_lived`
     #[test]
     #[ignore = "需要 root 与可加载 eBPF 的内核"]
@@ -1063,27 +1064,35 @@ format:
                 });
             }
             let marker = format!("openxdr-argv-{}", std::process::id());
+            let script = format!("(/bin/echo {marker}-sub >/dev/null; :); :");
             let child = std::process::Command::new("/bin/sh")
-                .args(["-c", "exit 0", &marker])
+                .args(["-c", &script, &marker])
                 .status()
                 .unwrap();
             assert!(child.success());
             let me = std::process::id();
+            let (mut sh, mut echo_parent) = (None, None);
             let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
             while let Ok(Some((pid, ppid, uid, cmd))) =
                 tokio::time::timeout_at(deadline, rx.recv()).await
             {
-                if cmd.as_deref().is_some_and(|c| c.contains(&marker)) {
-                    eprintln!("pid {pid} ppid {ppid} uid {uid} cmd {cmd:?}");
-                    assert_eq!(
-                        cmd.as_deref(),
-                        Some(format!("/bin/sh -c exit 0 {marker}").as_str())
-                    );
+                let Some(cmd) = cmd.filter(|c| c.contains(&marker)) else {
+                    continue;
+                };
+                eprintln!("pid {pid} ppid {ppid} uid {uid} cmd {cmd:?}");
+                if cmd.starts_with("/bin/sh") {
+                    assert_eq!(cmd, format!("/bin/sh -c {script} {marker}"));
                     assert_eq!(ppid, me, "父进程应是本测试进程");
+                    sh = Some(pid);
+                } else {
+                    echo_parent = Some(ppid);
+                }
+                if sh.is_some() && echo_parent.is_some() {
+                    assert_eq!(echo_parent, sh, "子 shell 拉起的进程，父进程记成 exec 过的 sh");
                     return;
                 }
             }
-            panic!("没收到带命令行的 exec 事件");
+            panic!("没收到两条带命令行的 exec 事件：sh {sh:?} echo 的父 {echo_parent:?}");
         });
     }
 

@@ -61,9 +61,20 @@ static ARGV_SCRATCH: PerCpuArray<Argv> = PerCpuArray::with_max_entries(1, 0);
 #[map]
 static ARGVS: LruHashMap<u32, Argv> = LruHashMap::with_max_entries(8192, 0);
 
-/// 子进程（线程）号 → fork 它的进程（tgid）。短命进程 exec 时 /proc 早已读不到父进程，靠这里
+/// 子进程（线程）号 → 它的血缘。短命进程 exec 时 /proc 早已读不到父进程，靠这里
 #[map]
-static PARENTS: LruHashMap<u32, u32> = LruHashMap::with_max_entries(65536, 0);
+static PARENTS: LruHashMap<u32, Lineage> = LruHashMap::with_max_entries(65536, 0);
+
+/// 报给用户态的父进程是「最近一个 exec 过的祖先」：fork 出来还没 exec 的进程（子 shell、runc 的
+/// 中间进程）与 fork 它的进程是同一个程序映像，用户态也从不登记它；它再 fork 出去的子进程把父进程
+/// 记成它的祖先，名字、路径、命令行才查得到，而且就是同一份
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Lineage {
+    pub ancestor: u32,
+    /// 自 fork 以来 exec 过没有
+    pub execed: u32,
+}
 
 /// [0] 是 sched_process_fork 里 child_pid 的偏移：这个 tracepoint 的布局随内核版本变（6.1 是 44，
 /// 7.0 的 comm 改成 __data_loc 后是 20），由用户态读 format 填；0 表示没填，不记父进程
@@ -146,9 +157,18 @@ pub fn sched_process_fork(ctx: TracePointContext) -> u32 {
     let Ok(child) = (unsafe { ctx.read_at::<i32>(child_off as usize) }) else {
         return 1;
     };
-    // fork 在父进程上下文里触发：当前进程就是父进程
+    // fork 在父进程上下文里触发：当前进程就是父进程。它自己没 exec 过就跳到它的祖先
     let parent = (bpf_get_current_pid_tgid() >> 32) as u32;
-    let _ = PARENTS.insert(&(child as u32), &parent, 0);
+    // SAFETY: get 返回 map 值的引用，立即拷出，不跨辅助函数调用
+    let ancestor = match unsafe { PARENTS.get(&parent).copied() } {
+        Some(l) if l.execed == 0 => l.ancestor,
+        _ => parent,
+    };
+    let lineage = Lineage {
+        ancestor,
+        execed: 0,
+    };
+    let _ = PARENTS.insert(&(child as u32), &lineage, 0);
     0
 }
 
@@ -167,8 +187,14 @@ fn try_exec(ctx: &TracePointContext) -> Result<(), i64> {
     let event = unsafe { &mut *event };
     event.pid = tgid;
     event.uid = bpf_get_current_uid_gid() as u32;
-    // SAFETY: get 返回 map 值的引用，立即拷出 u32，不跨辅助函数调用
-    event.ppid = unsafe { PARENTS.get(&tgid).copied() }.unwrap_or(0);
+    event.ppid = match PARENTS.get_ptr_mut(&tgid) {
+        // SAFETY: 指向 map 里的值，元素内存在本程序运行期间由 RCU 保活；只有本进程自己 exec 时写它
+        Some(l) => unsafe {
+            (*l).execed = 1;
+            (*l).ancestor
+        },
+        None => 0,
+    };
     event.comm = bpf_get_current_comm().unwrap_or([0; 16]);
     event.filename[0] = 0;
 
