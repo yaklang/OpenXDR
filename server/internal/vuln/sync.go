@@ -304,9 +304,12 @@ func rows(rec osvRecord, want map[string]bool) []row {
 	if r := []rune(summary); len(r) > 500 {
 		summary = string(r[:500])
 	}
+	// 复制出来再取地址：指向 rec 的字段会让整条公告（Details 全文、全部发行版的 affected）随每一行常驻内存，
+	// Ubuntu 全量同步因此涨到数 GB
 	var pub *time.Time
 	if !rec.Published.IsZero() {
-		pub = &rec.Published
+		p := rec.Published
+		pub = &p
 	}
 	var out []row
 	for _, a := range rec.Affected {
