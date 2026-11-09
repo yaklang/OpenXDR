@@ -65,6 +65,8 @@ fn decode_ipv4(frame: &[u8], offset: usize) -> Option<Packet<'_>> {
         return None;
     }
 
+    // 总长度为 0：分段卸载（LSO / GSO）的大包，长度只在硬件分段时才填，按实际抓到的算
+    let total_len = if total_len == 0 { ip.len() } else { total_len };
     let l4_len = total_len.checked_sub(ihl)?.min(ip.len() - ihl);
     decode_l4(
         IpAddr::V4(src),

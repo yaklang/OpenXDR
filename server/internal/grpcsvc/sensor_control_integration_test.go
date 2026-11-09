@@ -100,6 +100,24 @@ func TestSensorRegisterHealthUpgrade(t *testing.T) {
 		t.Fatalf("纯探针主机应建资产并登记地址：%+v", tap)
 	}
 
+	// Windows 探针：资产记 windows，按 windows 平台的安装包升级
+	winBinary := []byte("sensor-windows")
+	if err := os.WriteFile(filepath.Join(dir, "openxdr-sensor-windows-amd64.exe"), winBinary, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	winResp, err := srv.Register(ctxWithCN("sensor:win01"), &pb.SensorRegisterRequest{
+		Hostname: "win01", Os: "windows", Arch: "x86_64", BinarySha256: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	winSum := sha256.Sum256(winBinary)
+	if winResp.UpgradePlatform != "windows-amd64" || winResp.UpgradeSha256 != hex.EncodeToString(winSum[:]) {
+		t.Fatalf("Windows 探针应按 windows 安装包升级：%+v", winResp)
+	}
+	if win := client.Asset.Query().Where(asset.HostnameEQ("win01")).OnlyX(ctx); win.Os == nil || *win.Os != "windows" {
+		t.Fatalf("Windows 探针的资产应记 windows：%+v", win)
+	}
+
 	stream := &fakeSensorDownload{ctx: ctx}
 	if err := srv.DownloadSensor(&pb.SensorDownloadRequest{Platform: "linux-amd64", Sha256: want}, stream); err != nil || !bytes.Equal(stream.data.Bytes(), binary) {
 		t.Fatalf("下载应与安装包一致：%v", err)

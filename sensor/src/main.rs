@@ -27,6 +27,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use capture::Capture;
+#[cfg(target_os = "linux")]
 use capture::afpacket::{AfPacket, RingConfig};
 #[cfg(feature = "xdp")]
 use capture::afxdp::AfXdp;
@@ -38,6 +39,17 @@ use health::Stats;
 /// 上报队列容量：server 断线时的缓冲，满了丢弃并计数——探针绝不因为上报慢而丢包
 const REPORT_QUEUE: usize = 65536;
 
+/// 本平台可选的抓包后端，第一个是默认
+#[cfg(target_os = "linux")]
+const BACKENDS: &[&str] = &["afpacket", "afxdp"];
+#[cfg(windows)]
+const BACKENDS: &[&str] = &["pktmon"];
+#[cfg(target_os = "linux")]
+const DEFAULT_IFACE: &str = "eth0";
+/// Windows 默认抓所有网卡；SENSOR_IFACE 填网卡名或描述里的一段
+#[cfg(windows)]
+const DEFAULT_IFACE: &str = "all";
+
 /// 运行统计打印间隔
 const STATS_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -45,9 +57,17 @@ const STATS_INTERVAL: Duration = Duration::from_secs(10);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn main() {
+    #[cfg(windows)]
+    enroll::load_env_file();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["version"] => println!("{}", env!("CARGO_PKG_VERSION")),
+        // 列出能抓的网卡；系统没有 Packet Monitor 实时 API 时报原因并以 1 退出，安装脚本据此拦下
+        #[cfg(windows)]
+        ["interfaces"] => match capture::pktmon::PktMon::list() {
+            Ok(nics) => nics.iter().for_each(|n| println!("{n}")),
+            Err(e) => exit(&e.to_string(), 1),
+        },
         ["enroll-request", dir] => match enroll::request(dir.as_ref()) {
             Ok(json) => println!("{json}"),
             Err(e) => exit(&format!("生成接入请求失败：{e}"), 1),
@@ -75,20 +95,26 @@ fn exit(msg: &str, code: i32) -> ! {
 
 #[tokio::main]
 async fn sensor() -> anyhow::Result<i32> {
-    let iface = std::env::var("SENSOR_IFACE").unwrap_or_else(|_| "eth0".into());
+    let iface = std::env::var("SENSOR_IFACE").unwrap_or_else(|_| DEFAULT_IFACE.into());
     let server = std::env::var("OPENXDR_SERVER").unwrap_or_else(|_| "http://127.0.0.1:8081".into());
-    let workers: u16 = env_or("SENSOR_WORKERS", || {
-        std::thread::available_parallelism().map_or(1, |n| n.get() as u16)
-    });
+    // Windows 只有一个 PktMon 会话，多个 worker 只会重复收同一份包
+    let workers: u16 = if cfg!(windows) {
+        1
+    } else {
+        env_or("SENSOR_WORKERS", || {
+            std::thread::available_parallelism().map_or(1, |n| n.get() as u16)
+        })
+    };
 
     // FANOUT 组 ID 用 pid，避免同机多实例串台；最低位置 1 保证非 0
+    #[cfg(target_os = "linux")]
     let fanout_group = std::process::id() as u16 | 1;
     let running = Arc::new(AtomicBool::new(true));
     let (tx, rx) = async_channel::bounded(REPORT_QUEUE);
 
-    let backend = std::env::var("SENSOR_BACKEND").unwrap_or_else(|_| "afpacket".into());
-    if backend != "afpacket" && backend != "afxdp" {
-        anyhow::bail!("SENSOR_BACKEND 只能是 afpacket 或 afxdp：{backend}");
+    let backend = std::env::var("SENSOR_BACKEND").unwrap_or_else(|_| BACKENDS[0].into());
+    if !BACKENDS.contains(&backend.as_str()) {
+        anyhow::bail!("SENSOR_BACKEND 只能是 {}：{backend}", BACKENDS.join(" 或 "));
     }
     eprintln!("sensor 启动: iface={iface} workers={workers} backend={backend} server={server}");
     let health = health::Health::new(&iface, &backend, workers);
@@ -111,12 +137,18 @@ async fn sensor() -> anyhow::Result<i32> {
     for id in 0..workers {
         #[cfg(feature = "xdp")]
         let cap = open_capture(&iface, id, fanout_group, xdp.as_mut())?;
-        #[cfg(not(feature = "xdp"))]
+        #[cfg(all(target_os = "linux", not(feature = "xdp")))]
         let cap: Box<dyn Capture + Send> = Box::new(AfPacket::open(
             &iface,
             &RingConfig::default(),
             fanout_group,
         )?);
+        #[cfg(windows)]
+        let cap: Box<dyn Capture + Send> = {
+            let pktmon = capture::pktmon::PktMon::open(&iface)?;
+            eprintln!("抓包网卡：{}", pktmon.interfaces.join("；"));
+            Box::new(pktmon)
+        };
 
         let (running, tx, stats) = (running.clone(), tx.clone(), health.stats.clone());
         stats.workers_alive.fetch_add(1, Ordering::Relaxed);
@@ -164,6 +196,12 @@ async fn sensor() -> anyhow::Result<i32> {
     Ok(code)
 }
 
+#[cfg(windows)]
+async fn stop_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(unix)]
 async fn stop_signal() {
     use tokio::signal::unix::{SignalKind, signal};
     let (Ok(mut terminate), Ok(mut interrupt)) = (

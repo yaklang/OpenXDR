@@ -16,10 +16,15 @@ function commands(token: string) {
   }
 }
 
-// 流量探针只有 Linux；不带网卡时脚本只列出本机网卡后退出，不替用户猜抓哪块
+// Linux 探针不带网卡时脚本只列出本机网卡后退出，不替用户猜抓哪块；
+// Windows 探针看的是本机自己的流量，默认抓所有网卡
 function sensorCommand(token: string, iface: string) {
   const base = window.location.origin
   return `curl -fsSL ${base}/api/enroll/sensor-install.sh | sudo sh -s -- ${base} ${token}${iface ? ` ${iface}` : ''}`
+}
+function sensorWindowsCommand(token: string) {
+  const base = window.location.origin
+  return `& ([scriptblock]::Create((irm ${base}/api/enroll/sensor-install.ps1))) ${base} ${token}`
 }
 // 与安装脚本同一套网卡名校验，命令里不会混进别的东西
 const IFACE_RE = /^[A-Za-z0-9._-]{1,15}$/
@@ -122,20 +127,30 @@ export function AddHostModal({ open, onClose }: { open: boolean; onClose: () => 
             </Space>
           </div>
           {kind === 'sensor' && (
-            <Space wrap>
-              <span>{t('addSensorIface')}</span>
-              <Input aria-label={t('addSensorIface')} style={{ width: 200 }} value={iface} status={ifaceOK ? undefined : 'error'}
-                placeholder={t('addSensorIfacePlaceholder')} onChange={e => setIface(e.target.value.trim())} />
-              {!ifaceOK && <Typography.Text type="danger">{t('addSensorIfaceInvalid')}</Typography.Text>}
-            </Space>
+            <Tabs items={[
+              { key: 'linux', label: t('addHostLinux'), children: (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <Space wrap>
+                    <span>{t('addSensorIface')}</span>
+                    <Input aria-label={t('addSensorIface')} style={{ width: 200 }} value={iface} status={ifaceOK ? undefined : 'error'}
+                      placeholder={t('addSensorIfacePlaceholder')} onChange={e => setIface(e.target.value.trim())} />
+                    {!ifaceOK && <Typography.Text type="danger">{t('addSensorIfaceInvalid')}</Typography.Text>}
+                  </Space>
+                  {sensorCmd && <>
+                    <Typography.Text type="secondary">{t(iface ? 'addSensorHint' : 'addSensorHintNoIface')}</Typography.Text>
+                    <Command text={sensorCmd} />
+                  </>}
+                </Space>
+              ) },
+              { key: 'windows', label: t('addHostWindows'), children: (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <Typography.Text type="secondary">{t('addSensorWindowsHint')}</Typography.Text>
+                  {current && <Command text={sensorWindowsCommand(current)} />}
+                </Space>
+              ) },
+            ]} />
           )}
-          {sensorCmd && (
-            <>
-              <Typography.Text type="secondary">{t(iface ? 'addSensorHint' : 'addSensorHintNoIface')}</Typography.Text>
-              <Command text={sensorCmd} />
-              <Alert type="success" showIcon title={t('addSensorDone')} />
-            </>
-          )}
+          {kind === 'sensor' && current && <Alert type="success" showIcon title={t('addSensorDone')} />}
           {cmds && (
             <>
               <Typography.Text type="secondary">{t('addHostHint')}</Typography.Text>

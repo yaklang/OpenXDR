@@ -1,9 +1,13 @@
 //! 抓包层。后端抽象成 trait，上层的解码与流表对后端无感。
 //!
-//! afpacket：任何 Linux 都能跑，不挑网卡驱动，默认后端。
+//! afpacket：任何 Linux 都能跑，不挑网卡驱动，Linux 默认后端。
 //! afxdp：绕过协议栈，吞吐更高，但需要驱动支持并加载 XDP 程序。
+//! pktmon：Windows 自带的 Packet Monitor 实时包流，Windows 唯一的后端。
 
+#[cfg(target_os = "linux")]
 pub mod afpacket;
+#[cfg(any(windows, test))]
+pub mod pktmon;
 
 // AF_XDP 后端是可选特性：它依赖 XDP 重定向程序，而编译 XDP 需要 nightly
 #[cfg(feature = "xdp")]

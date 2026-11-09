@@ -24,6 +24,7 @@ message SensorRegisterRequest {
   string version = 3;
   string arch = 4;            // Rust std::env::consts::ARCH，如 x86_64
   string binary_sha256 = 5;   // 当前运行的二进制哈希，空表示不支持自动升级
+  string os = 6;              // Rust std::env::consts::OS，如 linux / windows；老版本探针不带，按 linux
 }
 
 message SensorRegisterResponse {

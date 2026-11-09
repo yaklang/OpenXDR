@@ -414,7 +414,7 @@ region（排除 OpenStack 的 EC2 兼容接口），其余厂商各自校验实�
 
 关掉 `collapsePeriodic` 即恢复逐条上报。
 
-## sensor（全流量探针，仅 Linux）
+## sensor（全流量探针，Linux 与 Windows）
 
 ### 抓包后端
 
@@ -422,10 +422,17 @@ region（排除 OpenStack 的 EC2 兼容接口），其余厂商各自校验实�
 |---|---|---|---|
 | `afpacket`（默认） | AF_PACKET v3 mmap 零拷贝环（2MiB×64 块），`PACKET_FANOUT_HASH` 按流哈希多 worker，内核重组分片 | 任意 Linux | `capture/afpacket.rs:12-19,81-89,150-158` |
 | `afxdp` | XDP 程序按 rx_queue redirect 到 XSKMAP，**仅入向（RX）** | `--features xdp` + 驱动支持 | `capture/afxdp.rs:19,185`、`sensor/ebpf/src/main.rs:19-24` |
+| `pktmon`（Windows 唯一） | 系统自带 Packet Monitor 的实时包流 API（`Pktmonapi.dll`），只加网卡类数据源，同一个包按 `PktGroupId` 去重，截断 9000 字节；裸 IP 帧补以太网头。回调线程复制进 65536 深的有界队列，满了计丢包 | Windows 11 / Server 2022（2022-06 更新）以上 + 管理员 | `capture/pktmon.rs` |
 
 - `SENSOR_IFACE` 抓包网卡、`SENSOR_BACKEND` 选择后端（只认 `afpacket` / `afxdp`），`SENSOR_WORKERS` 决定并行度
   （afxdp 下 worker 号=网卡队列号）（`main.rs` `sensor`）
 - mTLS 变量与 agent 相同（`OPENXDR_CA/CERT/KEY`，`sensor/src/tls.rs`），三个必须同时配置
+- **Windows**：看的是本机自己的流量（主机级探针），不是镜像口全网流量——镜像口部署仍用 Linux。固定 1 个 worker；
+  `SENSOR_IFACE` 默认 `all`，否则填网卡名或描述里的一段。没有 systemd，启动时自己读 `%ProgramData%\OpenXDR\sensor.env`
+  （只认 `OPENXDR_` / `SENSOR_` 开头的键）。用的是系统已签名的组件，不装驱动、不需要证书；多会话，不影响管理员同时用
+  `pktmon.exe`。Windows 10、Server 2016/2019 没有这套公开 API，`openxdr-sensor interfaces` 与安装脚本会明确报不支持——
+  不退回未公开的 `PktmonStart`（结构靠逆向，且是全局单会话，会掐掉别人正在用的 pktmon），也不用 NdisCap（启停要把过滤驱动
+  绑进栈，会让主机网络暂停）。这些主机的连接与 DNS 可见性靠 agent 的 ETW 采集
 
 ### 接入、升级与抓包状态
 

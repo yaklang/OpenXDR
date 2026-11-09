@@ -34,9 +34,14 @@ func (s *SensorServer) Register(ctx context.Context, req *pb.SensorRegisterReque
 	if err != nil {
 		return nil, err
 	}
+	// 老版本探针不报操作系统，那时只有 Linux 版
+	osName := req.Os
+	if osName == "" {
+		osName = "linux"
+	}
 	a, err := s.DB.Asset.Query().Where(asset.HostnameEQ(host)).First(ctx)
 	if ent.IsNotFound(err) {
-		a, err = s.DB.Asset.Create().SetHostname(host).SetOs("linux").Save(ctx)
+		a, err = s.DB.Asset.Create().SetHostname(host).SetOs(osName).Save(ctx)
 	}
 	if err != nil {
 		return nil, err
@@ -48,13 +53,13 @@ func (s *SensorServer) Register(ctx context.Context, req *pb.SensorRegisterReque
 		upd.SetIPAddrs(req.IpAddrs)
 	}
 	if a.Os == nil {
-		upd.SetOs("linux")
+		upd.SetOs(osName)
 	}
 	if err := upd.Exec(ctx); err != nil {
 		return nil, err
 	}
 	resp := &pb.SensorRegisterResponse{}
-	if platform := s.Dist.Platform("linux", req.Arch); s.AutoUpgrade && req.BinarySha256 != "" && platform != "" {
+	if platform := s.Dist.Platform(osName, req.Arch); s.AutoUpgrade && req.BinarySha256 != "" && platform != "" {
 		if want := s.Dist.SHA256(platform); want != "" && want != req.BinarySha256 {
 			resp.UpgradeSha256, resp.UpgradePlatform = want, platform
 			slog.Info("下发 sensor 升级", "host", host, "from", req.Version, "platform", platform)

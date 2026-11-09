@@ -32,6 +32,7 @@ type SensorRegisterRequest struct {
 	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
 	Arch          string                 `protobuf:"bytes,4,opt,name=arch,proto3" json:"arch,omitempty"`                                     // Rust std::env::consts::ARCH，如 x86_64
 	BinarySha256  string                 `protobuf:"bytes,5,opt,name=binary_sha256,json=binarySha256,proto3" json:"binary_sha256,omitempty"` // 当前运行的二进制哈希，空表示不支持自动升级
+	Os            string                 `protobuf:"bytes,6,opt,name=os,proto3" json:"os,omitempty"`                                         // Rust std::env::consts::OS，如 linux / windows；老版本探针不带，按 linux
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -97,6 +98,13 @@ func (x *SensorRegisterRequest) GetArch() string {
 func (x *SensorRegisterRequest) GetBinarySha256() string {
 	if x != nil {
 		return x.BinarySha256
+	}
+	return ""
+}
+
+func (x *SensorRegisterRequest) GetOs() string {
+	if x != nil {
+		return x.Os
 	}
 	return ""
 }
@@ -717,13 +725,14 @@ var File_sensor_proto protoreflect.FileDescriptor
 
 const file_sensor_proto_rawDesc = "" +
 	"\n" +
-	"\fsensor.proto\x12\x11openxdr.sensor.v1\"\xa1\x01\n" +
+	"\fsensor.proto\x12\x11openxdr.sensor.v1\"\xb1\x01\n" +
 	"\x15SensorRegisterRequest\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x19\n" +
 	"\bip_addrs\x18\x02 \x03(\tR\aipAddrs\x12\x18\n" +
 	"\aversion\x18\x03 \x01(\tR\aversion\x12\x12\n" +
 	"\x04arch\x18\x04 \x01(\tR\x04arch\x12#\n" +
-	"\rbinary_sha256\x18\x05 \x01(\tR\fbinarySha256\"j\n" +
+	"\rbinary_sha256\x18\x05 \x01(\tR\fbinarySha256\x12\x0e\n" +
+	"\x02os\x18\x06 \x01(\tR\x02os\"j\n" +
 	"\x16SensorRegisterResponse\x12%\n" +
 	"\x0eupgrade_sha256\x18\x01 \x01(\tR\rupgradeSha256\x12)\n" +
 	"\x10upgrade_platform\x18\x02 \x01(\tR\x0fupgradePlatform\"R\n" +

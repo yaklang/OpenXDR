@@ -120,6 +120,12 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     s.into()
 }
 
+#[cfg(not(unix))]
+fn write_executable(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, data)
+}
+
+#[cfg(unix)]
 fn write_executable(path: &Path, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;

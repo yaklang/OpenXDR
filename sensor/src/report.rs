@@ -202,6 +202,7 @@ async fn register(
         version: env!("CARGO_PKG_VERSION").into(),
         arch: std::env::consts::ARCH.into(),
         binary_sha256: upgrade::self_sha256().into(),
+        os: std::env::consts::OS.into(),
     });
     request.set_timeout(Duration::from_secs(10));
     Ok(client.register(request).await?.into_inner())

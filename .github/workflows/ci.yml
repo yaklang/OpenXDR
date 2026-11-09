@@ -250,9 +250,14 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: agent
+          workspaces: |
+            agent
+            sensor
           key: windows
       - working-directory: agent
+        run: cargo clippy --target x86_64-pc-windows-gnu -- -D warnings
+      # Windows 版 sensor（Packet Monitor 后端）
+      - working-directory: sensor
         run: cargo clippy --target x86_64-pc-windows-gnu -- -D warnings
 
   images:

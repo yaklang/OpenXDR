@@ -38,11 +38,12 @@ func AgentDist(dir string) *Dist {
 	}}
 }
 
-// SensorDist sensor 安装包，只有 Linux。
+// SensorDist sensor 安装包。Windows 版靠系统自带的 Packet Monitor 实时 API，只有 x64。
 func SensorDist(dir string) *Dist {
 	return &Dist{Dir: dir, Files: map[string]string{
-		"linux-amd64": "openxdr-sensor-linux-amd64",
-		"linux-arm64": "openxdr-sensor-linux-arm64",
+		"linux-amd64":   "openxdr-sensor-linux-amd64",
+		"linux-arm64":   "openxdr-sensor-linux-arm64",
+		"windows-amd64": "openxdr-sensor-windows-amd64.exe",
 	}}
 }
 

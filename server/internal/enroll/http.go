@@ -22,6 +22,9 @@ var installPs1 []byte
 //go:embed sensor-install.sh
 var sensorInstallSh []byte
 
+//go:embed sensor-install.ps1
+var sensorInstallPs1 []byte
+
 // Public 免登录的接入端点：安装脚本、agent / sensor 二进制与注册。注册靠令牌鉴权。
 func (s *Service) Public(dists Dists) http.Handler {
 	mux := http.NewServeMux()
@@ -36,6 +39,10 @@ func (s *Service) Public(dists Dists) http.Handler {
 	mux.HandleFunc("GET /api/enroll/sensor-install.sh", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
 		_, _ = w.Write(sensorInstallSh)
+	})
+	mux.HandleFunc("GET /api/enroll/sensor-install.ps1", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write(sensorInstallPs1)
 	})
 	mux.Handle("GET /api/enroll/agent/{platform}", serveDist(dists.Agent, "agent"))
 	mux.Handle("GET /api/enroll/sensor/{platform}", serveDist(dists.Sensor, "sensor"))

@@ -93,6 +93,39 @@ pub fn apply(dir: &Path, mut input: impl Read) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Windows 没有 systemd 的 EnvironmentFile：启动时自己读 %ProgramData%\OpenXDR\sensor.env。
+/// 只认 OPENXDR_ 与 SENSOR_ 开头的键，进程环境里已有的变量优先；文件不存在不是错误
+#[cfg(windows)]
+pub fn load_env_file() {
+    let base = std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".into());
+    let Ok(text) = std::fs::read_to_string(Path::new(&base).join(r"OpenXDR\sensor.env")) else {
+        return;
+    };
+    for (key, value) in parse_env(&text) {
+        if std::env::var_os(key).is_none() {
+            // SAFETY: 在 main 起任何线程之前调用
+            unsafe { std::env::set_var(key, value) };
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+fn parse_env(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.trim(), v.trim()))
+        .filter(|(k, _)| k.starts_with("OPENXDR_") || k.starts_with("SENSOR_"))
+}
+
+/// Windows 上靠安装脚本收紧目录权限（只留 SYSTEM 与管理员），文件本身不另设
+#[cfg(not(unix))]
+fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, data)
+}
+
+#[cfg(unix)]
 fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -108,6 +141,20 @@ fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn env_file_keeps_only_sensor_keys() {
+        let text =
+            "# 注释\nOPENXDR_SERVER=https://x:8081\nSENSOR_IFACE = 以太网 \nPATH=/evil\n坏行\n";
+        let got: Vec<_> = parse_env(text).collect();
+        assert_eq!(
+            got,
+            [
+                ("OPENXDR_SERVER", "https://x:8081"),
+                ("SENSOR_IFACE", "以太网")
+            ]
+        );
+    }
 
     #[test]
     fn request_then_apply_writes_config() {
