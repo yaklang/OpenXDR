@@ -29,12 +29,14 @@ type Config struct {
 }
 
 type Service struct {
-	SQL           *sql.DB
-	DB            *ent.Client
-	Gate          *commandgate.Gate
-	Vault         *hostimport.Vault
-	HTTP          *http.Client
-	Fallback      func(ctx context.Context, title, text, path string) error // 原审批通知器：卡片没送到任何有权审批人时改由它通知
+	SQL      *sql.DB
+	DB       *ent.Client
+	Gate     *commandgate.Gate
+	Vault    *hostimport.Vault
+	HTTP     *http.Client
+	Fallback func(ctx context.Context, title, text, path string) error // 原审批通知器：卡片没送到任何有权审批人时改由它通知
+	// Containment 研判提出的待审批处置（containments.state=proposed）也发卡片、在卡片上批准或驳回；nil 不发
+	Containment   ContainmentDecider
 	mu            sync.RWMutex
 	state         string
 	diagnostic    map[string]any
@@ -81,11 +83,19 @@ func (s *Service) EnsureSchema(ctx context.Context) error {
    created_at timestamptz NOT NULL DEFAULT now(), outcome text NOT NULL DEFAULT '',
    UNIQUE(approval_id,user_id));
  CREATE INDEX IF NOT EXISTS feishu_approval_delivery_expiry ON feishu_approval_deliveries(expires_at);
+ ALTER TABLE feishu_approval_deliveries ADD COLUMN IF NOT EXISTS containment_id uuid REFERENCES containments(id) ON DELETE CASCADE;
+ CREATE UNIQUE INDEX IF NOT EXISTS feishu_approval_delivery_containment ON feishu_approval_deliveries(containment_id,user_id);
  CREATE TABLE IF NOT EXISTS feishu_approval_fallbacks (
    approval_id uuid PRIMARY KEY REFERENCES approvals(id) ON DELETE CASCADE,
    created_at timestamptz NOT NULL DEFAULT now());
  `)
 	return err
+}
+
+// ContainmentDecider 处置引擎的审批入口（containment.Engine）：状态 CAS、目标校验、熔断与下发都在里面
+type ContainmentDecider interface {
+	Approve(ctx context.Context, c *ent.Containment, actor string) (*ent.Containment, error)
+	Decline(ctx context.Context, c *ent.Containment, actor, reason string) (*ent.Containment, error)
 }
 
 type queryer interface {

@@ -12,11 +12,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/larksuite/oapi-sdk-go/v3/event"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
+	"openxdr/server/ent"
+	entcontainment "openxdr/server/ent/containment"
+	"openxdr/server/internal/auth"
 	"openxdr/server/internal/commandgate"
 )
 
@@ -169,7 +173,8 @@ func (s *Service) decide(ctx context.Context, c Config, tenant, openID, messageI
 		return "", errors.New("配置已失效")
 	}
 	var d delivery
-	err = tx.QueryRowContext(ctx, `SELECT nonce,approval_id,user_id,expires_at FROM feishu_approval_deliveries WHERE nonce=$1 AND app_id=$2 AND revision=$3 AND tenant=$4 AND open_id=$5 AND message_id=$6 AND expires_at>now() FOR UPDATE`, nonce, c.AppID, c.Revision, tenant, openID, messageID).Scan(&d.Nonce, &d.ApprovalID, &d.UserID, &d.Expires)
+	var outcome string
+	err = tx.QueryRowContext(ctx, `SELECT nonce,approval_id,containment_id,user_id,expires_at,outcome FROM feishu_approval_deliveries WHERE nonce=$1 AND app_id=$2 AND revision=$3 AND tenant=$4 AND open_id=$5 AND message_id=$6 AND expires_at>now() FOR UPDATE`, nonce, c.AppID, c.Revision, tenant, openID, messageID).Scan(&d.Nonce, &d.ApprovalID, &d.ContainmentID, &d.UserID, &d.Expires, &outcome)
 	if err != nil {
 		return "", errors.New("卡片已失效")
 	}
@@ -183,15 +188,15 @@ func (s *Service) decide(ctx context.Context, c Config, tenant, openID, messageI
 		return "", err
 	}
 	result := ""
-	if d.ApprovalID == nil {
+	if d.ContainmentID != nil {
+		if result, err = s.decideContainment(ctx, *d.ContainmentID, u, action, outcome); err != nil {
+			return "", err
+		}
+	} else if d.ApprovalID == nil {
 		if action != "test" {
 			return "", errors.New("连接测试不能批准命令")
 		}
 		result = "私聊身份及按钮回调验证成功，没有执行主机命令。"
-		var outcome string
-		if err = tx.QueryRowContext(ctx, `SELECT outcome FROM feishu_approval_deliveries WHERE nonce=$1`, nonce).Scan(&outcome); err != nil {
-			return "", err
-		}
 		if outcome == "test" {
 			return result, nil
 		}
@@ -219,11 +224,52 @@ func (s *Service) decide(ctx context.Context, c Config, tenant, openID, messageI
 	if err == nil {
 		err = tx.Commit()
 	}
-	// 命令决定已在 Gate 的独立事务内提交并审计；投递状态回写失败不否认已批准的事实。
-	if d.ApprovalID != nil {
+	// 命令与处置的决定已在各自的事务里提交并审计；投递状态回写失败不否认已做的决定。
+	if d.ApprovalID != nil || d.ContainmentID != nil {
 		return result, nil
 	}
 	return result, err
+}
+
+// decideContainment 卡片上批准或驳回待审批处置。权限按处置所在组重新核对；驳回当场完成。
+// 批准要下发指令，可能超过飞书回调的 3 秒时限，核对通过后在后台执行，结果以平台记录为准
+func (s *Service) decideContainment(ctx context.Context, id uuid.UUID, u *ent.User, action, outcome string) (string, error) {
+	if action != "approve" && action != "reject" {
+		return "", errors.New("操作不匹配")
+	}
+	if outcome != "" {
+		return "", errors.New("这张卡片已经处理过")
+	}
+	if s.Containment == nil {
+		return "", errors.New("平台未开启处置")
+	}
+	p, err := s.DB.Containment.Get(ctx, id)
+	if err != nil || p.State != entcontainment.StateProposed || p.ExpiresAt == nil || !time.Now().Before(*p.ExpiresAt) || p.GroupID == nil {
+		return "", errors.New("处置已处理或已过期")
+	}
+	if !auth.Allowed(auth.GroupRole(ctx, s.DB, u, *p.GroupID), "admin") {
+		return "", errors.New("只有组内 admin 可以审批")
+	}
+	audit := func(name string) {
+		_, _ = s.SQL.ExecContext(context.WithoutCancel(ctx), `INSERT INTO audit_logs(id,ts,username,action,target,remote_addr) VALUES($1,now(),$2,$3,$4,'feishu')`,
+			uuid.New(), u.Username, name, p.ID.String())
+	}
+	if action == "reject" {
+		if _, err := s.Containment.Decline(ctx, p, u.Username, "飞书驳回"); err != nil {
+			return "", err
+		}
+		audit("containment_declined")
+		return "已驳回，这条处置不会执行。", nil
+	}
+	audit("containment_approved")
+	go func() {
+		run, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		defer cancel()
+		if _, err := s.Containment.Approve(run, p, u.Username); err != nil {
+			slog.Error("飞书批准的处置下发失败", "containment", p.ID, "err", err)
+		}
+	}()
+	return "已批准，正在下发；结果以 OpenXDR 自主响应页的记录为准。", nil
 }
 
 // 长连接退出（如凭据错误这类不可重试的失败）后按指数退避重连，连上过则从头计时。

@@ -67,7 +67,7 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var tested bool
-	_ = s.SQL.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM feishu_approval_deliveries WHERE app_id=$1 AND revision=$2 AND user_id=$3 AND approval_id IS NULL AND outcome<>'')`, c.AppID, c.Revision, u.ID).Scan(&tested)
+	_ = s.SQL.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM feishu_approval_deliveries WHERE app_id=$1 AND revision=$2 AND user_id=$3 AND approval_id IS NULL AND containment_id IS NULL AND outcome<>'')`, c.AppID, c.Revision, u.ID).Scan(&tested)
 	result := map[string]any{"enabled": c.Enabled, "app_id": c.AppID, "secret_set": len(c.Sealed) > 0, "bound": bound, "connection": s.getState(), "callback_verified": tested}
 	if u.Role == "admin" {
 		result["diagnostic"] = s.diagnostics()
@@ -160,7 +160,7 @@ func (s *Service) testMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var recent bool
-	err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM feishu_approval_deliveries WHERE user_id=$1 AND approval_id IS NULL AND created_at>now()-interval '1 minute')`, u.ID).Scan(&recent)
+	err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM feishu_approval_deliveries WHERE user_id=$1 AND approval_id IS NULL AND containment_id IS NULL AND created_at>now()-interval '1 minute')`, u.ID).Scan(&recent)
 	if err != nil || recent {
 		http.Error(w, "请一分钟后再试", 429)
 		return

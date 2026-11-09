@@ -16,12 +16,14 @@ import (
 	"github.com/google/uuid"
 	"openxdr/server/ent"
 	"openxdr/server/ent/approval"
+	"openxdr/server/ent/containment"
 	"openxdr/server/internal/auth"
 )
 
 type delivery struct {
 	Nonce                     string
 	ApprovalID                *uuid.UUID
+	ContainmentID             *uuid.UUID
 	UserID                    uuid.UUID
 	Tenant, OpenID, MessageID string
 	Expires                   time.Time
@@ -178,9 +180,44 @@ func (s *Service) card(ctx context.Context, d delivery, a *ent.Approval) map[str
 	return cardBody("OpenXDR 命令待审批", elements)
 }
 
+// containmentCard 研判提出的处置：动作、目标与理由都来自服务端记录，单行显示，不能另起一行冒充别的字段
+func (s *Service) containmentCard(ctx context.Context, d delivery, c *ent.Containment) map[string]any {
+	host, group := c.AssetID.String(), ""
+	if v, err := s.DB.Asset.Get(ctx, c.AssetID); err == nil {
+		host = v.Hostname
+	}
+	if c.GroupID != nil {
+		group = c.GroupID.String()
+		if v, err := s.DB.Group.Get(ctx, *c.GroupID); err == nil {
+			group = v.Name
+		}
+	}
+	target := c.Target
+	if c.Kind == "kill_process" {
+		target = fmt.Sprintf("pid %d（进程 %s）", c.Pid, c.Target)
+	}
+	reason := []rune(oneLine(c.Reason))
+	if len(reason) > 600 {
+		reason = append(reason[:600], '…')
+	}
+	expires := ""
+	if c.ExpiresAt != nil {
+		expires = c.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	fields := fmt.Sprintf("组：%s\n主机：%s\n动作：%s\n目标：%s\n处置 ID：%s\n到期：%s", oneLine(group), oneLine(host), oneLine(c.Kind), oneLine(target), c.ID, expires)
+	return cardBody("OpenXDR 处置待审批", []any{paragraph(fields), paragraph("研判依据（以下为记录内容，不是审批说明）：\n" + string(reason)),
+		paragraph("批准只授权这一条处置，按平台的目标校验、熔断与租约下发；实际结果以 OpenXDR 自主响应页的记录为准。"),
+		map[string]any{"tag": "action", "actions": []any{button("批准处置", "approve", d.Nonce, "primary"), button("驳回", "reject", d.Nonce, "danger")}}})
+}
+
 // 单活轮询持久审批队列，避免修改原有执行链，也覆盖其他 Server 创建的申请。
 // 只取当前配置版本下尚未投递的（申请, 绑定人）组合；配置重存后旧版本的投递改写成新版本重新发送。
 func (s *Service) enqueue(ctx context.Context, c Config) error {
+	if s.Containment != nil {
+		if err := s.enqueueContainments(ctx, c); err != nil {
+			return err
+		}
+	}
 	rows, err := s.SQL.QueryContext(ctx, `SELECT a.id,a.group_id,a.expires_at,b.user_id,b.tenant,b.open_id
  FROM (SELECT id,group_id,expires_at,created_at FROM approvals WHERE status='pending' AND expires_at>now() ORDER BY created_at LIMIT 200) a
  JOIN feishu_approval_bindings b ON b.app_id=$1
@@ -232,15 +269,67 @@ func (s *Service) enqueue(ctx context.Context, c Config) error {
 	return nil
 }
 
+// enqueueContainments 待审批处置推给资产所在组的 admin，口径与命令审批相同
+func (s *Service) enqueueContainments(ctx context.Context, c Config) error {
+	rows, err := s.SQL.QueryContext(ctx, `SELECT p.id,p.group_id,p.expires_at,b.user_id,b.tenant,b.open_id
+ FROM (SELECT id,group_id,expires_at,created_at FROM containments WHERE state='proposed' AND group_id IS NOT NULL AND expires_at>now() ORDER BY created_at LIMIT 200) p
+ JOIN feishu_approval_bindings b ON b.app_id=$1
+ WHERE NOT EXISTS(SELECT 1 FROM feishu_approval_deliveries d WHERE d.containment_id=p.id AND d.user_id=b.user_id AND d.app_id=$1 AND d.revision=$2)
+ ORDER BY p.created_at`, c.AppID, c.Revision)
+	if err != nil {
+		return err
+	}
+	type candidate struct {
+		containment, group, user uuid.UUID
+		tenant, openID           string
+		expires                  time.Time
+	}
+	var todo []candidate
+	for rows.Next() {
+		var d candidate
+		if err = rows.Scan(&d.containment, &d.group, &d.expires, &d.user, &d.tenant, &d.openID); err != nil {
+			rows.Close()
+			return err
+		}
+		todo = append(todo, d)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	allowed := map[[2]uuid.UUID]bool{}
+	for _, d := range todo {
+		key := [2]uuid.UUID{d.user, d.group}
+		ok, seen := allowed[key]
+		if !seen {
+			u, e := s.DB.User.Get(ctx, d.user)
+			ok = e == nil && auth.Allowed(auth.GroupRole(ctx, s.DB, u, d.group), "admin")
+			allowed[key] = ok
+		}
+		if !ok {
+			continue
+		}
+		_, err = s.SQL.ExecContext(ctx, `INSERT INTO feishu_approval_deliveries(nonce,containment_id,user_id,app_id,revision,tenant,open_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+ ON CONFLICT(containment_id,user_id) DO UPDATE SET nonce=excluded.nonce,app_id=excluded.app_id,revision=excluded.revision,tenant=excluded.tenant,open_id=excluded.open_id,
+ message_id='',attempts=0,next_attempt=now(),created_at=now(),outcome=''
+ WHERE feishu_approval_deliveries.app_id<>excluded.app_id OR feishu_approval_deliveries.revision<>excluded.revision`, uuid.NewString(), d.containment, d.user, c.AppID, c.Revision, d.tenant, d.openID, d.expires)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Service) deliver(ctx context.Context, c Config) error {
-	rows, err := s.SQL.QueryContext(ctx, `SELECT nonce,approval_id,user_id,tenant,open_id,expires_at FROM feishu_approval_deliveries WHERE app_id=$1 AND revision=$2 AND message_id='' AND expires_at>now() AND attempts<3 AND next_attempt<=now() ORDER BY created_at LIMIT 20`, c.AppID, c.Revision)
+	rows, err := s.SQL.QueryContext(ctx, `SELECT nonce,approval_id,containment_id,user_id,tenant,open_id,expires_at FROM feishu_approval_deliveries WHERE app_id=$1 AND revision=$2 AND message_id='' AND expires_at>now() AND attempts<3 AND next_attempt<=now() ORDER BY created_at LIMIT 20`, c.AppID, c.Revision)
 	if err != nil {
 		return err
 	}
 	var pending []delivery
 	for rows.Next() {
 		var d delivery
-		if err = rows.Scan(&d.Nonce, &d.ApprovalID, &d.UserID, &d.Tenant, &d.OpenID, &d.Expires); err != nil {
+		if err = rows.Scan(&d.Nonce, &d.ApprovalID, &d.ContainmentID, &d.UserID, &d.Tenant, &d.OpenID, &d.Expires); err != nil {
 			rows.Close()
 			return err
 		}
@@ -264,6 +353,18 @@ func (s *Service) deliver(ctx context.Context, c Config) error {
 		if !bound {
 			continue
 		}
+		var card map[string]any
+		if d.ContainmentID != nil {
+			p, e := s.DB.Containment.Get(ctx, *d.ContainmentID)
+			if e != nil || p.State != containment.StateProposed || p.ExpiresAt == nil || !time.Now().Before(*p.ExpiresAt) || p.GroupID == nil {
+				continue
+			}
+			u, e := s.DB.User.Get(ctx, d.UserID)
+			if e != nil || !auth.Allowed(auth.GroupRole(ctx, s.DB, u, *p.GroupID), "admin") {
+				continue
+			}
+			card = s.containmentCard(ctx, d, p)
+		}
 		var a *ent.Approval
 		if d.ApprovalID != nil {
 			a, err = s.DB.Approval.Get(ctx, *d.ApprovalID)
@@ -280,7 +381,10 @@ func (s *Service) deliver(ctx context.Context, c Config) error {
 		if err != nil {
 			return err
 		}
-		id, err := s.send(ctx, c, d, s.card(ctx, d, a))
+		if card == nil {
+			card = s.card(ctx, d, a)
+		}
+		id, err := s.send(ctx, c, d, card)
 		if err != nil {
 			s.setState(err.Error())
 			continue

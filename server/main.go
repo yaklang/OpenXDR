@@ -187,6 +187,9 @@ func main() {
 	routes := http.NewServeMux()
 	routes.Handle("/api/settings/repair-policy", repair.Handler())
 	feishu := &feishuapproval.Service{SQL: db, DB: client, Gate: chat.Gate, Vault: credentialVault, Fallback: webhook.Send}
+	if containmentEngine != nil {
+		feishu.Containment = containmentEngine
+	}
 	if err := cluster.WithLock(ctx, db, "feishu-schema", func() error { return feishu.EnsureSchema(ctx) }); err != nil {
 		slog.Error("飞书审批初始化失败")
 		os.Exit(1)
