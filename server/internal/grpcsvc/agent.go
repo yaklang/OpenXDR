@@ -33,6 +33,8 @@ import (
 type Server struct {
 	pb.UnimplementedAgentServiceServer
 	DB *ent.Client
+	// LXC 名字 → 同名资产，见 guest.go
+	guests guestCache
 	// SQL 核对平台指令标记与可信来源用；不配置时两者都不认，照常告警
 	SQL interface {
 		cmdorigin.Querier
@@ -341,9 +343,10 @@ func fileFingerprintSuffix(classUID uint32, rawMap map[string]any) string {
 
 // publish 事件入队，检测与落库交给队列消费端。
 func (st *agentStream) publish(ev *pb.AgentEvent, raw json.RawMessage, rawMap map[string]any, ts time.Time) error {
+	assetID, assetOS, raw := st.attribute(raw, rawMap)
 	partitionKey := ev.AgentId
-	if st.assetID != nil {
-		partitionKey = st.assetID.String()
+	if assetID != nil {
+		partitionKey = assetID.String()
 	}
 	var processGUID, parentGUID *uuid.UUID
 	if id, parseErr := uuid.Parse(ev.ProcessGuid); parseErr == nil {
@@ -357,8 +360,8 @@ func (st *agentStream) publish(ev *pb.AgentEvent, raw json.RawMessage, rawMap ma
 		ev.ConnTuple, string(raw))
 	envelope := ingest.Envelope{
 		Version: ingest.EnvelopeVersion, ID: eventID, PartitionKey: partitionKey,
-		Timestamp: ts, ClassUID: int(ev.ClassUid), Source: "agent", AssetID: st.assetID,
-		AssetOS: st.assetOS, ProcessGUID: processGUID, ParentProcessGUID: parentGUID,
+		Timestamp: ts, ClassUID: int(ev.ClassUid), Source: "agent", AssetID: assetID,
+		AssetOS: assetOS, ProcessGUID: processGUID, ParentProcessGUID: parentGUID,
 		Username: ev.Username, ConnTuple: ev.ConnTuple, FingerprintSuffix: fileFingerprintSuffix(ev.ClassUid, rawMap),
 		Raw: sanitizeRawJSON(raw),
 	}

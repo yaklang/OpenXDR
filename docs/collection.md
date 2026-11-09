@@ -115,7 +115,9 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
   Proxmox 的 LXC 容器（`/lxc/<VMID>`、`lxc.payload.<VMID>`）与 QEMU 虚拟机进程（`qemu.slice/<VMID>.scope`）、
   systemd-nspawn，事件里写成 `container: {runtime, uid, name}`。名字读 docker 容器配置与
   `/etc/pve/lxc|qemu-server/<VMID>.conf`，读不到只给 ID。agent 必须跑在宿主机的 cgroup 命名空间里
-  （systemd 服务即是；放进容器跑要 `--cgroupns=host`），否则看到的是相对路径
+  （systemd 服务即是；放进容器跑要 `--cgroupns=host`），否则看到的是相对路径。
+  LXC 里的进程事件，server 归到与 LXC 同名、未下线的纳管资产上（宿主机记在 `observed_by.asset_id`，`grpcsvc/guest.go`）：
+  容器里自己的 agent 多半加载不了 eBPF，宿主机的 eBPF 采得更全，归到 LXC 自己名下，研判、处置等级与关联才对得上
 - **容器健康检查**（`mod.rs` 的 `healthcheck_of`，仅 Linux）：dockerd 每隔几秒在容器里执行一次 HEALTHCHECK，
   `nc -z`、`/dev/tcp` 探测这类命令天天误中规则。agent 读容器配置 `/var/lib/docker/containers/<ID>/config.v2.json` 的
   `Config.Healthcheck.Test`，按 dockerd 的执行方式还原命令行（`["CMD", 参数…]` 直接执行；`["CMD-SHELL", 命令]` 在
