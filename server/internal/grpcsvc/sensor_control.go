@@ -46,6 +46,9 @@ func (s *SensorServer) Register(ctx context.Context, req *pb.SensorRegisterReque
 	if err != nil {
 		return nil, err
 	}
+	if a.RetiredAt != nil {
+		return nil, status.Error(codes.PermissionDenied, "主机已下线，需用接入令牌重新接入")
+	}
 	upd := a.Update().SetSensorVersion(req.Version).SetSensorSeen(time.Now())
 	// 同机有 agent 时地址以 agent 为准；只有探针的主机由探针登记地址，
 	// 这台机器自己的流量才归得到它身上

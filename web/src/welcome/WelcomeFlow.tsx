@@ -297,7 +297,7 @@ function AssetStep({ c }: { c: Copy }) {
   const { groups } = useSession()
   const [open, setOpen] = useState(false)
   // 执行安装命令后主机几秒内注册上来，这里轮询着等它出现
-  const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets, refetchInterval: 5000 })
+  const assets = useQuery({ queryKey: ['assets'], queryFn: () => fetchAssets(), refetchInterval: 5000 })
   const n = assets.data?.filter(a => a.agentId).length ?? 0
   if (!groups.length) return <Typography.Text type="warning">{c.hostNeedGroup}</Typography.Text>
   return (

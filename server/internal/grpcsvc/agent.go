@@ -61,6 +61,10 @@ func (s *Server) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.Reg
 	if err != nil {
 		return nil, err
 	}
+	// 下线的主机接不回来：没有证书吊销，旧证书只能在这里挡住。要回来得用接入令牌重新接入
+	if a.RetiredAt != nil {
+		return nil, status.Error(codes.PermissionDenied, "主机已下线，需用接入令牌重新接入")
+	}
 
 	agentID := uuid.Must(uuid.NewV7())
 	if a.AgentID != nil {

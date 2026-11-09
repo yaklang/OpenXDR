@@ -9,7 +9,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import {
-  createAgentSession, fetchAgentConfig, fetchAssets, fetchCommandsPage, fetchFindingsPage, fetchIncidents, saveAgentConfig, searchEvents,
+  createAgentSession, fetchAgentConfig, fetchAssets, fetchCommandsPage, fetchFindingsPage, fetchIncidents, restoreAsset, retireAsset, saveAgentConfig, searchEvents,
   type AgentConfig, type CommandRow, type EventRow, type FindingRow, type IncidentSummary,
 } from '../api'
 import { useRemember } from '../app/recent'
@@ -128,7 +128,7 @@ function AssetDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const client = useQueryClient()
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const { groups, isAdmin } = useSession()
   const [starting, setStarting] = useState(false)
   const [showSideProfile, setShowSideProfile] = useState(true)
@@ -162,7 +162,8 @@ function AssetDetail() {
   const [eventQ, setEventQ] = useState('')
 
   useEffect(() => { setCommandPage(1); setCommandDetail(null) }, [id])
-  const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets, refetchInterval: 15000 })
+  // 从历史事件点进来的可能是已下线的主机，连同它们一起取
+  const assets = useQuery({ queryKey: ['assets', 'retired'], queryFn: () => fetchAssets(true), refetchInterval: 15000 })
   const asset = assets.data?.find(a => a.id === id)
   const canAct = useCanActIn(asset?.groupId)
   const incidents = useQuery({
@@ -243,6 +244,48 @@ function AssetDetail() {
     asset.sensorHealth?.capabilities?.capture?.state === 'unavailable'
   )
 
+  const groupAdmin = isAdmin || group?.role === 'admin'
+  const refreshAssets = () => client.invalidateQueries({ queryKey: ['assets'] })
+  // 下线：原因必填，放在确认框里填
+  const retire = () => {
+    let reason = ''
+    modal.confirm({
+      title: t('retireHostConfirm', { host: asset.hostname }),
+      content: <Space direction="vertical" style={{ width: '100%' }}>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12.5, marginBottom: 0 }}>{t('retireHostHint')}</Typography.Paragraph>
+        <Input.TextArea autoSize={{ minRows: 2 }} maxLength={500} placeholder={t('retireReason')} onChange={e => { reason = e.target.value }} />
+      </Space>,
+      okButtonProps: { danger: true },
+      okText: t('retireHost'),
+      onOk: async () => {
+        if (!reason.trim()) {
+          message.error(t('retireReason'))
+          throw new Error('reason required')
+        }
+        try {
+          await retireAsset(asset.id, reason.trim())
+          await refreshAssets()
+          message.success(t('retireDone'))
+        } catch (e) {
+          message.error(errText(e, t))
+          throw e
+        }
+      },
+    })
+  }
+  const restore = () => modal.confirm({
+    title: t('restoreHostConfirm', { host: asset.hostname }),
+    onOk: async () => {
+      try {
+        await restoreAsset(asset.id)
+        await refreshAssets()
+        message.success(t('restoreDone'))
+      } catch (e) {
+        message.error(errText(e, t))
+      }
+    },
+  })
+
   // 一键排查：在主机所在组新建对话，把主机名预填进提问
   const investigate = async () => {
     if (!asset.groupId) return
@@ -266,10 +309,15 @@ function AssetDetail() {
       extra={
         <Space wrap>
           <Button icon={<SearchOutlined />} onClick={() => navigate(`/events?assetId=${asset.id}`)}>{t('openInEvents')}</Button>
-          {canChat && asset.groupId && <Button type="primary" icon={<RobotOutlined />} loading={starting} onClick={investigate}>{t('investigateHost')}</Button>}
+          {canChat && asset.groupId && !asset.retiredAt && <Button type="primary" icon={<RobotOutlined />} loading={starting} onClick={investigate}>{t('investigateHost')}</Button>}
+          {groupAdmin && (asset.retiredAt
+            ? <Button onClick={restore}>{t('restoreHost')}</Button>
+            : <Button danger onClick={retire}>{t('retireHost')}</Button>)}
         </Space>
       }
     >
+      {asset.retiredAt && <Alert type="info" showIcon style={{ marginBottom: 16 }}
+        message={t('hostRetiredBanner', { time: fmtTime(asset.retiredAt), who: asset.retiredBy ?? '-', reason: asset.retiredReason ?? '' })} />}
       {commandDetail && <CommandDetailDrawer id={commandDetail} onClose={() => setCommandDetail(null)} />}
       {verifying?.assetId === asset.id && <CommandVerificationDrawer key={`${verifying.id}:${asset.groupId}`} command={verifying} canEdit={canAct} onClose={() => setVerifying(null)} />}
       <Row gutter={[20, 20]}>

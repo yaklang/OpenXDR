@@ -48,6 +48,12 @@ const (
 	FieldAgentVersion = "agent_version"
 	// FieldSilentSince holds the string denoting the silent_since field in the database.
 	FieldSilentSince = "silent_since"
+	// FieldRetiredAt holds the string denoting the retired_at field in the database.
+	FieldRetiredAt = "retired_at"
+	// FieldRetiredBy holds the string denoting the retired_by field in the database.
+	FieldRetiredBy = "retired_by"
+	// FieldRetiredReason holds the string denoting the retired_reason field in the database.
+	FieldRetiredReason = "retired_reason"
 	// FieldHealthProblem holds the string denoting the health_problem field in the database.
 	FieldHealthProblem = "health_problem"
 	// FieldHealthDropped holds the string denoting the health_dropped field in the database.
@@ -142,6 +148,9 @@ var Columns = []string{
 	FieldGroupID,
 	FieldAgentVersion,
 	FieldSilentSince,
+	FieldRetiredAt,
+	FieldRetiredBy,
+	FieldRetiredReason,
 	FieldHealthProblem,
 	FieldHealthDropped,
 	FieldHealthDroppedAt,
@@ -275,6 +284,21 @@ func ByAgentVersion(opts ...sql.OrderTermOption) OrderOption {
 // BySilentSince orders the results by the silent_since field.
 func BySilentSince(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSilentSince, opts...).ToFunc()
+}
+
+// ByRetiredAt orders the results by the retired_at field.
+func ByRetiredAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRetiredAt, opts...).ToFunc()
+}
+
+// ByRetiredBy orders the results by the retired_by field.
+func ByRetiredBy(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRetiredBy, opts...).ToFunc()
+}
+
+// ByRetiredReason orders the results by the retired_reason field.
+func ByRetiredReason(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRetiredReason, opts...).ToFunc()
 }
 
 // ByHealthProblem orders the results by the health_problem field.

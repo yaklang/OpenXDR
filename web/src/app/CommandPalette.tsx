@@ -36,7 +36,7 @@ export function CommandPalette({ open, onClose, onHelp }: { open: boolean; onClo
   const [q, setQ] = useState('')
   const [active, setActive] = useState(0)
   const list = useRef<HTMLDivElement>(null)
-  const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets, enabled: open })
+  const assets = useQuery({ queryKey: ['assets'], queryFn: () => fetchAssets(), enabled: open })
   const incidents = useQuery({ queryKey: ['incidents', 'palette'], queryFn: () => fetchIncidents({ status: 'unresolved', limit: 200 }), enabled: open, staleTime: 30_000 })
   const sessions = useQuery({ queryKey: ['sessions', group?.id], queryFn: () => fetchAgentSessions(group!.id), enabled: open && !!group })
 

@@ -48,6 +48,11 @@ func (Asset) Fields() []ent.Field {
 		field.String("agent_version").Optional().Nillable(),
 		// 失联起始时刻：已发过失联通知，恢复后清空。避免同一次失联反复通知
 		field.Time("silent_since").Optional().Nillable(),
+		// 下线：主机已退役。记录与历史证据都保留，agent 与探针接不进来、不再下发指令，列表默认不显示；
+		// 用接入令牌重新接入或在控制台恢复即取消
+		field.Time("retired_at").Optional().Nillable(),
+		field.String("retired_by").Optional().Nillable(),
+		field.Text("retired_reason").Optional().Nillable(),
 		// 采集健康通知：已通知过的问题签名（降级的采集器、缓存写不进、丢事件），变了才再通知，恢复后清空
 		field.String("health_problem").Optional().Nillable(),
 		// 上一轮看到的丢弃累计数与最后一次超过阈值的时刻：丢事件是一阵一阵的，超阈值后持续一小时才算恢复

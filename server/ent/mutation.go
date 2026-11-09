@@ -5191,6 +5191,9 @@ type AssetMutation struct {
 	group_id               *uuid.UUID
 	agent_version          *string
 	silent_since           *time.Time
+	retired_at             *time.Time
+	retired_by             *string
+	retired_reason         *string
 	health_problem         *string
 	health_dropped         *int64
 	addhealth_dropped      *int64
@@ -6147,6 +6150,153 @@ func (m *AssetMutation) SilentSinceCleared() bool {
 func (m *AssetMutation) ResetSilentSince() {
 	m.silent_since = nil
 	delete(m.clearedFields, asset.FieldSilentSince)
+}
+
+// SetRetiredAt sets the "retired_at" field.
+func (m *AssetMutation) SetRetiredAt(t time.Time) {
+	m.retired_at = &t
+}
+
+// RetiredAt returns the value of the "retired_at" field in the mutation.
+func (m *AssetMutation) RetiredAt() (r time.Time, exists bool) {
+	v := m.retired_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRetiredAt returns the old "retired_at" field's value of the Asset entity.
+// If the Asset object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AssetMutation) OldRetiredAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRetiredAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRetiredAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRetiredAt: %w", err)
+	}
+	return oldValue.RetiredAt, nil
+}
+
+// ClearRetiredAt clears the value of the "retired_at" field.
+func (m *AssetMutation) ClearRetiredAt() {
+	m.retired_at = nil
+	m.clearedFields[asset.FieldRetiredAt] = struct{}{}
+}
+
+// RetiredAtCleared returns if the "retired_at" field was cleared in this mutation.
+func (m *AssetMutation) RetiredAtCleared() bool {
+	_, ok := m.clearedFields[asset.FieldRetiredAt]
+	return ok
+}
+
+// ResetRetiredAt resets all changes to the "retired_at" field.
+func (m *AssetMutation) ResetRetiredAt() {
+	m.retired_at = nil
+	delete(m.clearedFields, asset.FieldRetiredAt)
+}
+
+// SetRetiredBy sets the "retired_by" field.
+func (m *AssetMutation) SetRetiredBy(s string) {
+	m.retired_by = &s
+}
+
+// RetiredBy returns the value of the "retired_by" field in the mutation.
+func (m *AssetMutation) RetiredBy() (r string, exists bool) {
+	v := m.retired_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRetiredBy returns the old "retired_by" field's value of the Asset entity.
+// If the Asset object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AssetMutation) OldRetiredBy(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRetiredBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRetiredBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRetiredBy: %w", err)
+	}
+	return oldValue.RetiredBy, nil
+}
+
+// ClearRetiredBy clears the value of the "retired_by" field.
+func (m *AssetMutation) ClearRetiredBy() {
+	m.retired_by = nil
+	m.clearedFields[asset.FieldRetiredBy] = struct{}{}
+}
+
+// RetiredByCleared returns if the "retired_by" field was cleared in this mutation.
+func (m *AssetMutation) RetiredByCleared() bool {
+	_, ok := m.clearedFields[asset.FieldRetiredBy]
+	return ok
+}
+
+// ResetRetiredBy resets all changes to the "retired_by" field.
+func (m *AssetMutation) ResetRetiredBy() {
+	m.retired_by = nil
+	delete(m.clearedFields, asset.FieldRetiredBy)
+}
+
+// SetRetiredReason sets the "retired_reason" field.
+func (m *AssetMutation) SetRetiredReason(s string) {
+	m.retired_reason = &s
+}
+
+// RetiredReason returns the value of the "retired_reason" field in the mutation.
+func (m *AssetMutation) RetiredReason() (r string, exists bool) {
+	v := m.retired_reason
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRetiredReason returns the old "retired_reason" field's value of the Asset entity.
+// If the Asset object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AssetMutation) OldRetiredReason(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRetiredReason is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRetiredReason requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRetiredReason: %w", err)
+	}
+	return oldValue.RetiredReason, nil
+}
+
+// ClearRetiredReason clears the value of the "retired_reason" field.
+func (m *AssetMutation) ClearRetiredReason() {
+	m.retired_reason = nil
+	m.clearedFields[asset.FieldRetiredReason] = struct{}{}
+}
+
+// RetiredReasonCleared returns if the "retired_reason" field was cleared in this mutation.
+func (m *AssetMutation) RetiredReasonCleared() bool {
+	_, ok := m.clearedFields[asset.FieldRetiredReason]
+	return ok
+}
+
+// ResetRetiredReason resets all changes to the "retired_reason" field.
+func (m *AssetMutation) ResetRetiredReason() {
+	m.retired_reason = nil
+	delete(m.clearedFields, asset.FieldRetiredReason)
 }
 
 // SetHealthProblem sets the "health_problem" field.
@@ -7561,7 +7711,7 @@ func (m *AssetMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AssetMutation) Fields() []string {
-	fields := make([]string, 0, 38)
+	fields := make([]string, 0, 41)
 	if m.hostname != nil {
 		fields = append(fields, asset.FieldHostname)
 	}
@@ -7609,6 +7759,15 @@ func (m *AssetMutation) Fields() []string {
 	}
 	if m.silent_since != nil {
 		fields = append(fields, asset.FieldSilentSince)
+	}
+	if m.retired_at != nil {
+		fields = append(fields, asset.FieldRetiredAt)
+	}
+	if m.retired_by != nil {
+		fields = append(fields, asset.FieldRetiredBy)
+	}
+	if m.retired_reason != nil {
+		fields = append(fields, asset.FieldRetiredReason)
 	}
 	if m.health_problem != nil {
 		fields = append(fields, asset.FieldHealthProblem)
@@ -7716,6 +7875,12 @@ func (m *AssetMutation) Field(name string) (ent.Value, bool) {
 		return m.AgentVersion()
 	case asset.FieldSilentSince:
 		return m.SilentSince()
+	case asset.FieldRetiredAt:
+		return m.RetiredAt()
+	case asset.FieldRetiredBy:
+		return m.RetiredBy()
+	case asset.FieldRetiredReason:
+		return m.RetiredReason()
 	case asset.FieldHealthProblem:
 		return m.HealthProblem()
 	case asset.FieldHealthDropped:
@@ -7801,6 +7966,12 @@ func (m *AssetMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldAgentVersion(ctx)
 	case asset.FieldSilentSince:
 		return m.OldSilentSince(ctx)
+	case asset.FieldRetiredAt:
+		return m.OldRetiredAt(ctx)
+	case asset.FieldRetiredBy:
+		return m.OldRetiredBy(ctx)
+	case asset.FieldRetiredReason:
+		return m.OldRetiredReason(ctx)
 	case asset.FieldHealthProblem:
 		return m.OldHealthProblem(ctx)
 	case asset.FieldHealthDropped:
@@ -7965,6 +8136,27 @@ func (m *AssetMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetSilentSince(v)
+		return nil
+	case asset.FieldRetiredAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRetiredAt(v)
+		return nil
+	case asset.FieldRetiredBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRetiredBy(v)
+		return nil
+	case asset.FieldRetiredReason:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRetiredReason(v)
 		return nil
 	case asset.FieldHealthProblem:
 		v, ok := value.(string)
@@ -8216,6 +8408,15 @@ func (m *AssetMutation) ClearedFields() []string {
 	if m.FieldCleared(asset.FieldSilentSince) {
 		fields = append(fields, asset.FieldSilentSince)
 	}
+	if m.FieldCleared(asset.FieldRetiredAt) {
+		fields = append(fields, asset.FieldRetiredAt)
+	}
+	if m.FieldCleared(asset.FieldRetiredBy) {
+		fields = append(fields, asset.FieldRetiredBy)
+	}
+	if m.FieldCleared(asset.FieldRetiredReason) {
+		fields = append(fields, asset.FieldRetiredReason)
+	}
 	if m.FieldCleared(asset.FieldHealthProblem) {
 		fields = append(fields, asset.FieldHealthProblem)
 	}
@@ -8334,6 +8535,15 @@ func (m *AssetMutation) ClearField(name string) error {
 		return nil
 	case asset.FieldSilentSince:
 		m.ClearSilentSince()
+		return nil
+	case asset.FieldRetiredAt:
+		m.ClearRetiredAt()
+		return nil
+	case asset.FieldRetiredBy:
+		m.ClearRetiredBy()
+		return nil
+	case asset.FieldRetiredReason:
+		m.ClearRetiredReason()
 		return nil
 	case asset.FieldHealthProblem:
 		m.ClearHealthProblem()
@@ -8456,6 +8666,15 @@ func (m *AssetMutation) ResetField(name string) error {
 		return nil
 	case asset.FieldSilentSince:
 		m.ResetSilentSince()
+		return nil
+	case asset.FieldRetiredAt:
+		m.ResetRetiredAt()
+		return nil
+	case asset.FieldRetiredBy:
+		m.ResetRetiredBy()
+		return nil
+	case asset.FieldRetiredReason:
+		m.ResetRetiredReason()
 		return nil
 	case asset.FieldHealthProblem:
 		m.ResetHealthProblem()

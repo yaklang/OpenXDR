@@ -486,9 +486,16 @@ export interface Asset {
   sensorVersion?: string | null
   sensorSeen?: string | null
   sensorHealth?: SensorHealthSnapshot | null
+  // 下线：时间、操作人与原因，没下线时为空
+  retiredAt?: string | null
+  retiredBy?: string | null
+  retiredReason?: string | null
 }
 
-export const fetchAssets = () => get<Asset[]>('/api/assets')
+// 下线的主机默认不列出；retired 为 true 时连同它们一起
+export const fetchAssets = (retired = false) => get<Asset[]>(`/api/assets${retired ? '?retired=1' : ''}`)
+export const retireAsset = (id: string, reason: string) => send('POST', `/api/assets/${id}/retire`, { reason })
+export const restoreAsset = (id: string) => send('POST', `/api/assets/${id}/restore`)
 
 export interface TemporalGap {
   revision: string

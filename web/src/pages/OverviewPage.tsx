@@ -139,7 +139,7 @@ export function OverviewPage() {
   const stats = useQuery({ queryKey: ['stats'], queryFn: fetchStats, refetchInterval: 30_000, placeholderData: keepPreviousData })
   const incidents = useQuery({ queryKey: ['incidents', 'review', 'overview'], queryFn: () => fetchIncidents({ status: 'review', limit: 6 }), refetchInterval: 30_000 })
   const findings = useQuery({ queryKey: ['findings', 'count', 'open'], queryFn: () => fetchFindingsPage({ status: 'open', limit: 1 }), refetchInterval: 60_000 })
-  const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets, refetchInterval: 30_000 })
+  const assets = useQuery({ queryKey: ['assets'], queryFn: () => fetchAssets(), refetchInterval: 30_000 })
   const rowLink = useRowLink<IncidentSummary>(r => `/incidents/${r.id}`)
   useEffect(() => { if (incidents.data) saveQueue(incidents.data.items) }, [incidents.data])
   const isGroupAdmin = group?.role === 'admin'

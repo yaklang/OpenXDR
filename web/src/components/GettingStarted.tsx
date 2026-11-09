@@ -17,7 +17,7 @@ export function GettingStarted() {
   const tour = useTour()
   const [dismissed, setDismissed] = useState(() => localStorage.getItem('gettingStarted') === 'off')
   const show = isAdmin && !dismissed
-  const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets, enabled: show })
+  const assets = useQuery({ queryKey: ['assets'], queryFn: () => fetchAssets(), enabled: show })
   const notify = useQuery({ queryKey: ['notify-settings'], queryFn: fetchNotifySettings, enabled: show })
   const sessions = useQuery({ queryKey: ['sessions', group?.id], queryFn: () => fetchAgentSessions(group!.id), enabled: show && !!group })
   if (!show || assets.isPending || notify.isPending) return null

@@ -290,7 +290,7 @@ export function TasksPage() {
   const tasks = (data ?? [])
     .filter(task => (category === 'all' || task.category === category) && (!onlyEnabled || enabledIn(task, group?.id)))
     .sort((a, b) => Number(enabledIn(b, group?.id)) - Number(enabledIn(a, group?.id)))
-  const { data: hosts = {} } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets, select: as => Object.fromEntries(as.map(a => [a.id, a.hostname])) })
+  const { data: hosts = {} } = useQuery({ queryKey: ['assets'], queryFn: () => fetchAssets(), select: as => Object.fromEntries(as.map(a => [a.id, a.hostname])) })
 
   const perform = async (id: string, action: () => Promise<void>) => {
     if (pending.current.has(id)) return false

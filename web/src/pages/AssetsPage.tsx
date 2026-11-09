@@ -18,7 +18,7 @@ import { useI18n } from '../i18n'
 
 // 心跳超过 5 分钟视为失联——agent 掉线本身就是值得注意的信号
 const UNGROUPED = '__none__'
-const STATE_ORDER: Record<ReturnType<typeof hostState>, number> = { silent: 1, stale: 2, imported: 3, online: 4 }
+const STATE_ORDER: Record<ReturnType<typeof hostState>, number> = { silent: 1, stale: 2, imported: 3, online: 4, retired: 5 }
 
 function assetSource(a: Asset): 'agent' | 'sensor' | 'imported' | 'log' {
   if (a.agentId) return 'agent'
@@ -47,7 +47,11 @@ export function AssetsPage() {
   const [exporting, setExporting] = useState(false)
   // 组 admin 才能为本组签发接入令牌
   const canAdd = groups.some(g => g.role === 'admin')
-  const { data, isPending, isFetching, isError, error, dataUpdatedAt, refetch } = useQuery({ queryKey: ['assets'], queryFn: fetchAssets, refetchInterval: 30_000 })
+  // 选「已下线」时才连同下线的主机一起取
+  const showRetired = statusFilter === 'retired'
+  const { data, isPending, isFetching, isError, error, dataUpdatedAt, refetch } = useQuery({
+    queryKey: showRetired ? ['assets', 'retired'] : ['assets'], queryFn: () => fetchAssets(showRetired), refetchInterval: 30_000,
+  })
 
   const wideTable = useWideTable()
   const rowLink = useRowLink<Asset>(a => `/assets/${a.id}`)
@@ -137,6 +141,7 @@ export function AssetsPage() {
                 { value: 'stale', label: t('stale') },
                 { value: 'silent', label: t('silent') },
                 { value: 'imported', label: t('hostNotEnrolled') },
+                { value: 'retired', label: t('hostRetired') },
               ]}
             />
             <Select aria-label={t('thSource')} style={{ width: 140 }} value={sourceFilter} onChange={v => setFilter({ source: v })}

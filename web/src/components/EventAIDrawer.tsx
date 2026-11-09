@@ -98,7 +98,7 @@ export function EventAIDrawer({ event, onClose, onAsk }: { event: EventRow | nul
     }
   }, [canWrite, status, event?.id, locale, mutate])
   const x = status === 'done' ? explain.data?.result : undefined
-  const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets, enabled: !!event })
+  const assets = useQuery({ queryKey: ['assets'], queryFn: () => fetchAssets(), enabled: !!event })
   const canChat = useCanChat()
   const handoff = useHandoff()
   if (!event) return <Drawer open={false} />

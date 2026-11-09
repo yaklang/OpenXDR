@@ -24,7 +24,7 @@ function GroupDrawer({ group, onClose }: { group: GroupRow; onClose: () => void 
   const [activeTab, setActiveTab] = useState('members')
   const members = useQuery({ queryKey: ['members', group.id], queryFn: () => fetchMembers(group.id) })
   const usersQuery = useQuery({ queryKey: ['users'], queryFn: fetchUsers })
-  const assetsQuery = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
+  const assetsQuery = useQuery({ queryKey: ['assets'], queryFn: () => fetchAssets() })
 
   const run = async (fn: () => Promise<unknown>) => {
     if (pending.current) return false

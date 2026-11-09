@@ -213,7 +213,7 @@ function ChatWorkspace({ prompt, setPrompt, filter, setFilter }: {
   })
   const { data: hosts = {} } = useQuery({
     queryKey: ['assets'],
-    queryFn: fetchAssets,
+    queryFn: () => fetchAssets(),
     select: as => Object.fromEntries(as.map(a => [a.id, a.hostname])),
   })
   const isGroupAdmin = group?.role === 'admin'

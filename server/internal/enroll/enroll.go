@@ -194,7 +194,8 @@ func (s *Service) Enroll(ctx context.Context, token string, req Request) (*ent.A
 	case kind == KindSensor && a.SensorSeen != nil && time.Since(*a.SensorSeen) < s.OnlineWindow:
 		return nil, Grant{}, ErrSensor
 	default:
-		a, err = a.Update().SetGroupID(t.GroupID).Save(ctx)
+		// 用令牌重新接入是管理员的明确动作：下线的主机就此恢复
+		a, err = a.Update().SetGroupID(t.GroupID).ClearRetiredAt().ClearRetiredBy().ClearRetiredReason().Save(ctx)
 	}
 	if err != nil {
 		return nil, Grant{}, err

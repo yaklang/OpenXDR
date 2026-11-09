@@ -209,6 +209,48 @@ func (_c *AssetCreate) SetNillableSilentSince(v *time.Time) *AssetCreate {
 	return _c
 }
 
+// SetRetiredAt sets the "retired_at" field.
+func (_c *AssetCreate) SetRetiredAt(v time.Time) *AssetCreate {
+	_c.mutation.SetRetiredAt(v)
+	return _c
+}
+
+// SetNillableRetiredAt sets the "retired_at" field if the given value is not nil.
+func (_c *AssetCreate) SetNillableRetiredAt(v *time.Time) *AssetCreate {
+	if v != nil {
+		_c.SetRetiredAt(*v)
+	}
+	return _c
+}
+
+// SetRetiredBy sets the "retired_by" field.
+func (_c *AssetCreate) SetRetiredBy(v string) *AssetCreate {
+	_c.mutation.SetRetiredBy(v)
+	return _c
+}
+
+// SetNillableRetiredBy sets the "retired_by" field if the given value is not nil.
+func (_c *AssetCreate) SetNillableRetiredBy(v *string) *AssetCreate {
+	if v != nil {
+		_c.SetRetiredBy(*v)
+	}
+	return _c
+}
+
+// SetRetiredReason sets the "retired_reason" field.
+func (_c *AssetCreate) SetRetiredReason(v string) *AssetCreate {
+	_c.mutation.SetRetiredReason(v)
+	return _c
+}
+
+// SetNillableRetiredReason sets the "retired_reason" field if the given value is not nil.
+func (_c *AssetCreate) SetNillableRetiredReason(v *string) *AssetCreate {
+	if v != nil {
+		_c.SetRetiredReason(*v)
+	}
+	return _c
+}
+
 // SetHealthProblem sets the "health_problem" field.
 func (_c *AssetCreate) SetHealthProblem(v string) *AssetCreate {
 	_c.mutation.SetHealthProblem(v)
@@ -683,6 +725,18 @@ func (_c *AssetCreate) createSpec() (*Asset, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.SilentSince(); ok {
 		_spec.SetField(asset.FieldSilentSince, field.TypeTime, value)
 		_node.SilentSince = &value
+	}
+	if value, ok := _c.mutation.RetiredAt(); ok {
+		_spec.SetField(asset.FieldRetiredAt, field.TypeTime, value)
+		_node.RetiredAt = &value
+	}
+	if value, ok := _c.mutation.RetiredBy(); ok {
+		_spec.SetField(asset.FieldRetiredBy, field.TypeString, value)
+		_node.RetiredBy = &value
+	}
+	if value, ok := _c.mutation.RetiredReason(); ok {
+		_spec.SetField(asset.FieldRetiredReason, field.TypeString, value)
+		_node.RetiredReason = &value
 	}
 	if value, ok := _c.mutation.HealthProblem(); ok {
 		_spec.SetField(asset.FieldHealthProblem, field.TypeString, value)

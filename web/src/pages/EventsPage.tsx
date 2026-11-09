@@ -68,7 +68,7 @@ export function EventsPage() {
   }
   useEffect(() => setDraft(filter.q), [filter.q])
   const { data, isFetching, isError, error, refetch, dataUpdatedAt } = useQuery({ queryKey: ['events', filter], queryFn: () => searchEvents(filter) })
-  const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
+  const assets = useQuery({ queryKey: ['assets'], queryFn: () => fetchAssets() })
   const wideTable = useWideTable()
   const [asking, setAsking] = useState<EventRow | null>(null)
   // 当前结果里各类别的条数：点一下就只看这一类

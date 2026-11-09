@@ -166,6 +166,8 @@ func Handler(db *ent.Client, conn *stdsql.DB, rules sigma.Catalog, hub *response
 
 	mapIncidents(mux, db, rules)
 	mux.HandleFunc("GET /api/assets", listAssets(db))
+	mux.HandleFunc("POST /api/assets/{id}/retire", retireAsset(db, true))
+	mux.HandleFunc("POST /api/assets/{id}/restore", retireAsset(db, false))
 	mux.HandleFunc("POST /api/assets/export", exportAssets(db))
 	return mux
 }
@@ -464,7 +466,12 @@ func listAssets(db *ent.Client) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		assets, err := db.Asset.Query().Where(s.asset()...).Order(ent.Asc(entasset.FieldHostname)).All(r.Context())
+		q := db.Asset.Query().Where(s.asset()...)
+		// 下线的主机默认不列出，?retired=1 连同它们一起
+		if r.URL.Query().Get("retired") != "1" {
+			q.Where(entasset.RetiredAtIsNil())
+		}
+		assets, err := q.Order(ent.Asc(entasset.FieldHostname)).All(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -486,11 +493,15 @@ func listAssets(db *ent.Client) http.HandlerFunc {
 			SensorVersion *string         `json:"sensorVersion"`
 			SensorSeen    *time.Time      `json:"sensorSeen"`
 			SensorHealth  json.RawMessage `json:"sensorHealth"`
+			// 下线：时间、操作人与原因，没下线时为空
+			RetiredAt     *time.Time `json:"retiredAt"`
+			RetiredBy     *string    `json:"retiredBy"`
+			RetiredReason *string    `json:"retiredReason"`
 		}
 		out := make([]assetRow, len(assets))
 		for i, a := range assets {
 			out[i] = assetRow{a.ID, a.Hostname, a.Os, a.IPAddrs, a.AgentID, a.FirstSeen, a.LastSeen, a.GroupID, a.SilentSince, a.AgentVersion, a.CollectorHealth,
-				a.SensorVersion, a.SensorSeen, a.SensorHealth}
+				a.SensorVersion, a.SensorSeen, a.SensorHealth, a.RetiredAt, a.RetiredBy, a.RetiredReason}
 		}
 		writeJSON(w, out)
 	}

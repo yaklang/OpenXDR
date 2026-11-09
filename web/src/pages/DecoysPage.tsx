@@ -47,7 +47,7 @@ function GroupDecoys({ groupId }: { groupId: string }) {
   const kind = Form.useWatch('kind', form) ?? 'ssh'
   const rows = useQuery({ queryKey: ['ssh-decoys', groupId, offset], queryFn: () => fetchDecoys(groupId, offset), refetchInterval: 15000 })
   const profiles = useQuery({ queryKey: ['ssh-decoy-profiles'], queryFn: fetchDecoyProfiles })
-  const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets, enabled: open })
+  const assets = useQuery({ queryKey: ['assets'], queryFn: () => fetchAssets(), enabled: open })
   const refresh = () => client.invalidateQueries({ queryKey: ['ssh-decoys', groupId] })
   const onError = (e: Error) => message.error(errText(e, t))
   const review = useMutation({ mutationFn: (observation: string) => reviewDecoyObservation(observing!, observation), onError, onSuccess: () => { void client.invalidateQueries({ queryKey: ['decoy-observations'] }); void client.invalidateQueries({ queryKey: ['incidents'] }); void client.invalidateQueries({ queryKey: ['stats'] }) } })

@@ -25,7 +25,7 @@ export function MemoriesPage() {
   const [editing, setEditing] = useState<MemoryRow | 'new' | null>(null)
   const [form] = Form.useForm<{ content: string; assetId?: string }>()
   const { data, isPending, isError, error, refetch, dataUpdatedAt, isFetching } = useQuery({ queryKey: ['memories'], queryFn: fetchMemories })
-  const assets = useQuery({ queryKey: ['assets'], queryFn: fetchAssets })
+  const assets = useQuery({ queryKey: ['assets'], queryFn: () => fetchAssets() })
   const groupRows = (data ?? []).filter(m => m.groupId === group?.id)
   const hosts = (assets.data ?? []).filter(a => a.groupId === group?.id)
   const hostNameOf = (assetId?: string | null) => hosts.find(h => h.id === assetId)?.hostname ?? ''

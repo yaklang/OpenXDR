@@ -328,6 +328,66 @@ func (_u *AssetUpdate) ClearSilentSince() *AssetUpdate {
 	return _u
 }
 
+// SetRetiredAt sets the "retired_at" field.
+func (_u *AssetUpdate) SetRetiredAt(v time.Time) *AssetUpdate {
+	_u.mutation.SetRetiredAt(v)
+	return _u
+}
+
+// SetNillableRetiredAt sets the "retired_at" field if the given value is not nil.
+func (_u *AssetUpdate) SetNillableRetiredAt(v *time.Time) *AssetUpdate {
+	if v != nil {
+		_u.SetRetiredAt(*v)
+	}
+	return _u
+}
+
+// ClearRetiredAt clears the value of the "retired_at" field.
+func (_u *AssetUpdate) ClearRetiredAt() *AssetUpdate {
+	_u.mutation.ClearRetiredAt()
+	return _u
+}
+
+// SetRetiredBy sets the "retired_by" field.
+func (_u *AssetUpdate) SetRetiredBy(v string) *AssetUpdate {
+	_u.mutation.SetRetiredBy(v)
+	return _u
+}
+
+// SetNillableRetiredBy sets the "retired_by" field if the given value is not nil.
+func (_u *AssetUpdate) SetNillableRetiredBy(v *string) *AssetUpdate {
+	if v != nil {
+		_u.SetRetiredBy(*v)
+	}
+	return _u
+}
+
+// ClearRetiredBy clears the value of the "retired_by" field.
+func (_u *AssetUpdate) ClearRetiredBy() *AssetUpdate {
+	_u.mutation.ClearRetiredBy()
+	return _u
+}
+
+// SetRetiredReason sets the "retired_reason" field.
+func (_u *AssetUpdate) SetRetiredReason(v string) *AssetUpdate {
+	_u.mutation.SetRetiredReason(v)
+	return _u
+}
+
+// SetNillableRetiredReason sets the "retired_reason" field if the given value is not nil.
+func (_u *AssetUpdate) SetNillableRetiredReason(v *string) *AssetUpdate {
+	if v != nil {
+		_u.SetRetiredReason(*v)
+	}
+	return _u
+}
+
+// ClearRetiredReason clears the value of the "retired_reason" field.
+func (_u *AssetUpdate) ClearRetiredReason() *AssetUpdate {
+	_u.mutation.ClearRetiredReason()
+	return _u
+}
+
 // SetHealthProblem sets the "health_problem" field.
 func (_u *AssetUpdate) SetHealthProblem(v string) *AssetUpdate {
 	_u.mutation.SetHealthProblem(v)
@@ -1031,6 +1091,24 @@ func (_u *AssetUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.SilentSinceCleared() {
 		_spec.ClearField(asset.FieldSilentSince, field.TypeTime)
 	}
+	if value, ok := _u.mutation.RetiredAt(); ok {
+		_spec.SetField(asset.FieldRetiredAt, field.TypeTime, value)
+	}
+	if _u.mutation.RetiredAtCleared() {
+		_spec.ClearField(asset.FieldRetiredAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.RetiredBy(); ok {
+		_spec.SetField(asset.FieldRetiredBy, field.TypeString, value)
+	}
+	if _u.mutation.RetiredByCleared() {
+		_spec.ClearField(asset.FieldRetiredBy, field.TypeString)
+	}
+	if value, ok := _u.mutation.RetiredReason(); ok {
+		_spec.SetField(asset.FieldRetiredReason, field.TypeString, value)
+	}
+	if _u.mutation.RetiredReasonCleared() {
+		_spec.ClearField(asset.FieldRetiredReason, field.TypeString)
+	}
 	if value, ok := _u.mutation.HealthProblem(); ok {
 		_spec.SetField(asset.FieldHealthProblem, field.TypeString, value)
 	}
@@ -1645,6 +1723,66 @@ func (_u *AssetUpdateOne) SetNillableSilentSince(v *time.Time) *AssetUpdateOne {
 // ClearSilentSince clears the value of the "silent_since" field.
 func (_u *AssetUpdateOne) ClearSilentSince() *AssetUpdateOne {
 	_u.mutation.ClearSilentSince()
+	return _u
+}
+
+// SetRetiredAt sets the "retired_at" field.
+func (_u *AssetUpdateOne) SetRetiredAt(v time.Time) *AssetUpdateOne {
+	_u.mutation.SetRetiredAt(v)
+	return _u
+}
+
+// SetNillableRetiredAt sets the "retired_at" field if the given value is not nil.
+func (_u *AssetUpdateOne) SetNillableRetiredAt(v *time.Time) *AssetUpdateOne {
+	if v != nil {
+		_u.SetRetiredAt(*v)
+	}
+	return _u
+}
+
+// ClearRetiredAt clears the value of the "retired_at" field.
+func (_u *AssetUpdateOne) ClearRetiredAt() *AssetUpdateOne {
+	_u.mutation.ClearRetiredAt()
+	return _u
+}
+
+// SetRetiredBy sets the "retired_by" field.
+func (_u *AssetUpdateOne) SetRetiredBy(v string) *AssetUpdateOne {
+	_u.mutation.SetRetiredBy(v)
+	return _u
+}
+
+// SetNillableRetiredBy sets the "retired_by" field if the given value is not nil.
+func (_u *AssetUpdateOne) SetNillableRetiredBy(v *string) *AssetUpdateOne {
+	if v != nil {
+		_u.SetRetiredBy(*v)
+	}
+	return _u
+}
+
+// ClearRetiredBy clears the value of the "retired_by" field.
+func (_u *AssetUpdateOne) ClearRetiredBy() *AssetUpdateOne {
+	_u.mutation.ClearRetiredBy()
+	return _u
+}
+
+// SetRetiredReason sets the "retired_reason" field.
+func (_u *AssetUpdateOne) SetRetiredReason(v string) *AssetUpdateOne {
+	_u.mutation.SetRetiredReason(v)
+	return _u
+}
+
+// SetNillableRetiredReason sets the "retired_reason" field if the given value is not nil.
+func (_u *AssetUpdateOne) SetNillableRetiredReason(v *string) *AssetUpdateOne {
+	if v != nil {
+		_u.SetRetiredReason(*v)
+	}
+	return _u
+}
+
+// ClearRetiredReason clears the value of the "retired_reason" field.
+func (_u *AssetUpdateOne) ClearRetiredReason() *AssetUpdateOne {
+	_u.mutation.ClearRetiredReason()
 	return _u
 }
 
@@ -2380,6 +2518,24 @@ func (_u *AssetUpdateOne) sqlSave(ctx context.Context) (_node *Asset, err error)
 	}
 	if _u.mutation.SilentSinceCleared() {
 		_spec.ClearField(asset.FieldSilentSince, field.TypeTime)
+	}
+	if value, ok := _u.mutation.RetiredAt(); ok {
+		_spec.SetField(asset.FieldRetiredAt, field.TypeTime, value)
+	}
+	if _u.mutation.RetiredAtCleared() {
+		_spec.ClearField(asset.FieldRetiredAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.RetiredBy(); ok {
+		_spec.SetField(asset.FieldRetiredBy, field.TypeString, value)
+	}
+	if _u.mutation.RetiredByCleared() {
+		_spec.ClearField(asset.FieldRetiredBy, field.TypeString)
+	}
+	if value, ok := _u.mutation.RetiredReason(); ok {
+		_spec.SetField(asset.FieldRetiredReason, field.TypeString, value)
+	}
+	if _u.mutation.RetiredReasonCleared() {
+		_spec.ClearField(asset.FieldRetiredReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.HealthProblem(); ok {
 		_spec.SetField(asset.FieldHealthProblem, field.TypeString, value)

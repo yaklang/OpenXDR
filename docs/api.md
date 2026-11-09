@@ -148,7 +148,9 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/assets` | 资产清单（含 `groupId`，未分组为 null；`agentVersion` 为 agent 自报版本） |
+| GET | `/api/assets` | 资产清单（含 `groupId`，未分组为 null；`agentVersion` 为 agent 自报版本）；默认不含已下线的主机，`?retired=1` 一起列出（带 `retiredAt`、`retiredBy`、`retiredReason`） |
+| POST | `/api/assets/{id}/retire` | 下线主机（组 admin，body `{"reason"}` 必填）：保留记录与历史证据，清掉 agent_id，agent 与探针注册被拒（旧证书也接不回来），不再下发指令，待审批处置作废、生效中的标记解除。已经连着的会话在下次重连时被拒 |
+| POST | `/api/assets/{id}/restore` | 取消下线（组 admin）；agent 重新注册拿新的 agent_id。用接入令牌重新接入同样会取消下线 |
 | GET | `/api/assets/{id}/config` | 该主机的采集配置 |
 | PUT | `/api/assets/{id}/config` | 设置采集配置：`{"fileWatchDirs":[...],"collectFiles":true,"collectAuth":true,"collectPersist":true,"collectNetwork":true,"collectInventory":true,"collapsePeriodic":true}`。随 agent 下次注册（重连或重启）生效；`collectNetwork` 在 Linux eBPF 与 Windows ETW 路径生效 |
 | GET | `/api/assets/{id}/profile` | 资产画像：区域、暴露级别、云环境、监听端口、依赖与 AI 标注。改标注、指派区域与资产图谱、攻击面、区域定义等接口见 [资产图谱与攻击面](asset-map.md#接口) |

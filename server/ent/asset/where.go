@@ -116,6 +116,21 @@ func SilentSince(v time.Time) predicate.Asset {
 	return predicate.Asset(sql.FieldEQ(FieldSilentSince, v))
 }
 
+// RetiredAt applies equality check predicate on the "retired_at" field. It's identical to RetiredAtEQ.
+func RetiredAt(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldRetiredAt, v))
+}
+
+// RetiredBy applies equality check predicate on the "retired_by" field. It's identical to RetiredByEQ.
+func RetiredBy(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldRetiredBy, v))
+}
+
+// RetiredReason applies equality check predicate on the "retired_reason" field. It's identical to RetiredReasonEQ.
+func RetiredReason(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldRetiredReason, v))
+}
+
 // HealthProblem applies equality check predicate on the "health_problem" field. It's identical to HealthProblemEQ.
 func HealthProblem(v string) predicate.Asset {
 	return predicate.Asset(sql.FieldEQ(FieldHealthProblem, v))
@@ -944,6 +959,206 @@ func SilentSinceIsNil() predicate.Asset {
 // SilentSinceNotNil applies the NotNil predicate on the "silent_since" field.
 func SilentSinceNotNil() predicate.Asset {
 	return predicate.Asset(sql.FieldNotNull(FieldSilentSince))
+}
+
+// RetiredAtEQ applies the EQ predicate on the "retired_at" field.
+func RetiredAtEQ(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldRetiredAt, v))
+}
+
+// RetiredAtNEQ applies the NEQ predicate on the "retired_at" field.
+func RetiredAtNEQ(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldNEQ(FieldRetiredAt, v))
+}
+
+// RetiredAtIn applies the In predicate on the "retired_at" field.
+func RetiredAtIn(vs ...time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldIn(FieldRetiredAt, vs...))
+}
+
+// RetiredAtNotIn applies the NotIn predicate on the "retired_at" field.
+func RetiredAtNotIn(vs ...time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldNotIn(FieldRetiredAt, vs...))
+}
+
+// RetiredAtGT applies the GT predicate on the "retired_at" field.
+func RetiredAtGT(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldGT(FieldRetiredAt, v))
+}
+
+// RetiredAtGTE applies the GTE predicate on the "retired_at" field.
+func RetiredAtGTE(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldGTE(FieldRetiredAt, v))
+}
+
+// RetiredAtLT applies the LT predicate on the "retired_at" field.
+func RetiredAtLT(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldLT(FieldRetiredAt, v))
+}
+
+// RetiredAtLTE applies the LTE predicate on the "retired_at" field.
+func RetiredAtLTE(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldLTE(FieldRetiredAt, v))
+}
+
+// RetiredAtIsNil applies the IsNil predicate on the "retired_at" field.
+func RetiredAtIsNil() predicate.Asset {
+	return predicate.Asset(sql.FieldIsNull(FieldRetiredAt))
+}
+
+// RetiredAtNotNil applies the NotNil predicate on the "retired_at" field.
+func RetiredAtNotNil() predicate.Asset {
+	return predicate.Asset(sql.FieldNotNull(FieldRetiredAt))
+}
+
+// RetiredByEQ applies the EQ predicate on the "retired_by" field.
+func RetiredByEQ(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldRetiredBy, v))
+}
+
+// RetiredByNEQ applies the NEQ predicate on the "retired_by" field.
+func RetiredByNEQ(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldNEQ(FieldRetiredBy, v))
+}
+
+// RetiredByIn applies the In predicate on the "retired_by" field.
+func RetiredByIn(vs ...string) predicate.Asset {
+	return predicate.Asset(sql.FieldIn(FieldRetiredBy, vs...))
+}
+
+// RetiredByNotIn applies the NotIn predicate on the "retired_by" field.
+func RetiredByNotIn(vs ...string) predicate.Asset {
+	return predicate.Asset(sql.FieldNotIn(FieldRetiredBy, vs...))
+}
+
+// RetiredByGT applies the GT predicate on the "retired_by" field.
+func RetiredByGT(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldGT(FieldRetiredBy, v))
+}
+
+// RetiredByGTE applies the GTE predicate on the "retired_by" field.
+func RetiredByGTE(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldGTE(FieldRetiredBy, v))
+}
+
+// RetiredByLT applies the LT predicate on the "retired_by" field.
+func RetiredByLT(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldLT(FieldRetiredBy, v))
+}
+
+// RetiredByLTE applies the LTE predicate on the "retired_by" field.
+func RetiredByLTE(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldLTE(FieldRetiredBy, v))
+}
+
+// RetiredByContains applies the Contains predicate on the "retired_by" field.
+func RetiredByContains(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldContains(FieldRetiredBy, v))
+}
+
+// RetiredByHasPrefix applies the HasPrefix predicate on the "retired_by" field.
+func RetiredByHasPrefix(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldHasPrefix(FieldRetiredBy, v))
+}
+
+// RetiredByHasSuffix applies the HasSuffix predicate on the "retired_by" field.
+func RetiredByHasSuffix(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldHasSuffix(FieldRetiredBy, v))
+}
+
+// RetiredByIsNil applies the IsNil predicate on the "retired_by" field.
+func RetiredByIsNil() predicate.Asset {
+	return predicate.Asset(sql.FieldIsNull(FieldRetiredBy))
+}
+
+// RetiredByNotNil applies the NotNil predicate on the "retired_by" field.
+func RetiredByNotNil() predicate.Asset {
+	return predicate.Asset(sql.FieldNotNull(FieldRetiredBy))
+}
+
+// RetiredByEqualFold applies the EqualFold predicate on the "retired_by" field.
+func RetiredByEqualFold(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEqualFold(FieldRetiredBy, v))
+}
+
+// RetiredByContainsFold applies the ContainsFold predicate on the "retired_by" field.
+func RetiredByContainsFold(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldContainsFold(FieldRetiredBy, v))
+}
+
+// RetiredReasonEQ applies the EQ predicate on the "retired_reason" field.
+func RetiredReasonEQ(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldRetiredReason, v))
+}
+
+// RetiredReasonNEQ applies the NEQ predicate on the "retired_reason" field.
+func RetiredReasonNEQ(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldNEQ(FieldRetiredReason, v))
+}
+
+// RetiredReasonIn applies the In predicate on the "retired_reason" field.
+func RetiredReasonIn(vs ...string) predicate.Asset {
+	return predicate.Asset(sql.FieldIn(FieldRetiredReason, vs...))
+}
+
+// RetiredReasonNotIn applies the NotIn predicate on the "retired_reason" field.
+func RetiredReasonNotIn(vs ...string) predicate.Asset {
+	return predicate.Asset(sql.FieldNotIn(FieldRetiredReason, vs...))
+}
+
+// RetiredReasonGT applies the GT predicate on the "retired_reason" field.
+func RetiredReasonGT(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldGT(FieldRetiredReason, v))
+}
+
+// RetiredReasonGTE applies the GTE predicate on the "retired_reason" field.
+func RetiredReasonGTE(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldGTE(FieldRetiredReason, v))
+}
+
+// RetiredReasonLT applies the LT predicate on the "retired_reason" field.
+func RetiredReasonLT(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldLT(FieldRetiredReason, v))
+}
+
+// RetiredReasonLTE applies the LTE predicate on the "retired_reason" field.
+func RetiredReasonLTE(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldLTE(FieldRetiredReason, v))
+}
+
+// RetiredReasonContains applies the Contains predicate on the "retired_reason" field.
+func RetiredReasonContains(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldContains(FieldRetiredReason, v))
+}
+
+// RetiredReasonHasPrefix applies the HasPrefix predicate on the "retired_reason" field.
+func RetiredReasonHasPrefix(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldHasPrefix(FieldRetiredReason, v))
+}
+
+// RetiredReasonHasSuffix applies the HasSuffix predicate on the "retired_reason" field.
+func RetiredReasonHasSuffix(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldHasSuffix(FieldRetiredReason, v))
+}
+
+// RetiredReasonIsNil applies the IsNil predicate on the "retired_reason" field.
+func RetiredReasonIsNil() predicate.Asset {
+	return predicate.Asset(sql.FieldIsNull(FieldRetiredReason))
+}
+
+// RetiredReasonNotNil applies the NotNil predicate on the "retired_reason" field.
+func RetiredReasonNotNil() predicate.Asset {
+	return predicate.Asset(sql.FieldNotNull(FieldRetiredReason))
+}
+
+// RetiredReasonEqualFold applies the EqualFold predicate on the "retired_reason" field.
+func RetiredReasonEqualFold(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEqualFold(FieldRetiredReason, v))
+}
+
+// RetiredReasonContainsFold applies the ContainsFold predicate on the "retired_reason" field.
+func RetiredReasonContainsFold(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldContainsFold(FieldRetiredReason, v))
 }
 
 // HealthProblemEQ applies the EQ predicate on the "health_problem" field.
