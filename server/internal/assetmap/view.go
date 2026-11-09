@@ -23,6 +23,8 @@ type Group struct {
 	Links  []*ent.AssetLink
 	// 公网目的地址的背景信息缓存
 	Info map[string]*ent.IPInfo
+	// 纳管主机上容器（或别的网络命名空间）的地址 → 那台主机，见 hostedAddrs
+	Hosted map[netip.Addr]*ent.Asset
 }
 
 // LoadGroup 只取最近 linkTTL 内还出现过的边
@@ -64,6 +66,7 @@ func load(ctx context.Context, db *ent.Client, keep func(*ent.Asset) bool, zones
 	if err != nil {
 		return nil, err
 	}
+	g.Hosted = hostedAddrs(w, g.Links)
 	var public []string
 	for _, l := range g.Links {
 		for _, ip := range []string{l.SrcIP, l.DstIP} {
@@ -74,6 +77,32 @@ func load(ctx context.Context, db *ent.Client, keep func(*ent.Asset) bool, zones
 	}
 	g.Info, err = loadInfo(ctx, db, public)
 	return g, err
+}
+
+// hostedAddrs 纳管主机上容器的地址：主机的 agent 报过从这个地址发起的连接，地址又不是这台主机登记的，
+// 就是它上面容器、LXC 或别的网络命名空间的地址（容器发起的连接按 cgroup 归到宿主机上报）。
+// 只认实际观测到的，不按 Docker 网段猜；同一地址出现在多台主机上（各自的 docker0 都是 172.17.0.0/16）
+// 说不清是哪台的，不认
+func hostedAddrs(w *World, links []*ent.AssetLink) map[netip.Addr]*ent.Asset {
+	out := map[netip.Addr]*ent.Asset{}
+	ambiguous := map[netip.Addr]bool{}
+	for _, l := range links {
+		if l.SrcAssetID == nil {
+			continue
+		}
+		host := w.ByID[*l.SrcAssetID]
+		addr, err := netip.ParseAddr(l.SrcIP)
+		if host == nil || err != nil || !addr.IsPrivate() || w.ByIP[addr] != nil || ambiguous[addr] {
+			continue
+		}
+		if prev, ok := out[addr]; ok && prev.ID != host.ID {
+			delete(out, addr)
+			ambiguous[addr] = true
+			continue
+		}
+		out[addr] = host
+	}
+	return out
 }
 
 func (g *Group) inGroup(a *ent.Asset) bool {
@@ -94,6 +123,10 @@ func (g *Group) resolve(ip string, assetID *uuid.UUID) endpoint {
 	a := g.World.ByID[ptr(assetID)]
 	if a == nil {
 		a = g.World.ByIP[addr]
+	}
+	// 纳管主机上容器的地址归到那台主机：不是一台待纳管的设备
+	if a == nil {
+		a = g.Hosted[addr]
 	}
 	switch {
 	case g.inGroup(a):

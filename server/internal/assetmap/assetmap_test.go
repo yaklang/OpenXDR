@@ -265,6 +265,34 @@ func TestGraph(t *testing.T) {
 	}
 }
 
+// 纳管主机上容器连宿主机自己的地址（用户部署：172.17.1.8 → server）：容器地址归到宿主机，
+// 不画成待纳管的设备；两台主机都报过的同一个容器地址说不清归谁，照旧当未纳管
+func TestContainerAddressesBelongToTheirHost(t *testing.T) {
+	g := testGroup(t)
+	web, db := g.Assets[0], g.Assets[1]
+	link := func(src string, srcAsset *uuid.UUID, dst string, port int) *ent.AssetLink {
+		return &ent.AssetLink{SrcIP: src, SrcAssetID: srcAsset, DstIP: dst, DstPort: port, Proto: "tcp", Count: 1, LastSeen: time.Now()}
+	}
+	g.Links = append(g.Links,
+		link("172.17.1.8", &web.ID, "10.0.0.1", 8096), // 容器出站，宿主机 agent 按 cgroup 报在 web 名下
+		link("172.17.1.8", nil, "10.0.0.1", 8096),     // 同一条连接在 web 上的入站
+		link("172.18.0.5", &web.ID, "10.0.0.2", 5432),
+		link("172.18.0.5", &db.ID, "10.0.0.1", 80), // 两台主机都有这个地址
+		link("172.18.0.5", nil, "10.0.0.1", 80),    // 它的入站：不知道是哪台的
+	)
+	g.Hosted = hostedAddrs(g.World, g.Links)
+	labels := map[string]string{}
+	for _, n := range g.Graph(time.Now()).Nodes {
+		labels[n.Label] = n.Kind
+	}
+	if _, ok := labels["172.17.1.8"]; ok {
+		t.Fatalf("容器地址不该画成待纳管设备：%v", labels)
+	}
+	if labels["172.18.0.5"] != "discovered" {
+		t.Fatalf("归属不明的地址照旧当未纳管：%v", labels)
+	}
+}
+
 func TestSurface(t *testing.T) {
 	s := testGroup(t).Surface()
 	if len(s.Exposures) != 3 {
