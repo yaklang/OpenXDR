@@ -1088,7 +1088,10 @@ format:
                     echo_parent = Some(ppid);
                 }
                 if sh.is_some() && echo_parent.is_some() {
-                    assert_eq!(echo_parent, sh, "子 shell 拉起的进程，父进程记成 exec 过的 sh");
+                    assert_eq!(
+                        echo_parent, sh,
+                        "子 shell 拉起的进程，父进程记成 exec 过的 sh"
+                    );
                     return;
                 }
             }

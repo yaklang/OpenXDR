@@ -162,6 +162,8 @@ impl ProcessRegistry {
     /// （Linux 上 stdio dup 与 exec 也分两路处理），
     /// 短命进程（nslookup、curl）的连接或查询常比它的启动事件先到：占位后若启动事件在
     /// PLACEHOLDER_TTL 内到达，就沿用这个 GUID，而不是另发一个、把先到的事件挂空
+    // Windows 的 ETW 会话与 Linux eBPF 的 stdio 事件用；默认构建（netlink / 轮询）没有这两条路
+    #[cfg_attr(not(any(target_os = "windows", feature = "ebpf")), allow(dead_code))]
     pub fn placeholder(&mut self, pid: u32) -> Uuid {
         let (guid, _) = self.register(pid, None);
         if let Some(e) = self.guids.get_mut(&pid) {
@@ -254,7 +256,9 @@ impl ProcessRegistry {
     #[cfg(test)]
     pub fn is_exited(&self, pid: u32) -> bool {
         let seq = self.guids.get(&pid).map(|e| e.seq);
-        self.exited.iter().any(|&(p, s, _)| p == pid && Some(s) == seq)
+        self.exited
+            .iter()
+            .any(|&(p, s, _)| p == pid && Some(s) == seq)
     }
 
     /// 压下一条被折叠的启动事件：它的退出也不再单独上报，除非之前被补发了
@@ -445,7 +449,11 @@ mod tests {
             reg.register(pid, None);
             reg.forget(pid);
         }
-        assert_eq!(reg.known(10).unwrap().name, "reused", "复用后的新登记不能被旧的退出清掉");
+        assert_eq!(
+            reg.known(10).unwrap().name,
+            "reused",
+            "复用后的新登记不能被旧的退出清掉"
+        );
     }
 
     /// 每次 register 分配独立 GUID。

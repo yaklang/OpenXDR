@@ -40,7 +40,10 @@ pub fn snapshot() -> Vec<Hosted> {
     let mut out = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(pid) = name.to_str().filter(|s| s.bytes().all(|b| b.is_ascii_digit())) else {
+        let Some(pid) = name
+            .to_str()
+            .filter(|s| s.bytes().all(|b| b.is_ascii_digit()))
+        else {
             continue;
         };
         let Some(c) = pid.parse().ok().and_then(container::of) else {

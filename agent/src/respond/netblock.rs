@@ -162,7 +162,10 @@ pub fn block(cmd: &Command) -> Outcome {
     }
     let list = nets.iter().map(Net::render).collect::<Vec<_>>().join(", ");
     match platform::add(&target, &nets) {
-        Ok(()) => Outcome::ok(format!("已封锁 {target}（{list}）的进出通信{}", platform::save())),
+        Ok(()) => Outcome::ok(format!(
+            "已封锁 {target}（{list}）的进出通信{}",
+            platform::save()
+        )),
         Err(e) => Outcome::failed(format!("封锁失败：{e}")),
     }
 }
@@ -180,7 +183,10 @@ pub fn unblock(cmd: &Command) -> Outcome {
     }
     match platform::remove(&target) {
         Ok(0) => Outcome::ok(format!("{target} 当前未被封锁")),
-        Ok(n) => Outcome::ok(format!("已解除 {target} 的封锁（{n} 条规则）{}", platform::save())),
+        Ok(n) => Outcome::ok(format!(
+            "已解除 {target} 的封锁（{n} 条规则）{}",
+            platform::save()
+        )),
         Err(e) => Outcome::failed(format!("解除封锁失败：{e}")),
     }
 }
