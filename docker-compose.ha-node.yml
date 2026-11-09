@@ -88,6 +88,8 @@ services:
       # 自主响应，默认关闭；SCOPE=lab 只处置实验等级的来源
       CONTAINMENT_ENABLED: ${CONTAINMENT_ENABLED:-}
       CONTAINMENT_SCOPE: ${CONTAINMENT_SCOPE:-}
+      # 边界网关的主机名（逗号分隔）：公网地址的封锁在这些主机上一并执行，不配不启用
+      CONTAINMENT_EDGE_HOSTS: ${CONTAINMENT_EDGE_HOSTS:-}
       ISOLATION_ALLOW: ${ISOLATION_ALLOW:-10.1.1.199:8081}
       TLS_CA_FILE: /certs/ca.crt
       TLS_CERT_FILE: /certs/server.crt
