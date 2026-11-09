@@ -411,7 +411,7 @@ func newAIConf(client *ent.Client, credentialVault *hostimport.Vault) *aiconf.St
 
 // newLLM 端点与模型按调用当时的控制台配置取，用量记在 feature 名下。
 func newLLM(client *ent.Client, conf func() aiconf.Config, feature string) *triage.LLM {
-	l := triage.NewLLM("", "", "", time.Duration(getenvInt("AI_TIMEOUT_SECONDS", 120))*time.Second)
+	l := triage.NewLLM("", "", "", time.Duration(getenvInt("AI_TIMEOUT_SECONDS", 300))*time.Second)
 	l.Endpoint = func() (string, string, string) { c := conf(); return c.BaseURL, c.Model, c.APIKey }
 	l.FallbackModels = func() string { return conf().FallbackModels }
 	l.FallbackEndpoints = func() []modelroute.Endpoint { return conf().Routes(false) }

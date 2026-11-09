@@ -52,6 +52,19 @@ test('服务额度耗尽后切换 API 和密钥，沿用已执行的工具结果
   assert.equal(last.event.message.model,'backup-model');
 });
 
+test('响应流中途被掐断：报错带上底层原因与已收字节', async t => {
+  const apiBase = await mockModel(t, (body, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write(`data: ${JSON.stringify({ id: 'test', object: 'chat.completion.chunk', model: 'test',
+      choices: [{ index: 0, delta: { role: 'assistant', content: '半' }, finish_reason: null }] })}\n\n`);
+    setTimeout(() => res.socket.destroy(), 50);
+  });
+  await assert.rejects(
+    run({ type: 'run', api_base: apiBase, model: 'm', prompt: '测试' }, () => {}, async () => ({ success: true })),
+    error => /响应读到一半中断/.test(error.message) && /UND_ERR_SOCKET|other side closed/.test(error.message) && /已收 \d+ 字节/.test(error.message),
+  );
+});
+
 async function mockModel(t, responder) {
   const server = createServer(async (req, res) => {
     let body = '';

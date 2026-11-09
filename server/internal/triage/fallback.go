@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
+	"net"
 	"openxdr/server/internal/modelroute"
 	"strings"
 	"sync"
@@ -20,10 +22,28 @@ func cooldownKey(base, key, model string) [32]byte {
 	return sha256.Sum256([]byte(base + "\x00" + key + "\x00" + model))
 }
 
-// LLMTransportError 不携带地址、凭据或上游诊断正文。
-type LLMTransportError struct{}
+// LLMTransportError 不携带地址、凭据或上游诊断正文。Timeout 非零表示连上了、但在客户端超时内没等到完整回答，
+// 多半是模型慢或推理服务排队，不是服务挂了
+type LLMTransportError struct{ Timeout time.Duration }
 
-func (*LLMTransportError) Error() string { return "连接推理服务失败" }
+func (e *LLMTransportError) Error() string {
+	if e.Timeout > 0 {
+		return fmt.Sprintf("推理超时（超过 %d 秒没有返回完整回答，上下文大或推理服务繁忙时可调大 AI_TIMEOUT_SECONDS）", int(e.Timeout.Seconds()))
+	}
+	return "连接推理服务失败"
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+func (l *LLM) transportError(err error) *LLMTransportError {
+	if isTimeout(err) {
+		return &LLMTransportError{Timeout: l.http.Timeout}
+	}
+	return &LLMTransportError{}
+}
 
 func (l *LLM) chatFallback(ctx context.Context, base, primary, key string, msgs []Message, tools []Tool) (Message, error) {
 	models := []modelroute.Endpoint{{BaseURL: base, APIKey: key, Model: primary}}

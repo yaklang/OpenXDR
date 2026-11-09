@@ -25,6 +25,7 @@ const capabilityTrigger = "capability_upgrade_v4"
 // capabilityActions 结论里出现这些建议，说明当时缺的正是新能力可能补上的证据
 var capabilityActions = []string{"collect_original_records", "verify_source"}
 
+// capabilityMaxAttempts 新能力重研判的次数上限；推理服务没给出回答的失败不计（见 inferenceTimeout）
 const capabilityMaxAttempts = 3
 
 func needsCapabilityUpgrade(inc *ent.Incident) bool {
@@ -68,7 +69,8 @@ func capabilityAttempts(exhausted bool) predicate.Incident {
 	return func(s *sql.Selector) {
 		s.Where(sql.P(func(b *sql.Builder) {
 			b.WriteString(fmt.Sprintf("(SELECT count(*) FROM %s r WHERE r.incident_id = %s AND r.trigger = ", triagerun.Table, s.C(incident.FieldID)))
-			b.Arg(capabilityTrigger).WriteString(")")
+			b.Arg(capabilityTrigger).WriteString(" AND COALESCE(r.error_code, '') NOT IN (").
+				Arg(inferenceTimeout).WriteString(", ").Arg(transportFailure).WriteString("))")
 			if exhausted {
 				b.WriteString(" >= ")
 			} else {

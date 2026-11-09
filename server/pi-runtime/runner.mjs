@@ -9,6 +9,55 @@ import { modelFallback } from './model-fallback.mjs';
 const textOf = message => (message?.content || [])
   .filter(part => part.type === 'text').map(part => part.text).join('');
 
+// 底层错误链里的 code 与说明（undici 的 terminated 下面挂着 UND_ERR_SOCKET「other side closed」、
+// UND_ERR_BODY_TIMEOUT 之类真正的原因），不带地址与凭据以外的东西
+const causes = error => {
+  const out = [];
+  for (let e = error, depth = 0; e && depth < 5; e = e.cause, depth++) {
+    const text = [e.code, e.message].filter(Boolean).join(' ');
+    if (text && !out.includes(text)) out.push(text);
+  }
+  return out.join(' ← ');
+};
+
+// 记下模型请求在传输层的最后一次失败：Pi 只把错误的 message（常常只有 terminated）写进结果，
+// 这里补上底层原因、已收到的字节数与请求开始后的耗时，排查时才分得清是超时、对端断开还是代理掐掉
+export function traced(fetch) {
+  const state = { failure: '' };
+  state.fetch = async (input, init) => {
+    const started = Date.now();
+    const elapsed = () => `${Math.round((Date.now() - started) / 1000)}s`;
+    let response;
+    try {
+      response = await fetch(input, init);
+    } catch (error) {
+      if (!init?.signal?.aborted) state.failure = `请求未建立（${causes(error)}，${elapsed()}）`;
+      throw error;
+    }
+    if (!response.body) return response;
+    const reader = response.body.getReader();
+    let bytes = 0;
+    const body = new ReadableStream({
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) return controller.close();
+          bytes += value.byteLength;
+          controller.enqueue(value);
+        } catch (error) {
+          if (!init?.signal?.aborted) {
+            state.failure = `HTTP ${response.status} 响应读到一半中断（${causes(error)}，已收 ${bytes} 字节，${elapsed()}）`;
+          }
+          controller.error(error);
+        }
+      },
+      cancel: reason => reader.cancel(reason),
+    });
+    return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  };
+  return state;
+}
+
 // 每个进程只处理一次 run；工具全部回调平台，不注册本机文件或 shell 工具。
 export async function run(request, send, callTool, signal) {
   if (request.type !== 'run' || !request.prompt?.trim() || !request.model?.trim()) {
@@ -48,6 +97,7 @@ export async function run(request, send, callTool, signal) {
   }));
   let turns = 0;
   const routing = modelFallback(request);
+  const transport = traced(routing.fetch);
   let limited = false;
   const agent = new Agent({
     initialState: {
@@ -66,7 +116,7 @@ export async function run(request, send, callTool, signal) {
     toolExecution: 'sequential',
     // GLM 的本地兼容端点不会从 SDK thinkingLevel 推断模板开关。
     streamFn: (model, context, options) => models.streamSimple(model, context, {
-      ...options, maxTokens, fetch: routing.fetch,
+      ...options, maxTokens, fetch: transport.fetch,
       ...(/(^|\/)glm[-_.]/i.test(request.model) ? {
         samplingParams: { ...options?.samplingParams, chat_template_kwargs: { enable_thinking: false } },
       } : {}),
@@ -86,7 +136,8 @@ export async function run(request, send, callTool, signal) {
     signal?.throwIfAborted();
     const last = agent.state.messages.findLast(message => message.role === 'assistant');
     if (!last || ['error', 'aborted'].includes(last.stopReason)) {
-      throw new Error(last?.errorMessage || 'Pi 未返回有效结果');
+      const detail = last?.stopReason === 'error' && transport.failure ? `：${transport.failure}` : '';
+      throw new Error((last?.errorMessage || 'Pi 未返回有效结果') + detail);
     }
     send({ type: 'result', response: textOf(last), turns,
       stop_reason: limited ? 'max_turns' : last.stopReason });

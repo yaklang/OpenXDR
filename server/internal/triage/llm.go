@@ -180,7 +180,7 @@ func (l *LLM) chatOnce(ctx context.Context, baseURL, model, apiKey string, msgs 
 		if ctx.Err() != nil {
 			return Message{}, ctx.Err()
 		}
-		return Message{}, &LLMTransportError{}
+		return Message{}, l.transportError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -198,6 +198,10 @@ func (l *LLM) chatOnce(ctx context.Context, baseURL, model, apiKey string, msgs 
 		} `json:"usage"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		// 客户端超时同样会在读响应正文时触发
+		if ctx.Err() == nil && isTimeout(err) {
+			return Message{}, l.transportError(err)
+		}
 		return Message{}, err
 	}
 	if l.OnUsage != nil {

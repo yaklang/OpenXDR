@@ -119,6 +119,12 @@ func (e *Engine) beginRun(ctx context.Context, inc *ent.Incident, started time.T
 	return row, nil
 }
 
+// 推理服务没给出回答的失败（超时、连不上）：怪不到证据或模型输出上，不消耗按次数封顶的重研判资格
+const (
+	inferenceTimeout = "inference_timeout"
+	transportFailure = "inference_unreachable"
+)
+
 func runUpdate(db *ent.Client, row *ent.TriageRun, timing *runTiming, finished time.Time) *ent.TriageRunUpdateOne {
 	return db.TriageRun.UpdateOneID(row.ID).Where(triagerun.StatusEQ(triagerun.StatusRunning)).
 		SetFinishedAt(finished).SetDurationMs(max(0, finished.Sub(row.StartedAt).Milliseconds())).
@@ -136,6 +142,13 @@ func (e *Engine) failRun(row *ent.TriageRun, timing *runTiming, stage string, ca
 	}
 	if errors.Is(cause, context.DeadlineExceeded) {
 		stage = "timeout"
+	}
+	var transport *LLMTransportError
+	if errors.As(cause, &transport) {
+		stage = transportFailure
+		if transport.Timeout > 0 {
+			stage = inferenceTimeout
+		}
 	}
 	if err := runUpdate(e.DB, row, timing, time.Now()).SetStatus(status).SetErrorCode(stage).Exec(ctx); err != nil && !ent.IsNotFound(err) {
 		slog.Error("保存研判尝试失败", "run", row.ID, "err", err)

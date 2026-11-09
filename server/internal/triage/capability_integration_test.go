@@ -4,6 +4,7 @@ package triage
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -81,6 +82,34 @@ func TestCapabilityUpgradeAttemptBudgetAndNewEvidence(t *testing.T) {
 	queued, err = e.queue(ctx, time.Now())
 	if err != nil || len(queued) != 1 {
 		t.Fatal("升级失败不能阻塞真正的新证据", queued, err)
+	}
+}
+
+// 推理服务超时或连不上不是证据或模型输出的问题，失败多少次都不耗尽重研判资格
+func TestCapabilityUpgradeIgnoresTransportFailures(t *testing.T) {
+	ctx, db := testdb.New(t)
+	f := &retriageFixture{t: t, ctx: ctx, client: db}
+	e := &Engine{DB: db, Cooldown: time.Minute}
+	inc := upgradeIncident(f, "推理超时")
+	for attempt := range capabilityMaxAttempts + 2 {
+		queued, err := e.queue(ctx, time.Now())
+		if err != nil || len(queued) != 1 {
+			t.Fatal("推理失败耗掉了重研判资格", attempt, queued, err)
+		}
+		row, err := e.beginRun(ctx, queued[0], time.Now().UTC().Truncate(time.Microsecond), "m")
+		if err != nil || row == nil {
+			t.Fatal(row, err)
+		}
+		cause := error(&LLMTransportError{Timeout: 300 * time.Second})
+		if attempt%2 == 1 {
+			cause = fmt.Errorf("第 %d 轮: %w", attempt, &LLMTransportError{})
+		}
+		e.failRun(row, &runTiming{}, "model_or_verdict", cause)
+		db.Incident.UpdateOneID(inc.ID).ClearTriageStartedAt().ClearTriageHeartbeatAt().ExecX(ctx)
+	}
+	codes := db.TriageRun.Query().Where(triagerun.IncidentIDEQ(inc.ID)).Order(ent.Asc(triagerun.FieldStartedAt)).AllX(ctx)
+	if codes[0].ErrorCode != inferenceTimeout || codes[1].ErrorCode != transportFailure {
+		t.Fatalf("失败原因没分开：%v %v", codes[0].ErrorCode, codes[1].ErrorCode)
 	}
 }
 
