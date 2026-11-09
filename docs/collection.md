@@ -86,6 +86,8 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
   `syscalls:sys_enter_execve(at)` 读用户态 argv（以 0 分隔紧凑存放，抓 1~2 KiB，超出在命令行末尾标「…」），按线程号暂存，
   `sched_process_exec` 用 old_pid 取走并入事件；`sched_process_fork` 在父进程上下文里记下「子 → 父」（这个 tracepoint 的布局随内核变：
   6.1 的 child_pid 在偏移 44，7.0 的 comm 改成 __data_loc 后在 20，偏移由用户态读本机 format 填进 `FORK_LAYOUT`）；属主取 exec 时的 uid。
+  父进程记的是**最近一个 exec 过的祖先**：fork 了还没 exec 的进程（子 shell、runc 的中间进程）与 fork 它的进程是同一个映像，
+  用户态从不登记它，照实记下的话 docker 健康检查这类进程两成到五成查不到父进程名（2026-11-09 上线首版时实测）。
   2026-11-09 之前命令行与父进程是用户态收到事件后才读 /proc，事件在 perf 缓冲里排上几百毫秒到一秒，
   生产上 1%~28% 的启动事件因此既没命令行也没父进程——恰恰是 `curl … | sh`、`id`、`whoami` 这类攻击动作。
   各钩子独立降级，挂不上就回到读 /proc。exec 事件带命令行后有 2 KiB 多，perf 缓冲每 CPU 给 32 页。
