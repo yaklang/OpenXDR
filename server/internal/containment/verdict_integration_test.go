@@ -137,3 +137,21 @@ func TestVerdictHostIsolationByTier(t *testing.T) {
 		}
 	}
 }
+
+// 涉事进程已经退出：不提结束进程，外部地址照样封
+func TestVerdictSkipsExitedProcess(t *testing.T) {
+	f := setup(t)
+	web := f.host(t, "web", "10.1.1.183", nil, "")
+	al := f.alertOn(t, web, "rule-x", 1007, "", curlShell)
+	ev := f.client.Event.GetX(f.ctx, *al.EventID)
+	f.client.Event.Create().SetTs(ev.Ts.Add(3 * time.Second)).SetClassUID(1007).SetSource("agent").SetAssetID(web.ID).
+		SetProcessGUID(*ev.ProcessGUID).SetRaw(json.RawMessage(`{"activity_id":2,"process":{"pid":4242}}`)).SaveX(f.ctx)
+	f.incidentWith(t, "suspicious", 75, al)
+	if err := f.verdictEngine().Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	st := f.states()
+	if len(st) != 1 || st["block_network 203.0.113.7"] != entcontainment.StateProposed {
+		t.Fatalf("只应提出封锁：%v", st)
+	}
+}

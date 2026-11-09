@@ -235,7 +235,7 @@ func (e *Engine) evidenceActions(ctx context.Context, host *ent.Asset, tier stri
 			out = append(out, action{asset: host, kind: "isolate_container", target: doc.Container.UID, role: "host",
 				why: because + "，隔离涉事容器 " + container{doc.Container.UID, doc.Container.Name}.label()})
 		}
-	case ev.ClassUID == 1007 && ev.ProcessGUID != nil && doc.Process.PID > 1:
+	case ev.ClassUID == 1007 && ev.ProcessGUID != nil && doc.Process.PID > 1 && !e.exited(ctx, host, ev, doc):
 		out = append(out, e.killProcess(host, ev, doc, "", because+"，结束涉事进程 "+doc.Process.Name))
 	}
 	peer := doc.Dst.IP
@@ -247,6 +247,19 @@ func (e *Engine) evidenceActions(ctx context.Context, host *ent.Asset, tier stri
 			why: because + "，封锁涉事外部地址 " + peer})
 	}
 	return out
+}
+
+// exited 涉事进程（原地 exec 过的取当前那个）的退出事件已经到了：结束它没有意义，不提。
+// agent 不单独上报 2 秒内成功退出的进程，这类判断不了，照常处置；查询出错也照常处置
+func (e *Engine) exited(ctx context.Context, host *ent.Asset, ev *ent.Event, doc eventDoc) bool {
+	guid, err := e.execHead(ctx, host.ID, *ev.ProcessGUID, doc.Process.PID, ev.Ts)
+	if err != nil {
+		return false
+	}
+	var gone bool
+	err = e.SQL.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE asset_id=$1 AND class_uid=1007
+  AND ts>=$2 AND ts<=$3 AND process_guid=$4 AND raw->>'activity_id'='2')`, host.ID, ev.Ts.Add(-time.Minute), e.now(), guid).Scan(&gone)
+	return err == nil && gone
 }
 
 // public 公网地址才自动封：内网、回环、链路本地、组播都不是
