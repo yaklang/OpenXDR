@@ -2,7 +2,7 @@ import { ArrowRight, BellRing, Check, Copy } from "lucide-react";
 import { motion } from "motion/react";
 import { useState } from "react";
 import { useCopy } from "@/i18n";
-import { ChapterHead, EASE } from "./chapter";
+import { ChapterHead, EASE, type Flow } from "./chapter";
 
 const REPO = "https://github.com/yaklang/OpenXDR";
 // 一行安装：脚本生成口令与证书、配好 HTTPS，拉起后打印控制台地址与 admin 口令
@@ -22,6 +22,7 @@ const COPY = {
       </>
     ),
     body: "预设任务每天巡检全组：复查待办，登记新问题，写成一份报告。\n只有缺了你知道的事，它才会来问你。",
+    flow: { reads: ["全组数据", { you: "记忆" }], writes: ["报告", "待办"] } as Flow,
     demo: "示例",
     tasksTitle: "20 个预设任务，按组开关",
     tasks: ["每日主机巡检", "备份验证", "证书到期检查", "容量趋势预测", "补丁与重启", "账户与权限审计", "暴露面周检", "外联复核", "容器审计", "安全周报", "还有 10 个"],
@@ -63,6 +64,7 @@ const COPY = {
       </>
     ),
     body: "Preset tasks check every host in the group, every day: revisit open findings, log new ones, write it all up.\nIt only comes to you for what only you know.",
+    flow: { reads: ["the whole group", { you: "memory" }], writes: ["reports", "findings"] } as Flow,
     demo: "Sample",
     tasksTitle: "20 preset tasks, switchable per group",
     tasks: ["Daily host inspection", "Backup verification", "Certificate expiry", "Capacity forecast", "Patches and reboots", "Account and privilege audit", "Weekly exposure review", "Egress review", "Container audit", "Weekly security report", "and 10 more"],
@@ -111,7 +113,7 @@ export function Closing() {
       <div className="mx-auto max-w-[1400px]">
         <div className="grid gap-14 lg:grid-cols-2 lg:items-center">
           <div>
-            <ChapterHead index="07" kicker={t.kicker} title={t.title} body={t.body} />
+            <ChapterHead index="08" kicker={t.kicker} title={t.title} body={t.body} flow={t.flow} />
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}

@@ -1,7 +1,7 @@
 import { motion, useMotionValueEvent, useScroll } from "motion/react";
 import { useMemo, useRef, useState } from "react";
 import { useCopy } from "@/i18n";
-import { ChapterHead, DemoBadge, EASE } from "./chapter";
+import { ChapterHead, DemoBadge, EASE, type Flow } from "./chapter";
 
 // 每一道闸之后还剩多少（示意量级），以及点阵里留几个点。
 const STAGES = [
@@ -24,6 +24,7 @@ const COPY = {
       </>
     ),
     body: "进程、文件、登录、外连，主机一上线就源源不断。\n往下滚，看它们一层层被筛掉。",
+    flow: { reads: ["遥测", "情报", { you: "你批准的抑制" }], writes: ["告警", "事件单"] } as Flow,
     demo: "示意数据",
     stages: [
       ["全部遥测", "agent、流量探针与 syslog，一天的量"],
@@ -56,6 +57,7 @@ const COPY = {
       </>
     ),
     body: "Processes, files, logons, connections. Once a host is online, they never stop.\nScroll, and watch them filtered away, layer by layer.",
+    flow: { reads: ["telemetry", "intel", { you: "suppressions you approved" }], writes: ["alerts", "incidents"] } as Flow,
     demo: "Illustrative",
     stages: [
       ["All telemetry", "a day from agents, sensors and syslog"],
@@ -105,16 +107,16 @@ export function Funnel() {
     <section id="secure" className="relative scroll-mt-20">
       {/* 窄屏标题放在吸顶区之前；宽屏放进吸顶区左栏，免得标题和漏斗之间空出一整屏 */}
       <div className="mx-auto max-w-[1400px] px-4 pt-28 sm:px-6 lg:hidden lg:px-8">
-        <ChapterHead index="02" kicker={t.kicker} title={t.title} body={t.body} tone="rose" />
+        <ChapterHead index="03" kicker={t.kicker} title={t.title} body={t.body} flow={t.flow} tone="rose" />
       </div>
       {/* 滚动驱动：外层撑出滚动距离，内层吸顶，按滚动进度推进闸门 */}
       <div ref={ref} className="relative h-[360vh]">
       <div className="sticky top-0 flex h-screen items-center overflow-hidden px-4 sm:px-6 lg:px-8">
         <div className="mx-auto grid w-full max-w-[1400px] gap-6 lg:grid-cols-2 lg:items-center lg:gap-10">
           <div>
-            <p className="mb-4 font-mono text-xs uppercase tracking-[0.22em] text-rose-300 lg:hidden">02 · {t.kicker}</p>
+            <p className="mb-4 font-mono text-xs uppercase tracking-[0.22em] text-rose-300 lg:hidden">03 · {t.kicker}</p>
             <div className="mb-10 hidden lg:block">
-              <ChapterHead index="02" kicker={t.kicker} title={t.title} body={t.body} tone="rose" />
+              <ChapterHead index="03" kicker={t.kicker} title={t.title} body={t.body} flow={t.flow} tone="rose" />
             </div>
             <div className="relative">
               {/* 左侧进度线随滚动填满 */}

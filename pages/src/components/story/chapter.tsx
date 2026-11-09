@@ -1,7 +1,45 @@
+import { ArrowRight } from "lucide-react";
 import { motion, useMotionValueEvent, useScroll, type MotionValue } from "motion/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useLocale } from "@/i18n";
 
 export const EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
+
+/** 一条数据：机器产生的写成字符串，人产生的写成 { you }，整页统一用绿色标出。 */
+export type Datum = string | { you: string };
+/** 一个章节读哪些数据、写回哪些数据。 */
+export type Flow = { reads: Datum[]; writes: Datum[] };
+
+function Chip({ d }: { d: Datum }) {
+  const you = typeof d !== "string";
+  return (
+    <span
+      className={`rounded-md border px-1.5 py-0.5 ${
+        you ? "border-emerald-300/30 bg-emerald-400/[0.08] text-emerald-200" : "border-white/10 text-neutral-400"
+      }`}
+    >
+      {you ? d.you : d}
+    </span>
+  );
+}
+
+/** 章节的数据流：读 → 写。 */
+function FlowLine({ flow }: { flow: Flow }) {
+  const zh = useLocale() === "zh-CN";
+  return (
+    <div className="mt-6 flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+      <span className="mr-0.5 text-neutral-500">{zh ? "读" : "reads"}</span>
+      {flow.reads.map((d) => (
+        <Chip key={typeof d === "string" ? d : d.you} d={d} />
+      ))}
+      <ArrowRight className="mx-1 h-3 w-3 text-neutral-600" />
+      <span className="mr-0.5 text-neutral-500">{zh ? "写" : "writes"}</span>
+      {flow.writes.map((d) => (
+        <Chip key={typeof d === "string" ? d : d.you} d={d} />
+      ))}
+    </div>
+  );
+}
 
 /** 叙事章节的标题区：序号 + 主题词 + 标题 + 说明。 */
 export function ChapterHead({
@@ -9,12 +47,14 @@ export function ChapterHead({
   kicker,
   title,
   body,
+  flow,
   tone = "emerald",
 }: {
   index: string;
   kicker: string;
   title: ReactNode;
   body: ReactNode;
+  flow?: Flow;
   tone?: "emerald" | "rose" | "amber" | "sky";
 }) {
   const color = {
@@ -40,6 +80,7 @@ export function ChapterHead({
       <p className="mt-5 whitespace-pre-line text-base leading-relaxed text-neutral-400 sm:text-lg">
         {body}
       </p>
+      {flow && <FlowLine flow={flow} />}
     </motion.div>
   );
 }

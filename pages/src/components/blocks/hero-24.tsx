@@ -158,7 +158,7 @@ export function Hero24() {
               <ArrowRight className="ml-2 h-4 w-4" />
             </a>
             <a
-              href="#onboard"
+              href="#architecture"
               className="inline-flex w-full cursor-pointer items-center justify-center rounded-full border border-white/20 bg-white/5 px-6 py-3 text-sm font-medium text-white backdrop-blur transition-colors duration-200 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950 sm:w-auto sm:px-8 sm:py-3.5 sm:text-base"
             >
               {copy.pipeline}

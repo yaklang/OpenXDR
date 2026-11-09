@@ -2,7 +2,7 @@ import { Check, FileText, Lock, RotateCcw, Upload } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { useCopy } from "@/i18n";
-import { ChapterHead, Console, DemoBadge, EASE } from "./chapter";
+import { ChapterHead, Console, DemoBadge, EASE, type Flow } from "./chapter";
 
 const HOSTS = [
   { name: "web-01", ip: "10.0.1.11", os: "ubuntu 24.04", user: "root" },
@@ -32,6 +32,7 @@ const COPY = {
       </>
     ),
     body: "不用逐台登录。把交接文档拖进来，\n主机和凭据自动识别、加密保存、按组接入。\n上线那一刻，检测和巡检就开始了。",
+    flow: { reads: [{ you: "交接文档" }], writes: ["资产", "凭据（加密）", "分组"] } as Flow,
     docName: "运维交接.md",
     docHeading: "生产环境主机",
     docHint: "拖住这份文档，放进导入框",
@@ -67,6 +68,7 @@ const COPY = {
       </>
     ),
     body: "No logging in host by host. Drop in your handover doc.\nHosts and credentials are found, encrypted and onboarded by group.\nDetection and checkups start the moment they're online.",
+    flow: { reads: [{ you: "handover doc" }], writes: ["assets", "credentials (encrypted)", "groups"] } as Flow,
     docName: "ops-handover.md",
     docHeading: "Production hosts",
     docHint: "Grab this document and drop it into the import box",
@@ -141,7 +143,7 @@ export function Onboard() {
     <section id="onboard" className="relative scroll-mt-20 px-4 py-28 sm:px-6 lg:px-8">
       <div className="mx-auto grid max-w-[1400px] gap-14 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center">
         <div>
-          <ChapterHead index="01" kicker={t.kicker} title={t.title} body={t.body} />
+          <ChapterHead index="02" kicker={t.kicker} title={t.title} body={t.body} flow={t.flow} />
 
           <div className="mt-10">
             <p className="mb-3 text-sm text-neutral-500">{t.docHint}</p>

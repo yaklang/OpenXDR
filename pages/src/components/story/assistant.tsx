@@ -2,7 +2,7 @@ import { Bot, CheckCircle2, FileText, Hand, ListTodo, Play, RotateCcw, Terminal 
 import { motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { useCopy } from "@/i18n";
-import { ChapterHead, Console, DemoBadge, EASE } from "./chapter";
+import { ChapterHead, Console, DemoBadge, EASE, type Flow } from "./chapter";
 
 type Item =
   | { kind: "user" | "ai"; text: string }
@@ -24,6 +24,7 @@ const COPY = {
       </>
     ),
     body: "执行命令、查数据、记待办、写报告，都在组内主机上完成。\n到了危险的一步，审计员先把关；它来问你，是因为还缺你知道的那一块。",
+    flow: { reads: [{ you: "你的指令" }, "本组只读视图", { you: "记忆" }], writes: ["对话", "待办", "报告", "审计"] } as Flow,
     points: [
       "寻常命令，直接执行，不用每条都点批准",
       "高风险命令先送审计员：AI 发起的由 AI 审计员当场裁决，整夜也不会卡住；人发起的等组管理员",
@@ -75,6 +76,7 @@ const COPY = {
       </>
     ),
     body: "Run commands, query data, track findings, write reports — all on the group's hosts.\nAt a risky step, an auditor rules first; when it asks you, it's because it's missing what only you know.",
+    flow: { reads: [{ you: "your request" }, "read-only group views", { you: "memory" }], writes: ["chats", "findings", "reports", "audit"] } as Flow,
     points: [
       "Routine commands just run. No approving every line",
       "High-risk commands go to an auditor: the AI auditor rules on the AI's own commands on the spot, so nothing stalls overnight; a person's commands wait for a group admin",
@@ -152,7 +154,7 @@ export function Assistant() {
     <section id="operate" className="relative scroll-mt-20 px-4 py-28 sm:px-6 lg:px-8">
       <div className="mx-auto grid max-w-[1400px] gap-14 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center">
         <div>
-          <ChapterHead index="06" kicker={t.kicker} title={t.title} body={t.body} tone="sky" />
+          <ChapterHead index="07" kicker={t.kicker} title={t.title} body={t.body} flow={t.flow} tone="sky" />
           <ul className="mt-10 space-y-4">
             {t.points.map((p) => (
               <li key={p} className="flex gap-3 text-sm leading-relaxed text-neutral-400">

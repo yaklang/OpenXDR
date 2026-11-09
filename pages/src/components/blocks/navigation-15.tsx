@@ -25,6 +25,7 @@ export default function Navigation15() {
     locale === "zh-CN"
       ? {
           links: [
+            { label: "架构", href: "#architecture" },
             { label: "接入", href: "#onboard" },
             { label: "安全", href: "#secure" },
             { label: "资产", href: "#surface" },
@@ -45,6 +46,7 @@ export default function Navigation15() {
         }
       : {
           links: [
+            { label: "Architecture", href: "#architecture" },
             { label: "Onboard", href: "#onboard" },
             { label: "Secure", href: "#secure" },
             { label: "Assets", href: "#surface" },

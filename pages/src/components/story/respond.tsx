@@ -1,6 +1,6 @@
 import { motion } from "motion/react";
 import { useCopy } from "@/i18n";
-import { ChapterHead, Console, DemoBadge, EASE, StepList, useScrollSteps } from "./chapter";
+import { ChapterHead, Console, DemoBadge, EASE, StepList, useScrollSteps, type Flow } from "./chapter";
 
 // 一次内网跳板攻击从落地到收场：每一步的时刻（示意，来自一次真实攻击的复盘），以及决策记录里多出的那一行
 type Row = { time: string; host: string; action: string; state: "contain" | "block" | "review" | "trace" };
@@ -23,6 +23,7 @@ const COPY = {
       </>
     ),
     body: "知道了你的意图，确定的攻击就不必等人。\n它按谁是来源、谁是受害者下手，每一步都留下理由，随时可以撤回。",
+    flow: { reads: ["告警", { you: "记忆" }, { you: "区域等级" }], writes: ["决策记录", "审计"] } as Flow,
     times: ["03:12", "03:41", "+5 秒", "+5 秒", "次日", "醒来"],
     steps: [
       ["跳板落地", "靶场里一个容器被拿下，开始对内网逐台试 SSH 口令"],
@@ -53,6 +54,7 @@ const COPY = {
       </>
     ),
     body: "Once it knows your intent, a certain attack doesn't wait for anyone.\nIt acts on who is the source and who is the victim, writes down why, and lets you undo any of it.",
+    flow: { reads: ["alerts", { you: "memory" }, { you: "zone levels" }], writes: ["decision log", "audit"] } as Flow,
     times: ["03:12", "03:41", "+5s", "+5s", "next day", "morning"],
     steps: [
       ["A foothold", "a lab container is taken over and starts trying SSH passwords across the network"],
@@ -79,7 +81,7 @@ export function Respond() {
   const t = useCopy(COPY);
   const { ref, wide, step, progress } = useScrollSteps(t.steps.length);
 
-  const head = <ChapterHead index="05" kicker={t.kicker} title={t.title} body={t.body} tone="rose" />;
+  const head = <ChapterHead index="06" kicker={t.kicker} title={t.title} body={t.body} flow={t.flow} tone="rose" />;
 
   // 决策记录逐行出现：走到第几步就显示到第几行，后面留空行占位不剧透
   const demo = (

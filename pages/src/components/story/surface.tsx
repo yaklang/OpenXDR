@@ -2,7 +2,7 @@ import { Globe, HelpCircle } from "lucide-react";
 import { motion } from "motion/react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useCopy } from "@/i18n";
-import { ChapterHead, Console, DemoBadge, EASE, StepList, useScrollSteps } from "./chapter";
+import { ChapterHead, Console, DemoBadge, EASE, StepList, useScrollSteps, type Flow } from "./chapter";
 
 // 示意数据：风险分 = 暴露级别 × 端口风险 × 重要程度，与 server/internal/assetmap 同一口径
 type Service = { port: string; name: string; exposure: number; portRisk: number; public?: boolean };
@@ -57,6 +57,7 @@ const COPY = {
       </>
     ),
     body: "不用画拓扑，也不用填表。\n往下滚，看一张攻击面自己长出来。",
+    flow: { reads: ["主机信息", "监听端口", "流量", { you: "你改过的标注" }], writes: ["资产画像", "依赖边"] } as Flow,
     steps: [
       ["主机上线", "agent 接入，资产自动登记，AI 标好角色与重要程度"],
       ["端口浮现", "监听端口与属主进程，每分钟比对一次"],
@@ -90,6 +91,7 @@ const COPY = {
       </>
     ),
     body: "No diagrams to draw. No spreadsheets to fill.\nScroll, and watch an attack surface build itself.",
+    flow: { reads: ["host facts", "listeners", "flows", { you: "labels you corrected" }], writes: ["asset profiles", "dependency edges"] } as Flow,
     steps: [
       ["Hosts come online", "agents enroll, assets register, AI labels role and importance"],
       ["Ports surface", "listeners and their processes, checked every minute"],
@@ -160,7 +162,7 @@ export function Surface() {
   const stats = [3, all.length, EDGES.length - 1, ZONES.length, 1];
   const statStep = [0, S.ports, S.edges, S.zones, S.blind];
 
-  const head = <ChapterHead index="03" kicker={t.kicker} title={t.title} body={t.body} tone="amber" />;
+  const head = <ChapterHead index="04" kicker={t.kicker} title={t.title} body={t.body} flow={t.flow} tone="amber" />;
 
   const demo = (
     <Console title={t.console} badge={<DemoBadge label={t.demo} />}>

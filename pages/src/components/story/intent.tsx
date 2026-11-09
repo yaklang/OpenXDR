@@ -2,7 +2,7 @@ import { CheckCircle2, MessageSquareQuote, Plus, RotateCcw, Sparkles } from "luc
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
 import { useCopy } from "@/i18n";
-import { ChapterHead, Console, DemoBadge, EASE } from "./chapter";
+import { ChapterHead, Console, DemoBadge, EASE, type Flow } from "./chapter";
 
 // 同一夜的四个信号：缺了人知道的那一句，判断就错；补上，就判对。与研判、巡检、对话读同一份组内记忆的口径一致
 type Verdict = { verdict: string; action: string };
@@ -29,6 +29,7 @@ const COPY = {
       </>
     ),
     body: "AI 判错，几乎都因为少了一块数据：\n那个地址是备份，那台机器已经下线。\n这些只有你知道。说出来，它就成了数据。",
+    flow: { reads: [{ you: "你说的话" }], writes: [{ you: "记忆" }] } as Flow,
     points: [
       "说话就是录入：对话里说一句，它就写进本组记忆",
       "研判、巡检、对话读同一份记忆，你写的排在最前",
@@ -104,6 +105,7 @@ const COPY = {
       </>
     ),
     body: "When the AI gets it wrong, it's almost always a missing piece of data:\nthat address is the backup, that host was retired.\nOnly you know these things. Say them, and they become data.",
+    flow: { reads: [{ you: "what you say" }], writes: [{ you: "memory" }] } as Flow,
     points: [
       "Saying it is entering it: mention it in a conversation and it goes into the group's memory",
       "Triage, inspections and conversations all read the same memory, with yours on top",
@@ -184,7 +186,7 @@ export function Intent() {
     <section id="intent" className="relative scroll-mt-20 px-4 py-28 sm:px-6 lg:px-8">
       <div className="mx-auto grid max-w-[1400px] gap-14 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center">
         <div>
-          <ChapterHead index="04" kicker={t.kicker} title={t.title} body={t.body} />
+          <ChapterHead index="05" kicker={t.kicker} title={t.title} body={t.body} flow={t.flow} />
           <ul className="mt-10 space-y-4">
             {t.points.map((p) => (
               <li key={p} className="flex gap-3 text-sm leading-relaxed text-neutral-400">
