@@ -10,28 +10,147 @@
 use aya_ebpf::{
     EbpfContext,
     helpers::{
-        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_ktime_get_ns, bpf_probe_read_kernel,
-        bpf_probe_read_kernel_str_bytes,
+        bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_ns,
+        bpf_probe_read_kernel, bpf_probe_read_kernel_buf, bpf_probe_read_kernel_str_bytes,
+        bpf_probe_read_user, bpf_probe_read_user_str_bytes,
     },
     macros::{kprobe, map, tracepoint},
-    maps::{HashMap, LruHashMap, PerfEventArray},
+    maps::{Array, HashMap, LruHashMap, PerCpuArray, PerfEventArray},
     programs::{ProbeContext, TracePointContext},
 };
+
+/// 命令行缓冲：参数之间以 0 分隔紧凑存放。每个参数从前半段的某个偏移开始、最多读半段长，
+/// 偏移按半段长取掩码，验证器才看得出写不越界；能抓到 1~2 KiB，超出的记截断
+const ARGV_HALF: usize = 1024;
+const ARGV_BUF: usize = ARGV_HALF * 2;
+const MAX_ARGS: usize = 32;
 
 // 与 userspace collector/linux.rs 中的定义保持一致
 #[repr(C)]
 pub struct ExecEvent {
     pub pid: u32,
+    /// fork 时记下的父进程（tgid），0 表示没记到
+    pub ppid: u32,
+    pub uid: u32,
+    /// argv 里用掉的字节（含各参数后的 0），0 表示没抓到命令行
+    pub argv_len: u32,
+    pub argv_truncated: u32,
     pub comm: [u8; 16],
     pub filename: [u8; 256],
+    pub argv: [u8; ARGV_BUF],
+}
+
+/// execve 入口抓到的参数，按线程号暂存，exec 成功时取走
+#[repr(C)]
+pub struct Argv {
+    pub len: u32,
+    pub truncated: u32,
+    pub data: [u8; ARGV_BUF],
 }
 
 #[map]
 static EVENTS: PerfEventArray<ExecEvent> = PerfEventArray::new(0);
 
+/// 事件与参数都比 512 字节的栈大，在每 CPU 的暂存区里拼
+#[map]
+static EXEC_SCRATCH: PerCpuArray<ExecEvent> = PerCpuArray::with_max_entries(1, 0);
+#[map]
+static ARGV_SCRATCH: PerCpuArray<Argv> = PerCpuArray::with_max_entries(1, 0);
+
+/// 线程号 → execve 入口抓到的参数。失败的 execve（execvp 逐个试 PATH）留下的条目由 LRU 淘汰
+#[map]
+static ARGVS: LruHashMap<u32, Argv> = LruHashMap::with_max_entries(8192, 0);
+
+/// 子进程（线程）号 → fork 它的进程（tgid）。短命进程 exec 时 /proc 早已读不到父进程，靠这里
+#[map]
+static PARENTS: LruHashMap<u32, u32> = LruHashMap::with_max_entries(65536, 0);
+
+/// [0] 是 sched_process_fork 里 child_pid 的偏移：这个 tracepoint 的布局随内核版本变（6.1 是 44，
+/// 7.0 的 comm 改成 __data_loc 后是 20），由用户态读 format 填；0 表示没填，不记父进程
+#[map]
+static FORK_LAYOUT: Array<u32> = Array::with_max_entries(1, 0);
+
 // /sys/kernel/tracing/events/sched/sched_process_exec/format:
 //   field:__data_loc char[] filename;  offset:8;  size:4
+//   field:pid_t old_pid;               offset:16; size:4
 const FILENAME_DATA_LOC_OFFSET: usize = 8;
+const OLD_PID_OFFSET: usize = 16;
+
+// sys_enter_execve 的 argv 在偏移 24，sys_enter_execveat 的在 32（两者前面多一个 fd）
+const EXECVE_ARGV_OFFSET: usize = 24;
+const EXECVEAT_ARGV_OFFSET: usize = 32;
+
+#[tracepoint]
+pub fn sys_enter_execve(ctx: TracePointContext) -> u32 {
+    capture_argv(&ctx, EXECVE_ARGV_OFFSET).map_or(1, |()| 0)
+}
+
+#[tracepoint]
+pub fn sys_enter_execveat(ctx: TracePointContext) -> u32 {
+    capture_argv(&ctx, EXECVEAT_ARGV_OFFSET).map_or(1, |()| 0)
+}
+
+fn capture_argv(ctx: &TracePointContext, argv_offset: usize) -> Result<(), i64> {
+    let tid = bpf_get_current_pid_tgid() as u32;
+    // SAFETY: 偏移与 sys_enter_execve(at) 的 format（const char *const * argv）一致；read_at 走 bpf_probe_read
+    let argv: *const *const u8 = unsafe { ctx.read_at(argv_offset)? };
+    let a = ARGV_SCRATCH.get_ptr_mut(0).ok_or(0i64)?;
+    // SAFETY: 每 CPU 暂存区的唯一元素，本程序运行期间不会被别的程序改写
+    let a = unsafe { &mut *a };
+    a.truncated = 0;
+    let mut off: usize = 0;
+    for i in 0..MAX_ARGS {
+        // SAFETY: 读用户态 argv 数组的第 i 个指针，地址不可读时返回错误
+        let Ok(arg) = (unsafe { bpf_probe_read_user(argv.wrapping_add(i)) }) else {
+            break;
+        };
+        if arg.is_null() {
+            break;
+        }
+        if off >= ARGV_HALF || i == MAX_ARGS - 1 {
+            a.truncated = 1;
+            break;
+        }
+        // SAFETY: 起点按半段长取掩码、长度恰为半段长，[起点, 起点+半段) 落在 data 之内
+        let dst = unsafe {
+            core::slice::from_raw_parts_mut(
+                a.data.as_mut_ptr().add(off & (ARGV_HALF - 1)),
+                ARGV_HALF,
+            )
+        };
+        // SAFETY: 从用户态读以 0 结尾的字符串，最多写满 dst，地址不可读时返回错误
+        match unsafe { bpf_probe_read_user_str_bytes(arg, dst) } {
+            Ok(s) => {
+                if s.len() >= ARGV_HALF - 1 {
+                    a.truncated = 1;
+                }
+                off += s.len() + 1;
+            }
+            Err(_) => break,
+        }
+    }
+    a.len = off as u32;
+    ARGVS.insert(&tid, a, 0)?;
+    Ok(())
+}
+
+#[tracepoint]
+pub fn sched_process_fork(ctx: TracePointContext) -> u32 {
+    let Some(&child_off) = FORK_LAYOUT.get(0) else {
+        return 0;
+    };
+    if child_off == 0 {
+        return 0;
+    }
+    // SAFETY: 偏移由用户态从本机 format 读出；read_at 走 bpf_probe_read，越界只返回错误
+    let Ok(child) = (unsafe { ctx.read_at::<i32>(child_off as usize) }) else {
+        return 1;
+    };
+    // fork 在父进程上下文里触发：当前进程就是父进程
+    let parent = (bpf_get_current_pid_tgid() >> 32) as u32;
+    let _ = PARENTS.insert(&(child as u32), &parent, 0);
+    0
+}
 
 #[tracepoint]
 pub fn sched_process_exec(ctx: TracePointContext) -> u32 {
@@ -42,14 +161,16 @@ pub fn sched_process_exec(ctx: TracePointContext) -> u32 {
 }
 
 fn try_exec(ctx: &TracePointContext) -> Result<(), i64> {
-    let mut event = ExecEvent {
-        pid: (bpf_get_current_pid_tgid() >> 32) as u32,
-        comm: [0; 16],
-        filename: [0; 256],
-    };
-    if let Ok(comm) = bpf_get_current_comm() {
-        event.comm = comm;
-    }
+    let tgid = (bpf_get_current_pid_tgid() >> 32) as u32;
+    let event = EXEC_SCRATCH.get_ptr_mut(0).ok_or(0i64)?;
+    // SAFETY: 每 CPU 暂存区的唯一元素，本程序运行期间不会被别的程序改写
+    let event = unsafe { &mut *event };
+    event.pid = tgid;
+    event.uid = bpf_get_current_uid_gid() as u32;
+    // SAFETY: get 返回 map 值的引用，立即拷出 u32，不跨辅助函数调用
+    event.ppid = unsafe { PARENTS.get(&tgid).copied() }.unwrap_or(0);
+    event.comm = bpf_get_current_comm().unwrap_or([0; 16]);
+    event.filename[0] = 0;
 
     // __data_loc 低 16 位是 filename 相对事件起始的偏移
     // SAFETY: 偏移 8、宽 4 字节与 sched_process_exec 的 format（__data_loc char[] filename）一致；
@@ -64,7 +185,23 @@ fn try_exec(ctx: &TracePointContext) -> Result<(), i64> {
         let _ = bpf_probe_read_kernel_str_bytes(src, &mut event.filename);
     }
 
-    EVENTS.output(ctx, &event, 0);
+    // 参数在 execve 入口按当时的线程号暂存；非主线程 exec 后线程号变成 tgid，所以用 old_pid 取
+    event.argv_len = 0;
+    event.argv_truncated = 0;
+    // SAFETY: 偏移 16、宽 4 字节与 format（pid_t old_pid）一致
+    let old_pid = unsafe { ctx.read_at::<i32>(OLD_PID_OFFSET) }.unwrap_or(0) as u32;
+    if let Some(a) = ARGVS.get_ptr(&old_pid) {
+        // SAFETY: a 指向 map 里的值，元素内存在本程序运行期间由 RCU 保活；整块拷进事件
+        unsafe {
+            if bpf_probe_read_kernel_buf((*a).data.as_ptr(), &mut event.argv).is_ok() {
+                event.argv_len = (*a).len;
+                event.argv_truncated = (*a).truncated;
+            }
+        }
+        let _ = ARGVS.remove(&old_pid);
+    }
+
+    EVENTS.output(ctx, event, 0);
     Ok(())
 }
 
@@ -169,6 +306,7 @@ fn try_exit(ctx: &TracePointContext) -> Result<(), i64> {
     // i32，引用不跨越任何辅助函数调用，元素内存在本程序运行期间由 RCU 保活。
     let code = unsafe { EXIT_CODES.get(&tgid).copied() };
     let _ = EXIT_CODES.remove(&tgid);
+    let _ = PARENTS.remove(&tgid);
     let event = ExitEvent {
         pid: tgid,
         code: code.unwrap_or(0),

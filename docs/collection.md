@@ -82,8 +82,14 @@ server 原样落库）；sensor 与 syslog 的归一化在 **server 侧**完成�
 - **命名空间检测**：netlink 启动前检查 `/proc/self/ns/pid` inode 是否为初始
   pid ns（4026531836），容器/WSL2 中直接拒绝启动并回落轮询——宁可弱采集
   也不产假数据（`netlink.rs:32-58`）。eBPF 路径**无**此检测
-- **短命进程**：eBPF/netlink 在事件路径上从 /proc 补全 cmdline/ppid，进程已退场
-  就只报 pid、字段留空，事件本身不丢（`linux.rs`、`netlink.rs:148-167`）；
+- **短命进程**：eBPF 路径在内核里、exec 那一刻就把命令行、父进程与属主抓下来，不怕进程已退场：
+  `syscalls:sys_enter_execve(at)` 读用户态 argv（以 0 分隔紧凑存放，抓 1~2 KiB，超出在命令行末尾标「…」），按线程号暂存，
+  `sched_process_exec` 用 old_pid 取走并入事件；`sched_process_fork` 在父进程上下文里记下「子 → 父」（这个 tracepoint 的布局随内核变：
+  6.1 的 child_pid 在偏移 44，7.0 的 comm 改成 __data_loc 后在 20，偏移由用户态读本机 format 填进 `FORK_LAYOUT`）；属主取 exec 时的 uid。
+  2026-11-09 之前命令行与父进程是用户态收到事件后才读 /proc，事件在 perf 缓冲里排上几百毫秒到一秒，
+  生产上 1%~28% 的启动事件因此既没命令行也没父进程——恰恰是 `curl … | sh`、`id`、`whoami` 这类攻击动作。
+  各钩子独立降级，挂不上就回到读 /proc。exec 事件带命令行后有 2 KiB 多，perf 缓冲每 CPU 给 32 页。
+  netlink 路径（非 eBPF 构建）仍在事件路径上读 /proc，短命进程照旧可能缺字段（`netlink.rs:148-167`）；
   轮询路径明确会漏 1 秒内启动又退出的进程（`poll.rs`），且 WSL2 实测
   捕到的短命进程多为空 cmdline"鬼影"（扫描间隔内进程已退场，/proc 读不到）——
   轮询兜底下进程类规则基本无法命中，这是环境性降级，不是规则问题

@@ -15,17 +15,49 @@ use super::inventory_linux::Scanner;
 use super::netwatch::{self, ConnInfo, ConnSampler};
 use super::{
     ACTIVITY_LAUNCH, ACTIVITY_TERMINATE, EventSink, ProcessInfo, ProcessRegistry, container,
-    emit_process, netlink, poll, seeded_registry, stdio_socket_event, stdiosock, username_of,
+    emit_process, netlink, poll, seeded_registry, stdio_socket_event, stdiosock,
 };
 use crate::pb::AgentEvent;
+
+/// 与 ebpf/src/main.rs 的 ARGV_BUF 一致
+const ARGV_BUF: usize = 2048;
 
 // 与 ebpf/src/main.rs 中的定义保持一致
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct ExecEvent {
     pid: u32,
+    /// fork 时记下的父进程，0 表示没记到
+    ppid: u32,
+    uid: u32,
+    /// argv 用掉的字节（参数以 0 分隔），0 表示内核没抓到命令行
+    argv_len: u32,
+    argv_truncated: u32,
     comm: [u8; 16],
     filename: [u8; 256],
+    argv: [u8; ARGV_BUF],
+}
+
+impl ExecEvent {
+    /// 内核抓到的命令行，参数之间用空格连起来（与读 /proc/<pid>/cmdline 同一写法，空参数略去）；
+    /// 截断的末尾标「…」。没抓到返回 None
+    fn cmd_line(&self) -> Option<String> {
+        let used = &self.argv[..(self.argv_len as usize).min(ARGV_BUF)];
+        let line = used
+            .split(|b| *b == 0)
+            .filter(|a| !a.is_empty())
+            .map(String::from_utf8_lossy)
+            .collect::<Vec<_>>()
+            .join(" ");
+        if line.is_empty() {
+            return None;
+        }
+        Some(if self.argv_truncated != 0 {
+            line + " …"
+        } else {
+            line
+        })
+    }
 }
 
 // 与 ebpf/src/main.rs 中的定义保持一致
@@ -64,7 +96,7 @@ struct ConnEvent {
 /// 实现者必须是 `#[repr(C)]`、只由整数与整数数组组成的类型：任意字节序列都是它的合法值。
 unsafe trait Pod: Copy {}
 
-// SAFETY: 三个事件结构都是 #[repr(C)]，字段只有 u32 / i32 / u16 与 [u8; N]，任意位模式都合法
+// SAFETY: 事件结构都是 #[repr(C)]，字段只有 u32 / i32 / u16 与 [u8; N]，任意位模式都合法
 unsafe impl Pod for ExecEvent {}
 // SAFETY: 同上，字段为 u32 / i32 / u32
 unsafe impl Pod for ExitEvent {}
@@ -242,6 +274,7 @@ fn start_process(
     let mut bpf = load()?;
     attach_tracepoint(&mut bpf, "sched_process_exec", "sched")?;
     attach_tracepoint(&mut bpf, "sched_process_exit", "sched")?;
+    attach_exec_context(&mut bpf);
 
     let mut events: AsyncPerfEventArray<_> = bpf
         .take_map("EVENTS")
@@ -259,7 +292,8 @@ fn start_process(
     // exec 事件按 CPU 分发到多个任务，进程血缘是全局的，注册表要共享。
     // exec 频率远低于包速率，这把锁的争用可以忽略。
     for cpu in online_cpus().map_err(|(_, e)| e)? {
-        let mut buf = events.open(cpu, None)?;
+        // 事件带着命令行有 2 KiB 多，默认两页的缓冲经不起登录、构建这类成串的 exec，给 128 KiB
+        let mut buf = events.open(cpu, Some(EXEC_BUFFER_PAGES))?;
         let tx = tx.clone();
         let agent_id = agent_id.to_string();
         let registry = registry.clone();
@@ -394,6 +428,60 @@ fn start_stdio(
         });
     }
     Ok(())
+}
+
+/// exec 事件的 perf 缓冲页数（每 CPU），须是 2 的幂
+const EXEC_BUFFER_PAGES: usize = 32;
+
+/// exec 时就在内核里抓命令行与父进程：用户态收到事件再去 /proc 读，短命进程早已退场，
+/// 生产上 1%~28% 的启动事件因此丢了命令行与父进程。各自独立降级，挂不上只是回到读 /proc
+fn attach_exec_context(bpf: &mut aya::Ebpf) {
+    for name in ["sys_enter_execve", "sys_enter_execveat"] {
+        if let Err(e) = attach_tracepoint(bpf, name, "syscalls") {
+            eprintln!("{name} 不可用，命令行退回读 /proc（{e}）");
+        }
+    }
+    // sched_process_fork 的布局随内核版本变，child_pid 的偏移从本机 format 读
+    let Some(offset) = tracepoint_field_offset("sched", "sched_process_fork", "child_pid") else {
+        eprintln!("读不到 sched_process_fork 的布局，父进程退回读 /proc");
+        return;
+    };
+    let set = (|| -> Result<(), BoxError> {
+        let mut layout: aya::maps::Array<_, u32> = bpf
+            .map_mut("FORK_LAYOUT")
+            .ok_or("FORK_LAYOUT map 缺失")?
+            .try_into()?;
+        layout.set(0, offset, 0)?;
+        attach_tracepoint(bpf, "sched_process_fork", "sched")
+    })();
+    if let Err(e) = set {
+        eprintln!("sched_process_fork 不可用，父进程退回读 /proc（{e}）");
+    }
+}
+
+/// tracepoint format 里某个字段的偏移（tracefs 新旧两个挂载点都试）
+fn tracepoint_field_offset(category: &str, name: &str, field: &str) -> Option<u32> {
+    ["/sys/kernel/tracing", "/sys/kernel/debug/tracing"]
+        .iter()
+        .find_map(|root| {
+            std::fs::read_to_string(format!("{root}/events/{category}/{name}/format")).ok()
+        })
+        .and_then(|format| field_offset(&format, field))
+}
+
+/// format 每行形如 `field:pid_t child_pid;\toffset:44;\tsize:4;\tsigned:1;`
+fn field_offset(format: &str, field: &str) -> Option<u32> {
+    format.lines().find_map(|line| {
+        let decl = line.trim().strip_prefix("field:")?.split(';').next()?;
+        let name = decl.rsplit([' ', '*']).next()?.split('[').next()?;
+        if name != field {
+            return None;
+        }
+        line.split(';')
+            .find_map(|part| part.trim().strip_prefix("offset:"))?
+            .parse()
+            .ok()
+    })
 }
 
 fn attach_tracepoint(bpf: &mut aya::Ebpf, name: &str, category: &str) -> Result<(), BoxError> {
@@ -755,9 +843,15 @@ fn to_agent_event(
 ) -> Vec<AgentEvent> {
     let name = cstr(&ev.comm);
     let exe = cstr(&ev.filename);
-    // exec 瞬间从 /proc 补充命令行和父进程；短命进程可能已退场，拿不到就算了
-    let cmd_line = super::container::cmd_line(ev.pid);
-    let ppid = super::container::ppid(ev.pid);
+    // 命令行、父进程、属主优先用内核在 exec 时抓的；没抓到（老内核、钩子没挂上）才去 /proc 读，
+    // 短命进程那时可能已退场，就只能缺省
+    let cmd_line = ev.cmd_line().or_else(|| super::container::cmd_line(ev.pid));
+    let ppid = (ev.ppid != 0)
+        .then_some(ev.ppid)
+        .or_else(|| super::container::ppid(ev.pid));
+    // 属主取 exec 那一刻内核给的 uid，同样不怕进程已退场
+    let username =
+        super::execfacts::username("/etc/passwd", ev.uid).unwrap_or_else(|| ev.uid.to_string());
 
     emit_process(
         agent_id,
@@ -769,7 +863,7 @@ fn to_agent_event(
             exe: Some(exe.as_ref()),
             cmd_line: cmd_line.as_deref(),
             ppid,
-            username: username_of(ev.pid),
+            username,
             ..Default::default()
         },
     )
@@ -808,9 +902,14 @@ mod tests {
     /// 布局必须与 ebpf/src/main.rs 逐字节一致：内核侧原样写、这边原样读
     #[test]
     fn event_layout_matches_kernel_side() {
-        assert_eq!(size_of::<ExecEvent>(), 4 + 16 + 256);
-        assert_eq!(offset_of!(ExecEvent, comm), 4);
-        assert_eq!(offset_of!(ExecEvent, filename), 20);
+        assert_eq!(size_of::<ExecEvent>(), 20 + 16 + 256 + ARGV_BUF);
+        assert_eq!(offset_of!(ExecEvent, ppid), 4);
+        assert_eq!(offset_of!(ExecEvent, uid), 8);
+        assert_eq!(offset_of!(ExecEvent, argv_len), 12);
+        assert_eq!(offset_of!(ExecEvent, argv_truncated), 16);
+        assert_eq!(offset_of!(ExecEvent, comm), 20);
+        assert_eq!(offset_of!(ExecEvent, filename), 36);
+        assert_eq!(offset_of!(ExecEvent, argv), 292);
 
         assert_eq!(size_of::<ExitEvent>(), 12);
         assert_eq!(offset_of!(ExitEvent, code), 4);
@@ -899,6 +998,95 @@ mod tests {
         });
     }
 
+    #[test]
+    fn fork_layout_comes_from_the_format_file() {
+        // Debian 6.1
+        let old = "name: sched_process_fork
+format:
+\tfield:unsigned short common_type;\toffset:0;\tsize:2;\tsigned:0;
+\tfield:char parent_comm[16];\toffset:8;\tsize:16;\tsigned:1;
+\tfield:pid_t parent_pid;\toffset:24;\tsize:4;\tsigned:1;
+\tfield:char child_comm[16];\toffset:28;\tsize:16;\tsigned:1;
+\tfield:pid_t child_pid;\toffset:44;\tsize:4;\tsigned:1;";
+        assert_eq!(field_offset(old, "child_pid"), Some(44));
+        // PVE 7.0：comm 改成 __data_loc，布局整体前移
+        let new = "\tfield:__data_loc char[] parent_comm;\toffset:8;\tsize:4;\tsigned:0;
+\tfield:pid_t parent_pid;\toffset:12;\tsize:4;\tsigned:1;
+\tfield:__data_loc char[] child_comm;\toffset:16;\tsize:4;\tsigned:0;
+\tfield:pid_t child_pid;\toffset:20;\tsize:4;\tsigned:1;";
+        assert_eq!(field_offset(new, "child_pid"), Some(20));
+        assert_eq!(field_offset(new, "child_comm"), Some(16));
+        assert_eq!(field_offset(new, "nope"), None);
+    }
+
+    #[test]
+    fn kernel_argv_joins_like_proc_cmdline() {
+        let mut ev: ExecEvent = decode(&vec![0u8; size_of::<ExecEvent>()]).unwrap();
+        assert_eq!(ev.cmd_line(), None, "没抓到就是 None");
+        let args = b"sh\0-c\0\0curl x | sh\0";
+        ev.argv[..args.len()].copy_from_slice(args);
+        ev.argv_len = args.len() as u32;
+        assert_eq!(ev.cmd_line().as_deref(), Some("sh -c curl x | sh"));
+        ev.argv_truncated = 1;
+        assert_eq!(ev.cmd_line().as_deref(), Some("sh -c curl x | sh …"));
+    }
+
+    /// 真内核验证：起一个转瞬即逝的 sh 子进程，exec 事件里要有它的命令行，父进程指向本测试进程。
+    /// 需要 root：`cargo test --features ebpf --no-run` 后 `sudo <测试程序> --ignored kernel_captures_short_lived`
+    #[test]
+    #[ignore = "需要 root 与可加载 eBPF 的内核"]
+    fn kernel_captures_short_lived_exec() {
+        use aya::maps::perf::AsyncPerfEventArray;
+        use aya::util::online_cpus;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            ensure_memlock_rlimit();
+            let mut bpf = load().unwrap();
+            attach_tracepoint(&mut bpf, "sched_process_exec", "sched").unwrap();
+            attach_exec_context(&mut bpf);
+            let mut events: AsyncPerfEventArray<_> =
+                bpf.take_map("EVENTS").unwrap().try_into().unwrap();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            for cpu in online_cpus().unwrap() {
+                let mut buf = events.open(cpu, Some(EXEC_BUFFER_PAGES)).unwrap();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let mut bufs = vec![bytes::BytesMut::with_capacity(4096); 8];
+                    while let Ok(batch) = buf.read_events(&mut bufs).await {
+                        for b in bufs.iter().take(batch.read) {
+                            if let Some(ev) = decode::<ExecEvent>(b) {
+                                let _ = tx.send((ev.pid, ev.ppid, ev.uid, ev.cmd_line()));
+                            }
+                        }
+                    }
+                });
+            }
+            let marker = format!("openxdr-argv-{}", std::process::id());
+            let child = std::process::Command::new("/bin/sh")
+                .args(["-c", "exit 0", &marker])
+                .status()
+                .unwrap();
+            assert!(child.success());
+            let me = std::process::id();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+            while let Ok(Some((pid, ppid, uid, cmd))) =
+                tokio::time::timeout_at(deadline, rx.recv()).await
+            {
+                if cmd.as_deref().is_some_and(|c| c.contains(&marker)) {
+                    eprintln!("pid {pid} ppid {ppid} uid {uid} cmd {cmd:?}");
+                    assert_eq!(
+                        cmd.as_deref(),
+                        Some(format!("/bin/sh -c exit 0 {marker}").as_str())
+                    );
+                    assert_eq!(ppid, me, "父进程应是本测试进程");
+                    return;
+                }
+            }
+            panic!("没收到带命令行的 exec 事件");
+        });
+    }
+
     fn exit_bytes(pid: u32, code: i32, has_code: u32) -> Vec<u8> {
         [
             pid.to_ne_bytes(),
@@ -967,17 +1155,25 @@ mod tests {
 
     #[test]
     fn decode_exec_event_strings() {
-        let mut b = 99u32.to_ne_bytes().to_vec();
+        let argv = b"bash\0-i\0";
+        let mut b = Vec::new();
+        for v in [99u32, 7, 1000, argv.len() as u32, 0] {
+            b.extend(v.to_ne_bytes());
+        }
         let mut comm = [0u8; 16];
         comm[..4].copy_from_slice(b"bash");
         let mut filename = [0u8; 256];
         filename[..9].copy_from_slice(b"/bin/bash");
+        let mut args = [0u8; ARGV_BUF];
+        args[..argv.len()].copy_from_slice(argv);
         b.extend(comm);
         b.extend(filename);
+        b.extend(args);
         let ev = decode::<ExecEvent>(&b).unwrap();
-        assert_eq!(ev.pid, 99);
+        assert_eq!((ev.pid, ev.ppid, ev.uid), (99, 7, 1000));
         assert_eq!(cstr(&ev.comm), "bash");
         assert_eq!(cstr(&ev.filename), "/bin/bash");
+        assert_eq!(ev.cmd_line().as_deref(), Some("bash -i"));
     }
 
     #[test]
@@ -1017,10 +1213,17 @@ mod tests {
         let mut filename = [0u8; 256];
         let path = b"/nonexistent/openxdr/probe1";
         filename[..path.len()].copy_from_slice(path);
+        // argv_len 为 0、ppid 为 0：内核没抓到，走读 /proc 的回落路径
         ExecEvent {
             pid,
+            ppid: 0,
+            // SAFETY: getuid 没有前置条件、不会失败
+            uid: unsafe { libc::getuid() },
+            argv_len: 0,
+            argv_truncated: 0,
             comm,
             filename,
+            argv: [0; ARGV_BUF],
         }
     }
 
