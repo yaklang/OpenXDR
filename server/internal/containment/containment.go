@@ -62,6 +62,8 @@ type Engine struct {
 	// 慢路径：研判结论驱动的处置门槛（见 verdict.go）；Notify 推送待审批处置，nil 不推
 	Verdicts VerdictPolicy
 	Notify   func(ctx context.Context, title, text, path string) error
+	// 边界网关的主机名（CONTAINMENT_EDGE_HOSTS）：公网地址的封锁在这些主机上一并执行，见 edge.go
+	EdgeHosts []string
 	// 已处理过的结论：事件 → 研判时刻，只在单活循环里读写
 	verdictSeen map[uuid.UUID]time.Time
 }
@@ -513,7 +515,7 @@ func (e *Engine) react(ctx context.Context) error {
 			last = *al.LastTs
 		}
 		for _, a := range p.actions {
-			if err := e.decide(ctx, al, p.source, a, last); err != nil {
+			if err := e.decideWithEdge(ctx, al, p.source, a, last); err != nil {
 				return fmt.Errorf("告警 %s 处置 %s: %w", al.ID, a.key(), err)
 			}
 		}

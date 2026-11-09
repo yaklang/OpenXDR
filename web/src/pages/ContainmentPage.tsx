@@ -26,7 +26,7 @@ const STATE: Record<ContainmentState, { key: MsgKey; color: string }> = {
   declined: { key: 'cmtDeclined', color: 'default' },
 }
 
-const ROLE: Record<Containment['role'], MsgKey> = { source: 'cmtRoleSource', victim: 'cmtRoleVictim', host: 'cmtRoleHost' }
+const ROLE: Record<Containment['role'], MsgKey> = { source: 'cmtRoleSource', victim: 'cmtRoleVictim', host: 'cmtRoleHost', edge: 'cmtRoleEdge' }
 
 // 策略矩阵：代码里写死的信号 → 动作，这里只展示
 const POLICY: { signal: MsgKey; action: MsgKey }[] = [

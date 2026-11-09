@@ -429,7 +429,7 @@ var (
 		{Name: "alert_id", Type: field.TypeUUID},
 		{Name: "incident_id", Type: field.TypeUUID, Nullable: true},
 		{Name: "source_asset_id", Type: field.TypeUUID, Nullable: true},
-		{Name: "role", Type: field.TypeEnum, Enums: []string{"source", "victim", "host"}},
+		{Name: "role", Type: field.TypeEnum, Enums: []string{"source", "victim", "host", "edge"}},
 		{Name: "state", Type: field.TypeEnum, Enums: []string{"pending", "active", "expired", "executed", "lifted", "held", "skipped", "failed", "proposed", "declined"}},
 		{Name: "reason", Type: field.TypeString, Size: 2147483647},
 		{Name: "command_id", Type: field.TypeUUID, Nullable: true},

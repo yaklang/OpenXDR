@@ -1820,7 +1820,7 @@ export interface Containment {
   incidentId: string | null
   // 来源主机在别组时不给名字
   sourceHostname?: string
-  role: 'source' | 'victim' | 'host'
+  role: 'source' | 'victim' | 'host' | 'edge'
   state: ContainmentState
   reason: string
   commandId: string | null

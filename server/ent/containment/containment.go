@@ -116,6 +116,7 @@ const (
 	RoleSource Role = "source"
 	RoleVictim Role = "victim"
 	RoleHost   Role = "host"
+	RoleEdge   Role = "edge"
 )
 
 func (r Role) String() string {
@@ -125,7 +126,7 @@ func (r Role) String() string {
 // RoleValidator is a validator for the "role" field enum values. It is called by the builders before save.
 func RoleValidator(r Role) error {
 	switch r {
-	case RoleSource, RoleVictim, RoleHost:
+	case RoleSource, RoleVictim, RoleHost, RoleEdge:
 		return nil
 	default:
 		return fmt.Errorf("containment: invalid enum value for role field: %q", r)

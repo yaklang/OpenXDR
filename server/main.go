@@ -522,6 +522,8 @@ func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *
 			Exempt:            hostSet(os.Getenv("AUTO_RESPONSE_EXEMPT")),
 		},
 		Notify: notify,
+		// 边界网关：公网地址的封锁在这些主机上一并执行（逗号分隔的主机名，不配就不启用）
+		EdgeHosts: strings.FieldsFunc(os.Getenv("CONTAINMENT_EDGE_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' }),
 	}
 	go cluster.RunLeader(ctx, db, "containment", engine.Run)
 	return engine, store

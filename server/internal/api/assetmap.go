@@ -20,7 +20,7 @@ import (
 
 // AssetMapPaths 由 AssetMap 处理的路径，main 逐个挂到总路由上
 var AssetMapPaths = []string{"/api/asset-map", "/api/attack-surface", "/api/zones", "/api/zones/",
-	"/api/assets/{id}/profile", "/api/assets/{id}/zone", "/api/assets/{id}/annotate", "/api/assets/{id}/services"}
+	"/api/assets/{id}/profile", "/api/assets/{id}/zone", "/api/assets/{id}/response-tier", "/api/assets/{id}/annotate", "/api/assets/{id}/services"}
 
 // AssetMap 资产图谱、攻击面、区域定义与资产画像。读按组 viewer；
 // 改标注要组 analyst；区域定义与资产的区域指派影响攻击面判定，要组 admin。

@@ -108,7 +108,7 @@ func (e *Engine) reactVerdict(ctx context.Context, inc *ent.Incident) error {
 	var proposed []string
 	for _, s := range steps {
 		if s.auto {
-			if err := e.decide(ctx, s.alert, nil, s.action, s.last); err != nil {
+			if err := e.decideWithEdge(ctx, s.alert, nil, s.action, s.last); err != nil {
 				return err
 			}
 			continue
@@ -402,6 +402,17 @@ func (e *Engine) Approve(ctx context.Context, c *ent.Containment, actor string) 
 	}
 	if err := e.dispatch(ctx, pending, a, req, c.AlertID); err != nil {
 		return nil, err
+	}
+	// 批准的是公网封锁就连同边界一起；边界那条按快路径同一流程自动执行
+	edge, err := e.edgeActions(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	for _, ea := range edge {
+		ea.why = c.Reason + "；" + actor + " 批准后在边界网关 " + ea.asset.Hostname + " 一并封锁"
+		if err := e.decide(ctx, al, nil, ea, e.now()); err != nil {
+			return nil, err
+		}
 	}
 	return e.DB.Containment.Get(ctx, c.ID)
 }
