@@ -63,6 +63,7 @@ import (
 	"openxdr/server/internal/ipdb"
 	"openxdr/server/internal/janitor"
 	"openxdr/server/internal/liveness"
+	"openxdr/server/internal/maintenance"
 	"openxdr/server/internal/modelroute"
 	"openxdr/server/internal/notify"
 	"openxdr/server/internal/piruntime"
@@ -131,6 +132,7 @@ func main() {
 	allowlist := isolationAllowlist()
 	triageEngine := startTriage(ctx, db, client, rules, llmFor)
 	notifySettings, webhook := startNotify(ctx, db, client, rules, triageEngine.LLM.Enabled)
+	startMaintenance(ctx, db, client, hub, webhook.Send)
 	containmentEngine, containmentConfig := startContainment(ctx, db, client, hub, allowlist, llmFor("containment"), webhook.Send)
 	// 自身监控：平台节点的 agent 掉线；配了 SELFWATCH_PATRONI_URL（HA 部署）再盯 Patroni 动态配置
 	go cluster.RunLeader(ctx, db, "selfwatch", (&selfwatch.Watch{
@@ -685,6 +687,31 @@ func startAuthentik(ctx context.Context, db *sql.DB, client *ent.Client, events 
 	}
 	p := &authentik.Poller{API: api, DB: client, SQL: db, Events: events, Host: host, Interval: 30 * time.Second}
 	go cluster.RunLeader(ctx, db, "authentik-events", p.Run)
+}
+
+// startMaintenance 夜间维护：配了 MAINTENANCE_WINDOW（如 02:00-05:00）才启用，见 internal/maintenance
+func startMaintenance(ctx context.Context, db *sql.DB, client *ent.Client, hub *response.Hub, notify func(ctx context.Context, title, text, path string) error) {
+	window := os.Getenv("MAINTENANCE_WINDOW")
+	if window == "" {
+		return
+	}
+	if !hub.Enabled {
+		slog.Warn("夜间维护需要 RESPONSE_ENABLED=true，不启动")
+		return
+	}
+	start, end, err := maintenance.ParseWindow(window)
+	if err != nil {
+		slog.Error("夜间维护配置错误", "err", err)
+		os.Exit(1)
+	}
+	loc, err := time.LoadLocation(getenv("MAINTENANCE_TZ", "Asia/Shanghai"))
+	if err != nil {
+		slog.Error("夜间维护时区错误", "err", err)
+		os.Exit(1)
+	}
+	r := &maintenance.Runner{DB: client, SQL: db, Hub: hub, Notify: notify,
+		Config: maintenance.Config{Start: start, End: end, Location: loc, Exclude: hostSet(os.Getenv("MAINTENANCE_EXCLUDE"))}}
+	go cluster.RunLeader(ctx, db, "maintenance", r.Run)
 }
 
 // startSyslog syslog 接入，与采集端共用同一事件管道。

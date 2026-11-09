@@ -498,6 +498,9 @@ server 全部通过环境变量配置，均有默认值：
 | `AUTHENTIK_RESPONSE_TOKEN` | 空 | Authentik 服务账号的 API 令牌，只需「查看事件、查看用户、修改用户、查看与删除会话」：拉登录事件、爆破得手时停用账号并作废它已登录的会话 |
 | `AUTHENTIK_ASSET` | 空 | 运行 Authentik 的资产主机名（如 `gateway`）：SSO 登录事件挂在它名下，进爆破得手等检测 |
 | `AUTHENTIK_PROTECTED` | 空 | 逗号分隔的用户名：永远不自动停用（超级管理员与服务账号本来就不停用） |
+| `MAINTENANCE_WINDOW` | 空（不启用） | 夜间维护窗口，如 `02:00-05:00`：窗口内逐台装安全更新（unattended-upgrades），需要重启就重启，agent 回来且启动 ID 变了才轮下一台；跑 OpenXDR server 的平台节点放最后、一晚一台、另一台须在线；有一台 15 分钟没回来当晚停手并通知。只下发写死的固定命令。需要 `RESPONSE_ENABLED` |
+| `MAINTENANCE_TZ` | `Asia/Shanghai` | 维护窗口的时区 |
+| `MAINTENANCE_EXCLUDE` | 空 | 逗号分隔的主机名：永远不做夜间维护（如 PVE 宿主机） |
 | `CONTAINMENT_TTL_HOURS` | `24` | 处置租约长度，从最后一条证据算起；证据持续就续期。到期时配了模型先请 AI 复核（解除或续期，出错按续期、一小时后再问），没配模型直接解除；租约最长 7 天 |
 | `SELFWATCH_PATRONI_URL` | 空（HA 编排默认 `http://127.0.0.1:8008/config`） | 自身监控：每分钟读本机 Patroni 动态配置与基线比对，被改就出 `xdr:control-plane-change` 告警（改 pg_hba、`*_command`、预加载库等 5 级，其余 3 级）。不配只检查平台节点 agent 掉线（`xdr:core-agent-silent`，4 级） |
 | `CONTAINMENT_MAX_PER_HOUR` | `10` | 一小时内最多生效的自动处置数，超出熔断（只记录不执行）；另有组内同时隔离不超过纳管主机 20% 的上限 |

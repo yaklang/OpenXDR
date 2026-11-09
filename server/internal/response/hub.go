@@ -140,7 +140,8 @@ func (h *Hub) Issue(ctx context.Context, req Request) (*ent.Command, error) {
 	return h.issue(ctx, req)
 }
 
-// IssueExec 仅供 commandgate.Gate.Issue 调用：它已完成判权并写入 IssuedBy。
+// IssueExec 供 commandgate.Gate.Issue 调用（它已完成判权并写入 IssuedBy）；
+// 另一个调用方是夜间维护（internal/maintenance），只下发写死在代码里的固定命令，没有外部输入。
 func (h *Hub) IssueExec(ctx context.Context, req Request) (*ent.Command, error) {
 	if req.Kind != "exec" {
 		return nil, errors.New("IssueExec 只处理 exec")

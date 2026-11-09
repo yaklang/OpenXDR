@@ -58,6 +58,9 @@ func EffectiveTier(ctx context.Context, db *ent.Client, a *ent.Asset) (string, s
 	return TierProduction, "默认", nil
 }
 
+// RunsServer 资产上跑着 OpenXDR server（平台节点）
+func RunsServer(a *ent.Asset) bool { return runsServer(a.Listening) }
+
 func runsServer(listening json.RawMessage) bool {
 	var ports []struct {
 		Process string `json:"process"`
