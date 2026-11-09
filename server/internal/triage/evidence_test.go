@@ -191,6 +191,23 @@ func TestRecordClaimsCannotBorrowParentFromAnotherEvent(t *testing.T) {
 	}
 }
 
+// 纠正提示附上台账：能引用的编号与字段都在里面，命令输出这类正文不在
+func TestLedgerDigestListsCitableFacts(t *testing.T) {
+	tool := `{"status":"ok","exit_code":0,"stdout":"-- Logs begin at Mon --","items":[{"event_id":"e1","class":"process"}]}`
+	got := ledgerDigest([]Message{{Role: "tool", Content: tool}})
+	for _, want := range []string{"query-1：", "exit_code=0", `status="ok"`, "query-1/items-1：", `event_id="e1"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("缺少 %q：%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Logs begin") {
+		t.Fatalf("命令输出不能进台账：%s", got)
+	}
+	if ledgerDigest(nil) != "" {
+		t.Fatal("没有工具证据时不附台账")
+	}
+}
+
 func TestEvidenceWithoutToolsDoesNotInventReferences(t *testing.T) {
 	for _, suffix := range []string{"", `,"evidence_claims":[]`} {
 		answer := strings.TrimSuffix(validVerdict, "}") + suffix + "}"

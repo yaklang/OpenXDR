@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 )
 
 // queryEvidence 记录查询覆盖和事件结构化字段，不把事件正文或模型推断升级成已核验事实。
@@ -186,6 +187,42 @@ func bindEvidence(msg Message, messages []Message) (string, error) {
 	verdict["evidence_observations"] = evidenceObservations(claims)
 	out, err := json.Marshal(verdict)
 	return string(out), err
+}
+
+// ledgerDigest 纠正时给模型看的证据台账：只有这里的编号、字段和值能引用，命令输出、日志正文这类内容不在其中。
+// 模型平时看不到台账，只能从工具结果里猜字段，猜成 stdout 之类就会被拒
+func ledgerDigest(messages []Message) string {
+	const maxEntries = 40
+	var b strings.Builder
+	n := 0
+	add := func(id string, facts map[string]any) {
+		if n == maxEntries || len(facts) == 0 {
+			return
+		}
+		n++
+		fields := make([]string, 0, len(facts))
+		for k := range facts {
+			fields = append(fields, k)
+		}
+		sort.Strings(fields)
+		b.WriteString("\n- " + id + "：")
+		for i, k := range fields {
+			if i > 0 {
+				b.WriteString("，")
+			}
+			b.WriteString(k + "=" + shortEvidenceValue(facts[k]))
+		}
+	}
+	for _, q := range queryEvidenceFrom(messages) {
+		add(q.ID, q.Facts)
+		for _, r := range q.Records {
+			add(r.ID, r.Facts)
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	return "\n可引用的证据台账（只能从这里选编号、字段和值，值照抄）：" + b.String()
 }
 
 // shortEvidenceValue 限制诊断值长度，避免长字符串淹没纠正提示和日志。
