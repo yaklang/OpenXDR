@@ -94,8 +94,9 @@ fn hostname(s: &str) -> bool {
         })
 }
 
-/// 自保检查：过宽、回环、未指定，或者覆盖了 server 地址的，一律拒绝
-pub fn check(nets: &[Net], protected: &[IpAddr]) -> Result<(), String> {
+/// 自保检查：过宽、回环、未指定，或者覆盖了 server 地址、本机地址的，一律拒绝。
+/// protected 是地址与它的称呼（「server 地址」「本机地址」）
+pub fn check(nets: &[Net], protected: &[(IpAddr, &str)]) -> Result<(), String> {
     for n in nets {
         let min = if n.addr.is_ipv4() {
             MIN_PREFIX_V4
@@ -111,9 +112,9 @@ pub fn check(nets: &[Net], protected: &[IpAddr]) -> Result<(), String> {
         if n.addr.is_loopback() || n.addr.is_unspecified() || n.addr.is_multicast() {
             return Err(format!("{} 不能封锁", n.render()));
         }
-        if let Some(ip) = protected.iter().find(|ip| n.contains(**ip)) {
+        if let Some((ip, what)) = protected.iter().find(|(ip, _)| n.contains(*ip)) {
             return Err(format!(
-                "{} 包含 server 地址 {ip}，封锁后将收不到解除指令",
+                "{} 包含{what} {ip}，封锁后本机会断网、收不到解除指令",
                 n.render()
             ));
         }
@@ -121,8 +122,18 @@ pub fn check(nets: &[Net], protected: &[IpAddr]) -> Result<(), String> {
     Ok(())
 }
 
-/// server 的地址：OPENXDR_SERVER 里的主机名解析出来的全部地址
-fn protected() -> Vec<IpAddr> {
+/// 不能封的地址：本机网卡上的地址（反弹 shell 连回本机这类信号的对端就是自己），
+/// 加上 OPENXDR_SERVER 里的主机名解析出来的全部地址
+fn protected() -> Vec<(IpAddr, &'static str)> {
+    let own = if_addrs::get_if_addrs().unwrap_or_default();
+    let server = server_addrs();
+    own.into_iter()
+        .map(|i| (i.ip(), "本机地址"))
+        .chain(server.into_iter().map(|ip| (ip, "server 地址")))
+        .collect()
+}
+
+fn server_addrs() -> Vec<IpAddr> {
     let Ok(url) = std::env::var("OPENXDR_SERVER") else {
         return Vec::new();
     };
@@ -383,7 +394,7 @@ mod tests {
     #[test]
     fn refuses_wide_loopback_and_server() {
         let net = |s: &str| parse_target(s).unwrap().1;
-        let server: Vec<IpAddr> = vec!["10.1.1.199".parse().unwrap()];
+        let server = [("10.1.1.199".parse().unwrap(), "server 地址")];
         assert!(check(&net("10.0.0.0/8"), &server).is_err(), "过宽");
         assert!(check(&net("127.0.0.1"), &server).is_err(), "回环");
         assert!(check(&net("0.0.0.0/16"), &server).is_err(), "未指定");
