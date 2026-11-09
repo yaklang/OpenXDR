@@ -475,9 +475,11 @@ server 全部通过环境变量配置，均有默认值：
 | `RESPONSE_ENABLED` | `false` | 是否允许下发响应指令；开启后人工处置、Pi 命令、定时任务与自动响应下发的指令都会真执行 |
 | `ISOLATION_ALLOW` | 空 | 隔离主机时放行的地址，必须包含 server 的 gRPC 端点 |
 | `COMMAND_SIGNING_KEY_FILE` | 空 | 响应指令签名私钥（PKCS#8 PEM Ed25519，`gencerts` 生成）。开启 `RESPONSE_ENABLED` 时必须配置，否则启动失败；未开启时配了也会下发公钥，让 agent 提前固定 |
-| `AUTO_RESPONSE_ENABLED` | `false` | AI 研判高置信度 malicious 时真实隔离涉事主机（依赖 `RESPONSE_ENABLED`，每次决策落审计） |
-| `AUTO_RESPONSE_MIN_CONFIDENCE` | `90` | 触发自动响应的置信度门槛 |
-| `AUTO_RESPONSE_EXEMPT` | 空 | 逗号分隔的主机名，绝不自动隔离 |
+| `AUTO_RESPONSE_ENABLED` | `true` | AI 研判恶意且高置信度时按证据自动执行最小处置；`false` 改为全部等组管理员批准（依赖 `RESPONSE_ENABLED` 与自主响应开关，见 detection.md） |
+| `AUTO_RESPONSE_MIN_CONFIDENCE` | `90` | 自动处置的置信度门槛 |
+| `RESPONSE_PROPOSE_MIN_CONFIDENCE` | `70` | 可疑结论提出处置等批准的置信度门槛 |
+| `RESPONSE_PROPOSAL_TTL_HOURS` | `4` | 待审批处置的有效期，过期作废 |
+| `AUTO_RESPONSE_EXEMPT` | 空 | 逗号分隔的主机名：只提出处置、不自动执行 |
 | `CONTAINMENT_ENABLED` | 空（控制台决定，默认关） | 自主响应：内网横向喷洒、爆破得手、高级别情报命中等确定性信号命中后，按角色与处置等级直接遏制（隔离实验等级的来源、封锁来源、锁定被攻破的账号、结束恶意进程、隔离恶意文件），不等研判与人工。依赖 `RESPONSE_ENABLED`，见 [自主响应设计](autonomous-response-design.md)。平时在「自主响应」页由全局 admin 开关，各节点 5 秒内生效、记审计；设了这个变量（`true` / `false`）就是锁定值，控制台只读。关闭只停新处置，已生效的照常按租约到期复核或解除 |
 | `CONTAINMENT_SCOPE` | 空（控制台决定，默认 `lab`） | `lab` 只处置涉及实验等级主机的攻击（上线初期），`all` 不限；同样可在「自主响应」页改，设了即锁定 |
 | `CONTAINMENT_TTL_HOURS` | `24` | 处置租约长度，从最后一条证据算起；证据持续就续期。到期时配了模型先请 AI 复核（解除或续期，出错按续期、一小时后再问），没配模型直接解除；租约最长 7 天 |

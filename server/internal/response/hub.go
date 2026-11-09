@@ -166,12 +166,6 @@ func (h *Hub) issue(ctx context.Context, req Request) (*ent.Command, error) {
 	}
 
 	cmdID := req.CommandID
-	if req.automatic {
-		if req.Kind != "isolate_host" || req.IncidentID == nil || *req.IncidentID == uuid.Nil {
-			return nil, fmt.Errorf("自动响应必须绑定事件与隔离动作")
-		}
-		cmdID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("openxdr:auto-isolate|"+req.IncidentID.String()+"|"+a.ID.String()))
-	}
 	create := h.DB.Command.Create().
 		SetKind(req.Kind).
 		SetAssetID(a.ID).
@@ -241,8 +235,6 @@ func (h *Hub) enqueue(agentID uuid.UUID, expected chan *pb.Command, cmd *pb.Comm
 }
 
 type Request struct {
-	// 仅 Auto 可设置；不接受 HTTP/模型提供的幂等身份。
-	automatic bool
 	// CommandID 内部调用方（如 containment）预留的确定性指令 ID；非零时以该 ID 幂等建单，
 	// 若库里已有同 ID 且完整动作身份一致的指令则直接返回已有记录，绝不重复签名或重复投递。
 	CommandID   uuid.UUID `json:"-"`
@@ -282,9 +274,6 @@ func (r Request) toProto(id uuid.UUID) *pb.Command {
 func sameCommandIntent(prior *ent.Command, assetID uuid.UUID, req Request) bool {
 	if prior == nil || prior.Kind != req.Kind || prior.AssetID != assetID || prior.IssuedBy != req.IssuedBy {
 		return false
-	}
-	if req.automatic {
-		return prior.IncidentID != nil && req.IncidentID != nil && *prior.IncidentID == *req.IncidentID
 	}
 	if prior.Pid != req.PID || prior.TimeoutMs != req.TimeoutMS {
 		return false

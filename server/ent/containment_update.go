@@ -356,6 +356,26 @@ func (_u *ContainmentUpdate) ClearLiftedBy() *ContainmentUpdate {
 	return _u
 }
 
+// SetDecidedBy sets the "decided_by" field.
+func (_u *ContainmentUpdate) SetDecidedBy(v string) *ContainmentUpdate {
+	_u.mutation.SetDecidedBy(v)
+	return _u
+}
+
+// SetNillableDecidedBy sets the "decided_by" field if the given value is not nil.
+func (_u *ContainmentUpdate) SetNillableDecidedBy(v *string) *ContainmentUpdate {
+	if v != nil {
+		_u.SetDecidedBy(*v)
+	}
+	return _u
+}
+
+// ClearDecidedBy clears the value of the "decided_by" field.
+func (_u *ContainmentUpdate) ClearDecidedBy() *ContainmentUpdate {
+	_u.mutation.ClearDecidedBy()
+	return _u
+}
+
 // SetReviews sets the "reviews" field.
 func (_u *ContainmentUpdate) SetReviews(v int) *ContainmentUpdate {
 	_u.mutation.ResetReviews()
@@ -522,6 +542,12 @@ func (_u *ContainmentUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.LiftedByCleared() {
 		_spec.ClearField(containment.FieldLiftedBy, field.TypeString)
+	}
+	if value, ok := _u.mutation.DecidedBy(); ok {
+		_spec.SetField(containment.FieldDecidedBy, field.TypeString, value)
+	}
+	if _u.mutation.DecidedByCleared() {
+		_spec.ClearField(containment.FieldDecidedBy, field.TypeString)
 	}
 	if value, ok := _u.mutation.Reviews(); ok {
 		_spec.SetField(containment.FieldReviews, field.TypeInt, value)
@@ -876,6 +902,26 @@ func (_u *ContainmentUpdateOne) ClearLiftedBy() *ContainmentUpdateOne {
 	return _u
 }
 
+// SetDecidedBy sets the "decided_by" field.
+func (_u *ContainmentUpdateOne) SetDecidedBy(v string) *ContainmentUpdateOne {
+	_u.mutation.SetDecidedBy(v)
+	return _u
+}
+
+// SetNillableDecidedBy sets the "decided_by" field if the given value is not nil.
+func (_u *ContainmentUpdateOne) SetNillableDecidedBy(v *string) *ContainmentUpdateOne {
+	if v != nil {
+		_u.SetDecidedBy(*v)
+	}
+	return _u
+}
+
+// ClearDecidedBy clears the value of the "decided_by" field.
+func (_u *ContainmentUpdateOne) ClearDecidedBy() *ContainmentUpdateOne {
+	_u.mutation.ClearDecidedBy()
+	return _u
+}
+
 // SetReviews sets the "reviews" field.
 func (_u *ContainmentUpdateOne) SetReviews(v int) *ContainmentUpdateOne {
 	_u.mutation.ResetReviews()
@@ -1072,6 +1118,12 @@ func (_u *ContainmentUpdateOne) sqlSave(ctx context.Context) (_node *Containment
 	}
 	if _u.mutation.LiftedByCleared() {
 		_spec.ClearField(containment.FieldLiftedBy, field.TypeString)
+	}
+	if value, ok := _u.mutation.DecidedBy(); ok {
+		_spec.SetField(containment.FieldDecidedBy, field.TypeString, value)
+	}
+	if _u.mutation.DecidedByCleared() {
+		_spec.ClearField(containment.FieldDecidedBy, field.TypeString)
 	}
 	if value, ok := _u.mutation.Reviews(); ok {
 		_spec.SetField(containment.FieldReviews, field.TypeInt, value)

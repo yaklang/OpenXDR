@@ -497,6 +497,9 @@ type eventDoc struct {
 	Dst struct {
 		IP string `json:"ip"`
 	} `json:"dst_endpoint"`
+	Src struct {
+		IP string `json:"ip"`
+	} `json:"src_endpoint"`
 	Container struct {
 		UID     string `json:"uid"`
 		Name    string `json:"name"`

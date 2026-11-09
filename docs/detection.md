@@ -691,17 +691,20 @@ POST /api/commands → Hub.Issue 落 command 行并发往 agent 指令通道
 断线重连不自动重放任何旧指令，迟到回执仍可更新结果；指令流冒领防护 `verifyAgentID`；结果回写必须对上
 库里的 command_id（`hub.go:25-215`、`grpcsvc/commands.go:29-44`）。
 
-### 自动响应保险（`response/auto.go`）
+### 研判结论驱动的处置（`containment/verdict.go`）
 
-挂 `OnVerdict` 钩子，verdict=malicious 且 confidence ≥
-`AUTO_RESPONSE_MIN_CONFIDENCE`（默认 90）时触发：
+研判结论由自主响应引擎在它的单活循环里消费（不在研判钩子里直接下发），与快路径共用租约、熔断、
+处置等级与到期复核：
 
-1. `AUTO_RESPONSE_ENABLED=true` 才挂钩子，隔离真执行，仍受 `RESPONSE_ENABLED` 约束
-2. `AUTO_RESPONSE_EXEMPT` 主机名白名单绝不隔离，跳过也记审计
-3. 每次决策（含跳过）落审计
+1. 恶意且置信度 ≥ `AUTO_RESPONSE_MIN_CONFIDENCE`（默认 90）自动执行；`AUTO_RESPONSE_ENABLED=false` 时改为全部等批准
+2. 可疑或恶意且置信度 ≥ `RESPONSE_PROPOSE_MIN_CONFIDENCE`（默认 70）提出处置（状态 proposed），推送通知，
+   资产所在组的 admin 在「自主响应」页批准或驳回；`RESPONSE_PROPOSAL_TTL_HOURS`（默认 4）内不批即作废，绝不默认执行
+3. 处置对象只从告警触发事件里取，不由模型点名：容器里的隔离容器，否则结束触发进程；事件里的公网地址
+  （出站目的、入站与认证来源）在本机封锁，内网地址不封。都认不出时才隔离主机：实验等级自动，生产只提出，核心不隔离
+4. 依据的告警须 ≥ 3 级，排除平台指令、可信自动化来源、健康检查与诱饵观察；一条结论最多 10 个处置
+5. `AUTO_RESPONSE_EXEMPT` 里的主机达到自动门槛也只提出；自主响应总开关与范围（lab/all）照样约束自动执行
 
-同一 incident 同一资产只自动隔离一次（查 issued_by="auto" 的 isolate_host），
-重研判不重复隔离（`auto.go:28-104`）。
+2026-11-09 之前是 `response/auto.go`：显式开启后对事件涉及的所有主机隔离整机，生产上一直没开。
 
 ## 通知（`server/internal/notify`）
 
@@ -799,9 +802,11 @@ POST /api/commands → Hub.Issue 落 command 行并发往 agent 指令通道
 | `AI_RETRIAGE_COOLDOWN_MINUTES` | `30` | 已研判 incident 又并入普通新证据时，距上次研判至少隔多久才重研判；升级类不等 |
 | `RESPONSE_ENABLED` | `false` | 响应处置总开关 |
 | `ISOLATION_ALLOW` | 空（隔离将被 agent 拒绝） | 隔离放行地址，逗号分隔 |
-| `AUTO_RESPONSE_ENABLED` | `false` | 自动响应钩子，开启即真实隔离（依赖 RESPONSE_ENABLED） |
-| `AUTO_RESPONSE_MIN_CONFIDENCE` | `90` | 自动隔离置信度门槛 |
-| `AUTO_RESPONSE_EXEMPT` | 空 | 自动隔离主机白名单 |
+| `AUTO_RESPONSE_ENABLED` | `true` | 恶意且高置信度的研判结论自动处置；`false` 改为全部等批准（依赖 RESPONSE_ENABLED 与自主响应开关） |
+| `AUTO_RESPONSE_MIN_CONFIDENCE` | `90` | 自动处置的置信度门槛 |
+| `RESPONSE_PROPOSE_MIN_CONFIDENCE` | `70` | 提出处置等批准的置信度门槛 |
+| `RESPONSE_PROPOSAL_TTL_HOURS` | `4` | 待审批处置的有效期 |
+| `AUTO_RESPONSE_EXEMPT` | 空 | 逗号分隔的主机名：只提出、不自动处置 |
 | `WEBHOOK_URL` | 空（不启用） | 通知地址 |
 | `WEBHOOK_FORMAT` | `generic` | generic / dingtalk / feishu / wecom |
 | `WEBHOOK_INTERVAL_SECONDS` | `30` | 通知扫描周期 |

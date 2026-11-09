@@ -56,6 +56,8 @@ type Containment struct {
 	EndedAt *time.Time `json:"ended_at,omitempty"`
 	// LiftedBy holds the value of the "lifted_by" field.
 	LiftedBy *string `json:"lifted_by,omitempty"`
+	// DecidedBy holds the value of the "decided_by" field.
+	DecidedBy *string `json:"decided_by,omitempty"`
 	// Reviews holds the value of the "reviews" field.
 	Reviews      int `json:"reviews,omitempty"`
 	selectValues sql.SelectValues
@@ -70,7 +72,7 @@ func (*Containment) scanValues(columns []string) ([]any, error) {
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
 		case containment.FieldPid, containment.FieldReviews:
 			values[i] = new(sql.NullInt64)
-		case containment.FieldKind, containment.FieldTarget, containment.FieldKey, containment.FieldSignal, containment.FieldRole, containment.FieldState, containment.FieldReason, containment.FieldLiftedBy:
+		case containment.FieldKind, containment.FieldTarget, containment.FieldKey, containment.FieldSignal, containment.FieldRole, containment.FieldState, containment.FieldReason, containment.FieldLiftedBy, containment.FieldDecidedBy:
 			values[i] = new(sql.NullString)
 		case containment.FieldCreatedAt, containment.FieldExpiresAt, containment.FieldEndedAt:
 			values[i] = new(sql.NullTime)
@@ -219,6 +221,13 @@ func (_m *Containment) assignValues(columns []string, values []any) error {
 				_m.LiftedBy = new(string)
 				*_m.LiftedBy = value.String
 			}
+		case containment.FieldDecidedBy:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field decided_by", values[i])
+			} else if value.Valid {
+				_m.DecidedBy = new(string)
+				*_m.DecidedBy = value.String
+			}
 		case containment.FieldReviews:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
 				return fmt.Errorf("unexpected type %T for field reviews", values[i])
@@ -331,6 +340,11 @@ func (_m *Containment) String() string {
 	builder.WriteString(", ")
 	if v := _m.LiftedBy; v != nil {
 		builder.WriteString("lifted_by=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.DecidedBy; v != nil {
+		builder.WriteString("decided_by=")
 		builder.WriteString(*v)
 	}
 	builder.WriteString(", ")

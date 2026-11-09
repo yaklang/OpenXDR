@@ -223,6 +223,20 @@ func (_c *ContainmentCreate) SetNillableLiftedBy(v *string) *ContainmentCreate {
 	return _c
 }
 
+// SetDecidedBy sets the "decided_by" field.
+func (_c *ContainmentCreate) SetDecidedBy(v string) *ContainmentCreate {
+	_c.mutation.SetDecidedBy(v)
+	return _c
+}
+
+// SetNillableDecidedBy sets the "decided_by" field if the given value is not nil.
+func (_c *ContainmentCreate) SetNillableDecidedBy(v *string) *ContainmentCreate {
+	if v != nil {
+		_c.SetDecidedBy(*v)
+	}
+	return _c
+}
+
 // SetReviews sets the "reviews" field.
 func (_c *ContainmentCreate) SetReviews(v int) *ContainmentCreate {
 	_c.mutation.SetReviews(v)
@@ -459,6 +473,10 @@ func (_c *ContainmentCreate) createSpec() (*Containment, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.LiftedBy(); ok {
 		_spec.SetField(containment.FieldLiftedBy, field.TypeString, value)
 		_node.LiftedBy = &value
+	}
+	if value, ok := _c.mutation.DecidedBy(); ok {
+		_spec.SetField(containment.FieldDecidedBy, field.TypeString, value)
+		_node.DecidedBy = &value
 	}
 	if value, ok := _c.mutation.Reviews(); ok {
 		_spec.SetField(containment.FieldReviews, field.TypeInt, value)

@@ -36,8 +36,9 @@ func (Containment) Fields() []ent.Field {
 		field.Enum("role").Values("source", "victim", "host"),
 		// pending 指令已投递待回执确认 / active 生效中（封锁、隔离主机这类可逆处置的租约）/ expired 到期已解除 /
 		// executed 一次性处置已生效（结束进程、隔离文件、锁定账号：自动恢复比不恢复更危险，只能人工恢复）/
-		// lifted 人工解除或恢复 / held 熔断挡下 / skipped 不该自动处置 / failed 下发或执行失败
-		field.Enum("state").Values("pending", "active", "expired", "executed", "lifted", "held", "skipped", "failed"),
+		// lifted 人工解除或恢复 / held 熔断挡下 / skipped 不该自动处置 / failed 下发或执行失败 /
+		// proposed 研判提出、等组管理员批准（expires_at 是审批截止）/ declined 被驳回或审批超时
+		field.Enum("state").Values("pending", "active", "expired", "executed", "lifted", "held", "skipped", "failed", "proposed", "declined"),
 		field.Text("reason"),
 		field.UUID("command_id", uuid.UUID{}).Optional().Nillable(),
 		field.UUID("lift_command_id", uuid.UUID{}).Optional().Nillable(),
@@ -45,6 +46,8 @@ func (Containment) Fields() []ent.Field {
 		// 租约到期、人工解除的时间；人工解除的，这之前的证据不再触发同一处置
 		field.Time("ended_at").Optional().Nillable(),
 		field.String("lifted_by").Optional().Nillable(),
+		// 批准或驳回待审批处置的人
+		field.String("decided_by").Optional().Nillable(),
 		// 到期时 AI 复核后续期的次数（见 containment.review）
 		field.Int("reviews").Default(0),
 	}

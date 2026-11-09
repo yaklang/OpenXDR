@@ -59,6 +59,11 @@ type Engine struct {
 	Now func() time.Time
 	// 租约到期时复核用的模型；未配置时到期直接解除
 	LLM *triage.LLM
+	// 慢路径：研判结论驱动的处置门槛（见 verdict.go）；Notify 推送待审批处置，nil 不推
+	Verdicts VerdictPolicy
+	Notify   func(ctx context.Context, title, text, path string) error
+	// 已处理过的结论：事件 → 研判时刻，只在单活循环里读写
+	verdictSeen map[uuid.UUID]time.Time
 }
 
 // lookback 每轮回看多久内有新证据的告警。处置是幂等的，回看长一点只为单活切换期间不漏
@@ -105,6 +110,12 @@ func (e *Engine) Tick(ctx context.Context) error {
 		if err := e.react(ctx); err != nil {
 			return err
 		}
+		if err := e.reactVerdicts(ctx); err != nil {
+			return err
+		}
+	}
+	if err := e.expireProposals(ctx); err != nil {
+		return err
 	}
 	if err := e.expire(ctx); err != nil {
 		return err
@@ -467,6 +478,8 @@ type action struct {
 	skip string
 	// 进决策记录与审计的理由
 	why string
+	// 慢路径用：这个动作依据的告警
+	alert *ent.Alert
 }
 
 func (a action) key() string { return a.asset.ID.String() + "|" + a.kind + "|" + a.target }
@@ -573,29 +586,15 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a
 		return nil
 	}
 	cmdID := initialCommandID(al.ID, key)
-	req := response.Request{CommandID: cmdID, AssetID: a.asset.ID, Kind: a.kind, IncidentID: al.IncidentID, IssuedBy: "auto", AllowEndpoints: e.AllowEndpoints}
-	switch a.kind {
-	case "kill_process":
-		guid, err := uuid.Parse(a.target)
-		if err != nil || a.pid == 0 {
-			if err := create.SetState(entcontainment.StateSkipped).SetReason("事件没有可核对的进程 GUID 与 PID").Exec(ctx); err != nil && !ent.IsConstraintError(err) {
-				return err
-			}
-			return nil
-		}
-		if guid, err = e.execHead(ctx, a.asset.ID, guid, a.pid, al.Ts); err != nil {
+	req, skip, err := e.request(ctx, a, cmdID, al.IncidentID, al.Ts)
+	if err != nil {
+		return err
+	}
+	if skip != "" {
+		if err := create.SetState(entcontainment.StateSkipped).SetReason(skip).Exec(ctx); err != nil && !ent.IsConstraintError(err) {
 			return err
 		}
-		req.ProcessGUID, req.PID = &guid, a.pid
-	case "block_network", "quarantine_file", "disable_account", "isolate_container":
-		target, err := response.NormalizeTarget(a.kind, a.target, response.ProtectedAddrs(e.AllowEndpoints))
-		if err != nil {
-			if err := create.SetState(entcontainment.StateSkipped).SetReason("目标不能处置：" + err.Error()).Exec(ctx); err != nil && !ent.IsConstraintError(err) {
-				return err
-			}
-			return nil
-		}
-		req.Target = target
+		return nil
 	}
 	if held, err := e.fuse(ctx, a); err != nil || held != "" {
 		if err != nil {
@@ -625,6 +624,35 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a
 		return err
 	}
 
+	return e.dispatch(ctx, c, a, req, al.ID)
+}
+
+// request 组装下发请求。skip 非空表示这个动作做不了（缺可核对的进程身份、目标不能处置），照它记成跳过
+func (e *Engine) request(ctx context.Context, a action, cmdID uuid.UUID, incidentID *uuid.UUID, since time.Time) (response.Request, string, error) {
+	req := response.Request{CommandID: cmdID, AssetID: a.asset.ID, Kind: a.kind, IncidentID: incidentID, IssuedBy: "auto", AllowEndpoints: e.AllowEndpoints}
+	switch a.kind {
+	case "kill_process":
+		guid, err := uuid.Parse(a.target)
+		if err != nil || a.pid == 0 {
+			return req, "事件没有可核对的进程 GUID 与 PID", nil
+		}
+		if guid, err = e.execHead(ctx, a.asset.ID, guid, a.pid, since); err != nil {
+			return req, "", err
+		}
+		req.ProcessGUID, req.PID = &guid, a.pid
+	case "block_network", "quarantine_file", "disable_account", "isolate_container":
+		target, err := response.NormalizeTarget(a.kind, a.target, response.ProtectedAddrs(e.AllowEndpoints))
+		if err != nil {
+			return req, "目标不能处置：" + err.Error(), nil
+		}
+		req.Target = target
+	}
+	return req, "", nil
+}
+
+// dispatch 下发已落库为 pending 的处置并按回执推进状态。c 已绑定 req.CommandID
+func (e *Engine) dispatch(ctx context.Context, c *ent.Containment, a action, req response.Request, alertID uuid.UUID) error {
+	cmdID := req.CommandID
 	cmd, issueErr := e.Hub.Issue(ctx, req)
 	if (issueErr != nil && !errors.Is(issueErr, response.ErrDeliveryUnknown) && cmd == nil) ||
 		(cmd != nil && (cmd.Status == "failed" || cmd.Status == "unsupported")) {
@@ -638,7 +666,7 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a
 				clearCmd = true
 			}
 		}
-		audit.System(ctx, e.DB, "containment_failed", al.ID.String(), a.asset.Hostname+" "+a.kind+" "+a.target+"："+detail)
+		audit.System(ctx, e.DB, "containment_failed", alertID.String(), a.asset.Hostname+" "+a.kind+" "+a.target+"："+detail)
 		reason := a.why + "；下发失败：" + detail
 		if issueErr == nil && cmd != nil {
 			reason = appendReasonOnce(a.why, detail)

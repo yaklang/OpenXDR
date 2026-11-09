@@ -128,13 +128,13 @@ func main() {
 	hub := response.NewHub(client, os.Getenv("RESPONSE_ENABLED") == "true")
 	hub.Signer = commandSigner(hub.Enabled)
 	allowlist := isolationAllowlist()
-	triageEngine := startTriage(ctx, db, client, rules, llmFor, hub, allowlist)
-	containmentEngine, containmentConfig := startContainment(ctx, db, client, hub, allowlist, llmFor("containment"))
+	triageEngine := startTriage(ctx, db, client, rules, llmFor)
+	notifySettings, webhook := startNotify(ctx, db, client, rules, triageEngine.LLM.Enabled)
+	containmentEngine, containmentConfig := startContainment(ctx, db, client, hub, allowlist, llmFor("containment"), webhook.Send)
 	// 自身监控：平台节点的 agent 掉线；配了 SELFWATCH_PATRONI_URL（HA 部署）再盯 Patroni 动态配置
 	go cluster.RunLeader(ctx, db, "selfwatch", (&selfwatch.Watch{
 		DB: client, PatroniURL: os.Getenv("SELFWATCH_PATRONI_URL"), Interval: time.Minute,
 	}).Run)
-	notifySettings, webhook := startNotify(ctx, db, client, rules, triageEngine.LLM.Enabled)
 	silentAfter := time.Duration(getenvInt("AGENT_SILENT_MINUTES", 10)) * time.Minute
 	startLiveness(ctx, db, client, webhook, silentAfter)
 	startAutomation(ctx, db, client, webhook)
@@ -445,25 +445,15 @@ func startAssetMap(ctx context.Context, db *sql.DB, client *ent.Client, llmFor f
 	return assetEngine
 }
 
-// startTriage 研判引擎：AI 带只读调查工具逐个研判 incident
-func startTriage(ctx context.Context, db *sql.DB, client *ent.Client, rules sigma.Catalog, llmFor func(string) *triage.LLM, hub *response.Hub, allowlist []string) *triage.Engine {
-	triageEngine := &triage.Engine{
+// startTriage 研判引擎：AI 带只读调查工具逐个研判 incident。结论驱动的处置在自主响应引擎里（containment/verdict.go）
+func startTriage(ctx context.Context, db *sql.DB, client *ent.Client, rules sigma.Catalog, llmFor func(string) *triage.LLM) *triage.Engine {
+	return &triage.Engine{
 		DB:       client,
 		Rules:    rules,
 		LLM:      llmFor("triage"),
 		Interval: time.Duration(getenvInt("AI_INTERVAL_SECONDS", 30)) * time.Second,
 		Cooldown: time.Duration(getenvInt("AI_RETRIAGE_COOLDOWN_MINUTES", 30)) * time.Minute,
 	}
-	// 自动响应：显式开启才挂钩子，隔离真执行（仍受 RESPONSE_ENABLED 约束），白名单主机绝不自动隔离
-	if os.Getenv("AUTO_RESPONSE_ENABLED") == "true" {
-		triageEngine.OnVerdict = (&response.Auto{
-			Hub:            hub,
-			MinConfidence:  getenvInt("AUTO_RESPONSE_MIN_CONFIDENCE", 90),
-			Exempt:         hostSet(os.Getenv("AUTO_RESPONSE_EXEMPT")),
-			AllowEndpoints: allowlist,
-		}).React
-	}
-	return triageEngine
 }
 
 // startAuditChain 审计防篡改：有指令签名私钥才启用（链密钥由它派生，不在库里）。返回链密钥，没启用为 nil
@@ -498,7 +488,8 @@ func startCustomRules(ctx context.Context, client *ent.Client, base sigma.Catalo
 
 // startContainment 自主响应：确定性信号命中后按角色与处置等级直接遏制。开关与范围在控制台改，
 // CONTAINMENT_ENABLED / CONTAINMENT_SCOPE 设了就是锁定值；仍受 RESPONSE_ENABLED 约束
-func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *response.Hub, allowlist []string, llm *triage.LLM) (*containment.Engine, *containment.Store) {
+func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *response.Hub, allowlist []string, llm *triage.LLM,
+	notify func(ctx context.Context, title, text, path string) error) (*containment.Engine, *containment.Store) {
 	store := &containment.Store{DB: client, EnvOn: os.Getenv("CONTAINMENT_ENABLED"), EnvScope: os.Getenv("CONTAINMENT_SCOPE")}
 	if err := store.Validate(); err != nil {
 		slog.Error("自主响应配置错误", "err", err)
@@ -519,6 +510,15 @@ func startContainment(ctx context.Context, db *sql.DB, client *ent.Client, hub *
 		MaxPerHour: getenvInt("CONTAINMENT_MAX_PER_HOUR", 10),
 		Interval:   5 * time.Second,
 		LLM:        llm,
+		// 研判结论：恶意且高置信度默认自动处置（AUTO_RESPONSE_ENABLED=false 改为全部等批准），可疑的提出处置等批准
+		Verdicts: containment.VerdictPolicy{
+			Auto:              os.Getenv("AUTO_RESPONSE_ENABLED") != "false",
+			AutoConfidence:    getenvInt("AUTO_RESPONSE_MIN_CONFIDENCE", 90),
+			ProposeConfidence: getenvInt("RESPONSE_PROPOSE_MIN_CONFIDENCE", 70),
+			ProposalTTL:       time.Duration(getenvInt("RESPONSE_PROPOSAL_TTL_HOURS", 4)) * time.Hour,
+			Exempt:            hostSet(os.Getenv("AUTO_RESPONSE_EXEMPT")),
+		},
+		Notify: notify,
 	}
 	go cluster.RunLeader(ctx, db, "containment", engine.Run)
 	return engine, store

@@ -1799,7 +1799,7 @@ export interface TriageRun {
 export const fetchTriageRuns = (id: string, page: number) => get<{ items: TriageRun[]; more: boolean }>(`/api/incidents/${id}/triage-runs?page=${page}`)
 
 // 自主响应：处置决定（执行了的封锁、隔离是租约），见 docs/autonomous-response-design.md
-export type ContainmentState = 'pending' | 'active' | 'expired' | 'executed' | 'lifted' | 'held' | 'skipped' | 'failed'
+export type ContainmentState = 'pending' | 'active' | 'expired' | 'executed' | 'lifted' | 'held' | 'skipped' | 'failed' | 'proposed' | 'declined'
 export interface Containment {
   id: string
   createdAt: string
@@ -1823,6 +1823,7 @@ export interface Containment {
   expiresAt: string | null
   endedAt: string | null
   liftedBy: string | null
+  decidedBy: string | null
   liftable: boolean
 }
 export interface ContainmentStatus {
@@ -1845,6 +1846,8 @@ export const fetchContainmentStatus = () => get<ContainmentStatus>('/api/contain
 export const saveContainmentConfig = async (enabled: boolean, scope: 'lab' | 'all'): Promise<ContainmentStatus> =>
   (await send('PUT', '/api/containments/config', { enabled, scope })).json()
 export const liftContainment = (id: string, reason: string) => send('POST', `/api/containments/${id}/lift`, { reason })
+export const approveContainment = (id: string) => send('POST', `/api/containments/${id}/approve`)
+export const declineContainment = (id: string, reason: string) => send('POST', `/api/containments/${id}/decline`, { reason })
 
 export interface SyslogStatus {
   address: string

@@ -53,6 +53,8 @@ const (
 	FieldEndedAt = "ended_at"
 	// FieldLiftedBy holds the string denoting the lifted_by field in the database.
 	FieldLiftedBy = "lifted_by"
+	// FieldDecidedBy holds the string denoting the decided_by field in the database.
+	FieldDecidedBy = "decided_by"
 	// FieldReviews holds the string denoting the reviews field in the database.
 	FieldReviews = "reviews"
 	// Table holds the table name of the containment in the database.
@@ -81,6 +83,7 @@ var Columns = []string{
 	FieldExpiresAt,
 	FieldEndedAt,
 	FieldLiftedBy,
+	FieldDecidedBy,
 	FieldReviews,
 }
 
@@ -142,6 +145,8 @@ const (
 	StateHeld     State = "held"
 	StateSkipped  State = "skipped"
 	StateFailed   State = "failed"
+	StateProposed State = "proposed"
+	StateDeclined State = "declined"
 )
 
 func (s State) String() string {
@@ -151,7 +156,7 @@ func (s State) String() string {
 // StateValidator is a validator for the "state" field enum values. It is called by the builders before save.
 func StateValidator(s State) error {
 	switch s {
-	case StatePending, StateActive, StateExpired, StateExecuted, StateLifted, StateHeld, StateSkipped, StateFailed:
+	case StatePending, StateActive, StateExpired, StateExecuted, StateLifted, StateHeld, StateSkipped, StateFailed, StateProposed, StateDeclined:
 		return nil
 	default:
 		return fmt.Errorf("containment: invalid enum value for state field: %q", s)
@@ -259,6 +264,11 @@ func ByEndedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByLiftedBy orders the results by the lifted_by field.
 func ByLiftedBy(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldLiftedBy, opts...).ToFunc()
+}
+
+// ByDecidedBy orders the results by the decided_by field.
+func ByDecidedBy(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDecidedBy, opts...).ToFunc()
 }
 
 // ByReviews orders the results by the reviews field.

@@ -237,7 +237,7 @@ func init() {
 	// containment.DefaultPid holds the default value on creation for the pid field.
 	containment.DefaultPid = containmentDescPid.Default.(uint32)
 	// containmentDescReviews is the schema descriptor for reviews field.
-	containmentDescReviews := containmentFields[20].Descriptor()
+	containmentDescReviews := containmentFields[21].Descriptor()
 	// containment.DefaultReviews holds the default value on creation for the reviews field.
 	containment.DefaultReviews = containmentDescReviews.Default.(int)
 	// containmentDescID is the schema descriptor for id field.

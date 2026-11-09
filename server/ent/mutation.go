@@ -12975,6 +12975,7 @@ type ContainmentMutation struct {
 	expires_at      *time.Time
 	ended_at        *time.Time
 	lifted_by       *string
+	decided_by      *string
 	reviews         *int
 	addreviews      *int
 	clearedFields   map[string]struct{}
@@ -13908,6 +13909,55 @@ func (m *ContainmentMutation) ResetLiftedBy() {
 	delete(m.clearedFields, containment.FieldLiftedBy)
 }
 
+// SetDecidedBy sets the "decided_by" field.
+func (m *ContainmentMutation) SetDecidedBy(s string) {
+	m.decided_by = &s
+}
+
+// DecidedBy returns the value of the "decided_by" field in the mutation.
+func (m *ContainmentMutation) DecidedBy() (r string, exists bool) {
+	v := m.decided_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDecidedBy returns the old "decided_by" field's value of the Containment entity.
+// If the Containment object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ContainmentMutation) OldDecidedBy(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDecidedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDecidedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDecidedBy: %w", err)
+	}
+	return oldValue.DecidedBy, nil
+}
+
+// ClearDecidedBy clears the value of the "decided_by" field.
+func (m *ContainmentMutation) ClearDecidedBy() {
+	m.decided_by = nil
+	m.clearedFields[containment.FieldDecidedBy] = struct{}{}
+}
+
+// DecidedByCleared returns if the "decided_by" field was cleared in this mutation.
+func (m *ContainmentMutation) DecidedByCleared() bool {
+	_, ok := m.clearedFields[containment.FieldDecidedBy]
+	return ok
+}
+
+// ResetDecidedBy resets all changes to the "decided_by" field.
+func (m *ContainmentMutation) ResetDecidedBy() {
+	m.decided_by = nil
+	delete(m.clearedFields, containment.FieldDecidedBy)
+}
+
 // SetReviews sets the "reviews" field.
 func (m *ContainmentMutation) SetReviews(i int) {
 	m.reviews = &i
@@ -13998,7 +14048,7 @@ func (m *ContainmentMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ContainmentMutation) Fields() []string {
-	fields := make([]string, 0, 20)
+	fields := make([]string, 0, 21)
 	if m.created_at != nil {
 		fields = append(fields, containment.FieldCreatedAt)
 	}
@@ -14056,6 +14106,9 @@ func (m *ContainmentMutation) Fields() []string {
 	if m.lifted_by != nil {
 		fields = append(fields, containment.FieldLiftedBy)
 	}
+	if m.decided_by != nil {
+		fields = append(fields, containment.FieldDecidedBy)
+	}
 	if m.reviews != nil {
 		fields = append(fields, containment.FieldReviews)
 	}
@@ -14105,6 +14158,8 @@ func (m *ContainmentMutation) Field(name string) (ent.Value, bool) {
 		return m.EndedAt()
 	case containment.FieldLiftedBy:
 		return m.LiftedBy()
+	case containment.FieldDecidedBy:
+		return m.DecidedBy()
 	case containment.FieldReviews:
 		return m.Reviews()
 	}
@@ -14154,6 +14209,8 @@ func (m *ContainmentMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldEndedAt(ctx)
 	case containment.FieldLiftedBy:
 		return m.OldLiftedBy(ctx)
+	case containment.FieldDecidedBy:
+		return m.OldDecidedBy(ctx)
 	case containment.FieldReviews:
 		return m.OldReviews(ctx)
 	}
@@ -14298,6 +14355,13 @@ func (m *ContainmentMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetLiftedBy(v)
 		return nil
+	case containment.FieldDecidedBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDecidedBy(v)
+		return nil
 	case containment.FieldReviews:
 		v, ok := value.(int)
 		if !ok {
@@ -14389,6 +14453,9 @@ func (m *ContainmentMutation) ClearedFields() []string {
 	if m.FieldCleared(containment.FieldLiftedBy) {
 		fields = append(fields, containment.FieldLiftedBy)
 	}
+	if m.FieldCleared(containment.FieldDecidedBy) {
+		fields = append(fields, containment.FieldDecidedBy)
+	}
 	return fields
 }
 
@@ -14429,6 +14496,9 @@ func (m *ContainmentMutation) ClearField(name string) error {
 		return nil
 	case containment.FieldLiftedBy:
 		m.ClearLiftedBy()
+		return nil
+	case containment.FieldDecidedBy:
+		m.ClearDecidedBy()
 		return nil
 	}
 	return fmt.Errorf("unknown Containment nullable field %s", name)
@@ -14494,6 +14564,9 @@ func (m *ContainmentMutation) ResetField(name string) error {
 		return nil
 	case containment.FieldLiftedBy:
 		m.ResetLiftedBy()
+		return nil
+	case containment.FieldDecidedBy:
+		m.ResetDecidedBy()
 		return nil
 	case containment.FieldReviews:
 		m.ResetReviews()

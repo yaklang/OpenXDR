@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, App, Button, Card, Descriptions, Input, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, Typography } from 'antd'
 import { useState } from 'react'
 import { Link } from 'react-router'
-import { fetchContainments, fetchContainmentStatus, liftContainment, saveContainmentConfig, type Containment, type ContainmentState, type ContainmentStatus } from '../api'
+import { approveContainment, declineContainment, fetchContainments, fetchContainmentStatus, liftContainment, saveContainmentConfig, type Containment, type ContainmentState, type ContainmentStatus } from '../api'
 import { useSession } from '../app/session'
 import { EmptyHint } from '../components/Ago'
 import { HostLink } from '../components/HostLink'
@@ -22,6 +22,8 @@ const STATE: Record<ContainmentState, { key: MsgKey; color: string }> = {
   held: { key: 'cmtHeld', color: 'gold' },
   skipped: { key: 'cmtSkipped', color: 'default' },
   failed: { key: 'cmtFailed', color: 'warning' },
+  proposed: { key: 'cmtProposed', color: 'orange' },
+  declined: { key: 'cmtDeclined', color: 'default' },
 }
 
 const ROLE: Record<Containment['role'], MsgKey> = { source: 'cmtRoleSource', victim: 'cmtRoleVictim', host: 'cmtRoleHost' }
@@ -34,6 +36,7 @@ const POLICY: { signal: MsgKey; action: MsgKey }[] = [
   { signal: 'cmtSigIntelIP', action: 'cmtActIntelIP' },
   { signal: 'cmtSigIntelDomain', action: 'cmtActIntelDomain' },
   { signal: 'cmtSigIntelHash', action: 'cmtActIntelHash' },
+  { signal: 'cmtSigVerdict', action: 'cmtActVerdict' },
 ]
 
 // 自主响应：平台自己做了什么、什么还在生效、为什么动或没动；人在这里事后审计、一键撤回
@@ -60,6 +63,17 @@ export function ContainmentPage() {
       setWhy('')
       await Promise.all([client.invalidateQueries({ queryKey: ['containments'] }), client.invalidateQueries({ queryKey: ['containment-status'] })])
       message.success(t('cmtLiftDone'))
+    } catch (e) {
+      message.error(errText(e, t))
+    }
+  }
+
+  const decide = async (id: string, approve: boolean) => {
+    try {
+      await (approve ? approveContainment(id) : declineContainment(id, why.trim()))
+      setWhy('')
+      await Promise.all([client.invalidateQueries({ queryKey: ['containments'] }), client.invalidateQueries({ queryKey: ['containment-status'] })])
+      message.success(t(approve ? 'cmtApproveDone' : 'cmtDeclineDone'))
     } catch (e) {
       message.error(errText(e, t))
     }
@@ -131,7 +145,10 @@ export function ContainmentPage() {
                 render: (v: string, c) => <span>{commandKind(v, t)} <Typography.Text code style={{ fontSize: 12 }}>{v === 'kill_process' ? `pid ${c.pid}` : c.target}</Typography.Text></span>,
               },
               { title: t('cmtRole'), dataIndex: 'role', width: 100, render: (v: Containment['role'], c) => <Tooltip title={c.sourceHostname ? t('cmtSourceIs', { host: c.sourceHostname }) : undefined}>{t(ROLE[v])}</Tooltip> },
-              { title: t('thStatus'), dataIndex: 'state', width: 110, render: (v: ContainmentState) => <Tag color={STATE[v].color}>{t(STATE[v].key)}</Tag> },
+              {
+                title: t('thStatus'), dataIndex: 'state', width: 110,
+                render: (v: ContainmentState, c) => <Tooltip title={c.decidedBy ? t('cmtDecidedBy', { who: c.decidedBy }) : undefined}><Tag color={STATE[v].color}>{t(STATE[v].key)}</Tag></Tooltip>,
+              },
               { title: t('reason'), dataIndex: 'reason', render: v => <Clamp text={v} /> },
               {
                 title: t('cmtCommand'), dataIndex: 'commandStatus', width: 120,
@@ -147,9 +164,22 @@ export function ContainmentPage() {
               },
               ...(canWrite
                 ? [{
-                    title: t('actions'), width: 100,
+                    title: t('actions'), width: 120,
                     fixed: wideTable ? 'right' as const : undefined,
-                    render: (_: unknown, c: Containment) => c.liftable && (
+                    render: (_: unknown, c: Containment) => c.state === 'proposed' ? (
+                      <TableActions>
+                        <Popconfirm title={t('cmtApproveConfirm')} onConfirm={() => decide(c.id, true)}>
+                          <Button type="link" size="small">{t('cmtApprove')}</Button>
+                        </Popconfirm>
+                        <Popconfirm
+                          title={t('cmtDeclineConfirm')}
+                          description={<Input size="small" placeholder={t('cmtDeclineReason')} value={why} onChange={e => setWhy(e.target.value)} />}
+                          onConfirm={() => decide(c.id, false)}
+                        >
+                          <Button type="link" danger size="small">{t('cmtDecline')}</Button>
+                        </Popconfirm>
+                      </TableActions>
+                    ) : c.liftable && (
                       <TableActions>
                         <Popconfirm
                           title={t(c.state === 'active' ? 'cmtLiftConfirm' : 'cmtRestoreConfirm')}

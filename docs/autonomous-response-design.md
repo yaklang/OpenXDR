@@ -13,7 +13,7 @@
 
 | 项 | 现状 | 问题 |
 |---|---|---|
-| 开关 | 生产只开了 `RESPONSE_ENABLED`，`AUTO_RESPONSE_ENABLED` 没开 | 实际上没有自主响应 |
+| 开关 | 生产只开了 `RESPONSE_ENABLED`，`AUTO_RESPONSE_ENABLED` 没开（2026-11-09 起默认开，慢路径改为分级处置 + 审批，见 detection.md「研判结论驱动的处置」） | 实际上没有自主响应 |
 | 触发 | 只有 AI 研判结论 malicious 且置信度 ≥ 90（`response/auto.go`） | 分钟级；模型不可用时完全不响应 |
 | 动作 | 只有隔离整台主机 | agent 支持 9 种处置，自动响应只用了最重的一种 |
 | 目标 | incident 里所有涉事资产，**包括受害者** | 这次如果开着，会隔离 node1，自己把生产停掉 |

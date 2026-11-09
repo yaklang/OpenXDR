@@ -27,6 +27,8 @@ func Containments(db *ent.Client, hub *response.Hub, engine *containment.Engine,
 	mux.HandleFunc("GET /api/containments/status", containmentStatus(db, engine))
 	mux.HandleFunc("PUT /api/containments/config", saveContainmentConfig(db, engine, config))
 	mux.HandleFunc("POST /api/containments/{id}/lift", liftContainment(db, hub))
+	mux.HandleFunc("POST /api/containments/{id}/approve", decideContainment(db, engine, true))
+	mux.HandleFunc("POST /api/containments/{id}/decline", decideContainment(db, engine, false))
 	return mux
 }
 
@@ -52,6 +54,7 @@ type containmentRow struct {
 	ExpiresAt      *time.Time `json:"expiresAt"`
 	EndedAt        *time.Time `json:"endedAt"`
 	LiftedBy       *string    `json:"liftedBy"`
+	DecidedBy      *string    `json:"decidedBy"`
 	Liftable       bool       `json:"liftable"`
 }
 
@@ -145,7 +148,7 @@ func containmentRows(r *http.Request, db *ent.Client, s scope, rows []*ent.Conta
 		row := containmentRow{ID: c.ID, CreatedAt: c.CreatedAt, AssetID: c.AssetID, AssetHostname: names[c.AssetID],
 			Kind: c.Kind, Target: c.Target, PID: c.Pid, Signal: c.Signal, AlertID: c.AlertID, IncidentID: c.IncidentID,
 			Role: string(c.Role), State: string(c.State), Reason: c.Reason, CommandID: c.CommandID,
-			ExpiresAt: c.ExpiresAt, EndedAt: c.EndedAt, LiftedBy: c.LiftedBy, Liftable: containment.Liftable(c)}
+			ExpiresAt: c.ExpiresAt, EndedAt: c.EndedAt, LiftedBy: c.LiftedBy, DecidedBy: c.DecidedBy, Liftable: containment.Liftable(c)}
 		if c.SourceAssetID != nil && s.has(*c.SourceAssetID) {
 			row.SourceHostname = names[*c.SourceAssetID]
 		}
@@ -236,6 +239,54 @@ func liftContainment(db *ent.Client, hub *response.Hub) http.HandlerFunc {
 		audit.Log(r.Context(), db, r, "containment_lifted", c.ID.String(), c.Kind+" "+c.Target+" "+strings.TrimSpace(body.Reason))
 		s, _ := scopeOf(r.Context(), db, "viewer")
 		rows, err := containmentRows(r, db, s, []*ent.Containment{lifted})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, rows[0])
+	}
+}
+
+// decideContainment 批准或驳回研判提出的处置：只有资产所在组的 admin 可以，与命令审批同一口径
+func decideContainment(db *ent.Client, engine *containment.Engine, approve bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		c, ok := getByPath(w, r, "id", "containment", db.Containment.Get)
+		if !ok || !assetInScope(w, r, db, c.AssetID, "admin") {
+			return
+		}
+		var body struct {
+			Reason string `json:"reason"`
+		}
+		if r.ContentLength != 0 && json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body) != nil {
+			http.Error(w, "请求无效", http.StatusBadRequest)
+			return
+		}
+		if engine == nil {
+			http.Error(w, "未开启 RESPONSE_ENABLED，不能执行处置", http.StatusConflict)
+			return
+		}
+		actor := auth.From(r.Context()).Username
+		reason := strings.TrimSpace(body.Reason)
+		var decided *ent.Containment
+		var err error
+		action := "containment_approved"
+		if approve {
+			decided, err = engine.Approve(r.Context(), c, actor)
+		} else {
+			action = "containment_declined"
+			decided, err = engine.Decline(r.Context(), c, actor, reason)
+		}
+		if errors.Is(err, containment.ErrNotProposed) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		audit.Log(r.Context(), db, r, action, c.ID.String(), c.Kind+" "+c.Target+" "+reason)
+		s, _ := scopeOf(r.Context(), db, "viewer")
+		rows, err := containmentRows(r, db, s, []*ent.Containment{decided})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

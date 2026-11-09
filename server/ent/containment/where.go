@@ -140,6 +140,11 @@ func LiftedBy(v string) predicate.Containment {
 	return predicate.Containment(sql.FieldEQ(FieldLiftedBy, v))
 }
 
+// DecidedBy applies equality check predicate on the "decided_by" field. It's identical to DecidedByEQ.
+func DecidedBy(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldEQ(FieldDecidedBy, v))
+}
+
 // Reviews applies equality check predicate on the "reviews" field. It's identical to ReviewsEQ.
 func Reviews(v int) predicate.Containment {
 	return predicate.Containment(sql.FieldEQ(FieldReviews, v))
@@ -1103,6 +1108,81 @@ func LiftedByEqualFold(v string) predicate.Containment {
 // LiftedByContainsFold applies the ContainsFold predicate on the "lifted_by" field.
 func LiftedByContainsFold(v string) predicate.Containment {
 	return predicate.Containment(sql.FieldContainsFold(FieldLiftedBy, v))
+}
+
+// DecidedByEQ applies the EQ predicate on the "decided_by" field.
+func DecidedByEQ(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldEQ(FieldDecidedBy, v))
+}
+
+// DecidedByNEQ applies the NEQ predicate on the "decided_by" field.
+func DecidedByNEQ(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldNEQ(FieldDecidedBy, v))
+}
+
+// DecidedByIn applies the In predicate on the "decided_by" field.
+func DecidedByIn(vs ...string) predicate.Containment {
+	return predicate.Containment(sql.FieldIn(FieldDecidedBy, vs...))
+}
+
+// DecidedByNotIn applies the NotIn predicate on the "decided_by" field.
+func DecidedByNotIn(vs ...string) predicate.Containment {
+	return predicate.Containment(sql.FieldNotIn(FieldDecidedBy, vs...))
+}
+
+// DecidedByGT applies the GT predicate on the "decided_by" field.
+func DecidedByGT(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldGT(FieldDecidedBy, v))
+}
+
+// DecidedByGTE applies the GTE predicate on the "decided_by" field.
+func DecidedByGTE(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldGTE(FieldDecidedBy, v))
+}
+
+// DecidedByLT applies the LT predicate on the "decided_by" field.
+func DecidedByLT(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldLT(FieldDecidedBy, v))
+}
+
+// DecidedByLTE applies the LTE predicate on the "decided_by" field.
+func DecidedByLTE(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldLTE(FieldDecidedBy, v))
+}
+
+// DecidedByContains applies the Contains predicate on the "decided_by" field.
+func DecidedByContains(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldContains(FieldDecidedBy, v))
+}
+
+// DecidedByHasPrefix applies the HasPrefix predicate on the "decided_by" field.
+func DecidedByHasPrefix(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldHasPrefix(FieldDecidedBy, v))
+}
+
+// DecidedByHasSuffix applies the HasSuffix predicate on the "decided_by" field.
+func DecidedByHasSuffix(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldHasSuffix(FieldDecidedBy, v))
+}
+
+// DecidedByIsNil applies the IsNil predicate on the "decided_by" field.
+func DecidedByIsNil() predicate.Containment {
+	return predicate.Containment(sql.FieldIsNull(FieldDecidedBy))
+}
+
+// DecidedByNotNil applies the NotNil predicate on the "decided_by" field.
+func DecidedByNotNil() predicate.Containment {
+	return predicate.Containment(sql.FieldNotNull(FieldDecidedBy))
+}
+
+// DecidedByEqualFold applies the EqualFold predicate on the "decided_by" field.
+func DecidedByEqualFold(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldEqualFold(FieldDecidedBy, v))
+}
+
+// DecidedByContainsFold applies the ContainsFold predicate on the "decided_by" field.
+func DecidedByContainsFold(v string) predicate.Containment {
+	return predicate.Containment(sql.FieldContainsFold(FieldDecidedBy, v))
 }
 
 // ReviewsEQ applies the EQ predicate on the "reviews" field.
