@@ -63,6 +63,8 @@ func (Asset) Fields() []ent.Field {
 		field.JSON("listening", json.RawMessage{}).Optional(),
 		field.JSON("cloud", json.RawMessage{}).Optional(),
 		field.Time("inventory_at").Optional().Nillable(),
+		// 本机容器（docker、LXC 等有独立网络的）与它们的地址，agent 随清单上报；图谱据此把容器地址归到这台主机
+		field.JSON("containers", json.RawMessage{}).Optional(),
 		// 软件清单：agent 上报的发行版与已装包（OCSF 5020），由 assetmap 物化，漏洞匹配读它
 		field.JSON("software", json.RawMessage{}).Optional(),
 		field.Time("software_at").Optional().Nillable(),

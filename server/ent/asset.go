@@ -69,6 +69,8 @@ type Asset struct {
 	Cloud json.RawMessage `json:"cloud,omitempty"`
 	// InventoryAt holds the value of the "inventory_at" field.
 	InventoryAt *time.Time `json:"inventory_at,omitempty"`
+	// Containers holds the value of the "containers" field.
+	Containers json.RawMessage `json:"containers,omitempty"`
 	// Software holds the value of the "software" field.
 	Software json.RawMessage `json:"software,omitempty"`
 	// SoftwareAt holds the value of the "software_at" field.
@@ -154,7 +156,7 @@ func (*Asset) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case asset.FieldAgentID, asset.FieldGroupID, asset.FieldZoneID:
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
-		case asset.FieldIPAddrs, asset.FieldCollectorHealth, asset.FieldSensorHealth, asset.FieldConfig, asset.FieldListening, asset.FieldCloud, asset.FieldSoftware, asset.FieldServiceNotes, asset.FieldEgressNotes, asset.FieldRelationNotes, asset.FieldLockedFields:
+		case asset.FieldIPAddrs, asset.FieldCollectorHealth, asset.FieldSensorHealth, asset.FieldConfig, asset.FieldListening, asset.FieldCloud, asset.FieldContainers, asset.FieldSoftware, asset.FieldServiceNotes, asset.FieldEgressNotes, asset.FieldRelationNotes, asset.FieldLockedFields:
 			values[i] = new([]byte)
 		case asset.FieldHealthDropped, asset.FieldCriticality:
 			values[i] = new(sql.NullInt64)
@@ -362,6 +364,14 @@ func (_m *Asset) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.InventoryAt = new(time.Time)
 				*_m.InventoryAt = value.Time
+			}
+		case asset.FieldContainers:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field containers", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.Containers); err != nil {
+					return fmt.Errorf("unmarshal field containers: %w", err)
+				}
 			}
 		case asset.FieldSoftware:
 			if value, ok := values[i].(*[]byte); !ok {
@@ -637,6 +647,9 @@ func (_m *Asset) String() string {
 		builder.WriteString("inventory_at=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
+	builder.WriteString(", ")
+	builder.WriteString("containers=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Containers))
 	builder.WriteString(", ")
 	builder.WriteString("software=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Software))

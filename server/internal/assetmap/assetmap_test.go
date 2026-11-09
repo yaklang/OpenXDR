@@ -293,6 +293,27 @@ func TestContainerAddressesBelongToTheirHost(t *testing.T) {
 	}
 }
 
+// agent 直接报的容器地址：只被动接收连接的容器（server → 172.17.1.9）也归到宿主机
+func TestReportedContainersBelongToTheirHost(t *testing.T) {
+	g := testGroup(t)
+	web := g.Assets[0]
+	web.Containers = hostedContainers(json.RawMessage(`{"device":{"containers":[
+		{"runtime":"docker","uid":"4f1c2a3b5d6e","name":"jellyfin","addrs":["172.17.1.9","::1","bogus"]}]}}`))
+	if string(web.Containers) != `[{"runtime":"docker","uid":"4f1c2a3b5d6e","name":"jellyfin","addrs":["172.17.1.9"]}]` {
+		t.Fatalf("清单应校验后重编码：%s", web.Containers)
+	}
+	g.Links = append(g.Links, &ent.AssetLink{SrcIP: "10.0.0.1", SrcAssetID: &web.ID, DstIP: "172.17.1.9", DstPort: 8096, Proto: "tcp", Count: 1, LastSeen: time.Now()})
+	g.Hosted = hostedAddrs(g.World, g.Links)
+	for _, n := range g.Graph(time.Now()).Nodes {
+		if n.Label == "172.17.1.9" {
+			t.Fatal("agent 报过的容器地址不该画成待纳管设备")
+		}
+	}
+	if hostedContainers(json.RawMessage(`{"device":{}}`)) != nil {
+		t.Fatal("旧 agent 不报这个键时不能清空库里的清单")
+	}
+}
+
 func TestSurface(t *testing.T) {
 	s := testGroup(t).Surface()
 	if len(s.Exposures) != 3 {

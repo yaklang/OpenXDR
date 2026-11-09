@@ -177,3 +177,48 @@ func clean(s string, max int) string {
 	}
 	return s
 }
+
+// Hosted 本机容器与它的地址（agent 清单的 device.containers）
+type Hosted struct {
+	Runtime string   `json:"runtime"`
+	UID     string   `json:"uid"`
+	Name    string   `json:"name,omitempty"`
+	Addrs   []string `json:"addrs"`
+}
+
+// 一台主机最多收这么多个容器，与 agent 的上限一致
+const maxHosted = 256
+
+// hostedContainers 清单里的本机容器，校验后重新编码；事件没有这个键（旧 agent）返回 nil
+func hostedContainers(raw json.RawMessage) json.RawMessage {
+	var body struct {
+		Device struct {
+			Containers *[]Hosted `json:"containers"`
+		} `json:"device"`
+	}
+	if json.Unmarshal(raw, &body) != nil || body.Device.Containers == nil {
+		return nil
+	}
+	out := []Hosted{}
+	for _, h := range *body.Device.Containers {
+		if h.UID == "" || len(h.UID) > 64 || len(h.Runtime) > 16 || len(h.Name) > 128 {
+			continue
+		}
+		var addrs []string
+		for _, a := range h.Addrs {
+			if ip, err := netip.ParseAddr(a); err == nil && !ip.IsLoopback() && len(addrs) < 16 {
+				addrs = append(addrs, ip.String())
+			}
+		}
+		if len(addrs) == 0 {
+			continue
+		}
+		h.Addrs = addrs
+		out = append(out, h)
+		if len(out) == maxHosted {
+			break
+		}
+	}
+	b, _ := json.Marshal(out)
+	return b
+}

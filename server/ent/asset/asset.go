@@ -66,6 +66,8 @@ const (
 	FieldCloud = "cloud"
 	// FieldInventoryAt holds the string denoting the inventory_at field in the database.
 	FieldInventoryAt = "inventory_at"
+	// FieldContainers holds the string denoting the containers field in the database.
+	FieldContainers = "containers"
 	// FieldSoftware holds the string denoting the software field in the database.
 	FieldSoftware = "software"
 	// FieldSoftwareAt holds the string denoting the software_at field in the database.
@@ -157,6 +159,7 @@ var Columns = []string{
 	FieldListening,
 	FieldCloud,
 	FieldInventoryAt,
+	FieldContainers,
 	FieldSoftware,
 	FieldSoftwareAt,
 	FieldServiceNotes,

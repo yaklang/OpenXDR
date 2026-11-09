@@ -1406,6 +1406,16 @@ func InventoryAtNotNil() predicate.Asset {
 	return predicate.Asset(sql.FieldNotNull(FieldInventoryAt))
 }
 
+// ContainersIsNil applies the IsNil predicate on the "containers" field.
+func ContainersIsNil() predicate.Asset {
+	return predicate.Asset(sql.FieldIsNull(FieldContainers))
+}
+
+// ContainersNotNil applies the NotNil predicate on the "containers" field.
+func ContainersNotNil() predicate.Asset {
+	return predicate.Asset(sql.FieldNotNull(FieldContainers))
+}
+
 // SoftwareIsNil applies the IsNil predicate on the "software" field.
 func SoftwareIsNil() predicate.Asset {
 	return predicate.Asset(sql.FieldIsNull(FieldSoftware))

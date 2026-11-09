@@ -319,6 +319,12 @@ func (_c *AssetCreate) SetNillableInventoryAt(v *time.Time) *AssetCreate {
 	return _c
 }
 
+// SetContainers sets the "containers" field.
+func (_c *AssetCreate) SetContainers(v json.RawMessage) *AssetCreate {
+	_c.mutation.SetContainers(v)
+	return _c
+}
+
 // SetSoftware sets the "software" field.
 func (_c *AssetCreate) SetSoftware(v json.RawMessage) *AssetCreate {
 	_c.mutation.SetSoftware(v)
@@ -761,6 +767,10 @@ func (_c *AssetCreate) createSpec() (*Asset, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.InventoryAt(); ok {
 		_spec.SetField(asset.FieldInventoryAt, field.TypeTime, value)
 		_node.InventoryAt = &value
+	}
+	if value, ok := _c.mutation.Containers(); ok {
+		_spec.SetField(asset.FieldContainers, field.TypeJSON, value)
+		_node.Containers = value
 	}
 	if value, ok := _c.mutation.Software(); ok {
 		_spec.SetField(asset.FieldSoftware, field.TypeJSON, value)

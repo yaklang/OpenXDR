@@ -231,6 +231,7 @@ var (
 		{Name: "listening", Type: field.TypeJSON, Nullable: true},
 		{Name: "cloud", Type: field.TypeJSON, Nullable: true},
 		{Name: "inventory_at", Type: field.TypeTime, Nullable: true},
+		{Name: "containers", Type: field.TypeJSON, Nullable: true},
 		{Name: "software", Type: field.TypeJSON, Nullable: true},
 		{Name: "software_at", Type: field.TypeTime, Nullable: true},
 		{Name: "service_notes", Type: field.TypeJSON, Nullable: true},

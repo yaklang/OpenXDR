@@ -5203,6 +5203,8 @@ type AssetMutation struct {
 	cloud                  *json.RawMessage
 	appendcloud            json.RawMessage
 	inventory_at           *time.Time
+	containers             *json.RawMessage
+	appendcontainers       json.RawMessage
 	software               *json.RawMessage
 	appendsoftware         json.RawMessage
 	software_at            *time.Time
@@ -6646,6 +6648,71 @@ func (m *AssetMutation) ResetInventoryAt() {
 	delete(m.clearedFields, asset.FieldInventoryAt)
 }
 
+// SetContainers sets the "containers" field.
+func (m *AssetMutation) SetContainers(jm json.RawMessage) {
+	m.containers = &jm
+	m.appendcontainers = nil
+}
+
+// Containers returns the value of the "containers" field in the mutation.
+func (m *AssetMutation) Containers() (r json.RawMessage, exists bool) {
+	v := m.containers
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldContainers returns the old "containers" field's value of the Asset entity.
+// If the Asset object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AssetMutation) OldContainers(ctx context.Context) (v json.RawMessage, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldContainers is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldContainers requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldContainers: %w", err)
+	}
+	return oldValue.Containers, nil
+}
+
+// AppendContainers adds jm to the "containers" field.
+func (m *AssetMutation) AppendContainers(jm json.RawMessage) {
+	m.appendcontainers = append(m.appendcontainers, jm...)
+}
+
+// AppendedContainers returns the list of values that were appended to the "containers" field in this mutation.
+func (m *AssetMutation) AppendedContainers() (json.RawMessage, bool) {
+	if len(m.appendcontainers) == 0 {
+		return nil, false
+	}
+	return m.appendcontainers, true
+}
+
+// ClearContainers clears the value of the "containers" field.
+func (m *AssetMutation) ClearContainers() {
+	m.containers = nil
+	m.appendcontainers = nil
+	m.clearedFields[asset.FieldContainers] = struct{}{}
+}
+
+// ContainersCleared returns if the "containers" field was cleared in this mutation.
+func (m *AssetMutation) ContainersCleared() bool {
+	_, ok := m.clearedFields[asset.FieldContainers]
+	return ok
+}
+
+// ResetContainers resets all changes to the "containers" field.
+func (m *AssetMutation) ResetContainers() {
+	m.containers = nil
+	m.appendcontainers = nil
+	delete(m.clearedFields, asset.FieldContainers)
+}
+
 // SetSoftware sets the "software" field.
 func (m *AssetMutation) SetSoftware(jm json.RawMessage) {
 	m.software = &jm
@@ -7711,7 +7778,7 @@ func (m *AssetMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AssetMutation) Fields() []string {
-	fields := make([]string, 0, 41)
+	fields := make([]string, 0, 42)
 	if m.hostname != nil {
 		fields = append(fields, asset.FieldHostname)
 	}
@@ -7786,6 +7853,9 @@ func (m *AssetMutation) Fields() []string {
 	}
 	if m.inventory_at != nil {
 		fields = append(fields, asset.FieldInventoryAt)
+	}
+	if m.containers != nil {
+		fields = append(fields, asset.FieldContainers)
 	}
 	if m.software != nil {
 		fields = append(fields, asset.FieldSoftware)
@@ -7893,6 +7963,8 @@ func (m *AssetMutation) Field(name string) (ent.Value, bool) {
 		return m.Cloud()
 	case asset.FieldInventoryAt:
 		return m.InventoryAt()
+	case asset.FieldContainers:
+		return m.Containers()
 	case asset.FieldSoftware:
 		return m.Software()
 	case asset.FieldSoftwareAt:
@@ -7984,6 +8056,8 @@ func (m *AssetMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldCloud(ctx)
 	case asset.FieldInventoryAt:
 		return m.OldInventoryAt(ctx)
+	case asset.FieldContainers:
+		return m.OldContainers(ctx)
 	case asset.FieldSoftware:
 		return m.OldSoftware(ctx)
 	case asset.FieldSoftwareAt:
@@ -8199,6 +8273,13 @@ func (m *AssetMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetInventoryAt(v)
+		return nil
+	case asset.FieldContainers:
+		v, ok := value.(json.RawMessage)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetContainers(v)
 		return nil
 	case asset.FieldSoftware:
 		v, ok := value.(json.RawMessage)
@@ -8435,6 +8516,9 @@ func (m *AssetMutation) ClearedFields() []string {
 	if m.FieldCleared(asset.FieldInventoryAt) {
 		fields = append(fields, asset.FieldInventoryAt)
 	}
+	if m.FieldCleared(asset.FieldContainers) {
+		fields = append(fields, asset.FieldContainers)
+	}
 	if m.FieldCleared(asset.FieldSoftware) {
 		fields = append(fields, asset.FieldSoftware)
 	}
@@ -8562,6 +8646,9 @@ func (m *AssetMutation) ClearField(name string) error {
 		return nil
 	case asset.FieldInventoryAt:
 		m.ClearInventoryAt()
+		return nil
+	case asset.FieldContainers:
+		m.ClearContainers()
 		return nil
 	case asset.FieldSoftware:
 		m.ClearSoftware()
@@ -8693,6 +8780,9 @@ func (m *AssetMutation) ResetField(name string) error {
 		return nil
 	case asset.FieldInventoryAt:
 		m.ResetInventoryAt()
+		return nil
+	case asset.FieldContainers:
+		m.ResetContainers()
 		return nil
 	case asset.FieldSoftware:
 		m.ResetSoftware()

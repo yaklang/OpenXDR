@@ -255,6 +255,10 @@ RPM 当前只支持清单，不支持漏洞匹配；Debian / Ubuntu 的 dpkg 清
 region（排除 OpenStack 的 EC2 兼容接口），其余厂商各自校验实例 ID 前缀，拿不准就不报。
 系统显示名由 `osinfo.rs` 按进程识别一次：Linux 读 os-release 的 `PRETTY_NAME`（麒麟、
 统信等国产发行版同规范，解析是纯函数、CI 可测），Windows 读注册表；拿不到就不带该键。
+Linux 另带本机容器的地址（`device.containers`，`hosted.rs`）：按 cgroup 认出容器，每个容器取一个进程，
+在临时线程里切进它的网络命名空间读网卡地址；和宿主机共用网络的（`--network host`、QEMU）跳过，
+同一命名空间的多个容器（K8s Pod）只读一次，最多 256 个。server 据此把图谱里容器的地址归到这台主机，
+不当成待纳管的设备。
 产出 class 5001，见 [事件模型](events.md#5001-设备清单)。
 
 ## Windows 采集路径

@@ -91,6 +91,8 @@ fn run(agent_id: &str, sink: &EventSink, mut scan: impl FnMut() -> std::io::Resu
     let mut last: Option<(Fingerprint, Instant)> = None;
     #[cfg(target_os = "linux")]
     let mut last_accounts = None;
+    #[cfg(target_os = "linux")]
+    let mut last_hosted = None;
     while !sink.is_closed() {
         let listeners = match scan() {
             Ok(listeners) => {
@@ -139,16 +141,26 @@ fn run(agent_id: &str, sink: &EventSink, mut scan: impl FnMut() -> std::io::Resu
             let changed = due || value != last_accounts;
             (value, changed)
         };
+        // 本机容器的地址：容器起停、换网络时随清单重报
+        #[cfg(target_os = "linux")]
+        let (hosted, due) = {
+            let hosted = super::hosted::snapshot();
+            let changed = due || last_hosted.as_ref() != Some(&hosted);
+            (hosted, changed)
+        };
         if due {
             let event = inventory_event(agent_id, &listeners, cloud, os.as_deref(), package_of);
             #[cfg(target_os = "linux")]
             let event = with_local_accounts(event, accounts.as_deref());
+            #[cfg(target_os = "linux")]
+            let event = with_hosted(event, &hosted);
             if !sink.send(event) {
                 return;
             }
             #[cfg(target_os = "linux")]
             {
                 last_accounts = accounts;
+                last_hosted = Some(hosted);
             }
             last = Some((fp, Instant::now()));
         }
@@ -169,6 +181,15 @@ fn with_local_accounts(
             }
             None => json!({"version": 1, "source": "etc-passwd", "state": "unavailable"}),
         };
+        event.raw_json = raw.to_string();
+    }
+    event
+}
+
+#[cfg(target_os = "linux")]
+fn with_hosted(mut event: AgentEvent, hosted: &[super::hosted::Hosted]) -> AgentEvent {
+    if let Ok(mut raw) = serde_json::from_str::<Value>(&event.raw_json) {
+        raw["device"]["containers"] = super::hosted::to_json(hosted);
         event.raw_json = raw.to_string();
     }
     event

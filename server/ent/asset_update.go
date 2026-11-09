@@ -511,6 +511,24 @@ func (_u *AssetUpdate) ClearInventoryAt() *AssetUpdate {
 	return _u
 }
 
+// SetContainers sets the "containers" field.
+func (_u *AssetUpdate) SetContainers(v json.RawMessage) *AssetUpdate {
+	_u.mutation.SetContainers(v)
+	return _u
+}
+
+// AppendContainers appends value to the "containers" field.
+func (_u *AssetUpdate) AppendContainers(v json.RawMessage) *AssetUpdate {
+	_u.mutation.AppendContainers(v)
+	return _u
+}
+
+// ClearContainers clears the value of the "containers" field.
+func (_u *AssetUpdate) ClearContainers() *AssetUpdate {
+	_u.mutation.ClearContainers()
+	return _u
+}
+
 // SetSoftware sets the "software" field.
 func (_u *AssetUpdate) SetSoftware(v json.RawMessage) *AssetUpdate {
 	_u.mutation.SetSoftware(v)
@@ -1157,6 +1175,17 @@ func (_u *AssetUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.InventoryAtCleared() {
 		_spec.ClearField(asset.FieldInventoryAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.Containers(); ok {
+		_spec.SetField(asset.FieldContainers, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedContainers(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, asset.FieldContainers, value)
+		})
+	}
+	if _u.mutation.ContainersCleared() {
+		_spec.ClearField(asset.FieldContainers, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.Software(); ok {
 		_spec.SetField(asset.FieldSoftware, field.TypeJSON, value)
@@ -1909,6 +1938,24 @@ func (_u *AssetUpdateOne) ClearInventoryAt() *AssetUpdateOne {
 	return _u
 }
 
+// SetContainers sets the "containers" field.
+func (_u *AssetUpdateOne) SetContainers(v json.RawMessage) *AssetUpdateOne {
+	_u.mutation.SetContainers(v)
+	return _u
+}
+
+// AppendContainers appends value to the "containers" field.
+func (_u *AssetUpdateOne) AppendContainers(v json.RawMessage) *AssetUpdateOne {
+	_u.mutation.AppendContainers(v)
+	return _u
+}
+
+// ClearContainers clears the value of the "containers" field.
+func (_u *AssetUpdateOne) ClearContainers() *AssetUpdateOne {
+	_u.mutation.ClearContainers()
+	return _u
+}
+
 // SetSoftware sets the "software" field.
 func (_u *AssetUpdateOne) SetSoftware(v json.RawMessage) *AssetUpdateOne {
 	_u.mutation.SetSoftware(v)
@@ -2585,6 +2632,17 @@ func (_u *AssetUpdateOne) sqlSave(ctx context.Context) (_node *Asset, err error)
 	}
 	if _u.mutation.InventoryAtCleared() {
 		_spec.ClearField(asset.FieldInventoryAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.Containers(); ok {
+		_spec.SetField(asset.FieldContainers, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedContainers(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, asset.FieldContainers, value)
+		})
+	}
+	if _u.mutation.ContainersCleared() {
+		_spec.ClearField(asset.FieldContainers, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.Software(); ok {
 		_spec.SetField(asset.FieldSoftware, field.TypeJSON, value)

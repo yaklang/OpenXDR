@@ -3,6 +3,7 @@ package assetmap
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"net/netip"
 	"slices"
 	"strconv"
@@ -86,6 +87,27 @@ func load(ctx context.Context, db *ent.Client, keep func(*ent.Asset) bool, zones
 func hostedAddrs(w *World, links []*ent.AssetLink) map[netip.Addr]*ent.Asset {
 	out := map[netip.Addr]*ent.Asset{}
 	ambiguous := map[netip.Addr]bool{}
+	// agent 直接报的本机容器地址优先：只被动接收连接的容器也认得出
+	for _, a := range w.Assets {
+		var list []Hosted
+		if len(a.Containers) == 0 || json.Unmarshal(a.Containers, &list) != nil {
+			continue
+		}
+		for _, h := range list {
+			for _, s := range h.Addrs {
+				addr, err := netip.ParseAddr(s)
+				if err != nil || w.ByIP[addr] != nil || ambiguous[addr] {
+					continue
+				}
+				if prev, ok := out[addr]; ok && prev.ID != a.ID {
+					delete(out, addr)
+					ambiguous[addr] = true
+					continue
+				}
+				out[addr] = a
+			}
+		}
+	}
 	for _, l := range links {
 		if l.SrcAssetID == nil {
 			continue

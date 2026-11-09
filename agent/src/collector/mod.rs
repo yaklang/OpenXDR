@@ -34,6 +34,8 @@ mod software;
 #[cfg(target_os = "linux")]
 mod container;
 #[cfg(target_os = "linux")]
+mod hosted;
+#[cfg(target_os = "linux")]
 mod execfacts;
 #[cfg(all(target_os = "linux", any(feature = "ebpf", test)))]
 pub(crate) mod stdiosock;
