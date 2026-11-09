@@ -25,7 +25,7 @@ export default function Footer12() {
     locale === "zh-CN"
       ? {
           summary:
-            "开源的自治 XDR：它自己值守，你只需审阅。",
+            "开源的自治 XDR：它全天值守，你只需说清意图。",
           copyright: "© 2026 OpenXDR 贡献者",
           navGroups: [
             {
@@ -33,9 +33,10 @@ export default function Footer12() {
               links: [
                 { label: "接入", href: "#onboard" },
                 { label: "安全", href: "#secure" },
-                { label: "运维", href: "#operate" },
-                { label: "自治", href: "#respond" },
                 { label: "资产", href: "#surface" },
+                { label: "意图", href: "#intent" },
+                { label: "自治", href: "#respond" },
+                { label: "运维", href: "#operate" },
                 { label: "开始", href: "#start" },
               ],
             },
@@ -68,7 +69,7 @@ export default function Footer12() {
         }
       : {
           summary:
-            "Open-source autonomous XDR: it keeps the watch, you review.",
+            "Open-source autonomous XDR: it keeps the watch, you bring the intent.",
           copyright: "© 2026 OpenXDR contributors",
           navGroups: [
             {
@@ -76,9 +77,10 @@ export default function Footer12() {
               links: [
                 { label: "Onboard", href: "#onboard" },
                 { label: "Secure", href: "#secure" },
-                { label: "Operate", href: "#operate" },
-                { label: "Autonomy", href: "#respond" },
                 { label: "Assets", href: "#surface" },
+                { label: "Intent", href: "#intent" },
+                { label: "Autonomy", href: "#respond" },
+                { label: "Operate", href: "#operate" },
                 { label: "Start", href: "#start" },
               ],
             },

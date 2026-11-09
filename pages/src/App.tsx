@@ -5,7 +5,7 @@ import { Assistant } from "@/components/story/assistant";
 import { Closing } from "@/components/story/closing";
 import { Features } from "@/components/story/features";
 import { Funnel } from "@/components/story/funnel";
-import { Learn } from "@/components/story/learn";
+import { Intent } from "@/components/story/intent";
 import { Onboard } from "@/components/story/onboard";
 import { Respond } from "@/components/story/respond";
 import { Surface } from "@/components/story/surface";
@@ -27,10 +27,10 @@ export default function App() {
         <Hero24 />
         <Onboard />
         <Funnel />
-        <Assistant />
-        <Respond />
         <Surface />
-        <Learn />
+        <Intent />
+        <Respond />
+        <Assistant />
         <Features />
         <Closing />
       </main>

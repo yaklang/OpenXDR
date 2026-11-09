@@ -22,11 +22,11 @@ const COPY = {
         <span className="text-neutral-500">它已经收场。</span>
       </>
     ),
-    body: "确定的攻击，不必等人。\n它按谁是来源、谁是受害者下手，每一步都留下理由，随时可以撤回。",
+    body: "知道了你的意图，确定的攻击就不必等人。\n它按谁是来源、谁是受害者下手，每一步都留下理由，随时可以撤回。",
     times: ["03:12", "03:41", "+5 秒", "+5 秒", "次日", "醒来"],
     steps: [
       ["跳板落地", "靶场里一个容器被拿下，开始对内网逐台试 SSH 口令"],
-      ["喷洒成立", "第三台主机记下了来自同一地址的失败登录"],
+      ["越出靶场", "它试到了生产网段。你说过，靶场之外就是真攻击"],
       ["只断一个容器", "宿主机和它上面的其他容器照常运行"],
       ["受害方封锁来源", "三台主机封锁来源地址，没有一台被整机隔离"],
       ["AI 复核", "租约到期：来源已清理、再无新证据，解除封锁"],
@@ -52,11 +52,11 @@ const COPY = {
         <span className="text-neutral-500">it has already ended.</span>
       </>
     ),
-    body: "A certain attack doesn't wait for anyone.\nIt acts on who is the source and who is the victim, writes down why, and lets you undo any of it.",
+    body: "Once it knows your intent, a certain attack doesn't wait for anyone.\nIt acts on who is the source and who is the victim, writes down why, and lets you undo any of it.",
     times: ["03:12", "03:41", "+5s", "+5s", "next day", "morning"],
     steps: [
       ["A foothold", "a lab container is taken over and starts trying SSH passwords across the network"],
-      ["Spray confirmed", "a third host logs failed logins from the same address"],
+      ["Out of the lab", "it reaches the production range. You said anything beyond the lab is a real attack"],
       ["One container goes dark", "the host and its other containers keep running"],
       ["Victims block the source", "three hosts block the source address; none of them is isolated"],
       ["AI review", "the lease expires: source cleaned up, no new evidence — lifted"],
@@ -79,7 +79,7 @@ export function Respond() {
   const t = useCopy(COPY);
   const { ref, wide, step, progress } = useScrollSteps(t.steps.length);
 
-  const head = <ChapterHead index="04" kicker={t.kicker} title={t.title} body={t.body} tone="rose" />;
+  const head = <ChapterHead index="05" kicker={t.kicker} title={t.title} body={t.body} tone="rose" />;
 
   // 决策记录逐行出现：走到第几步就显示到第几行，后面留空行占位不剧透
   const demo = (

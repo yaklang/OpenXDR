@@ -21,7 +21,7 @@ const COPY = {
         <span className="text-neutral-500">报告已经写好。</span>
       </>
     ),
-    body: "预设任务每天巡检全组：复查待办，登记新问题，写成一份报告。\n只有需要你拍板的，才会来打扰你。",
+    body: "预设任务每天巡检全组：复查待办，登记新问题，写成一份报告。\n只有缺了你知道的事，它才会来问你。",
     demo: "示例",
     tasksTitle: "20 个预设任务，按组开关",
     tasks: ["每日主机巡检", "备份验证", "证书到期检查", "容量趋势预测", "补丁与重启", "账户与权限审计", "暴露面周检", "外联复核", "容器审计", "安全周报", "还有 10 个"],
@@ -50,7 +50,7 @@ const COPY = {
     copied: "已复制",
     github: "在 GitHub 查看",
     docs: "安装说明",
-    motto: ["它自己值守，", "你只需审阅。"],
+    motto: ["它全天值守，", "你只需说清意图。"],
     license: "Apache-2.0 开源",
   },
   en: {
@@ -62,7 +62,7 @@ const COPY = {
         <span className="text-neutral-500">the report is already written.</span>
       </>
     ),
-    body: "Preset tasks check every host in the group, every day: revisit open findings, log new ones, write it all up.\nOnly what needs your call comes to you.",
+    body: "Preset tasks check every host in the group, every day: revisit open findings, log new ones, write it all up.\nIt only comes to you for what only you know.",
     demo: "Sample",
     tasksTitle: "20 preset tasks, switchable per group",
     tasks: ["Daily host inspection", "Backup verification", "Certificate expiry", "Capacity forecast", "Patches and reboots", "Account and privilege audit", "Weekly exposure review", "Egress review", "Container audit", "Weekly security report", "and 10 more"],
@@ -91,7 +91,7 @@ const COPY = {
     copied: "Copied",
     github: "View on GitHub",
     docs: "Install guide",
-    motto: ["It keeps the watch.", "You review."],
+    motto: ["It keeps the watch.", "You bring the intent."],
     license: "Open source · Apache-2.0",
   },
 };

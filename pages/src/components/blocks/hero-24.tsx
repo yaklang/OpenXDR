@@ -39,25 +39,25 @@ export function Hero24() {
     locale === "zh-CN"
       ? {
           badge: "开源 · 自治 XDR",
-          headline: "它自己值守，",
-          headlineAccent: "你只需审阅。",
+          headline: "它从不缺时间，",
+          headlineAccent: "只缺你知道的事。",
           description:
-            "装上 agent，分好组，剩下的交给它。\n察觉、研判、处置，它自己走完。\n每一步都留下理由，随时可以推翻。",
+            "装上 agent，分好组，它就开始全天值守。\n它采集不到的，只有你的意图——说一次，它就一直记得。\n察觉、研判、处置，它自己走完。",
           github: "在 GitHub 查看",
           pipeline: "看看它怎么工作",
-          evidence: "一个平台，全都看见",
-          partners: ["端点", "流量", "日志", "AI", "审计"],
+          evidence: "它的数据源",
+          partners: ["端点", "流量", "日志", "情报", "你"],
         }
       : {
           badge: "Open-source · Autonomous XDR",
-          headline: "It keeps the watch.",
-          headlineAccent: "You review.",
+          headline: "It has all the time there is.",
+          headlineAccent: "What it lacks is what you know.",
           description:
-            "Install the agent. Pick a group. That's it.\nIt notices, judges and acts — all the way through.\nEvery step leaves its reasons. Overrule it any time.",
+            "Install the agent, pick a group, and it keeps watch around the clock.\nThe one thing it can't collect is your intent — say it once, and it remembers.\nIt notices, judges and acts, all the way through.",
           github: "View on GitHub",
           pipeline: "See how it works",
-          evidence: "One platform. Everything in view.",
-          partners: ["ENDPOINT", "NETWORK", "LOGS", "AI", "AUDIT"],
+          evidence: "Its data sources",
+          partners: ["ENDPOINT", "NETWORK", "LOGS", "INTEL", "YOU"],
         };
 
   useEffect(() => {
@@ -170,10 +170,12 @@ export function Hero24() {
               {copy.evidence}
             </p>
             <div className="mt-4 flex flex-wrap items-center gap-x-7 gap-y-3">
-              {copy.partners.map((name) => (
+              {copy.partners.map((name, i) => (
                 <span
                   key={name}
-                  className="text-sm font-semibold tracking-tight text-neutral-600 transition-colors duration-200 hover:text-neutral-300"
+                  className={`text-sm font-semibold tracking-tight transition-colors duration-200 ${
+                    i === copy.partners.length - 1 ? "text-emerald-300" : "text-neutral-600 hover:text-neutral-300"
+                  }`}
                 >
                   {name}
                 </span>

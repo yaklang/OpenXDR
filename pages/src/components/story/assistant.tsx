@@ -23,7 +23,7 @@ const COPY = {
         <span className="text-neutral-500">它就去做。</span>
       </>
     ),
-    body: "执行命令、查数据、记待办、写报告，都在组内主机上完成。\n到了危险的一步，审计员先把关；碰不得的事，它一律不做。",
+    body: "执行命令、查数据、记待办、写报告，都在组内主机上完成。\n到了危险的一步，审计员先把关；它来问你，是因为还缺你知道的那一块。",
     points: [
       "寻常命令，直接执行，不用每条都点批准",
       "高风险命令先送审计员：AI 发起的由 AI 审计员当场裁决，整夜也不会卡住；人发起的等组管理员",
@@ -60,7 +60,7 @@ const COPY = {
       { kind: "report", title: "巡检生产组", summary: "web-01 磁盘已清理，可疑账户 tmpadmin 已删除，没有遗留待办" },
     ],
     rejectTail: [
-      { kind: "ai", text: "好，不删。先保留账户，登记成待办，请确认它是不是合法的运维账号。" },
+      { kind: "ai", text: "好，不删，先登记成待办。它是谁的账号？告诉我一句，我记下来，下次巡检就不用再问。" },
       { kind: "track", done: false, text: "db-01 可疑 sudo 账户 tmpadmin 待确认" },
       { kind: "report", title: "巡检生产组", summary: "web-01 磁盘已清理；db-01 的 tmpadmin 待确认是否为合法账号" },
     ],
@@ -74,7 +74,7 @@ const COPY = {
         <span className="text-neutral-500">It gets it done.</span>
       </>
     ),
-    body: "Run commands, query data, track findings, write reports — all on the group's hosts.\nAt a risky step, an auditor rules first; the things it must never do, it never does.",
+    body: "Run commands, query data, track findings, write reports — all on the group's hosts.\nAt a risky step, an auditor rules first; when it asks you, it's because it's missing what only you know.",
     points: [
       "Routine commands just run. No approving every line",
       "High-risk commands go to an auditor: the AI auditor rules on the AI's own commands on the spot, so nothing stalls overnight; a person's commands wait for a group admin",
@@ -111,7 +111,7 @@ const COPY = {
       { kind: "report", title: "Inspect the prod group", summary: "web-01 disk trimmed, suspicious account tmpadmin removed, nothing left open" },
     ],
     rejectTail: [
-      { kind: "ai", text: "Understood, keeping it. Logged a finding so someone confirms whether it's a legitimate ops account." },
+      { kind: "ai", text: "Understood, keeping it — logged as a finding. Whose account is it? Tell me once and I'll remember; the next inspection won't have to ask." },
       { kind: "track", done: false, text: "Suspicious sudo account tmpadmin on db-01 to confirm" },
       { kind: "report", title: "Inspect the prod group", summary: "web-01 disk trimmed; tmpadmin on db-01 awaits confirmation that it's legitimate" },
     ],
@@ -152,7 +152,7 @@ export function Assistant() {
     <section id="operate" className="relative scroll-mt-20 px-4 py-28 sm:px-6 lg:px-8">
       <div className="mx-auto grid max-w-[1400px] gap-14 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-center">
         <div>
-          <ChapterHead index="03" kicker={t.kicker} title={t.title} body={t.body} tone="sky" />
+          <ChapterHead index="06" kicker={t.kicker} title={t.title} body={t.body} tone="sky" />
           <ul className="mt-10 space-y-4">
             {t.points.map((p) => (
               <li key={p} className="flex gap-3 text-sm leading-relaxed text-neutral-400">

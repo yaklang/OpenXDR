@@ -160,7 +160,7 @@ export function Surface() {
   const stats = [3, all.length, EDGES.length - 1, ZONES.length, 1];
   const statStep = [0, S.ports, S.edges, S.zones, S.blind];
 
-  const head = <ChapterHead index="05" kicker={t.kicker} title={t.title} body={t.body} tone="amber" />;
+  const head = <ChapterHead index="03" kicker={t.kicker} title={t.title} body={t.body} tone="amber" />;
 
   const demo = (
     <Console title={t.console} badge={<DemoBadge label={t.demo} />}>
