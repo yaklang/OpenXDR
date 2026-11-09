@@ -20,7 +20,8 @@ export function TriageHistory({ id }: { id: string }) {
       {query.isError && <LoadError error={query.error} onRetry={() => query.refetch()} />}
       <Table<TriageRun> size="small" rowKey="id" loading={query.isPending} dataSource={query.data?.items ?? []} pagination={false} scroll={{ x: 1000 }} columns={[
         { title: t('thTime'), width: 170, render: (_, row) => fmtTime(row.started_at) },
-        { title: t('thStatus'), width: 130, render: (_, row) => <Tag color={row.status === 'failed' ? 'error' : row.status === 'succeeded' ? 'success' : 'default'}>{row.status === 'running' && !row.heartbeat_valid ? t('triageRunUnknown') : t(statuses[row.status])}</Tag> },
+        // 推理没在超时内跑完不是研判失败：推理慢，稍后原样重试
+        { title: t('thStatus'), width: 130, render: (_, row) => <Tag color={row.status === 'failed' ? 'error' : row.status === 'succeeded' ? 'success' : 'default'}>{row.status === 'running' && !row.heartbeat_valid ? t('triageRunUnknown') : row.error_code === 'inference_timeout' ? t('triageRunSlow') : t(statuses[row.status])}</Tag> },
         { title: t('triageRunTrigger'), width: 120, render: (_, row) => t(row.trigger.startsWith('capability_upgrade_v') ? 'triageRunCapability' : triggers[row.trigger as keyof typeof triggers] ?? 'triageRunUnknown') },
         { title: t('triageRunWait'), width: 100, render: (_, row) => row.ready_at ? seconds(Math.max(0, Date.parse(row.started_at) - Date.parse(row.ready_at))) : '—' },
         { title: t('triageRunDuration'), width: 110, render: (_, row) => row.status === 'running' ? '—' : row.error_code === 'lease_replaced' ? t('triageRunUnknown') : seconds(row.duration_ms) },
@@ -28,7 +29,7 @@ export function TriageHistory({ id }: { id: string }) {
         { title: t('triageRunTools'), width: 150, render: (_, row) => `${row.tool_calls ?? 0} / ${seconds(row.tool_ms)} (${row.tool_errors ?? 0})` },
         { title: 'Token', width: 120, render: (_, row) => (row.input_tokens ?? 0) + (row.output_tokens ?? 0) },
       ]} expandable={{ expandedRowRender: row => <Space orientation="vertical" style={{ width: '100%' }}>
-        <Typography.Text>{t('triageRunError')}: {row.error_code || '—'}</Typography.Text>
+        <Typography.Text>{t('triageRunError')}: {row.error_code === 'inference_timeout' ? t('triageRunSlowDetail') : row.error_code || '—'}</Typography.Text>
         {(row.tool_details ?? []).map((tool, index) => <Typography.Text key={index}>
           {index + 1}. {tool.tool} · {seconds(tool.duration_ms)} · {t(tool.failed ? 'triageRunFailed' : 'triageRunSucceeded')}
           {tool.returned != null && ` · ${t('triageToolReturned')}: ${tool.returned}`}

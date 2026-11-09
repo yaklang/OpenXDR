@@ -147,7 +147,8 @@ func (e *Engine) failRun(row *ent.TriageRun, timing *runTiming, stage string, ca
 	if errors.As(cause, &transport) {
 		stage = transportFailure
 		if transport.Timeout > 0 {
-			stage = inferenceTimeout
+			// 推理没跑完，不是研判失败：记成中断，等稍后重试
+			stage, status = inferenceTimeout, triagerun.StatusInterrupted
 		}
 	}
 	if err := runUpdate(e.DB, row, timing, time.Now()).SetStatus(status).SetErrorCode(stage).Exec(ctx); err != nil && !ent.IsNotFound(err) {

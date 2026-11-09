@@ -63,6 +63,8 @@ func TestDecide(t *testing.T) {
 		{"升级等新结论", retriage(`{"verdict":"benign"}`, true, 0), 3, false, "wait"},
 		{"升级研判屡败照推", retriage(`{"verdict":"benign"}`, true, giveUpAfter), 3, true, ""},
 		{"首次研判屡败照推", func() *ent.Incident { i := incidentAt(fresh, "open", ""); i.TriageFailures = giveUpAfter; return i }(), 3, true, ""},
+		// 推理慢不计失败次数：等结论最多 maxTriageWait，到点照推
+		{"推理慢等满照推", incidentAt(fresh.Add(-maxTriageWait-time.Minute), "open", ""), 3, true, ""},
 	}
 	for _, c := range cases {
 		send, why := n.decide(c.inc, c.sev)

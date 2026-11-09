@@ -150,7 +150,16 @@ func (e *Engine) batch(ctx context.Context) error {
 			if errors.Is(err, context.Canceled) {
 				continue
 			}
-			// 一个失败（多半是大上下文超时）只退避它自己，后面的照常研判
+			// 推理没在超时内跑完不是研判失败：不计失败次数、不缩小上下文，稍后原样重试
+			var transport *LLMTransportError
+			if errors.As(err, &transport) && transport.Timeout > 0 {
+				slog.Info("incident 研判推理未在超时内完成，稍后原样重试", "id", inc.ID, "err", err)
+				if err := e.retryLater(ctx, inc, time.Now()); err != nil {
+					return err
+				}
+				continue
+			}
+			// 一个失败只退避它自己，后面的照常研判
 			slog.Error("incident 研判失败，退避后缩小上下文重试", "id", inc.ID, "failures", inc.TriageFailures+1, "err", err)
 			if err := e.backoff(ctx, inc, time.Now()); err != nil {
 				return err
@@ -231,6 +240,19 @@ func (e *Engine) queue(ctx context.Context, now time.Time) ([]*ent.Incident, err
 // lastLooked 按上次研判时刻（没研判过按创建时刻）排：刚看过的排后面，等得最久的先轮到
 func lastLooked(s *sql.Selector) {
 	s.OrderExpr(sql.Expr(fmt.Sprintf("COALESCE(%s, %s)", s.C(incident.FieldTriagedAt), s.C(incident.FieldCreatedAt))))
+}
+
+// retryLater 推理慢：下次研判推迟 backoffBase，失败次数不变，上下文也不缩小——结论质量优先，
+// 推理慢就等，自部署模型调大 AI_TIMEOUT_SECONDS
+func (e *Engine) retryLater(ctx context.Context, inc *ent.Incident, now time.Time) error {
+	if err := e.DB.Incident.UpdateOneID(inc.ID).SetTriageRetryAt(now.Add(backoffBase)).Exec(ctx); err != nil {
+		return err
+	}
+	current, err := e.DB.Incident.Get(ctx, inc.ID)
+	if err != nil {
+		return err
+	}
+	return incidentwork.Refresh(ctx, e.DB, current, now)
 }
 
 // backoff 记一次失败：下次研判推迟，上下文按失败次数缩小（见 buildContext）

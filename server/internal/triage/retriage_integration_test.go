@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"openxdr/server/ent"
+	"openxdr/server/ent/triagerun"
 	"openxdr/server/internal/review"
 	"openxdr/server/internal/testdb"
 )
@@ -245,6 +246,44 @@ func TestRetriageQueueFairness(t *testing.T) {
 }
 
 // 研判失败只退避失败的那一个，同批后面的照常研判；退避期内不取，到期后缩小上下文重试
+// 推理没在超时内跑完：不记失败次数、不缩小上下文，稍后原样重试；研判记录是中断而不是失败
+func TestSlowInferenceRetriesWithFullContext(t *testing.T) {
+	ctx, client := testdb.New(t)
+	f := &retriageFixture{t: t, ctx: ctx, client: client}
+	slow := true
+	stub := &stubLLM{hook: func() {
+		if slow {
+			time.Sleep(400 * time.Millisecond)
+		}
+	}}
+	llm := stub.llm(t)
+	llm.http.Timeout = 150 * time.Millisecond
+	e := &Engine{DB: client, LLM: llm, Cooldown: 30 * time.Minute}
+	now := time.Now()
+	inc := f.fresh("推理慢", now.Add(-time.Minute))
+	for range 40 {
+		f.alert(inc, "rule-noise", 3)
+	}
+	if err := e.batch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := f.get(inc)
+	if got.Status != "open" || got.TriageFailures != 0 || got.TriageRetryAt == nil {
+		t.Fatalf("推理慢不应记失败、应稍后重试：%+v", got)
+	}
+	run := client.TriageRun.Query().Where(triagerun.IncidentIDEQ(inc.ID)).OnlyX(ctx)
+	if run.Status != triagerun.StatusInterrupted || run.ErrorCode != inferenceTimeout {
+		t.Fatalf("研判记录应是中断、推理超时：%s %s", run.Status, run.ErrorCode)
+	}
+	c, err := e.buildContext(ctx, got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c, "告警明细（41 条，共 41 条") {
+		t.Errorf("推理慢不应缩小上下文：\n%s", c)
+	}
+}
+
 func TestRetriageFailureBackoff(t *testing.T) {
 	ctx, client := testdb.New(t)
 	f := &retriageFixture{t: t, ctx: ctx, client: client}

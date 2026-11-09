@@ -148,7 +148,7 @@ func (n *Notifier) decide(inc *ent.Incident, severity int16) (bool, string) {
 	// 研判连续失败到 giveUpAfter 次就不等了，AI 未启用也不等——照推，不拿旧结论静默掉升级。
 	// 普通新证据待重研判（冷却中）不在此列：旧结论仍可用，照它决定，不把通知卡在冷却上
 	if !usable(inc) {
-		if n.WaitTriage != nil && n.WaitTriage() && inc.TriageFailures < giveUpAfter {
+		if n.WaitTriage != nil && n.WaitTriage() && inc.TriageFailures < giveUpAfter && time.Since(waitingSince(inc)) < maxTriageWait {
 			return false, "wait"
 		}
 		return true, ""
@@ -176,6 +176,18 @@ func needsHumanEscalation(v verdict) bool {
 
 // giveUpAfter 研判连续失败这么多次后通知不再等结论
 const giveUpAfter = 3
+
+// maxTriageWait 等研判结论最多这么久。推理慢不计失败次数（见 triage.retryLater），没有这道上限，
+// 推理一直慢时通知会一直压着
+const maxTriageWait = 30 * time.Minute
+
+// waitingSince 从什么时候开始等结论：升级类证据从升级时刻算，其余从事件创建算
+func waitingSince(inc *ent.Incident) time.Time {
+	if inc.UrgentAt != nil && review.IsUrgent(inc) {
+		return *inc.UrgentAt
+	}
+	return inc.CreatedAt
+}
 
 // usable incident 当前的 AI 结论能否代表它的全部证据
 func usable(inc *ent.Incident) bool {
@@ -236,6 +248,8 @@ func (n *Notifier) message(ctx context.Context, inc *ent.Incident, linkBase stri
 		}
 	} else if inc.TriageFailures > 0 {
 		m.Summary = fmt.Sprintf("AI 研判连续失败 %d 次，未等结论先推送", inc.TriageFailures)
+	} else if time.Since(waitingSince(inc)) >= maxTriageWait {
+		m.Summary = fmt.Sprintf("AI 研判 %d 分钟内还没出结论（推理较慢），未等结论先推送", int(maxTriageWait.Minutes()))
 	}
 	if linkBase != "" {
 		m.Link = linkBase + "/?incident=" + m.IncidentID

@@ -267,6 +267,7 @@ export function IncidentDetailPage() {
                 {inc.triageStartedAt && <Descriptions.Item label={t('triageRunning')}>{t('triageStartedDetail', { at: fmtTime(inc.triageStartedAt) })}</Descriptions.Item>}
                 {inc.triagedAt && <Descriptions.Item label={t('lastTriaged')}>{fmtTime(inc.triagedAt)} · {t('triageRounds', { n: inc.triageCount })}</Descriptions.Item>}
                 {!inc.triageStartedAt && !!inc.triageFailures && <Descriptions.Item label={t('triageFailed')}>{t('triageFailedDetail', { n: inc.triageFailures, at: fmtTime(inc.triageRetryAt) })}</Descriptions.Item>}
+                {!inc.triageStartedAt && !inc.triageFailures && inc.triageRetryAt && <Descriptions.Item label={t('triageSlow')}>{t('triageSlowDetail', { at: fmtTime(inc.triageRetryAt) })}</Descriptions.Item>}
                 <Descriptions.Item label={t('group')}>{groups.find(g => g.id === inc.groupId)?.name ?? '-'}</Descriptions.Item>
                 {inc.resolvedAt && <Descriptions.Item label={t('resolution')}>{inc.resolution}</Descriptions.Item>}
                 {inc.resolvedAt && <Descriptions.Item label={t('resolvedBy')}>{inc.resolvedBy} · {fmtTime(inc.resolvedAt)}</Descriptions.Item>}

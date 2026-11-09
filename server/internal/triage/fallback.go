@@ -22,13 +22,13 @@ func cooldownKey(base, key, model string) [32]byte {
 	return sha256.Sum256([]byte(base + "\x00" + key + "\x00" + model))
 }
 
-// LLMTransportError 不携带地址、凭据或上游诊断正文。Timeout 非零表示连上了、但在客户端超时内没等到完整回答，
-// 多半是模型慢或推理服务排队，不是服务挂了
+// LLMTransportError 不携带地址、凭据或上游诊断正文。Timeout 非零表示连上了、但在客户端超时内没等到完整回答：
+// 推理慢（输出长、开着思考、服务排队），不是服务挂了，也不是模型给不出结论
 type LLMTransportError struct{ Timeout time.Duration }
 
 func (e *LLMTransportError) Error() string {
 	if e.Timeout > 0 {
-		return fmt.Sprintf("推理超时（超过 %d 秒没有返回完整回答，上下文大或推理服务繁忙时可调大 AI_TIMEOUT_SECONDS）", int(e.Timeout.Seconds()))
+		return fmt.Sprintf("推理未在 %d 秒内完成（推理慢，不是研判失败；稍后原样重试，自部署模型调大 AI_TIMEOUT_SECONDS 即可）", int(e.Timeout.Seconds()))
 	}
 	return "连接推理服务失败"
 }

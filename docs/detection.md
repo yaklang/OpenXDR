@@ -605,8 +605,11 @@ pve2 侦察 incident 首次研判等了 40 分钟；按新口径分别约 4 分�
 
 OpenAI 兼容 chat completions；默认 `http://localhost:11434/v1`（Ollama），
 temperature 0.1，超时 `AI_TIMEOUT_SECONDS` 默认 300s（2026-11-09 前是 120s，上下文变大、推理服务多人共用时常被客户端自己断开）。
-超时报「推理超时」、连不上报「连接推理服务失败」，研判记录的 error_code 分别是 `inference_timeout` / `inference_unreachable`；
-这两类失败不计入新能力重研判的 3 次上限
+推理没在超时内跑完是**推理慢，不是研判失败**：模型照样能给出结论，只是还没跑完（开着思考的主研判一次常要生成上万 token）。
+这种情况研判记录记为中断（error_code `inference_timeout`），不计失败次数、不缩小上下文、不占新能力重研判的 3 次上限，
+1 分钟后用同样的上下文重试；控制台显示「推理未完成 / 推理较慢」。自部署模型推理慢时调大 `AI_TIMEOUT_SECONDS` 就是标准做法，
+不要为了躲超时砍研判的思考、输出长度或上下文。连不上推理服务才是失败（`inference_unreachable`，按失败退避），
+同样不占重研判上限。通知等结论最多 30 分钟，推理一直慢也不会把告警压住
 （`llm.go:12-29,70-111`）。推理型模型的 `reasoning_content` 不影响解析，
 引擎只取 `content` 里的 JSON。结论必须包含有效的 verdict、0–100 的 confidence 和非空 summary；
 若 JSON 无效、字段不合规或 finish_reason 表示输出未完整结束，复用已有调查上下文，
@@ -797,7 +800,7 @@ POST /api/commands → Hub.Issue 落 command 行并发往 agent 指令通道
 | `AI_MODEL` | 空（不启用） | 研判模型名 |
 | `AI_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点 |
 | `AI_API_KEY` | 空 | Bearer key |
-| `AI_TIMEOUT_SECONDS` | `300` | LLM 单次请求超时（含读完回答） |
+| `AI_TIMEOUT_SECONDS` | `300` | LLM 单次请求超时（含读完回答）。自部署模型推理慢就调大（如 900），超时只是稍后重试、不算研判失败 |
 | `AI_INTERVAL_SECONDS` | `30` | 研判批次周期 |
 | `AI_RETRIAGE_COOLDOWN_MINUTES` | `30` | 已研判 incident 又并入普通新证据时，距上次研判至少隔多久才重研判；升级类不等 |
 | `RESPONSE_ENABLED` | `false` | 响应处置总开关 |
