@@ -932,7 +932,17 @@ pub(crate) fn stdio_socket_event(
         None => container_of(pid),
     };
     let ppid = container::ppid(pid);
-    let guid = known.as_ref().map(|k| k.guid);
+    // dup 紧跟在 exec 之后，两路事件分头处理，它的启动事件可能还没登记：先占位，启动事件沿用这个 GUID，
+    // 快路径结束进程时才核对得上身份
+    let guid = match &known {
+        Some(k) => k.guid,
+        None => {
+            let guid = registry.placeholder(pid);
+            registry.describe(pid, &name, exe.as_deref());
+            registry.set_cmd_line(pid, cmd_line.as_deref());
+            guid
+        }
+    };
     let parent_guid = ppid.and_then(|p| registry.guid_of(p));
     let endpoint =
         |a: std::net::SocketAddr| serde_json::json!({ "ip": a.ip().to_string(), "port": a.port() });
@@ -940,7 +950,7 @@ pub(crate) fn stdio_socket_event(
         "activity_id": ACTIVITY_OTHER,
         "process": {
             "pid": pid,
-            "uid": guid.map(|g| g.to_string()),
+            "uid": guid.to_string(),
             "name": name,
             "file": { "path": exe },
             "cmd_line": cmd_line,
@@ -979,7 +989,7 @@ pub(crate) fn stdio_socket_event(
             .unwrap_or_default()
             .as_nanos() as i64,
         class_uid: 1007,
-        process_guid: guid.map(|g| g.to_string()).unwrap_or_default(),
+        process_guid: guid.to_string(),
         parent_process_guid: parent_guid.map(|g| g.to_string()).unwrap_or_default(),
         username,
         conn_tuple: String::new(),
@@ -1077,6 +1087,32 @@ mod tests {
         assert_eq!(v["dst_endpoint"]["ip"], "203.0.113.9");
         assert_eq!(v["dst_endpoint"]["port"], 4444);
         assert_eq!(v["src_endpoint"]["port"], 50000);
+    }
+
+    /// dup 事件先于启动事件处理：先占位，随后的启动事件沿用同一个 GUID
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stdio_socket_before_launch_shares_guid() {
+        let mut reg = ProcessRegistry::default();
+        let sock = stdiosock::Socket {
+            inode: 7,
+            local: "10.0.2.15:50000".parse().unwrap(),
+            remote: "203.0.113.9:4444".parse().unwrap(),
+        };
+        let out = stdio_socket_event("agent-1", &mut reg, 4_000_002, 0, &sock);
+        assert!(!out[0].process_guid.is_empty());
+        let launch = process_event(
+            "agent-1",
+            &mut reg,
+            ACTIVITY_LAUNCH,
+            ProcessInfo {
+                pid: 4_000_002,
+                name: "bash",
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(launch.process_guid, out[0].process_guid);
     }
 
     #[test]
@@ -1476,7 +1512,7 @@ mod tests {
         let v: Value = serde_json::from_str(&exit.raw_json).unwrap();
         assert_eq!(v["process"]["exit_code"], 3);
         assert!(v["duration_ms"].is_u64() && v["process"]["created_time"].is_u64());
-        assert!(reg.known(400).is_none(), "退出后应删掉登记");
+        assert!(reg.is_exited(400), "退出后应排进删除队列");
     }
 
     /// 早于 agent 启动的进程由快照登记，退出时照样报出名字；
@@ -1827,7 +1863,7 @@ mod tests {
         backdate(&mut reg, 506, std::time::Duration::from_millis(10));
         assert!(reg.known(506).is_some());
         assert!(exit_pid(&mut reg, 506, Some(0)).is_empty());
-        assert!(reg.known(506).is_none(), "抑制后登记必须清掉");
+        assert!(reg.is_exited(506), "抑制后登记必须排进删除队列");
         // pid 紧接着被复用：新进程拿到的是自己的血缘，不指向上一条
         let reused = launch_pid(&mut reg, 506);
         assert_eq!(reused.len(), 1);

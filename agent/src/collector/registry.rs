@@ -1,7 +1,7 @@
 //! 进程 GUID 注册表：pid 会被系统复用，GUID 不会。
 //! 进程血缘全靠这张表——父进程的 GUID 从这里查，查不到说明父进程早于 agent 启动。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -52,7 +52,16 @@ pub struct ProcessRegistry {
     outbox: Vec<AgentEvent>,
     /// agent 自己拉起的自检进程（见 liveness）及其后代：pid → 登记时刻。只证明采集通道活着，不上报
     canaries: HashMap<u32, Instant>,
+    /// 已退出、登记还留着的进程：(pid, 登记序号, 退出时刻)，按退出先后排（见 forget）
+    exited: VecDeque<(u32, u64, Instant)>,
 }
+
+/// 退出后登记再留多久：exec 与退出事件分头排队，runc init 这类中间进程退得比它拉起的进程的 exec 事件
+/// 被处理还早，立刻删掉的话子进程就查不到父进程了
+const EXITED_TTL: Duration = Duration::from_secs(5);
+
+/// 退出后留着的登记最多这么多条：短命进程成批涌来时只丢最早退出的，不挤掉长驻进程
+const EXITED_MAX: usize = 8192;
 
 /// 占位 GUID 的有效期：各 ETW 会话之间的先后差不过一两秒，再久就当作另一个进程（pid 复用）
 const PLACEHOLDER_TTL: Duration = Duration::from_secs(10);
@@ -149,10 +158,10 @@ impl ProcessRegistry {
         (guid, parent)
     }
 
-    /// 给还没登记的进程占位，返回 GUID。Windows 的进程、网络与 DNS 走各自的 ETW 会话，
+    /// 给还没登记的进程占位，返回 GUID。Windows 的进程、网络与 DNS 走各自的 ETW 会话
+    /// （Linux 上 stdio dup 与 exec 也分两路处理），
     /// 短命进程（nslookup、curl）的连接或查询常比它的启动事件先到：占位后若启动事件在
     /// PLACEHOLDER_TTL 内到达，就沿用这个 GUID，而不是另发一个、把先到的事件挂空
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub fn placeholder(&mut self, pid: u32) -> Uuid {
         let (guid, _) = self.register(pid, None);
         if let Some(e) = self.guids.get_mut(&pid) {
@@ -222,10 +231,30 @@ impl ProcessRegistry {
         self.guids.get(&pid).and_then(|e| e.command.clone())
     }
 
-    /// 进程退出后删掉登记。不删的话表满时会按登记先后清理，最先被清掉的恰恰是
-    /// 早于 agent 启动的长驻服务，它们之后的网络连接就挂不回进程树了
+    /// 进程退出后删掉登记（留 EXITED_TTL 给晚到的子进程查父进程）。不删的话表满时会按登记先后清理，
+    /// 最先被清掉的恰恰是早于 agent 启动的长驻服务，它们之后的网络连接就挂不回进程树了
     pub fn forget(&mut self, pid: u32) {
-        self.guids.remove(&pid);
+        let now = Instant::now();
+        if let Some(e) = self.guids.get(&pid) {
+            self.exited.push_back((pid, e.seq, now));
+        }
+        while let Some(&(p, seq, at)) = self.exited.front() {
+            if now.duration_since(at) < EXITED_TTL && self.exited.len() <= EXITED_MAX {
+                break;
+            }
+            self.exited.pop_front();
+            // pid 已被新进程复用的不删
+            if self.guids.get(&p).is_some_and(|e| e.seq == seq) {
+                self.guids.remove(&p);
+            }
+        }
+    }
+
+    /// pid 的登记是否已随退出排进删除队列
+    #[cfg(test)]
+    pub fn is_exited(&self, pid: u32) -> bool {
+        let seq = self.guids.get(&pid).map(|e| e.seq);
+        self.exited.iter().any(|&(p, s, _)| p == pid && Some(s) == seq)
     }
 
     /// 压下一条被折叠的启动事件：它的退出也不再单独上报，除非之前被补发了
@@ -398,6 +427,25 @@ mod tests {
         }
         assert!(reg.known(1).is_some(), "长驻进程应一直在表里");
         assert!(reg.known(2).is_none());
+    }
+
+    /// 刚退出的进程登记还在：晚到的子进程 exec 事件查得到父进程；pid 复用后是新进程的登记
+    #[test]
+    fn exited_parent_stays_briefly() {
+        let mut reg = ProcessRegistry::default();
+        reg.register(10, None);
+        reg.describe(10, "runc", None);
+        reg.forget(10);
+        let (_, parent) = reg.register(11, Some(10));
+        assert!(parent.is_some(), "刚退出的父进程应还认得");
+        assert_eq!(reg.known(10).unwrap().name, "runc");
+        reg.register(10, None);
+        reg.describe(10, "reused", None);
+        for pid in 100..(100 + EXITED_MAX as u32 + 1) {
+            reg.register(pid, None);
+            reg.forget(pid);
+        }
+        assert_eq!(reg.known(10).unwrap().name, "reused", "复用后的新登记不能被旧的退出清掉");
     }
 
     /// 每次 register 分配独立 GUID。
