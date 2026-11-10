@@ -523,7 +523,7 @@ C2 心跳的样子是同一进程隔着差不多的时间反复连同一个公�
   | `query_event_raw(event_id)` | 合法事件 UUID；本事件资产组内最近 168 小时热表单条记录，原文最多 4096 字节（含省略标记）；不能取消上限、扩大范围或读取端点文件/冷归档 |
   | `query_event_context(event_id, keyword)` | 以本事件关联主机的留存事件为锚点，只查同主机前后 15 分钟（限制在最近 168 小时热表）；最多 15 条，每条原文仍为 300 字节，精查使用返回的事件 ID。模型不能指定主机或扩大时间窗 |
   | `collect_endpoint_evidence(asset_id, template)` | 只允许本事件关联、已纳管在线的 Linux 主机；固定认证 journal、当前进程快照、包管理日志和事件关联唯一容器 Web 日志模板，经 commandgate 只读校验、组权限、名单与必要的审计员评审；执行 5 秒、总预算 12 秒，输出合计 4096 字节；相同证据版本复用原指令，不重放未知结果 |
-  | `process_lineage(process_guid)` | GUID 必须合法 UUID；祖先上溯 10 层、子进程最多 10 条 |
+  | `process_lineage(process_guid)` | GUID 必须合法 UUID；祖先上溯 10 层、子进程最多 10 条；祖先每级原文去掉与上一级重复的 `process.parent_process` 后 4096 字节内完整给出，仍超限才按 300 字节摘录并标 `raw_truncated` |
   | `host_alerts(asset_id, days)` | UUID 校验；days 默认 7、>90 回落；最多 20 条，并附最近采集状态快照 |
   | `process_baseline(asset_id, exe_path)` | UUID 与完整路径校验；按资产匹配 UEBA 规范/旧版路径，返回已有基线首次记录；未命中为未知 |
 - 历史结案参考仅使用有结案人、结案时间和非空独立备注的记录；排除系统结案、采纳 AI 研判/建议以及来源不完整的旧记录。
@@ -557,7 +557,7 @@ C2 心跳的样子是同一进程隔着差不多的时间反复连同一个公�
   每步都是带 LIMIT 的查询；容器代表按 `(id, ts)` 逐条探事件主键（LATERAL），明细的事件也按 `(id, ts)` 取，只碰一个分区
 - 新研判必须提交非空 `action_codes`，从服务端建议目录选择；不接受模型自写 `actions`。
   服务端拒绝未知、重复、对象参数及结论不匹配的代码，再生成原有 `actions` 字符串数组供展示和存档。
-  结案审核只允许 benign，响应审核和关联排查只允许 malicious；建议代码不执行命令，也不替代响应权限、审批与审计。
+  结案审核只允许 benign，响应审核和关联排查只允许 malicious，核实来源（`verify_source`）只允许 suspicious / malicious——来源与授权仍待核实就不是良性；建议代码不执行命令，也不替代响应权限、审批与审计。
   无效建议仅允许一次格式修正，仍无效则退避，不落结论也不触发 OnVerdict。旧存档仍按原格式读取。
 - verdict 格式：`{verdict: malicious|suspicious|benign, confidence 0-100,
   summary, kill_chain[], actions[]}`；解析容错取首个 `{` 到末个 `}`，

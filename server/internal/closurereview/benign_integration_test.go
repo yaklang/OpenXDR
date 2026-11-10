@@ -168,3 +168,41 @@ func TestBenignAuditorFailClosed(t *testing.T) {
 		})
 	}
 }
+
+// 审计员拿到服务端逐级取的祖先完整记录：多级、只认同资产、缺失如实标出
+func TestBenignMaterialCarriesLineage(t *testing.T) {
+	f := setupBenign(t)
+	f.db.Alert.UpdateOneID(f.al.ID).SetRuleID(sigma.RuleNewProcess).SetSeverity(2).ExecX(f.ctx)
+	parent, grand := uuid.New(), uuid.New()
+	f.db.Event.UpdateOneID(f.ev.ID).SetParentProcessGUID(parent).ExecX(f.ctx)
+	daily := "/bin/sh /usr/lib/apt/apt.systemd.daily update"
+	raw, _ := json.Marshal(map[string]any{"activity_id": 1, "process": map[string]any{"cmd_line": daily, "pid": 41, "parent_process": map[string]any{"cmd_line": "/lib/systemd/systemd"}}})
+	ts := f.db.Event.GetX(f.ctx, f.ev.ID).Ts.Add(-time.Second)
+	f.db.Event.Create().SetTs(ts).SetAssetID(f.asset.ID).SetSource("agent").SetClassUID(1007).SetProcessGUID(parent).SetParentProcessGUID(grand).SetRaw(raw).ExecX(f.ctx)
+	other := f.db.Asset.Create().SetHostname("other").SetGroupID(f.group.ID).SaveX(f.ctx)
+	f.db.Event.Create().SetTs(ts).SetAssetID(other.ID).SetSource("agent").SetClassUID(1007).SetProcessGUID(grand).SetRaw(raw).ExecX(f.ctx)
+	var got material
+	judge := f.r.Judge
+	f.r.Judge = func(ctx context.Context, model, m string) (Decision, error) {
+		if err := json.Unmarshal([]byte(m), &got); err != nil {
+			t.Fatal(err)
+		}
+		return judge(ctx, model, m)
+	}
+	if ok, err := f.r.Review(f.ctx, f.inc.ID); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	l := got.Lineage
+	if l == nil || !l.Complete || len(l.Ancestors) != 2 {
+		t.Fatalf("%+v", l)
+	}
+	var rec struct {
+		Process map[string]any `json:"process"`
+	}
+	if json.Unmarshal(l.Ancestors[0].Record, &rec) != nil || rec.Process["cmd_line"] != daily || rec.Process["parent_process"] != nil || l.Ancestors[0].ProcessGUID != parent {
+		t.Fatalf("父进程应给完整记录且不重复上一级：%s", l.Ancestors[0].Record)
+	}
+	if l.Ancestors[1].ProcessGUID != grand || !l.Ancestors[1].Missing {
+		t.Fatalf("别的资产上的同 guid 记录不能顶替：%+v", l.Ancestors[1])
+	}
+}

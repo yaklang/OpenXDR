@@ -202,6 +202,8 @@ func TestToolProcessLineage(t *testing.T) {
 	grandparent := uuid.New()
 	parent := uuid.New()
 	child := uuid.New()
+	// 超过列表摘录上限的祖先命令行要完整给出
+	longCmd := "bash -c " + strings.Repeat("x", 2*eventExcerptBytes)
 
 	// 祖先链：child → parent → grandparent
 	if err := client.Event.Create().
@@ -213,7 +215,7 @@ func TestToolProcessLineage(t *testing.T) {
 	if _, err := client.Event.Create().
 		SetAssetID(host.ID).SetTs(time.Now()).SetClassUID(1007).SetSource("agent").
 		SetProcessGUID(parent).SetParentProcessGUID(grandparent).
-		SetRaw(json.RawMessage(`{"process":{"name":"bash"}}`)).Save(ctx); err != nil {
+		SetRaw(json.RawMessage(`{"process":{"name":"bash","cmd_line":"` + longCmd + `","parent_process":{"name":"init-dup"}}}`)).Save(ctx); err != nil {
 		t.Fatal(err)
 	}
 	// 两个子进程指向 parent
@@ -237,6 +239,10 @@ func TestToolProcessLineage(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("血缘链应含 %s，实际 %s", want, s)
 		}
+	}
+
+	if !strings.Contains(s, longCmd) || strings.Contains(s, "init-dup") {
+		t.Errorf("祖先应给去掉 parent_process 的完整原文，实际 %s", s)
 	}
 
 	// 非法 UUID → 错误

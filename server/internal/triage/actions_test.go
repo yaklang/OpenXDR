@@ -55,6 +55,13 @@ func TestActionVerdictScopes(t *testing.T) {
 			t.Fatal(v)
 		}
 	}
+	// 来源与授权仍待核实的结论不是良性，否则它既不能自动结案也不会被当作疑点跟进。
+	for _, verdict := range []string{"benign", "suspicious"} {
+		v := map[string]any{"verdict": verdict, "action_codes": []any{"verify_source", "monitor"}}
+		if err := bindActions(v); (err != nil) != (verdict == "benign") {
+			t.Fatal(verdict, err)
+		}
+	}
 	// 历史 JSON 仅解析和展示，不要求升级为新格式。
 	historical := `{"verdict":"benign","confidence":80,"summary":"旧结论","actions":["历史建议"]}`
 	if string(parseVerdict("history", historical)) != historical {

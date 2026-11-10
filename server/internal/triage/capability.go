@@ -19,8 +19,9 @@ import (
 // 只有调查能力变化才提升版本；仍缺证的成功结论不会反复占用队列。
 // v4：上下文补了涉事主机的运维待办、管理员执行决定、监听端口，以及登记晚于告警的可信自动化来源，
 // 卡在「来源与授权待核实」（verify_source）的旧结论也按新能力重看一次。
-const evidenceCapabilityVersion = 4
-const capabilityTrigger = "capability_upgrade_v4"
+// v5：进程血缘逐级给完整进程记录，不再只有 300 字节摘录；verify_source 不能再和 benign 同时出现。
+const evidenceCapabilityVersion = 5
+const capabilityTrigger = "capability_upgrade_v5"
 
 // capabilityActions 结论里出现这些建议，说明当时缺的正是新能力可能补上的证据
 var capabilityActions = []string{"collect_original_records", "verify_source"}

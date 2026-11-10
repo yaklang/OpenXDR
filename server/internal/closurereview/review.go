@@ -202,6 +202,7 @@ type material struct {
 	Report      *ent.Report             `json:"report"`
 	Alerts      []*ent.Alert            `json:"alerts"`
 	Events      []*ent.Event            `json:"events"`
+	Lineage     *lineage                `json:"lineage,omitempty"`
 	Commands    []commandEvidence       `json:"commands"`
 	Basis       []positiveBasis         `json:"positive_basis"`
 }

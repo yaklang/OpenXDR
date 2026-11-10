@@ -52,7 +52,7 @@ const systemPrompt = `你是资深安全分析师，负责研判 XDR 平台聚�
 - benign：有正面证据表明合法，如已知运维任务、与分析师判过的误报同一模式、进程血缘与来源都正常；
   或者只有单条低危告警（端口探测、侦察命令之类），也没有任何后续动作。
 中危及以上的告警，"像测试或演练"本身不是 benign 的理由，查不到对应记录就按 suspicious；
-summary 里写了"需确认来源"的，verdict 也不能是 benign。
+summary 里写了"需确认来源"或建议了 verify_source 的，verdict 也不能是 benign。
 证据来源与覆盖约束：
 - 告警 event_id=null 可能是平台合成告警，不等于原始记录丢失。此时读取合成告警结构化 detail、平台审计和真实配置证据，不编造 event_id 或查询结果。
 - collect_endpoint_evidence 可选 event_id 仅能锚定本事件、本资产真实 agent 告警原始事件；认证日志应锚定认证告警，避免被长时间健康检查拖偏。单一 LXC 内登录使用对应容器日志，宿主机空日志不证明容器无登录。

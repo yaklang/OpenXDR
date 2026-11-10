@@ -124,6 +124,26 @@ type eventBrief struct {
 	DNSOmitted        []string                   `json:"dns_omitted,omitempty"`
 }
 
+// processRecordBytes 血缘单级原文的上限，与 query_event_raw 精查一致；超过的多半是内联脚本，仍按摘录给出并标记裁剪。
+const processRecordBytes = 4096
+
+// ProcessRecord 血缘里单级进程的原文，去掉 process.parent_process：上一级由它自己的记录给出，
+// 这样每级都能在上限内完整给出命令行、用户、容器与登录会话。超限或不是进程记录返回 nil。
+func ProcessRecord(raw []byte) json.RawMessage {
+	var doc map[string]json.RawMessage
+	var proc map[string]json.RawMessage
+	if json.Unmarshal(raw, &doc) != nil || json.Unmarshal(doc["process"], &proc) != nil || proc == nil {
+		return nil
+	}
+	delete(proc, "parent_process")
+	doc["process"], _ = json.Marshal(proc)
+	b, _ := json.Marshal(doc)
+	if len(b) > processRecordBytes {
+		return nil
+	}
+	return b
+}
+
 func (e *Engine) toolQueryEvents(ctx context.Context, args string) (any, error) {
 	var in struct {
 		Keyword string `json:"keyword"`
@@ -212,7 +232,11 @@ func (e *Engine) toolProcessLineage(ctx context.Context, args string) (any, erro
 		if err := e.rememberInvestigationAssets(ctx, ev.Edges.Asset); err != nil {
 			return nil, err
 		}
-		ancestors = append(ancestors, brief(ev))
+		b := brief(ev)
+		if record := ProcessRecord(ev.Raw); record != nil {
+			b.Raw, b.RawTruncated = string(record), false
+		}
+		ancestors = append(ancestors, b)
 		if ev.ParentProcessGUID == nil {
 			break
 		}
@@ -241,7 +265,7 @@ func (e *Engine) toolProcessLineage(ctx context.Context, args string) (any, erro
 	for i, ev := range children {
 		childOut[i] = brief(ev)
 	}
-	return map[string]any{"self_and_ancestors": ancestors, "children": childOut, "status": "ok", "returned": len(ancestors) + len(childOut), "truncated": ancestorTruncated || childTruncated, "ancestors_truncated": ancestorTruncated, "children_truncated": childTruncated, "missing_ancestor": missingAncestor, "coverage": "仅限本事件资产组内已采集并保留的进程记录；血缘缺失不是正常或无父进程的证据"}, nil
+	return map[string]any{"self_and_ancestors": ancestors, "children": childOut, "status": "ok", "returned": len(ancestors) + len(childOut), "truncated": ancestorTruncated || childTruncated, "ancestors_truncated": ancestorTruncated, "children_truncated": childTruncated, "missing_ancestor": missingAncestor, "coverage": "仅限本事件资产组内已采集并保留的进程记录；血缘缺失不是正常或无父进程的证据。self_and_ancestors 每级的 raw 去掉了与上一级重复的 process.parent_process，4096 字节内完整给出，不按列表摘录裁剪；仍超限的才是摘录并标 raw_truncated"}, nil
 }
 
 func (e *Engine) toolHostAlerts(ctx context.Context, args string) (any, error) {
