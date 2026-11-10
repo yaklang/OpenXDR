@@ -58,6 +58,8 @@ type Config struct {
 	Start, End time.Duration // 距当天零点
 	Location   *time.Location
 	Exclude    map[string]bool
+	// 重启平台节点前交出数据库主节点；nil 时不交接（测试与单机部署）
+	Patroni *Patroni
 }
 
 // ParseWindow "02:00-05:00"
@@ -220,6 +222,11 @@ func (r *Runner) next(ctx context.Context, st *State) (*ent.Asset, error) {
 
 // maintain 装更新；需要重启就记下状态再下发定时重启
 func (r *Runner) maintain(ctx context.Context, st *State, a *ent.Asset) error {
+	if containment.RunsServer(a) {
+		if err := r.handoff(ctx, a); err != nil {
+			return r.halt(ctx, st, err.Error())
+		}
+	}
 	out, err := r.exec(ctx, a, upgradeScript, 30*time.Minute)
 	if err != nil {
 		return r.halt(ctx, st, a.Hostname+" 装更新失败："+err.Error())
@@ -311,10 +318,7 @@ func (r *Runner) exec(ctx context.Context, a *ent.Asset, cmd string, timeout tim
 	if err != nil {
 		return "", err
 	}
-	poll := r.Poll
-	if poll == 0 {
-		poll = 5 * time.Second
-	}
+	poll := r.pollInterval()
 	deadline := time.Now().Add(timeout + time.Minute)
 	for time.Now().Before(deadline) {
 		c, err = r.DB.Command.Get(ctx, c.ID)
@@ -341,6 +345,13 @@ func (r *Runner) exec(ctx context.Context, a *ent.Asset, cmd string, timeout tim
 		}
 	}
 	return "", errors.New("等回执超时")
+}
+
+func (r *Runner) pollInterval() time.Duration {
+	if r.Poll > 0 {
+		return r.Poll
+	}
+	return 5 * time.Second
 }
 
 // parse 固定脚本的输出：启动 ID、是否需要重启、更新失败信息

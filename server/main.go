@@ -709,8 +709,14 @@ func startMaintenance(ctx context.Context, db *sql.DB, client *ent.Client, hub *
 		slog.Error("夜间维护时区错误", "err", err)
 		os.Exit(1)
 	}
-	r := &maintenance.Runner{DB: client, SQL: db, Hub: hub, Notify: notify,
-		Config: maintenance.Config{Start: start, End: end, Location: loc, Exclude: hostSet(os.Getenv("MAINTENANCE_EXCLUDE"))}}
+	cfg := maintenance.Config{Start: start, End: end, Location: loc, Exclude: hostSet(os.Getenv("MAINTENANCE_EXCLUDE"))}
+	// 重启平台节点前交出数据库主节点：配了 Patroni 管理密码才做，否则主节点直接重启会让平台中断几分钟
+	if pw := os.Getenv("PATRONI_RESTAPI_PASSWORD"); pw != "" {
+		cfg.Patroni = &maintenance.Patroni{Port: 8008, User: getenv("MAINTENANCE_PATRONI_USER", "patroni-admin"), Password: pw}
+	} else {
+		slog.Warn("未配置 PATRONI_RESTAPI_PASSWORD，夜间维护重启平台节点前不会交出数据库主节点")
+	}
+	r := &maintenance.Runner{DB: client, SQL: db, Hub: hub, Notify: notify, Config: cfg}
 	go cluster.RunLeader(ctx, db, "maintenance", r.Run)
 }
 

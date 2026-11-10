@@ -59,6 +59,9 @@ After=network-online.target
 Type=exec
 %s%sExecStart=/usr/local/libexec/aidr-decoyhost %s
 Restart=no
+# 平台暂时连不上时 decoyhost 以 75 退出：一分钟后再拉起；被撤销等明确拒绝不重启
+RestartForceExitStatus=75
+RestartSec=60
 TimeoutStopSec=20
 NoNewPrivileges=yes
 ProtectSystem=strict

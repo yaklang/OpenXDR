@@ -99,6 +99,8 @@ services:
       MAINTENANCE_WINDOW: ${MAINTENANCE_WINDOW:-}
       MAINTENANCE_TZ: ${MAINTENANCE_TZ:-}
       MAINTENANCE_EXCLUDE: ${MAINTENANCE_EXCLUDE:-}
+      # 夜间维护重启平台节点前，经 Patroni 接口把数据库主节点计划内切到另一台
+      PATRONI_RESTAPI_PASSWORD: ${PATRONI_RESTAPI_PASSWORD:-}
       ISOLATION_ALLOW: ${ISOLATION_ALLOW:-10.1.1.199:8081}
       TLS_CA_FILE: /certs/ca.crt
       TLS_CERT_FILE: /certs/server.crt

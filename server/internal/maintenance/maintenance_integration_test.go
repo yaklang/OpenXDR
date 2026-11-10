@@ -6,8 +6,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +18,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"openxdr/server/ent"
+	"openxdr/server/ent/asset"
 	"openxdr/server/internal/testdb"
 )
 
@@ -142,5 +146,97 @@ func TestHaltsWhenAHostDoesNotComeBack(t *testing.T) {
 	st, _ := r.Status(ctx)
 	if st.Halted == "" || len(*notes) != 1 || !strings.Contains((*notes)[0], "app1") {
 		t.Fatalf("应停手并通知：%+v %v", st, *notes)
+	}
+}
+
+type fakePatroni struct {
+	mu        sync.Mutex
+	roles     map[string]string // 名字 → 角色
+	healthy   bool              // 从节点复制是否健康
+	switchTo  string
+	servers   map[string]*httptest.Server
+	authFails int
+}
+
+func (p *fakePatroni) server(t *testing.T, name string) *httptest.Server {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		switch r.URL.Path {
+		case "/patroni":
+			_ = json.NewEncoder(w).Encode(map[string]any{"role": p.roles[name], "patroni": map[string]string{"name": name}})
+		case "/replica":
+			if p.roles[name] == "replica" && p.healthy {
+				w.WriteHeader(200)
+			} else {
+				w.WriteHeader(503)
+			}
+		case "/switchover":
+			if u, pw, ok := r.BasicAuth(); !ok || u != "patroni-admin" || pw != "secret" {
+				p.authFails++
+				w.WriteHeader(401)
+				return
+			}
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			p.roles[body["leader"]], p.roles[body["candidate"]] = "replica", "primary"
+			p.switchTo = body["candidate"]
+			w.WriteHeader(200)
+		}
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+func platformOnly(t *testing.T, healthy bool) (context.Context, *Runner, *fakeFleet, *fakePatroni, *[]string) {
+	ctx, client, r, f, notes := setup(t)
+	for _, h := range []string{"app1", "app2", "pve1"} {
+		client.Asset.Update().Where(asset.HostnameEQ(h)).SetRetiredAt(f.now).ExecX(ctx)
+	}
+	p := &fakePatroni{roles: map[string]string{"openxdr-node1": "primary", "openxdr-node2": "replica"}, healthy: healthy, servers: map[string]*httptest.Server{}}
+	for _, n := range []string{"openxdr-node1", "openxdr-node2"} {
+		p.servers[n] = p.server(t, n)
+	}
+	r.Poll = 10 * time.Millisecond
+	r.Config.Patroni = &Patroni{User: "patroni-admin", Password: "secret", Addrs: func(a *ent.Asset) []string { return []string{p.servers[a.Hostname].URL} }}
+	return ctx, r, f, p, notes
+}
+
+// 平台节点是数据库主节点：先计划内切换到健康的从节点，变成从节点后才装更新、重启
+func TestPlatformNodeHandsOffPrimaryFirst(t *testing.T) {
+	ctx, r, f, p, notes := platformOnly(t, true)
+	for i := 0; i < 4; i++ {
+		f.heartbeat(ctx)
+		if err := r.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+		f.now = f.now.Add(2 * time.Minute)
+	}
+	if p.switchTo != "openxdr-node2" || p.roles["openxdr-node1"] != "replica" || p.authFails != 0 {
+		t.Fatalf("应先把主节点切到 node2：%+v", p.roles)
+	}
+	if got := strings.Join(f.calls, ","); got != "upgrade openxdr-node1,reboot openxdr-node1" {
+		t.Fatalf("切换后才维护：%s", got)
+	}
+	if len(*notes) != 0 {
+		t.Fatalf("不该通知：%v", *notes)
+	}
+}
+
+// 另一台复制不健康：不切换、不装更新、不重启，当晚停手并通知
+func TestPlatformNodeStaysWhenNoHealthyReplica(t *testing.T) {
+	ctx, r, f, p, notes := platformOnly(t, false)
+	for i := 0; i < 4; i++ {
+		f.heartbeat(ctx)
+		if err := r.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+		f.now = f.now.Add(2 * time.Minute)
+	}
+	if p.switchTo != "" || len(f.calls) != 0 {
+		t.Fatalf("不该切换也不该动主机：%v %v", p.switchTo, f.calls)
+	}
+	if len(*notes) != 1 || !strings.Contains((*notes)[0], "不是健康的从节点") {
+		t.Fatalf("应停手并通知：%v", *notes)
 	}
 }
