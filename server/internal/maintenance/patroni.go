@@ -55,8 +55,10 @@ func (p *Patroni) addrs(a *ent.Asset) []string {
 	return out
 }
 
-// member 节点上 Patroni 的名字与角色
+// member 节点上 Patroni 的名字与角色。登记的地址里可能有高可用虚拟地址（指向当时持有它的那台），
+// 所以成员名与主机名一致的才采信；都对不上时，只有所有应答都来自同一个成员才用它，说不清就报错
 func (p *Patroni) member(ctx context.Context, a *ent.Asset) (*member, error) {
+	var answers []*member
 	for _, addr := range p.addrs(a) {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, addr+"/patroni", nil)
 		resp, err := p.client().Do(req)
@@ -71,11 +73,24 @@ func (p *Patroni) member(ctx context.Context, a *ent.Asset) (*member, error) {
 		}
 		err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body)
 		resp.Body.Close()
-		if err == nil && body.Patroni.Name != "" {
-			return &member{addr: addr, name: body.Patroni.Name, role: body.Role}, nil
+		if err != nil || body.Patroni.Name == "" {
+			continue
+		}
+		m := &member{addr: addr, name: body.Patroni.Name, role: body.Role}
+		if m.name == a.Hostname {
+			return m, nil
+		}
+		answers = append(answers, m)
+	}
+	if len(answers) == 0 {
+		return nil, fmt.Errorf("读不到 %s 的 Patroni 状态", a.Hostname)
+	}
+	for _, m := range answers[1:] {
+		if m.name != answers[0].name {
+			return nil, fmt.Errorf("%s 的地址上应答的 Patroni 成员不一致，说不清哪个是它", a.Hostname)
 		}
 	}
-	return nil, fmt.Errorf("读不到 %s 的 Patroni 状态", a.Hostname)
+	return answers[0], nil
 }
 
 func primary(role string) bool { return role == "primary" || role == "master" }

@@ -198,7 +198,13 @@ func platformOnly(t *testing.T, healthy bool) (context.Context, *Runner, *fakeFl
 		p.servers[n] = p.server(t, n)
 	}
 	r.Poll = 10 * time.Millisecond
-	r.Config.Patroni = &Patroni{User: "patroni-admin", Password: "secret", Addrs: func(a *ent.Asset) []string { return []string{p.servers[a.Hostname].URL} }}
+	// node1 的地址里先列一个指向 node2 的「虚拟地址」：成员名对不上主机名的应答不能采信
+	r.Config.Patroni = &Patroni{User: "patroni-admin", Password: "secret", Addrs: func(a *ent.Asset) []string {
+		if a.Hostname == "openxdr-node1" {
+			return []string{p.servers["openxdr-node2"].URL, p.servers["openxdr-node1"].URL}
+		}
+		return []string{p.servers[a.Hostname].URL}
+	}}
 	return ctx, r, f, p, notes
 }
 
