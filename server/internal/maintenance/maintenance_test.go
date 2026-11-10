@@ -1,6 +1,7 @@
 package maintenance
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -27,11 +28,14 @@ func TestWindowAndParse(t *testing.T) {
 	if c.remaining(time.Date(2026, 11, 9, 18, 30, 0, 0, time.UTC)) != 150*time.Minute {
 		t.Fatal("按维护时区算")
 	}
-	boot, reboot, failed := parse("Installing...\nBOOT_ID abc-1\nREBOOT_REQUIRED\n")
-	if boot != "abc-1" || !reboot || failed != "" {
-		t.Fatal(boot, reboot, failed)
+	boot, reboot, failed, cs := parse("Installing...\nBOOT_ID abc-1\nREBOOT_REQUIRED\nCONTAINERS nats server \n")
+	if boot != "abc-1" || !reboot || failed != "" || strings.Join(cs, ",") != "nats,server" {
+		t.Fatal(boot, reboot, failed, cs)
 	}
-	if _, _, failed := parse("UPGRADE_FAILED 1\nBOOT_ID x\n"); failed == "" {
+	if got := absent([]string{"nats", "server", "web"}, []string{"server", "web"}); strings.Join(got, ",") != "nats" {
+		t.Fatal(got)
+	}
+	if _, _, failed, _ := parse("UPGRADE_FAILED 1\nBOOT_ID x\n"); failed == "" {
 		t.Fatal("要报出更新失败")
 	}
 }

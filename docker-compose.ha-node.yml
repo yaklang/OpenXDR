@@ -4,7 +4,7 @@ services:
       context: ./deploy/ha/patroni
       args:
         PATRONI_VERSION: 4.1.4
-    restart: unless-stopped
+    restart: always
     network_mode: host
     # 不经环境变量传数据库口令：超级用户能 COPY ... FROM PROGRAM 以容器内 postgres 身份执行命令，
     # 环境变量会出现在 /proc/*/environ、docker inspect 和每个子进程里。初始化用的 openxdr 口令
@@ -28,7 +28,7 @@ services:
 
   nats:
     image: nats:2.11-alpine
-    restart: unless-stopped
+    restart: always
     network_mode: host
     command: [-c, /etc/nats/nats.conf]
     volumes:
@@ -38,7 +38,7 @@ services:
 
   haproxy:
     image: haproxy:3.2-alpine
-    restart: unless-stopped
+    restart: always
     network_mode: host
     volumes:
       - ./deploy/ha/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
@@ -50,7 +50,7 @@ services:
       dockerfile: server/Dockerfile
       args:
         GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
-    restart: unless-stopped
+    restart: always
     network_mode: host
     depends_on:
       patroni:
@@ -146,7 +146,7 @@ services:
     build: ./deploy/ha/keepalived
     tmpfs:
       - /run/keepalived
-    restart: unless-stopped
+    restart: always
     network_mode: host
     cap_add: [NET_ADMIN, NET_BROADCAST, NET_RAW]
     depends_on: [haproxy, server]
@@ -158,7 +158,7 @@ services:
       context: ./web
       args:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
-    restart: unless-stopped
+    restart: always
     depends_on: [haproxy]
     ports:
       - 5173:80
@@ -167,14 +167,14 @@ services:
 
   nats-exporter:
     image: natsio/prometheus-nats-exporter:0.17.3
-    restart: unless-stopped
+    restart: always
     network_mode: host
     depends_on: [nats]
     command: [-varz, -jsz=all, http://127.0.0.1:8222]
 
   prometheus:
     image: prom/prometheus:v3.7.3
-    restart: unless-stopped
+    restart: always
     network_mode: host
     volumes:
       - ./deploy/ha/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -184,7 +184,7 @@ services:
 
   grafana:
     image: grafana/grafana:12.2.1
-    restart: unless-stopped
+    restart: always
     network_mode: host
     depends_on: [prometheus]
     environment:

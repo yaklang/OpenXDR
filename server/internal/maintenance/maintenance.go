@@ -29,17 +29,20 @@ import (
 	"openxdr/server/internal/response"
 )
 
-// upgradeScript 装安全更新（unattended-upgrades 的默认配置只装安全源），报出启动 ID 与是否需要重启
+// upgradeScript 装安全更新（unattended-upgrades 的默认配置只装安全源），报出启动 ID、是否需要重启，
+// 以及正在运行、带重启策略的容器（重启后它们都该回来；一次性容器不算）
 const upgradeScript = `set -u
 export DEBIAN_FRONTEND=noninteractive
 if command -v unattended-upgrade >/dev/null 2>&1; then unattended-upgrade || echo "UPGRADE_FAILED $?"; fi
 echo "BOOT_ID $(cat /proc/sys/kernel/random/boot_id)"
-if [ -f /var/run/reboot-required ]; then echo REBOOT_REQUIRED; fi`
+if [ -f /var/run/reboot-required ]; then echo REBOOT_REQUIRED; fi
+if command -v docker >/dev/null 2>&1; then echo "CONTAINERS $(docker ps -q | xargs -r docker inspect -f '{{if ne .HostConfig.RestartPolicy.Name "no"}}{{.Name}}{{end}}' | sed 's#^/##' | grep -v '^$' | sort | tr '\n' ' ')"; fi`
 
 // rebootCommand 20 秒后重启：指令先回执，agent 再随系统重启
 const rebootCommand = `systemd-run --on-active=20 --unit=openxdr-maintenance-reboot systemctl reboot`
 
-const bootIDCommand = `echo "BOOT_ID $(cat /proc/sys/kernel/random/boot_id)"; if [ -f /var/run/reboot-required ]; then echo REBOOT_REQUIRED; fi`
+const bootIDCommand = `echo "BOOT_ID $(cat /proc/sys/kernel/random/boot_id)"; if [ -f /var/run/reboot-required ]; then echo REBOOT_REQUIRED; fi
+if command -v docker >/dev/null 2>&1; then echo "CONTAINERS $(docker ps -q | xargs -r docker inspect -f '{{if ne .HostConfig.RestartPolicy.Name "no"}}{{.Name}}{{end}}' | sed 's#^/##' | grep -v '^$' | sort | tr '\n' ' ')"; fi`
 
 const (
 	stateKey = "maintenance.state"
@@ -119,6 +122,9 @@ type Reboot struct {
 	Hostname   string    `json:"hostname"`
 	BootBefore string    `json:"boot_before"`
 	At         time.Time `json:"at"`
+	// 重启前在跑、带重启策略的容器：重启后都回来了才算完成
+	Containers []string `json:"containers,omitempty"`
+	Missing    []string `json:"missing,omitempty"`
 }
 
 type Runner struct {
@@ -231,7 +237,7 @@ func (r *Runner) maintain(ctx context.Context, st *State, a *ent.Asset) error {
 	if err != nil {
 		return r.halt(ctx, st, a.Hostname+" 装更新失败："+err.Error())
 	}
-	boot, reboot, failed := parse(out)
+	boot, reboot, failed, containers := parse(out)
 	if failed != "" {
 		slog.Warn("夜间维护：更新有失败", "host", a.Hostname, "detail", failed)
 	}
@@ -241,7 +247,7 @@ func (r *Runner) maintain(ctx context.Context, st *State, a *ent.Asset) error {
 	if boot == "" {
 		return r.halt(ctx, st, a.Hostname+" 需要重启但读不到启动 ID，不重启")
 	}
-	st.Current = &Reboot{AssetID: a.ID, Hostname: a.Hostname, BootBefore: boot, At: r.now()}
+	st.Current = &Reboot{AssetID: a.ID, Hostname: a.Hostname, BootBefore: boot, At: r.now(), Containers: containers}
 	if containment.RunsServer(a) {
 		st.CoreDone = true
 	}
@@ -267,7 +273,16 @@ func (r *Runner) verify(ctx context.Context, st *State) error {
 	now := r.now()
 	if a.AgentID != nil && a.LastSeen.After(c.At.Add(20*time.Second)) {
 		if out, err := r.exec(ctx, a, bootIDCommand, time.Minute); err == nil {
-			if boot, still, _ := parse(out); boot != "" && boot != c.BootBefore {
+			if boot, still, _, running := parse(out); boot != "" && boot != c.BootBefore {
+				// 主机回来了，但服务也得回来：2026-11-10 node1 重启后 NATS 没被拉起，平台节点掉线 10 小时没人发现
+				if missing := absent(c.Containers, running); len(missing) > 0 {
+					c.Missing = missing
+					if now.Sub(c.At) <= rebootDeadline {
+						return r.save(ctx, st)
+					}
+					st.Current = nil
+					return r.halt(ctx, st, fmt.Sprintf("%s 重启后 %d 分钟，这些容器仍没起来：%s", c.Hostname, int(rebootDeadline.Minutes()), strings.Join(missing, " ")))
+				}
 				st.Current = nil
 				note := ""
 				if still {
@@ -282,6 +297,21 @@ func (r *Runner) verify(ctx context.Context, st *State) error {
 		return r.halt(ctx, st, fmt.Sprintf("%s 重启后 %d 分钟仍未恢复（agent 未上线或启动 ID 未变）", c.Hostname, int(rebootDeadline.Minutes())))
 	}
 	return nil
+}
+
+// absent before 里有、now 里没有的
+func absent(before, now []string) []string {
+	have := map[string]bool{}
+	for _, n := range now {
+		have[n] = true
+	}
+	var out []string
+	for _, n := range before {
+		if !have[n] {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func (r *Runner) done(ctx context.Context, st *State, a *ent.Asset, note string) error {
@@ -354,11 +384,13 @@ func (r *Runner) pollInterval() time.Duration {
 	return 5 * time.Second
 }
 
-// parse 固定脚本的输出：启动 ID、是否需要重启、更新失败信息
-func parse(out string) (boot string, reboot bool, failed string) {
+// parse 固定脚本的输出：启动 ID、是否需要重启、更新失败信息、带重启策略的运行中容器
+func parse(out string) (boot string, reboot bool, failed string, containers []string) {
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
+		case strings.HasPrefix(line, "CONTAINERS"):
+			containers = strings.Fields(strings.TrimPrefix(line, "CONTAINERS"))
 		case strings.HasPrefix(line, "BOOT_ID "):
 			boot = strings.TrimSpace(strings.TrimPrefix(line, "BOOT_ID "))
 		case line == "REBOOT_REQUIRED":
@@ -367,7 +399,7 @@ func parse(out string) (boot string, reboot bool, failed string) {
 			failed = line
 		}
 	}
-	return boot, reboot, failed
+	return boot, reboot, failed, containers
 }
 
 func (r *Runner) load(ctx context.Context) (*State, error) {

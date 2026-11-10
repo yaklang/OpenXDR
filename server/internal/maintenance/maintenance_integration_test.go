@@ -33,13 +33,15 @@ func (f *fakeFleet) heartbeat(ctx context.Context) {
 
 type fakeFleet struct {
 	rebooted map[string]bool
-	t        *testing.T
-	db       *ent.Client
-	now      time.Time
-	boot     map[string]string
-	pending  map[string]bool // 需要重启
-	calls    []string
-	silent   map[string]bool // 重启后回不来
+	// 重启后回不来的容器（模拟 2026-11-10 node1 的 NATS）
+	lose    map[string]bool
+	t       *testing.T
+	db      *ent.Client
+	now     time.Time
+	boot    map[string]string
+	pending map[string]bool // 需要重启
+	calls   []string
+	silent  map[string]bool // 重启后回不来
 }
 
 func (f *fakeFleet) exec(ctx context.Context, a *ent.Asset, cmd string, _ time.Duration) (string, error) {
@@ -52,7 +54,11 @@ func (f *fakeFleet) exec(ctx context.Context, a *ent.Asset, cmd string, _ time.D
 		if f.pending[a.Hostname] {
 			out += "REBOOT_REQUIRED\n"
 		}
-		return out, nil
+		containers := "nats server"
+		if f.rebooted[a.Hostname] && f.lose[a.Hostname] {
+			containers = "server"
+		}
+		return out + "CONTAINERS " + containers + "\n", nil
 	case rebootCommand:
 		f.calls = append(f.calls, "reboot "+a.Hostname)
 		f.rebooted[a.Hostname] = true
@@ -77,7 +83,7 @@ func setup(t *testing.T) (context.Context, *ent.Client, *Runner, *fakeFleet, *[]
 	t.Cleanup(func() { raw.Close() })
 	sh := time.FixedZone("CST", 8*3600)
 	now := time.Date(2026, 11, 10, 2, 30, 0, 0, sh)
-	f := &fakeFleet{t: t, db: client, now: now, boot: map[string]string{}, pending: map[string]bool{}, silent: map[string]bool{}, rebooted: map[string]bool{}}
+	f := &fakeFleet{t: t, db: client, now: now, boot: map[string]string{}, pending: map[string]bool{}, silent: map[string]bool{}, rebooted: map[string]bool{}, lose: map[string]bool{}}
 	server := json.RawMessage(`[{"proto":"tcp","addr":"0.0.0.0","port":8081,"process":"openxdr-server"}]`)
 	for _, h := range []string{"app1", "app2", "openxdr-node1", "openxdr-node2", "pve1"} {
 		c := client.Asset.Create().SetHostname(h).SetOs("linux").SetAgentID(uuid.New()).SetLastSeen(now)
@@ -244,5 +250,24 @@ func TestPlatformNodeStaysWhenNoHealthyReplica(t *testing.T) {
 	}
 	if len(*notes) != 1 || !strings.Contains((*notes)[0], "不是健康的从节点") {
 		t.Fatalf("应停手并通知：%v", *notes)
+	}
+}
+
+// 主机回来了但容器没回来：等到期限还缺就当晚停手，通知里点名缺的容器
+func TestHaltsWhenContainersDoNotComeBack(t *testing.T) {
+	ctx, _, r, f, notes := setup(t)
+	f.lose["app1"] = true
+	for i := 0; i < 12; i++ {
+		f.heartbeat(ctx)
+		if err := r.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+		f.now = f.now.Add(2 * time.Minute)
+	}
+	if got := strings.Join(f.calls, ","); got != "upgrade app1,reboot app1" {
+		t.Fatalf("容器没回来不能算完成、不能轮下一台：%s", got)
+	}
+	if len(*notes) != 1 || !strings.Contains((*notes)[0], "nats") {
+		t.Fatalf("应停手并点名缺的容器：%v", *notes)
 	}
 }
