@@ -498,7 +498,7 @@ server 全部通过环境变量配置，均有默认值：
 | `AUTHENTIK_RESPONSE_TOKEN` | 空 | Authentik 服务账号的 API 令牌，只需「查看事件、查看用户、修改用户、查看与删除会话」：拉登录事件、爆破得手时停用账号并作废它已登录的会话 |
 | `AUTHENTIK_ASSET` | 空 | 运行 Authentik 的资产主机名（如 `gateway`）：SSO 登录事件挂在它名下，进爆破得手等检测 |
 | `AUTHENTIK_PROTECTED` | 空 | 逗号分隔的用户名：永远不自动停用（超级管理员与服务账号本来就不停用） |
-| `MAINTENANCE_WINDOW` | 空（不启用） | 夜间维护窗口，如 `02:00-05:00`：窗口内逐台装安全更新（unattended-upgrades），需要重启就重启，agent 回来、启动 ID 变了、重启前在跑的带重启策略的容器也都回来了，才轮下一台；跑 OpenXDR server 的平台节点放最后、一晚一台、另一台须在线；有一台 15 分钟没回来当晚停手并通知。只下发写死的固定命令。需要 `RESPONSE_ENABLED`。平台节点若是数据库主节点，重启前先经 Patroni 计划内切到健康的另一台（需 `PATRONI_RESTAPI_PASSWORD`），没有健康从节点就当晚停手 |
+| `MAINTENANCE_WINDOW` | 空（不启用） | 夜间维护窗口，如 `02:00-05:00`：窗口内逐台装安全更新（unattended-upgrades），需要重启就重启，agent 回来、启动 ID 变了、重启前在跑的容器也都回来了（不论重启策略，`--rm` 的一次性容器除外；策略为 `no` 的不会自己回来，按重启前留在主机 `/var/lib/openxdr/maintenance-running` 的名单 `docker start`），才轮下一台；跑 OpenXDR server 的平台节点放最后、一晚一台、另一台须在线；有一台 15 分钟没回来当晚停手并通知。只下发写死的固定命令。需要 `RESPONSE_ENABLED`。平台节点若是数据库主节点，重启前先经 Patroni 计划内切到健康的另一台（需 `PATRONI_RESTAPI_PASSWORD`），没有健康从节点就当晚停手 |
 | `MAINTENANCE_TZ` | `Asia/Shanghai` | 维护窗口的时区 |
 | `MAINTENANCE_EXCLUDE` | 空 | 逗号分隔的主机名：永远不做夜间维护（如 PVE 宿主机） |
 | `MAINTENANCE_PATRONI_USER` | `patroni-admin` | 夜间维护切换数据库主节点用的 Patroni 接口账号（密码取 `PATRONI_RESTAPI_PASSWORD`） |

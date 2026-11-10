@@ -39,3 +39,13 @@ func TestWindowAndParse(t *testing.T) {
 		t.Fatal("要报出更新失败")
 	}
 }
+
+func TestStartedIn(t *testing.T) {
+	got := startedIn("BOOT_ID x\nSTARTED soulstream-pg\nSTARTED source-sentinel-mysql-1\nCONTAINERS a b\n")
+	if len(got) != 2 || got[0] != "soulstream-pg" || got[1] != "source-sentinel-mysql-1" {
+		t.Fatal(got)
+	}
+	if startedIn("BOOT_ID x\nCONTAINERS a\n") != nil {
+		t.Fatal("没拉起任何容器时应为空")
+	}
+}

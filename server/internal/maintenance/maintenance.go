@@ -29,20 +29,32 @@ import (
 	"openxdr/server/internal/response"
 )
 
+// runningContainers 正在运行的容器名，--rm 的一次性容器除外（停了就没了，重启后不该回来）。
+// 不按重启策略筛：2026-11-10 SoulStream 的 PG、blue-server 的 source-sentinel 是手动拉起、策略为 no 的，
+// 维护重启后没回来，业务断了一天也没人发现
+const runningContainers = `docker ps -q | xargs -r docker inspect -f '{{if not .HostConfig.AutoRemove}}{{.Name}}{{end}}' | sed 's#^/##' | grep -v '^$' | sort`
+
+// runningFile 重启前在跑的容器名单，留在主机上，重启后由 bootIDCommand 照着拉起；名单出自主机自己，不经服务端
+const runningFile = "/var/lib/openxdr/maintenance-running"
+
 // upgradeScript 装安全更新（unattended-upgrades 的默认配置只装安全源），报出启动 ID、是否需要重启，
-// 以及正在运行、带重启策略的容器（重启后它们都该回来；一次性容器不算）
+// 记下并报出正在运行的容器（重启后它们都该回来）
 const upgradeScript = `set -u
 export DEBIAN_FRONTEND=noninteractive
 if command -v unattended-upgrade >/dev/null 2>&1; then unattended-upgrade || echo "UPGRADE_FAILED $?"; fi
 echo "BOOT_ID $(cat /proc/sys/kernel/random/boot_id)"
 if [ -f /var/run/reboot-required ]; then echo REBOOT_REQUIRED; fi
-if command -v docker >/dev/null 2>&1; then echo "CONTAINERS $(docker ps -q | xargs -r docker inspect -f '{{if ne .HostConfig.RestartPolicy.Name "no"}}{{.Name}}{{end}}' | sed 's#^/##' | grep -v '^$' | sort | tr '\n' ' ')"; fi`
+if command -v docker >/dev/null 2>&1; then mkdir -p /var/lib/openxdr; ` + runningContainers + ` > ` + runningFile + `; echo "CONTAINERS $(tr '\n' ' ' < ` + runningFile + `)"; fi`
 
 // rebootCommand 20 秒后重启：指令先回执，agent 再随系统重启
 const rebootCommand = `systemd-run --on-active=20 --unit=openxdr-maintenance-reboot systemctl reboot`
 
+// bootIDCommand 报出启动 ID 与正在运行的容器；重启前在跑、现在没跑的先照名单拉起来（策略为 no 的不会自己回来），
+// 拉起的报 STARTED。还没重启时名单里的都在跑，什么也不做
 const bootIDCommand = `echo "BOOT_ID $(cat /proc/sys/kernel/random/boot_id)"; if [ -f /var/run/reboot-required ]; then echo REBOOT_REQUIRED; fi
-if command -v docker >/dev/null 2>&1; then echo "CONTAINERS $(docker ps -q | xargs -r docker inspect -f '{{if ne .HostConfig.RestartPolicy.Name "no"}}{{.Name}}{{end}}' | sed 's#^/##' | grep -v '^$' | sort | tr '\n' ' ')"; fi`
+if command -v docker >/dev/null 2>&1; then
+if [ -f ` + runningFile + ` ]; then while read -r n; do [ "$(docker inspect -f '{{.State.Running}}' "$n" 2>/dev/null)" = false ] && docker start "$n" >/dev/null 2>&1 && echo "STARTED $n"; done < ` + runningFile + `; fi
+echo "CONTAINERS $(` + runningContainers + ` | tr '\n' ' ')"; fi`
 
 const (
 	stateKey = "maintenance.state"
@@ -288,6 +300,9 @@ func (r *Runner) verify(ctx context.Context, st *State) error {
 				if still {
 					note = "（重启后仍提示需要重启）"
 				}
+				if started := startedIn(out); len(started) > 0 {
+					note += "（重启后照重启前名单拉起：" + strings.Join(started, " ") + "）"
+				}
 				return r.done(ctx, st, a, note)
 			}
 		}
@@ -297,6 +312,17 @@ func (r *Runner) verify(ctx context.Context, st *State) error {
 		return r.halt(ctx, st, fmt.Sprintf("%s 重启后 %d 分钟仍未恢复（agent 未上线或启动 ID 未变）", c.Hostname, int(rebootDeadline.Minutes())))
 	}
 	return nil
+}
+
+// startedIn bootIDCommand 照名单拉起的容器
+func startedIn(out string) []string {
+	var started []string
+	for _, line := range strings.Split(out, "\n") {
+		if n, ok := strings.CutPrefix(strings.TrimSpace(line), "STARTED "); ok {
+			started = append(started, n)
+		}
+	}
+	return started
 }
 
 // absent before 里有、now 里没有的
@@ -384,7 +410,7 @@ func (r *Runner) pollInterval() time.Duration {
 	return 5 * time.Second
 }
 
-// parse 固定脚本的输出：启动 ID、是否需要重启、更新失败信息、带重启策略的运行中容器
+// parse 固定脚本的输出：启动 ID、是否需要重启、更新失败信息、运行中的容器
 func parse(out string) (boot string, reboot bool, failed string, containers []string) {
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
