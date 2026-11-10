@@ -1,6 +1,9 @@
 package vuln
 
 import (
+	"fmt"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -75,4 +78,47 @@ func TestDue(t *testing.T) {
 			t.Errorf("用例 %d：期望 %v，得到 %v", i, c.want, got)
 		}
 	}
+}
+
+// 行不能引用整条公告：Ubuntu 全量同步时每条公告的 Details 与全部发行版的 affected 会随行常驻，涨到数 GB
+func TestRowsDoNotRetainRecord(t *testing.T) {
+	want := map[string]bool{"Ubuntu:24.04": true}
+	var ms runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&ms)
+	before := ms.HeapAlloc
+	var all []row
+	for i := 0; i < 64; i++ {
+		var rec osvRecord
+		rec.ID = fmt.Sprintf("UBUNTU-CVE-%d", i)
+		rec.Summary = "s"
+		rec.Details = strings.Repeat("x", 1<<20)
+		rec.Published = time.Now()
+		rec.Affected = make([]struct {
+			Package struct {
+				Name      string `json:"name"`
+				Ecosystem string `json:"ecosystem"`
+			} `json:"package"`
+			Ranges []struct {
+				Type   string              `json:"type"`
+				Events []map[string]string `json:"events"`
+			} `json:"ranges"`
+		}, 1)
+		rec.Affected[0].Package.Name = "pkg"
+		rec.Affected[0].Package.Ecosystem = "Ubuntu:24.04:LTS"
+		rec.Affected[0].Ranges = []struct {
+			Type   string              `json:"type"`
+			Events []map[string]string `json:"events"`
+		}{{Type: "ECOSYSTEM", Events: []map[string]string{{"introduced": "0"}, {"fixed": "1.0"}}}}
+		all = append(all, rows(rec, want)...)
+	}
+	if len(all) != 64 || all[0].published == nil {
+		t.Fatalf("应拆出 64 行且带发布时间，得到 %d 行", len(all))
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&ms)
+	if grown := int64(ms.HeapAlloc) - int64(before); grown > 16<<20 {
+		t.Errorf("64 行常驻 %d MB，行仍引用着整条公告", grown>>20)
+	}
+	runtime.KeepAlive(all)
 }
