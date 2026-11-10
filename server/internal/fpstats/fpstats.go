@@ -436,7 +436,8 @@ func entityTalliesBy(hits []hit, field string, extract func(string) (string, boo
 	return out
 }
 
-// tempDirPrefix 提取临时构建目录的固定前缀（如 /tmp/go-build3516107513/b001/pkg.test → /tmp/go-build），
+// tempDirPrefix 提取临时构建目录的固定前缀（如 /tmp/go-build3516107513/b001/pkg.test → /tmp/go-build，
+// /tmp/sibyl-rank-driver-fixture-ytj5vu6x/rank.py → /tmp/sibyl-rank-driver-fixture-），
 // 供每次生成随机后缀的临时构建产物（go test 等）按 contains 收窄，避免退化成整条规则抑制
 func tempDirPrefix(path string) (string, bool) {
 	for _, root := range []string{"/tmp/", "/var/tmp/"} {
@@ -452,8 +453,20 @@ func tempDirPrefix(path string) (string, bool) {
 		if len(seg)-len(trimmed) >= 4 && len(trimmed) >= 4 {
 			return root + trimmed, true
 		}
+		// mkdtemp 一类在固定前缀后接一段随机串（/tmp/sibyl-rank-driver-fixture-ytj5vu6x/）：按到最后一个 - 为止的前缀收窄
+		if i := strings.LastIndexByte(seg, '-'); i >= 4 && randomSuffix(seg[i+1:]) {
+			return root + seg[:i+1], true
+		}
 	}
 	return "", false
+}
+
+// randomSuffix 像临时目录随机串：6–16 位小写字母、数字或下划线，至少含一个数字（排除 -multi、-venv 这类单词）
+func randomSuffix(s string) bool {
+	if len(s) < 6 || len(s) > 16 || !strings.ContainsAny(s, "0123456789") {
+		return false
+	}
+	return strings.Trim(s, "abcdefghijklmnopqrstuvwxyz0123456789_") == ""
 }
 
 // sameImage 取值为 value 的命中是否都出自同一个进程映像

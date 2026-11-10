@@ -47,7 +47,15 @@ func TestTempDirPrefix(t *testing.T) {
 	if got, ok := tempDirPrefix("/var/tmp/go-build987654/b012/sigma.test"); !ok || got != "/var/tmp/go-build" {
 		t.Fatalf("got (%q, %v), want (/var/tmp/go-build, true)", got, ok)
 	}
-	for _, p := range []string{"/tmp/evil12345", "/tmp/a12345/x", "/usr/bin/bash"} {
+	for p, want := range map[string]string{
+		"/tmp/sibyl-rank-driver-fixture-ytj5vu6x/rank.py":    "/tmp/sibyl-rank-driver-fixture-",
+		"/tmp/soulbind-go-gateway-multi-rwp8t_4g/gateway-go": "/tmp/soulbind-go-gateway-multi-",
+	} {
+		if got, ok := tempDirPrefix(p); !ok || got != want {
+			t.Errorf("%s: got (%q, %v), want %s", p, got, ok, want)
+		}
+	}
+	for _, p := range []string{"/tmp/evil12345", "/tmp/a12345/x", "/usr/bin/bash", "/tmp/x-abc123/y", "/tmp/build-release/y", "/tmp/tmpk3j2_9x1/y"} {
 		if _, ok := tempDirPrefix(p); ok {
 			t.Errorf("%s 不应提取为临时构建目录前缀", p)
 		}

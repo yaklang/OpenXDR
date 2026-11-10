@@ -242,6 +242,9 @@ go -C server test -tags integration -p 1 ./internal/intel ./internal/api -run 'T
     （每个取值一条 `equals` 条件，同一（规则、主机）一轮最多 5 条）；这些命中都出自同一个进程映像时再加一条 `process.file.path` 条件。
     shell、脚本解释器与 cmd / powershell / mshta / rundll32 等通用映像不算实体（攻击同样经由它们执行，按它们压等于压整条规则）。
     事件体已过保留期的命中不知道是哪个值：属实与未结案的从严算进每个取值，误报的不算。
+    没有取值单独够数时再试临时目录前缀：`/tmp/`、`/var/tmp/` 下第一级目录名去掉随机部分后按 `contains` 收窄——
+    结尾 4 位以上数字（`/tmp/go-build3516107513/…` → `/tmp/go-build`），或最后一个 `-` 后是 6–16 位含数字的小写字母、数字、下划线随机串
+    （`/tmp/sibyl-rank-driver-fixture-ytj5vu6x/…` → `/tmp/sibyl-rank-driver-fixture-`）；剩下的前缀至少 4 个字符。
     **没有任何取值单独够数**（实体分散）且整条规则过门槛时才出不带条件的整条规则草案，理由与依据里标明「整条规则」。平台合成规则（`xdr:` 开头，如首次出现检测）不出整条规则草案：它们的每条命中本来就是不同实体，整条压掉等于关掉这台主机上的这项检测。
   - 草案即 `status=proposed` 的抑制（`created_by=fp-stats`），挂进上面同一个组管理员审批流程，批准前不进索引；
     带依据（计入的事件、谁判的、比例、未计入的数量）与建议有效期 `FP_SUPPRESS_DAYS`（30，1–90）。
