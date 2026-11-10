@@ -9,6 +9,10 @@
 // 两者单独计数写进依据，不进分子也不进分母。其他任意非 nil resolution_source（含空字符串、ai_verdict、
 // ai_review、external_integration 等）或非平台真实人工账号（如 system、ai_reviewer、viewer、已删账号）
 // 一律 fail-closed 排除，绝不计入独立人工误报统计。
+//
+// 第二路按 AI 研判良性的模式出草案（CreatedByAI）：没人结案时同一模式会一直冒出新事件，人工误报这一路永远攒不够数。
+// 未结案、研判为 benign 的事件与人工误报一起算，门槛、收窄方式、高危排除都与人工一路相同，但只出按实体收窄的草案、
+// 不出整条规则的；这类草案的依据出自 AI，只能由组管理员批准，AI 审计员不代批（见 suppressreview）。
 package fpstats
 
 import (
@@ -36,6 +40,9 @@ import (
 
 // CreatedBy 误报统计草案的 created_by，控制台据此标来源
 const CreatedBy = "fp-stats"
+
+// CreatedByAI 按 AI 研判良性模式生成的草案，只能由人批准
+const CreatedByAI = "fp-stats-ai"
 
 // entityFields 按实体收窄时依次尝试的字段：先看规则作用的对象（域名、对端、文件、注册表、模块、具体命令行），
 // 最后才是发起的进程映像——同一个进程往往干很多事，按进程压比按对象或具体命令行压宽
@@ -136,6 +143,7 @@ const (
 	pending         // 还没结案
 	aiProposal      // 原样采纳 AI 结案建议的误报，不计入
 	autoClosed      // 系统自动结案，不计入
+	aiBenign        // 未结案、AI 研判为良性；人工一路按未结案算，AI 一路与人工误报一起算
 )
 
 func classify(inc *ent.Incident, humanUsers map[string]bool) kind {
@@ -143,6 +151,9 @@ func classify(inc *ent.Incident, humanUsers map[string]bool) kind {
 	case "closed":
 		return tp
 	case "open", "triaged":
+		if verdictOf(inc) == "benign" {
+			return aiBenign
+		}
 		return pending
 	case "false_positive":
 	default:
@@ -167,10 +178,21 @@ func classify(inc *ent.Incident, humanUsers map[string]bool) kind {
 	return fp
 }
 
+func verdictOf(inc *ent.Incident) string {
+	var v struct {
+		Verdict string `json:"verdict"`
+	}
+	if json.Unmarshal(inc.AiVerdict, &v) != nil {
+		return ""
+	}
+	return v.Verdict
+}
+
 // tally 一组事件的结论计数，每个事件只算一次
 type tally struct {
 	counts map[kind]int
 	fps    []*ent.Incident
+	benign []*ent.Incident
 	seen   map[uuid.UUID]bool
 }
 
@@ -183,27 +205,40 @@ func (t *tally) add(inc *ent.Incident, k kind) {
 	}
 	t.seen[inc.ID] = true
 	t.counts[k]++
-	if k == fp {
+	switch k {
+	case fp:
 		t.fps = append(t.fps, inc)
+	case aiBenign:
+		t.benign = append(t.benign, inc)
 	}
 }
 
-func (t *tally) ratio() int {
-	total := t.counts[fp] + t.counts[tp] + t.counts[pending]
+// positives 支持抑制的结论数：人工一路只认人工误报，AI 一路再加上研判良性的未结案事件
+func (t *tally) positives(ai bool) int {
+	if ai {
+		return t.counts[fp] + t.counts[aiBenign]
+	}
+	return t.counts[fp]
+}
+
+// ratio 支持抑制的占比，分母是误报、属实与全部未结案（含研判良性的）
+func (t *tally) ratio(ai bool) int {
+	total := t.counts[fp] + t.counts[tp] + t.counts[pending] + t.counts[aiBenign]
 	if total == 0 {
 		return 0
 	}
-	return t.counts[fp] * 100 / total
+	return t.positives(ai) * 100 / total
 }
 
-func (s *Stats) qualifies(t *tally) bool {
-	return t.counts[fp] >= s.MinCount && t.counts[tp] == 0 && t.ratio() >= s.MinRatio
+func (s *Stats) qualifies(t *tally, ai bool) bool {
+	return t.positives(ai) >= s.MinCount && t.counts[tp] == 0 && t.ratio(ai) >= s.MinRatio
 }
 
 type draft struct {
 	key   key
 	conds []suppress.Condition
 	t     *tally
+	ai    bool
 }
 
 // Sweep 统计一轮并写入草案，返回新生成的条数。多节点由租约保证单活
@@ -250,30 +285,33 @@ func (s *Stats) Sweep(ctx context.Context, now time.Time) (int, error) {
 		}
 		byKey[k].add(a.Edges.Incident, classify(a.Edges.Incident, humanUsers))
 	}
-	keys := make([]key, 0, len(byKey))
-	for k, t := range byKey {
-		if t.counts[fp] >= s.MinCount && !severe[k] {
-			keys = append(keys, k)
-		}
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		return keys[i].rule < keys[j].rule || keys[i].rule == keys[j].rule && keys[i].asset.String() < keys[j].asset.String()
-	})
 	created := 0
-	for _, k := range keys {
-		hits, err := s.DB.Alert.Query().
-			Where(inWindow, alert.CommandIDIsNil(), alert.RuleIDEQ(k.rule), alert.AssetIDEQ(k.asset), alert.IncidentIDNotNil()).
-			WithIncident().WithEvent().All(ctx)
-		if err != nil {
-			return created, err
+	// 人工一路先出：同范围的人工草案在前，AI 一路的就被它覆盖，不重复提
+	for _, ai := range []bool{false, true} {
+		keys := make([]key, 0, len(byKey))
+		for k, t := range byKey {
+			if t.positives(ai) >= s.MinCount && (!ai || t.counts[aiBenign] > 0) && !severe[k] {
+				keys = append(keys, k)
+			}
 		}
-		for _, d := range s.drafts(k, byKey[k], hits, humanUsers) {
-			ok, err := s.propose(ctx, d, now)
+		sort.Slice(keys, func(i, j int) bool {
+			return keys[i].rule < keys[j].rule || keys[i].rule == keys[j].rule && keys[i].asset.String() < keys[j].asset.String()
+		})
+		for _, k := range keys {
+			hits, err := s.DB.Alert.Query().
+				Where(inWindow, alert.CommandIDIsNil(), alert.RuleIDEQ(k.rule), alert.AssetIDEQ(k.asset), alert.IncidentIDNotNil()).
+				WithIncident().WithEvent().All(ctx)
 			if err != nil {
 				return created, err
 			}
-			if ok {
-				created++
+			for _, d := range s.drafts(k, byKey[k], hits, humanUsers, ai) {
+				ok, err := s.propose(ctx, d, now)
+				if err != nil {
+					return created, err
+				}
+				if ok {
+					created++
+				}
 			}
 		}
 	}
@@ -287,7 +325,7 @@ type hit struct {
 }
 
 // drafts 先按实体找能收窄的值；实体维度分散（没有哪个值单独够数）时才考虑整条规则
-func (s *Stats) drafts(k key, whole *tally, alerts []*ent.Alert, humanUsers map[string]bool) []draft {
+func (s *Stats) drafts(k key, whole *tally, alerts []*ent.Alert, humanUsers map[string]bool, ai bool) []draft {
 	hits := make([]hit, 0, len(alerts))
 	for _, a := range alerts {
 		if a.Edges.Incident == nil {
@@ -307,15 +345,15 @@ func (s *Stats) drafts(k key, whole *tally, alerts []*ent.Alert, humanUsers map[
 			if generic(field, v.value) {
 				continue
 			}
-			if v.t.counts[fp] >= s.MinCount {
+			if v.t.positives(ai) >= s.MinCount {
 				concentrated = true
 			}
-			if s.qualifies(v.t) && utf8.RuneCountInString(v.value) <= 500 {
+			if s.qualifies(v.t, ai) && utf8.RuneCountInString(v.value) <= 500 {
 				conds := []suppress.Condition{{Field: field, Op: "equals", Value: v.value}}
 				if image, ok := sameImage(hits, field, v.value); ok && field != imageField {
 					conds = append(conds, suppress.Condition{Field: imageField, Op: "equals", Value: image})
 				}
-				out = append(out, draft{key: k, conds: conds, t: v.t})
+				out = append(out, draft{key: k, conds: conds, t: v.t, ai: ai})
 			}
 		}
 		if len(out) > 0 {
@@ -325,12 +363,12 @@ func (s *Stats) drafts(k key, whole *tally, alerts []*ent.Alert, humanUsers map[
 	for _, field := range []string{"file.path", imageField} {
 		var out []draft
 		for _, v := range entityTalliesBy(hits, field, tempDirPrefix, humanUsers) {
-			if v.t.counts[fp] >= s.MinCount {
+			if v.t.positives(ai) >= s.MinCount {
 				concentrated = true
 			}
-			if s.qualifies(v.t) && utf8.RuneCountInString(v.value) <= 500 {
+			if s.qualifies(v.t, ai) && utf8.RuneCountInString(v.value) <= 500 {
 				conds := []suppress.Condition{{Field: field, Op: "contains", Value: v.value}}
-				out = append(out, draft{key: k, conds: conds, t: v.t})
+				out = append(out, draft{key: k, conds: conds, t: v.t, ai: ai})
 			}
 		}
 		if len(out) > 0 {
@@ -338,8 +376,8 @@ func (s *Stats) drafts(k key, whole *tally, alerts []*ent.Alert, humanUsers map[
 		}
 	}
 	// 平台合成规则（xdr:new-process 这类 UEBA 首次出现检测）每条命中本来就是不同实体，
-	// 整条规则抑制等于关掉这台主机上的这项检测，不出草案
-	if concentrated || strings.HasPrefix(k.rule, "xdr:") || !s.qualifies(whole) {
+	// 整条规则抑制等于关掉这台主机上的这项检测，不出草案；AI 一路只出按实体收窄的
+	if ai || concentrated || strings.HasPrefix(k.rule, "xdr:") || !s.qualifies(whole, false) {
 		return nil
 	}
 	return []draft{{key: k, t: whole}}
@@ -380,15 +418,19 @@ func entityTalliesBy(hits []hit, field string, extract func(string) (string, boo
 	}
 	out := make([]valueTally, 0, len(byValue))
 	for _, v := range byValue {
+		// 研判良性的从严按未结案算，不替不知道取值的命中支持抑制
 		for _, inc := range unknown {
-			if k := classify(inc, humanUsers); k == tp || k == pending {
+			switch k := classify(inc, humanUsers); k {
+			case tp, pending:
 				v.t.add(inc, k)
+			case aiBenign:
+				v.t.add(inc, pending)
 			}
 		}
 		out = append(out, *v)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		a, b := out[i].t.counts[fp], out[j].t.counts[fp]
+		a, b := out[i].t.counts[fp]+out[i].t.counts[aiBenign], out[j].t.counts[fp]+out[j].t.counts[aiBenign]
 		return a > b || a == b && out[i].value < out[j].value
 	})
 	return out
@@ -447,16 +489,21 @@ func (s *Stats) propose(ctx context.Context, d draft, now time.Time) (bool, erro
 		}
 	}
 	ev := evidence(d, s.Window)
+	by := CreatedBy
+	if d.ai {
+		by = CreatedByAI
+	}
 	p, err := s.DB.Suppression.Create().
-		SetRuleID(d.key.rule).SetAssetID(d.key.asset).SetStatus("proposed").SetCreatedBy(CreatedBy).
+		SetRuleID(d.key.rule).SetAssetID(d.key.asset).SetStatus("proposed").SetCreatedBy(by).
 		SetReason(reason(d, ev, s.Days)).SetConditions(d.conds).SetEvidence(ev).
 		SetExpiresAt(now.AddDate(0, 0, s.Days)).SetCreatedAt(now).Save(ctx)
 	if err != nil {
 		return false, err
 	}
 	audit.System(ctx, s.DB, "suppression_proposed", p.ID.String(),
-		fmt.Sprintf("误报统计 %s 主机 %s：%d 次人工误报，误报率 %d%%", d.key.rule, d.key.asset, ev.FalsePositives, ev.RatioPercent))
-	if s.Proposed != nil {
+		fmt.Sprintf("误报统计 %s 主机 %s：%d 次人工误报、%d 个研判良性，占比 %d%%", d.key.rule, d.key.asset, ev.FalsePositives, ev.AIBenign, ev.RatioPercent))
+	// AI 一路的依据出自 AI，不交 AI 审计员，留给组管理员
+	if s.Proposed != nil && !d.ai {
 		s.Proposed(p.ID)
 	}
 	return true, nil
@@ -495,10 +542,18 @@ func evidence(d draft, window time.Duration) *schema.SuppressEvidence {
 		scope = "rule"
 	}
 	fps := slices.Clone(d.t.fps)
-	sort.Slice(fps, func(i, j int) bool { return resolvedAt(fps[i]).After(resolvedAt(fps[j])) })
+	if d.ai {
+		fps = append(fps, d.t.benign...)
+	}
+	sort.Slice(fps, func(i, j int) bool { return evidenceAt(fps[i]).After(evidenceAt(fps[j])) })
 	incidents := make([]schema.EvidenceIncident, 0, min(len(fps), maxEvidence))
 	for _, inc := range fps[:min(len(fps), maxEvidence)] {
-		e := schema.EvidenceIncident{ID: inc.ID, ResolvedBy: *inc.ResolvedBy, ResolvedAt: resolvedAt(inc)}
+		e := schema.EvidenceIncident{ID: inc.ID, ResolvedAt: evidenceAt(inc)}
+		if inc.ResolvedBy != nil {
+			e.ResolvedBy = *inc.ResolvedBy
+		} else {
+			e.Source = "ai_benign"
+		}
 		if inc.Title != nil {
 			e.Title = *inc.Title
 		}
@@ -507,19 +562,30 @@ func evidence(d draft, window time.Duration) *schema.SuppressEvidence {
 		}
 		incidents = append(incidents, e)
 	}
-	return &schema.SuppressEvidence{
+	ev := &schema.SuppressEvidence{
 		Scope: scope, WindowDays: int(window / (24 * time.Hour)),
 		FalsePositives: d.t.counts[fp], TruePositives: d.t.counts[tp], Pending: d.t.counts[pending],
-		RatioPercent: d.t.ratio(), AIProposals: d.t.counts[aiProposal], AutoClosed: d.t.counts[autoClosed],
+		RatioPercent: d.t.ratio(d.ai), AIProposals: d.t.counts[aiProposal], AutoClosed: d.t.counts[autoClosed],
 		Incidents: incidents,
 	}
+	if d.ai {
+		ev.Basis, ev.AIBenign = "ai_benign", d.t.counts[aiBenign]
+	} else {
+		// 人工一路里研判良性的仍是未结案
+		ev.Pending += d.t.counts[aiBenign]
+	}
+	return ev
 }
 
-func resolvedAt(inc *ent.Incident) time.Time {
+// evidenceAt 依据按最近排序：结案的看结案时间，未结案的看研判时间
+func evidenceAt(inc *ent.Incident) time.Time {
 	if inc.ResolvedAt != nil {
 		return *inc.ResolvedAt
 	}
-	return time.Time{}
+	if inc.TriagedAt != nil {
+		return *inc.TriagedAt
+	}
+	return inc.CreatedAt
 }
 
 func reason(d draft, ev *schema.SuppressEvidence, days int) string {
@@ -540,6 +606,12 @@ func reason(d draft, ev *schema.SuppressEvidence, days int) string {
 			parts[i] = c.Field + op + c.Value
 		}
 		scope = "这台主机上 " + strings.Join(parts, " 且 ") + " 的命中"
+	}
+	if d.ai {
+		r := fmt.Sprintf("AI 研判良性统计：%s近 %d 天有 %d 个未结案事件被 AI 研判为良性、%d 个被人判为误报，合计占比 %d%%（其余未结案 %d 个），期间没有判属实。"+
+			"依据出自 AI 研判，须组管理员批准，AI 审计员不能代批；批准后被抑制覆盖全部告警的未结案良性事件会一并结案。建议有效期 %d 天，到期自动失效。",
+			scope, ev.WindowDays, ev.AIBenign, ev.FalsePositives, ev.RatioPercent, ev.Pending, days)
+		return r
 	}
 	r := fmt.Sprintf("误报统计：%s近 %d 天有 %d 个事件被人判为误报（%s），误报率 %d%%（未结案 %d 个），期间没有判属实",
 		scope, ev.WindowDays, ev.FalsePositives, strings.Join(who, "、"), ev.RatioPercent, ev.Pending)

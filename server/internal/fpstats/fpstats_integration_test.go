@@ -206,3 +206,73 @@ func TestSweep(t *testing.T) {
 		t.Fatalf("MinCount=0 应关闭，得到 %d %v", n, err)
 	}
 }
+
+// benign 造一个未结案、研判为 verdict 的事件，只含一条告警
+func (f *fixture) judged(rule, verdict, raw string) {
+	now := time.Now()
+	inc := f.db.Incident.Create().SetStatus("triaged").SetGraph(json.RawMessage(`{}`)).SetCreatedAt(now.Add(-time.Hour)).
+		SetTriagedAt(now.Add(-30 * time.Minute)).SetAiVerdict(json.RawMessage(`{"verdict":"` + verdict + `"}`)).SaveX(f.ctx)
+	ev := f.db.Event.Create().SetTs(now).SetClassUID(4003).SetSource("agent").SetAssetID(f.host).SetRaw(json.RawMessage(raw)).SaveX(f.ctx)
+	f.db.Alert.Create().SetTs(now.Add(-time.Hour)).SetRuleID(rule).SetSeverity(2).SetAssetID(f.host).SetIncidentID(inc.ID).SetEventID(ev.ID).SaveX(f.ctx)
+}
+
+// 没人结案时，AI 反复研判良性的模式另出草案：只按实体收窄、不交 AI 审计员、人工草案优先
+func TestSweepAIBenignPattern(t *testing.T) {
+	ctx, db := testdb.New(t)
+	db.User.Create().SetUsername("alice").SetPasswordHash("x").SetRole("admin").SaveX(ctx)
+	group := db.Group.Create().SetName("g").SaveX(ctx)
+	host := db.Asset.Create().SetHostname("runner").SetGroupID(group.ID).SaveX(ctx)
+	f := &fixture{ctx: ctx, db: db, host: host.ID, t: t}
+	var submitted []uuid.UUID
+	s := &Stats{DB: db, Window: 30 * 24 * time.Hour, MinCount: 5, MinRatio: 90, Days: 30, Cooldown: 30 * 24 * time.Hour,
+		Proposed: func(id uuid.UUID) { submitted = append(submitted, id) }}
+
+	for range 3 {
+		f.judged("aib", "benign", dns)
+	}
+	f.times(2, "aib", "false_positive", "alice", "", dns)
+	for range 4 {
+		f.judged("few", "benign", dns)
+	}
+	// 一个可疑拉低占比：5 / 6
+	for range 5 {
+		f.judged("doubt", "benign", dns)
+	}
+	f.judged("doubt", "suspicious", dns)
+	// 实体分散不给整条规则
+	for i := range 6 {
+		f.judged("spread", "benign", `{"file":{"path":"/opt/x`+string(rune('a'+i))+`"}}`)
+	}
+	// 高危不出
+	for range 5 {
+		f.judged("severe", "benign", dns)
+	}
+	db.Alert.Update().Where(alert.RuleIDEQ("severe")).SetSeverity(4).ExecX(ctx)
+	// 人工够数的出人工草案（研判良性的按未结案算进分母），AI 一路不再重复提
+	f.times(9, "both", "false_positive", "alice", "", dns)
+	f.judged("both", "benign", dns)
+
+	if n, err := s.Sweep(ctx, time.Now()); err != nil || n != 2 {
+		t.Fatalf("应生成 2 条草案，得到 %d %v", n, err)
+	}
+	all := db.Suppression.Query().AllX(ctx)
+	by := map[string]*ent.Suppression{}
+	for _, d := range all {
+		by[d.RuleID] = d
+	}
+	if len(all) != 2 || by["aib"] == nil || by["both"] == nil {
+		t.Fatalf("草案范围不对：%+v", all)
+	}
+	d := by["aib"]
+	ev := d.Evidence
+	if d.CreatedBy != CreatedByAI || len(d.Conditions) != 2 || ev == nil || ev.Basis != "ai_benign" || ev.AIBenign != 3 ||
+		ev.FalsePositives != 2 || ev.RatioPercent != 100 || len(ev.Incidents) != 5 || !strings.Contains(*d.Reason, "须组管理员批准") {
+		t.Fatalf("AI 一路草案不对：%+v %+v", d, ev)
+	}
+	if by["both"].CreatedBy != CreatedBy || by["both"].Evidence.Basis != "" || by["both"].Evidence.Pending != 1 {
+		t.Fatalf("人工够数应出人工草案，研判良性的按未结案算：%+v %+v", by["both"], by["both"].Evidence)
+	}
+	if len(submitted) != 1 || submitted[0] != by["both"].ID {
+		t.Fatalf("只有人工草案交 AI 审计员：%v", submitted)
+	}
+}

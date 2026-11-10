@@ -247,6 +247,16 @@ go -C server test -tags integration -p 1 ./internal/intel ./internal/api -run 'T
     带依据（计入的事件、谁判的、比例、未计入的数量）与建议有效期 `FP_SUPPRESS_DAYS`（30，1–90）。
   - 不重复：同（规则、主机或全局）已有生效且范围不比草案窄的抑制、或与草案互相包含的待批草案时不生成；
     `FP_SUPPRESS_COOLDOWN_DAYS`（30）天内被拒过的，范围不比它窄的草案不再生成（拒了窄的，宽的更不提；更窄的可以再问）。
+  - **研判良性模式草案**（`created_by=fp-stats-ai`）：人工误报这一路要有人先结案，没人看时同一模式会一直冒出新事件、永远攒不够数。
+    第二路把未结案、AI 研判为 `benign` 的事件与人工误报一起算（人工一路里它们仍按未结案进分母），门槛、窄优先、高危排除与上面相同，
+    但**只出按实体收窄的草案**，不出整条规则的；人工一路同范围已出草案时不重复。依据标 `basis=ai_benign` 并单列研判良性的数量与事件。
+    依据出自 AI，**AI 审计员不代批**（`suppressreview` 一律留给组管理员），否则就是 AI 研判 → AI 统计 → AI 批准的自提自批；
+    人从逐个事件结案变成按模式批一次。
+- **抑制生效后回头结案**（`server/internal/suppressclose`，单活租约 `suppression-retro-close`，默认每 `SUPPRESSION_RETRO_CLOSE_MINUTES`（10）分钟一轮）：
+  抑制只挡新命中，批准之前已经成了事件的同一模式仍挂在未结案里。每轮按生效抑制找带其规则命中的未结案事件，
+  **全部告警**都能读到原始事件、且各自被某条生效抑制覆盖（与入库同一套匹配，只查不计命中数）、AI 研判为 `benign`、没有人工接管时，
+  按 `false_positive` 结案：结案人 `system`、来源 `suppression`、说明列出覆盖它的抑制；研判时间对不上（期间重研判或有人处理）的下一轮再看。
+  研判可疑或恶意的不收——抑制说这类命中是噪声，研判说这个事件里还有别的疑点。来源非空，误报统计不把它当人工误报，抑制不会自己喂大自己。
 
 ## 爆破得手升级（`internal/ingest/processor.go` 与旧接入路径 `internal/grpcsvc/bruteforce.go`）
 

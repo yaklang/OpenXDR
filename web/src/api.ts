@@ -439,6 +439,9 @@ export interface SuppressEvidence {
   aiProposals: number
   autoClosed: number
   incidents: { id: string; title?: string; resolvedBy: string; resolvedAt: string; source?: string }[]
+  // ai_benign：按 AI 研判良性的模式生成（另有 aiBenign 个研判良性的未结案事件），只能由人批准
+  basis?: 'ai_benign'
+  aiBenign?: number
 }
 
 export interface SuppressCondition {

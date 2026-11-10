@@ -60,6 +60,9 @@ type SuppressEvidence struct {
 	AutoClosed  int `json:"autoClosed"`
 	// 计入的误报事件，最多 20 个
 	Incidents []EvidenceIncident `json:"incidents"`
+	// ai_benign 表示按 AI 研判良性的模式生成（另计 AIBenign 个研判良性的未结案事件），只能由人批准；空为人工误报统计
+	Basis    string `json:"basis,omitempty"`
+	AIBenign int    `json:"aiBenign,omitempty"`
 }
 
 // EvidenceIncident 一个被人判为误报的事件
@@ -68,7 +71,7 @@ type EvidenceIncident struct {
 	Title      string    `json:"title,omitempty"`
 	ResolvedBy string    `json:"resolvedBy"`
 	ResolvedAt time.Time `json:"resolvedAt"`
-	// 空为人工写的结论；ai_verdict 人选了误报、采纳 AI 研判的说明
+	// 空为人工写的结论；ai_verdict 人选了误报、采纳 AI 研判的说明；ai_benign 未结案、AI 研判为良性
 	Source string `json:"source,omitempty"`
 }
 

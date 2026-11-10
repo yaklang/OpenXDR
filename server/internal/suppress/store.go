@@ -98,6 +98,14 @@ func (s *Store) Suppressed(ruleID string, assetID *uuid.UUID, raw map[string]any
 	return false
 }
 
+// Covering 与 Suppressed 同一口径，只查不计数：回头核对历史命中用，不算新压掉的次数
+func (s *Store) Covering(ruleID string, assetID *uuid.UUID, raw map[string]any, now time.Time) *uuid.UUID {
+	s.mu.RLock()
+	entries := s.byRule[ruleID]
+	s.mu.RUnlock()
+	return matchRule(entries, assetID, raw, now)
+}
+
 // matchRule 返回 entries 里第一条对给定资产/时间有效的抑制规则 id；
 // 过期、资产不匹配或字段条件对不上的条目跳过，全部不成立则返回 nil。
 func matchRule(entries []entry, assetID *uuid.UUID, raw map[string]any, now time.Time) *uuid.UUID {

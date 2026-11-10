@@ -100,7 +100,7 @@ export function SuppressionsPage() {
             {
               title: t('thStatus'), dataIndex: 'status', width: 105,
               sorter: (a, b) => a.status.localeCompare(b.status),
-              render: (v: Suppression['status'], s) => <Tag color={v === 'proposed' ? 'gold' : v === 'rejected' ? 'default' : 'green'}>{t(v === 'proposed' ? (s.evidence ? 'supStatsDraft' : 'supProposed') : v === 'rejected' ? 'supRejected' : 'supActive')}</Tag>,
+              render: (v: Suppression['status'], s) => <Tag color={v === 'proposed' ? 'gold' : v === 'rejected' ? 'default' : 'green'}>{t(v === 'proposed' ? (s.evidence ? (s.evidence.basis === 'ai_benign' ? 'supAIStatsDraft' : 'supStatsDraft') : 'supProposed') : v === 'rejected' ? 'supRejected' : 'supActive')}</Tag>,
             },
             { title: t('thScope'), dataIndex: 'assetId', width: 130, render: v => (v ? <HostLink id={v} /> : <Tag color="warning">{t('allHosts')}</Tag>) },
             {
@@ -117,7 +117,7 @@ export function SuppressionsPage() {
               title: t('thCreatedBy'), dataIndex: 'createdBy', width: 120,
               sorter: (a, b) => a.createdBy.localeCompare(b.createdBy),
               render: (v: string, s) => (s.evidence
-                ? <Popover title={t('supFromStats')} content={<StatsEvidence e={s.evidence} />}><Tag color="cyan" style={{ cursor: 'help' }}>{t('supFromStats')}</Tag></Popover>
+                ? <Popover title={t(s.evidence.basis === 'ai_benign' ? 'supFromAIStats' : 'supFromStats')} content={<StatsEvidence e={s.evidence} />}><Tag color={s.evidence.basis === 'ai_benign' ? 'orange' : 'cyan'} style={{ cursor: 'help' }}>{t(s.evidence.basis === 'ai_benign' ? 'supFromAIStats' : 'supFromStats')}</Tag></Popover>
                 : s.sessionId ? <Space size={4}><Tag color="purple" variant="filled">AI</Tag><Link to={`/chat/${s.sessionId}`}>{t('openSession')}</Link></Space> : v),
             },
             ...(canWrite
@@ -153,12 +153,14 @@ function StatsEvidence({ e }: { e: SuppressEvidence }) {
   return (
     <div style={{ maxWidth: 420, fontSize: 12 }}>
       {e.scope === 'rule' && <div style={{ marginBottom: 6 }}><Tag color="warning">{t('supWholeRule')}</Tag>{t('supStatsScopeRule')}</div>}
-      <div>{t('supStatsSummary', { days: e.windowDays, fp: e.falsePositives, ratio: e.ratioPercent, pending: e.pending })}</div>
+      <div>{e.basis === 'ai_benign'
+        ? t('supAIStatsSummary', { days: e.windowDays, benign: e.aiBenign ?? 0, fp: e.falsePositives, ratio: e.ratioPercent, pending: e.pending })
+        : t('supStatsSummary', { days: e.windowDays, fp: e.falsePositives, ratio: e.ratioPercent, pending: e.pending })}</div>
       {e.aiProposals + e.autoClosed > 0 && <div style={{ opacity: 0.7 }}>{t('supStatsExcluded', { ai: e.aiProposals, auto: e.autoClosed })}</div>}
       <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
         {e.incidents.map(i => (
           <li key={i.id}>
-            <Link to={`/incidents/${i.id}`}>{i.title || i.id}</Link> · {i.resolvedBy}{i.source === 'ai_verdict' ? ` (${t('supStatsAdoptedAI')})` : ''} · {fmtTime(i.resolvedAt)}
+            <Link to={`/incidents/${i.id}`}>{i.title || i.id}</Link> · {i.source === 'ai_benign' ? t('supStatsAIBenign') : i.resolvedBy}{i.source === 'ai_verdict' ? ` (${t('supStatsAdoptedAI')})` : ''} · {fmtTime(i.resolvedAt)}
           </li>
         ))}
       </ul>

@@ -76,6 +76,7 @@ import (
 	"openxdr/server/internal/selfwatch"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
+	"openxdr/server/internal/suppressclose"
 	"openxdr/server/internal/suppressreview"
 	"openxdr/server/internal/suricata"
 	"openxdr/server/internal/syslog"
@@ -365,7 +366,7 @@ func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules s
 		autoClose := &janitor.AutoClose{DB: client, Days: days, Interval: time.Hour, Review: closureReview}
 		go cluster.RunLeader(ctx, db, "auto-close-benign", autoClose.Run)
 	}
-	// 同一规则在同一主机上被人反复判误报，生成抑制草案交 AI 审计员评审；0 关闭
+	// 同一规则在同一主机上被人反复判误报，生成抑制草案交 AI 审计员评审；AI 反复研判良性的模式另出草案，只能由人批准；0 关闭
 	if minCount := getenvInt("FP_SUPPRESS_MIN_COUNT", 5); minCount > 0 {
 		stats := &fpstats.Stats{
 			DB: client, MinCount: minCount, MinRatio: getenvInt("FP_SUPPRESS_MIN_RATIO", 90),
@@ -376,6 +377,11 @@ func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules s
 			Proposed: func(id uuid.UUID) { reviewer.Submit(ctx, id) },
 		}
 		go cluster.RunLeader(ctx, db, "fp-stats", stats.Run)
+	}
+	// 抑制生效后回头结案被它覆盖全部告警的未结案良性事件；0 关闭
+	if minutes := getenvInt("SUPPRESSION_RETRO_CLOSE_MINUTES", 10); minutes > 0 {
+		closer := &suppressclose.Closer{DB: client, Store: suppressions, Interval: time.Duration(minutes) * time.Minute}
+		go cluster.RunLeader(ctx, db, "suppression-retro-close", closer.Run)
 	}
 }
 

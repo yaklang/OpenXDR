@@ -109,6 +109,11 @@ func TestShouldHoldForHuman(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "按 AI 研判良性模式出的低危带条件草案也必须留人工",
+			s:    &ent.Suppression{RuleID: "low", CreatedBy: "fp-stats-ai", Conditions: cond, Evidence: validEv},
+			want: true,
+		},
+		{
 			name: "AI 提议高危带条件必须留人工",
 			s:    &ent.Suppression{RuleID: "high", SessionID: &sess, CreatedBy: "ai:1", Conditions: cond},
 			want: true,

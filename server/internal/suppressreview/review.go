@@ -25,6 +25,7 @@ import (
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/commandreview"
+	"openxdr/server/internal/fpstats"
 	"openxdr/server/internal/modelroute"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
@@ -267,7 +268,9 @@ func (r *Reviewer) material(ctx context.Context, s *ent.Suppression) (string, er
 	origin := "误报统计（按人工误报结论生成）"
 	if s.SessionID != nil {
 		origin = "AI 会话提议"
-	} else if s.CreatedBy != "fp-stats" {
+	} else if s.CreatedBy == fpstats.CreatedByAI {
+		origin = "AI 研判良性统计（须人工批准）"
+	} else if s.CreatedBy != fpstats.CreatedBy {
 		origin = s.CreatedBy
 	}
 	fmt.Fprintf(&b, "草案来源：%s\n条件（AND）：%s\n", origin, conditions(s.Conditions))
@@ -293,6 +296,10 @@ func (r *Reviewer) material(ctx context.Context, s *ent.Suppression) (string, er
 }
 
 func (r *Reviewer) shouldHoldForHuman(s *ent.Suppression) bool {
+	// 按 AI 研判良性模式出的草案：依据本身出自 AI，再由 AI 批准就是自提自批
+	if s.CreatedBy == fpstats.CreatedByAI {
+		return true
+	}
 	sev := r.ruleSeverity(s.RuleID)
 	if len(s.Conditions) == 0 && sev >= 3 {
 		return true
