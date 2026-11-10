@@ -162,6 +162,7 @@ type fakePatroni struct {
 	switchTo  string
 	servers   map[string]*httptest.Server
 	authFails int
+	slow      time.Duration // 切换后迟迟不回应答（Patroni 等降级做完才回）
 }
 
 func (p *fakePatroni) server(t *testing.T, name string) *httptest.Server {
@@ -187,6 +188,11 @@ func (p *fakePatroni) server(t *testing.T, name string) *httptest.Server {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			p.roles[body["leader"]], p.roles[body["candidate"]] = "replica", "primary"
 			p.switchTo = body["candidate"]
+			if p.slow > 0 {
+				p.mu.Unlock()
+				time.Sleep(p.slow)
+				p.mu.Lock()
+			}
 			w.WriteHeader(200)
 		}
 	}))
@@ -232,6 +238,26 @@ func TestPlatformNodeHandsOffPrimaryFirst(t *testing.T) {
 	}
 	if len(*notes) != 0 {
 		t.Fatalf("不该通知：%v", *notes)
+	}
+}
+
+// 切换请求等到超时也没回应答，但切换成了：以成员角色为准接着维护，不停手
+func TestPlatformNodeHandoffOutlivesRequestTimeout(t *testing.T) {
+	ctx, r, f, p, notes := platformOnly(t, true)
+	p.slow = 300 * time.Millisecond
+	r.Config.Patroni.HTTP = &http.Client{Timeout: 50 * time.Millisecond}
+	for i := 0; i < 4; i++ {
+		f.heartbeat(ctx)
+		if err := r.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+		f.now = f.now.Add(2 * time.Minute)
+	}
+	if p.switchTo != "openxdr-node2" || len(*notes) != 0 {
+		t.Fatalf("超时不该当成失败：%v %v", p.switchTo, *notes)
+	}
+	if got := strings.Join(f.calls, ","); got != "upgrade openxdr-node1,reboot openxdr-node1" {
+		t.Fatalf("切换成了就该接着维护：%s", got)
 	}
 }
 

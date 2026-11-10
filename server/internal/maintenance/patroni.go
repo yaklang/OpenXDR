@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -141,15 +140,15 @@ func (r *Runner) handoff(ctx context.Context, a *ent.Asset) error {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, self.addr+"/switchover", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth(p.User, p.Password)
-	resp, err := p.client().Do(req)
-	if err != nil {
-		return errors.New("发起数据库主节点切换失败")
+	// Patroni 等降级做完才回应答，主库要先落一次检查点，忙时几十秒：2026-11-11 请求 5 秒超时被当成失败，切换其实成了。
+	// 所以只有明确的拒绝才算失败；超时或连接断了，以成员角色为准
+	if resp, err := p.client().Do(req); err == nil {
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("数据库主节点切换被拒绝（HTTP %d）", resp.StatusCode)
+		}
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("数据库主节点切换被拒绝（HTTP %d）", resp.StatusCode)
-	}
-	for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); {
+	for deadline := time.Now().Add(switchoverWait); time.Now().Before(deadline); {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -160,5 +159,8 @@ func (r *Runner) handoff(ctx context.Context, a *ent.Asset) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("数据库主节点切换后 90 秒 %s 仍是主节点", a.Hostname)
+	return fmt.Errorf("发起数据库主节点切换后 %d 分钟 %s 仍是主节点", int(switchoverWait.Minutes()), a.Hostname)
 }
+
+// switchoverWait 发起切换后等本节点降为从节点的上限
+const switchoverWait = 3 * time.Minute
