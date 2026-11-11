@@ -200,17 +200,17 @@ function FactsTab({ facts, refId, adding, onAdded }: { facts: UseQueryResult<Fac
           dataSource={rows}
           pagination={pagination}
           rowClassName={rowClassName}
-          scroll={{ x: 1250 }}
+          scroll={{ x: 1330 }}
           locale={{ emptyText: <EmptyHint title={t('factEmpty')} hint={t('factEmptyHint')} /> }}
           columns={[
             {
-              title: t('factRef'), dataIndex: 'ref', width: 120,
+              title: t('factRef'), dataIndex: 'ref', width: 140,
               render: (v: string, f) => <Flex vertical gap={2} align="flex-start">
                 <Typography.Text className="mono" copyable style={{ fontSize: 12.5 }}>{v}</Typography.Text>
                 {f.retiredAt && <Tooltip title={`${f.retiredBy ?? ''} · ${fmtTime(f.retiredAt)}`}><Tag>{t('factRetired')}</Tag></Tooltip>}
               </Flex>,
             },
-            { title: t('factSubject'), key: 'subject', width: 200, render: (_, f) => <FactSubject f={f} /> },
+            { title: t('factSubject'), key: 'subject', width: 240, render: (_, f) => <FactSubject f={f} /> },
             { title: t('factHolder'), dataIndex: 'holder', width: 150, ellipsis: { showTitle: false }, render: (v: string, f) => (v ? <Tooltip title={v}><span>{f.holderName || v}</span></Tooltip> : '-') },
             { title: t('factContent'), dataIndex: 'content', render: v => <Clamp text={v} /> },
             {
@@ -223,7 +223,7 @@ function FactsTab({ facts, refId, adding, onAdded }: { facts: UseQueryResult<Fac
               render: (v: number, f) => <Flex vertical gap={0}><span>{v}</span>{f.lastCitedAt && <Typography.Text type="secondary" style={{ fontSize: 12 }}><Ago iso={f.lastCitedAt} /></Typography.Text>}</Flex>,
             },
             ...(isAdmin ? [{
-              title: t('actions'), key: 'act', width: 110,
+              title: t('actions'), key: 'act', width: 130,
               render: (_: unknown, f: Fact) => !f.retiredAt && (
                 <TableActions>
                   <Button type="link" size="small" onClick={() => setEditing(f)}>{t('factEdit')}</Button>
@@ -353,7 +353,7 @@ function IntentsTab({ intents, refId }: { intents: UseQueryResult<Intent[]>; ref
           locale={{ emptyText: <EmptyHint title={t(view === 'active' ? 'intentEmpty' : 'intentHistoryEmpty')} hint={view === 'active' ? t('intentEmptyHint') : undefined} /> }}
           columns={[
             { title: t('factRef'), dataIndex: 'ref', width: 130, render: (v: string) => <Typography.Text className="mono" copyable style={{ fontSize: 12.5 }}>{v}</Typography.Text> },
-            { title: t('intentBy'), dataIndex: 'createdBy', width: 170, ellipsis: { showTitle: false }, render: (v: string, i) => <Tooltip title={v}><span>{i.createdByName || v}</span></Tooltip> },
+            { title: t('intentBy'), dataIndex: 'createdBy', width: 200, ellipsis: { showTitle: false }, render: (v: string, i) => <Tooltip title={v}><span>{i.createdByName || v}</span></Tooltip> },
             {
               title: t('intentHosts'), dataIndex: 'assetIds', width: 220,
               render: (v: string[], i) => <Flex wrap gap={6}>{v.map((id, n) => <HostLink key={id} id={id} fallback={i.hostnames?.[n]} />)}</Flex>,
