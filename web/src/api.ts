@@ -790,6 +790,81 @@ export const updateTrustedSource = (id: string, body: {
 }) => send('PATCH', `/api/trusted-sources/${encodeURIComponent(id)}`, body)
 export const deleteTrustedSource = (id: string) => send('DELETE', `/api/trusted-sources/${encodeURIComponent(id)}`)
 
+// 自治总控：权威事实（管理员录入，研判当前提引用）与运维意图（登记人声明的操作范围）
+export type FactKind = 'key' | 'channel' | 'asset_role' | 'decision' | 'change'
+export interface Fact {
+  id: string
+  // 研判结论里引用的编号，F-xxxxxxxx
+  ref: string
+  createdAt: string
+  updatedAt: string
+  kind: FactKind
+  subject: string
+  groupId: string | null
+  assetId: string | null
+  hostname?: string
+  holder: string
+  content: string
+  source: string
+  createdBy: string
+  expiresAt: string | null
+  retiredAt: string | null
+  retiredBy: string | null
+  citedCount: number
+  lastCitedAt: string | null
+}
+
+export interface Intent {
+  id: string
+  // I-xxxxxxxx
+  ref: string
+  createdAt: string
+  createdBy: string
+  keyFingerprint: string
+  sourceAddr: string
+  assetIds: string[]
+  hostnames: string[] | null
+  category: string
+  note: string
+  startsAt: string
+  expiresAt: string
+  endedAt: string | null
+  endedBy: string | null
+  late: boolean
+  active: boolean
+}
+
+export const fetchFacts = (q: { assetId?: string; retired?: boolean } = {}) =>
+  get<Fact[]>(`/api/facts?${new URLSearchParams({ ...(q.assetId ? { assetId: q.assetId } : {}), ...(q.retired ? { retired: '1' } : {}) })}`)
+export async function createFact(body: {
+  kind: FactKind
+  subject: string
+  assetId?: string
+  groupId?: string
+  holder: string
+  content: string
+  expiresInDays: number
+}): Promise<Fact> {
+  return (await send('POST', '/api/facts', body)).json()
+}
+export const updateFact = (id: string, body: { holder?: string; content?: string; expiresInDays?: number }) =>
+  send('PATCH', `/api/facts/${encodeURIComponent(id)}`, body)
+export const retireFact = (id: string) => send('POST', `/api/facts/${encodeURIComponent(id)}/retire`)
+
+export const fetchIntents = (active = false) => get<Intent[]>(`/api/intents${active ? '?active=1' : ''}`)
+export async function createIntent(body: {
+  keyFingerprint: string
+  sourceAddr: string
+  assetIds: string[]
+  category: string
+  note: string
+  durationMinutes: number
+  startedAt?: string
+}): Promise<Intent> {
+  return (await send('POST', '/api/intents', body)).json()
+}
+export const endIntent = (id: string) => send('POST', `/api/intents/${encodeURIComponent(id)}/end`)
+
 export async function createSuppression(body: {
   ruleId: string
   assetId?: string | null

@@ -66,6 +66,9 @@ type Event func(*sql.Selector)
 // ExternalTicket is the predicate function for externalticket builders.
 type ExternalTicket func(*sql.Selector)
 
+// Fact is the predicate function for fact builders.
+type Fact func(*sql.Selector)
+
 // Finding is the predicate function for finding builders.
 type Finding func(*sql.Selector)
 
@@ -110,6 +113,9 @@ type IntegrationToken func(*sql.Selector)
 
 // Intel is the predicate function for intel builders.
 type Intel func(*sql.Selector)
+
+// Intent is the predicate function for intent builders.
+type Intent func(*sql.Selector)
 
 // Memory is the predicate function for memory builders.
 type Memory func(*sql.Selector)

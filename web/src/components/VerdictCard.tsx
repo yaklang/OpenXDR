@@ -3,6 +3,7 @@ import { Alert, Card, Collapse, Empty, Flex, Space, Table, Tag, Timeline, Typogr
 import type { ReactNode } from 'react'
 import type { RecordEvidence, Verdict } from '../api'
 import { useI18n, type MsgKey } from '../i18n'
+import { RefText } from './ControlRefs'
 import { GeminiSparkle } from './Logo'
 
 const ACTION_CODE_LABELS: Record<string, { zh: string; en: string; color: string }> = {
@@ -94,7 +95,7 @@ export function VerdictCard({ verdict }: { verdict: Verdict | null }) {
         {headline && (
           <div style={{ marginBottom: 12 }}>
             <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>{t('triageCoreConclusion')}</Typography.Text>
-            <Typography.Paragraph strong style={{ fontSize: 15, lineHeight: 1.65, marginBottom: 0 }}>{headline}</Typography.Paragraph>
+            <Typography.Paragraph strong style={{ fontSize: 15, lineHeight: 1.65, marginBottom: 0 }}><RefText text={headline} /></Typography.Paragraph>
           </div>
         )}
         {(queries.length > 0 || actionCodes.length > 0) && (
@@ -118,13 +119,13 @@ export function VerdictCard({ verdict }: { verdict: Verdict | null }) {
         {!!chain.length && (
           <div style={{ marginBottom: 12 }}>
             <Typography.Title level={5} style={{ marginTop: 4, marginBottom: 10 }}>{t('triageModelChain')}</Typography.Title>
-            <Timeline items={chain.map(s => ({ color: meta?.color ?? token.colorPrimary, content: s }))} />
+            <Timeline items={chain.map(s => ({ color: meta?.color ?? token.colorPrimary, content: <RefText text={s} /> }))} />
           </div>
         )}
         {!actionCodes.length && !!actions.length && (
           <div style={{ marginBottom: 12 }}>
             <Typography.Title level={5} style={{ marginTop: 4 }}>{t('suggestedActions')}</Typography.Title>
-            <ol className="action-list">{actions.map((s, i) => <li key={i}>{s}</li>)}</ol>
+            <ol className="action-list">{actions.map((s, i) => <li key={i}><RefText text={s} /></li>)}</ol>
           </div>
         )}
         {hasFoldContent && (
@@ -136,13 +137,13 @@ export function VerdictCard({ verdict }: { verdict: Verdict | null }) {
                 {detail && (
                   <div>
                     <Typography.Text type="secondary">{t('triageModelSummary')}</Typography.Text>
-                    <Typography.Paragraph style={{ lineHeight: 1.75, marginBottom: 0, marginTop: 4 }}>{detail}</Typography.Paragraph>
+                    <Typography.Paragraph style={{ lineHeight: 1.75, marginBottom: 0, marginTop: 4 }}><RefText text={detail} /></Typography.Paragraph>
                   </div>
                 )}
                 {!!actionCodes.length && !!actions.length && (
                   <div>
                     <Typography.Text type="secondary">{t('suggestedActions')}</Typography.Text>
-                    <ol className="action-list" style={{ marginTop: 4, marginBottom: 0 }}>{actions.map((s, i) => <li key={i}>{s}</li>)}</ol>
+                    <ol className="action-list" style={{ marginTop: 4, marginBottom: 0 }}>{actions.map((s, i) => <li key={i}><RefText text={s} /></li>)}</ol>
                   </div>
                 )}
                 {!!verdict.evidence_observations?.length && <EvidenceObservations observations={verdict.evidence_observations} />}

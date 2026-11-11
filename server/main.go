@@ -224,8 +224,12 @@ func main() {
 	routes.Handle("/api/system-integrations", integrations)
 	routes.Handle("/api/system-integrations/", integrations)
 	startIntegrationDelivery(ctx, client, credentialVault, outboundAllow)
+	control := api.Control(client, webhook.Send)
+	for _, path := range []string{"/api/facts", "/api/facts/", "/api/intents", "/api/intents/"} {
+		routes.Handle(path, control)
+	}
 	routes.Handle("/", api.Handler(client, archiveRead, rules, hub, suppressions, intelStore, allowlist, chat))
-	mux := publicMux(auth.Middleware(client, routes), db, client, registry, enrollSvc, dists, events)
+	mux := publicMux(auth.Middleware(client, routes), db, client, registry, enrollSvc, dists, events, webhook.Send)
 	// 经反向代理时还原客户端地址，登录退避与审计才按真人计
 	trustedProxies, err := realip.Parse(os.Getenv("TRUSTED_PROXIES"))
 	if err != nil {
@@ -1009,7 +1013,7 @@ func registerAIRoutes(routes *http.ServeMux, client *ent.Client, conn *sql.DB, l
 }
 
 // publicMux 外层路由：指标、健康检查与免登录的接入端点，其余交给需登录的 app。
-func publicMux(app http.Handler, db *sql.DB, client *ent.Client, registry *prometheus.Registry, enrollSvc *enroll.Service, dists enroll.Dists, events eventbus.Bus) *http.ServeMux {
+func publicMux(app http.Handler, db *sql.DB, client *ent.Client, registry *prometheus.Registry, enrollSvc *enroll.Service, dists enroll.Dists, events eventbus.Bus, notify func(ctx context.Context, title, body, path string) error) *http.ServeMux {
 	mux := http.NewServeMux()
 	// 集成 API 的闸门是控制台里由全局管理员启用的集成与签发的 Token，不再另设全局开关；
 	// 游标密钥由 HOST_CREDENTIAL_KEY 派生，没配主密钥时集成 API 返回 503
@@ -1021,7 +1025,7 @@ func publicMux(app http.Handler, db *sql.DB, client *ent.Client, registry *prome
 			os.Exit(1)
 		}
 	}
-	integrationAPI := &integration.Service{DB: client, CursorKey: cursorKey,
+	integrationAPI := &integration.Service{DB: client, CursorKey: cursorKey, Notify: notify,
 		Flows: func(ctx context.Context, origin flowinput.Origin, event flowinput.Event) error {
 			return events.Publish(ctx, ingest.FlowEnvelope(origin, event))
 		},

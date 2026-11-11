@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"openxdr/server/ent/asset"
 	"openxdr/server/ent/event"
+	"openxdr/server/internal/facts"
 	"openxdr/server/internal/memories"
 	"slices"
 	"strings"
@@ -569,6 +570,7 @@ func (e *Engine) buildContext(ctx context.Context, inc *ent.Incident) (string, e
 	e.appendIPInfo(ctx, &sb, alerts)
 	e.appendCaseHistory(ctx, &sb, inc, alerts)
 	e.appendMemories(ctx, &sb, alerts)
+	e.appendFacts(ctx, &sb, alerts)
 	e.appendAssetWork(ctx, &sb, alerts)
 	return sb.String(), nil
 }
@@ -921,6 +923,73 @@ func (e *Engine) appendMemories(ctx context.Context, sb *strings.Builder, alerts
 			review += "〔待复核：" + note + "〕"
 		}
 		fmt.Fprintf(sb, "- (%s) %s%s%s\n", m["source"], host, m["content"], review)
+	}
+}
+
+// appendFacts 自治总控的权威事实与覆盖本次登录的运维意图：这把钥匙是谁的、这次会话登记过要做什么。
+// 登录身份取告警原始事件顶层的 login_session（agent 按 sshd 认证日志与审计会话号挂上，非 root 伪造不了）
+func (e *Engine) appendFacts(ctx context.Context, sb *strings.Builder, alerts []*ent.Alert) {
+	var ids []uuid.UUID
+	var logins []facts.Login
+	for _, a := range alerts {
+		if a.AssetID == nil {
+			continue
+		}
+		if !slices.Contains(ids, *a.AssetID) {
+			ids = append(ids, *a.AssetID)
+		}
+		if a.Edges.Event == nil {
+			continue
+		}
+		var raw struct {
+			Login struct {
+				KeyFP string `json:"key_fp"`
+				SrcIP string `json:"src_ip"`
+			} `json:"login_session"`
+		}
+		if json.Unmarshal(a.Edges.Event.Raw, &raw) == nil && raw.Login.KeyFP != "" {
+			logins = append(logins, facts.Login{KeyFP: raw.Login.KeyFP, SrcIP: raw.Login.SrcIP, AssetID: *a.AssetID, At: a.Edges.Event.Ts})
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	assets, err := e.DB.Asset.Query().Where(asset.IDIn(ids...)).All(ctx)
+	if err != nil {
+		return
+	}
+	var groups []uuid.UUID
+	hostnames := map[uuid.UUID]string{}
+	for _, a := range assets {
+		hostnames[a.ID] = a.Hostname
+		if a.GroupID != nil && !slices.Contains(groups, *a.GroupID) {
+			groups = append(groups, *a.GroupID)
+		}
+	}
+	now := time.Now()
+	b, err := facts.Lookup(ctx, e.DB, groups, ids, logins, now)
+	if err != nil {
+		slog.Warn("读取权威事实失败", "err", err)
+		return
+	}
+	var more []uuid.UUID
+	for _, m := range b.Intents {
+		for _, id := range m.Intent.AssetIds {
+			if hostnames[id] == "" && !slices.Contains(more, id) {
+				more = append(more, id)
+			}
+		}
+	}
+	if len(more) > 0 {
+		if rows, err := e.DB.Asset.Query().Where(asset.IDIn(more...)).Select(asset.FieldID, asset.FieldHostname).All(ctx); err == nil {
+			for _, a := range rows {
+				hostnames[a.ID] = a.Hostname
+			}
+		}
+	}
+	sb.WriteString(facts.Render(b, hostnames))
+	if err := facts.Cite(ctx, e.DB, b, now); err != nil {
+		slog.Warn("记录事实引用失败", "err", err)
 	}
 }
 

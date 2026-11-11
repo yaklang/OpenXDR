@@ -203,8 +203,10 @@ type material struct {
 	Alerts      []*ent.Alert            `json:"alerts"`
 	Events      []*ent.Event            `json:"events"`
 	Lineage     *lineage                `json:"lineage,omitempty"`
-	Commands    []commandEvidence       `json:"commands"`
-	Basis       []positiveBasis         `json:"positive_basis"`
+	// 服务端按登录身份、主机、时间核对过的权威事实与运维意图（Markdown，一节）
+	Authoritative string            `json:"authoritative,omitempty"`
+	Commands      []commandEvidence `json:"commands"`
+	Basis         []positiveBasis   `json:"positive_basis"`
 }
 
 func eligible(inc *ent.Incident) bool {

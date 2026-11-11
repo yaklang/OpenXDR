@@ -1,6 +1,7 @@
 import { Clamp } from '../components/Clamp'
 import { ArrowLeftOutlined, LayoutOutlined, RobotOutlined, SearchOutlined } from '@ant-design/icons'
 import { AssetVulns } from '../components/AssetVulns'
+import { AssetControlCard } from '../components/AssetControlCard'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert, App, Badge, Button, Card, Col, Descriptions, Empty, Form, Input, Result, Row, Segmented, Select, Skeleton, Space, Switch, Table, Tabs, Tag, Tooltip, Typography,
@@ -385,6 +386,7 @@ function AssetDetail() {
         {/* 仅当采集或探针处于降级/异常时在顶层显著提示；常规健康状态收敛在「采集与配置」标签页中 */}
         {collectorDegraded && (asset.agentId || !asset.sensorSeen) && <Col span={24}><CollectorHealth asset={asset} /></Col>}
         {collectorDegraded && asset.sensorSeen && <Col span={24}><SensorHealth asset={asset} /></Col>}
+        <AssetControlCard assetId={asset.id} />
 
         {/* 主工作区：支持切换右侧画像边栏或全宽表格模式 */}
         <Col xs={24} xl={showSideProfile && tab !== 'profile' ? 16 : 24}>

@@ -23,6 +23,7 @@ import (
 	"openxdr/server/ent/enrolltoken"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/externalticket"
+	"openxdr/server/ent/fact"
 	"openxdr/server/ent/finding"
 	"openxdr/server/ent/group"
 	"openxdr/server/ent/groupmember"
@@ -37,6 +38,7 @@ import (
 	"openxdr/server/ent/integrationsubscription"
 	"openxdr/server/ent/integrationtoken"
 	"openxdr/server/ent/intel"
+	"openxdr/server/ent/intent"
 	"openxdr/server/ent/ipinfo"
 	"openxdr/server/ent/memory"
 	"openxdr/server/ent/processbaseline"
@@ -426,6 +428,38 @@ func init() {
 	externalticketDescID := externalticketFields[0].Descriptor()
 	// externalticket.DefaultID holds the default value on creation for the id field.
 	externalticket.DefaultID = externalticketDescID.Default.(func() uuid.UUID)
+	factFields := schema.Fact{}.Fields()
+	_ = factFields
+	// factDescCreatedAt is the schema descriptor for created_at field.
+	factDescCreatedAt := factFields[1].Descriptor()
+	// fact.DefaultCreatedAt holds the default value on creation for the created_at field.
+	fact.DefaultCreatedAt = factDescCreatedAt.Default.(func() time.Time)
+	// factDescUpdatedAt is the schema descriptor for updated_at field.
+	factDescUpdatedAt := factFields[2].Descriptor()
+	// fact.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	fact.DefaultUpdatedAt = factDescUpdatedAt.Default.(func() time.Time)
+	// fact.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	fact.UpdateDefaultUpdatedAt = factDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// factDescSubject is the schema descriptor for subject field.
+	factDescSubject := factFields[4].Descriptor()
+	// fact.DefaultSubject holds the default value on creation for the subject field.
+	fact.DefaultSubject = factDescSubject.Default.(string)
+	// factDescHolder is the schema descriptor for holder field.
+	factDescHolder := factFields[7].Descriptor()
+	// fact.DefaultHolder holds the default value on creation for the holder field.
+	fact.DefaultHolder = factDescHolder.Default.(string)
+	// factDescSource is the schema descriptor for source field.
+	factDescSource := factFields[9].Descriptor()
+	// fact.DefaultSource holds the default value on creation for the source field.
+	fact.DefaultSource = factDescSource.Default.(string)
+	// factDescCitedCount is the schema descriptor for cited_count field.
+	factDescCitedCount := factFields[14].Descriptor()
+	// fact.DefaultCitedCount holds the default value on creation for the cited_count field.
+	fact.DefaultCitedCount = factDescCitedCount.Default.(int)
+	// factDescID is the schema descriptor for id field.
+	factDescID := factFields[0].Descriptor()
+	// fact.DefaultID holds the default value on creation for the id field.
+	fact.DefaultID = factDescID.Default.(func() uuid.UUID)
 	findingFields := schema.Finding{}.Fields()
 	_ = findingFields
 	// findingDescKey is the schema descriptor for key field.
@@ -752,6 +786,24 @@ func init() {
 	intelDescID := intelFields[0].Descriptor()
 	// intel.DefaultID holds the default value on creation for the id field.
 	intel.DefaultID = intelDescID.Default.(func() uuid.UUID)
+	intentFields := schema.Intent{}.Fields()
+	_ = intentFields
+	// intentDescCreatedAt is the schema descriptor for created_at field.
+	intentDescCreatedAt := intentFields[1].Descriptor()
+	// intent.DefaultCreatedAt holds the default value on creation for the created_at field.
+	intent.DefaultCreatedAt = intentDescCreatedAt.Default.(func() time.Time)
+	// intentDescNote is the schema descriptor for note field.
+	intentDescNote := intentFields[7].Descriptor()
+	// intent.DefaultNote holds the default value on creation for the note field.
+	intent.DefaultNote = intentDescNote.Default.(string)
+	// intentDescLate is the schema descriptor for late field.
+	intentDescLate := intentFields[12].Descriptor()
+	// intent.DefaultLate holds the default value on creation for the late field.
+	intent.DefaultLate = intentDescLate.Default.(bool)
+	// intentDescID is the schema descriptor for id field.
+	intentDescID := intentFields[0].Descriptor()
+	// intent.DefaultID holds the default value on creation for the id field.
+	intent.DefaultID = intentDescID.Default.(func() uuid.UUID)
 	memoryFields := schema.Memory{}.Fields()
 	_ = memoryFields
 	// memoryDescCreatedAt is the schema descriptor for created_at field.

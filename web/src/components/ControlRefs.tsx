@@ -1,0 +1,22 @@
+import { Tag } from 'antd'
+import { Link } from 'react-router'
+import { controlLink } from './control'
+
+// 事实与意图的编号：点开跳到总控对应条目
+export function RefTag({ value }: { value: string }) {
+  return (
+    <Link to={controlLink(value)}>
+      <Tag color={value.startsWith('I-') ? 'purple' : 'blue'} className="mono" style={{ margin: '0 2px', fontSize: 11.5, cursor: 'pointer' }}>{value}</Tag>
+    </Link>
+  )
+}
+
+const REF = /\[?\b([FI]-[0-9a-f]{8})\b\]?/g
+
+// 研判文字里的 [F-xxxxxxxx] / [I-xxxxxxxx] 换成可点的编号，其余原样
+export function RefText({ text }: { text: string }) {
+  const parts = text.split(REF)
+  if (parts.length === 1) return <>{text}</>
+  // split 带捕获组：奇数位是编号
+  return <>{parts.map((p, i) => (i % 2 ? <RefTag key={i} value={p} /> : p))}</>
+}

@@ -32,7 +32,7 @@ export function IntegrationsPage() {
   const users = useQuery({ queryKey: ['users'], queryFn: fetchUsers })
   const outbound = useQuery({ queryKey: ['outboundAllow'], queryFn: fetchOutboundAllow, enabled: allowOpen })
   const tokens = useQuery({ queryKey: ['integrationTokens', tokensFor?.id], queryFn: () => fetchIntegrationTokens(tokensFor!.id), enabled: !!tokensFor })
-  const scopeOptions = [{ value: 'assets:read', label: t('integrationAssetsRead') }, { value: 'incidents:read', label: t('integrationIncidentsRead') }, { value: 'tickets:write', label: t('integrationTicketsWrite') }, { value: 'incidents:resolve', label: t('integrationResolve') }, { value: 'suricata:write', label: t('integrationSuricataWrite') }, { value: 'flows:write', label: t('integrationFlowsWrite') }]
+  const scopeOptions = [{ value: 'assets:read', label: t('integrationAssetsRead') }, { value: 'incidents:read', label: t('integrationIncidentsRead') }, { value: 'tickets:write', label: t('integrationTicketsWrite') }, { value: 'incidents:resolve', label: t('integrationResolve') }, { value: 'suricata:write', label: t('integrationSuricataWrite') }, { value: 'flows:write', label: t('integrationFlowsWrite') }, { value: 'intents:write', label: t('integrationIntentsWrite') }]
   const run = async (fn: () => Promise<void>) => {
     if (lock.current) return
     lock.current = true; setBusy(true)

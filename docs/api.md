@@ -94,6 +94,13 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | PATCH | `/api/trusted-sources/{id}` | 调整 `{"name","reason","expiresInDays"(1–365，从现在起算),"pinned","enabled"}`，字段可选、至少一个；启用已过期的须同时给有效期；重新启用系统停用的会自动固定；组管理员，落审计（`trusted_source_updated` / `_enabled` / `_revoked`），已删除 409 |
 | DELETE | `/api/trusted-sources/{id}` | 删除（隐藏并停用，记录保留，自动识别的不会再被加回）；组管理员，落审计，重复删除 409 |
 | POST | `/api/trusted-sources/{id}/revoke` | 停用（保留记录，立即生效），同 `PATCH {"enabled":false}`；组管理员，落审计，重复停用 409 |
+| GET | `/api/facts?kind=&assetId=&retired=1` | 自治总控的权威事实（钥匙、通道、资产角色、管理员决定、已授权变更），带编号 `ref`（`F-` 加 UUID 末 8 位）、持有人、来源、被引用次数与最近引用；按组裁剪，全局事实所有人可见；默认不含已停用的 |
+| POST | `/api/facts` | 录入 `{"kind","subject","assetId","groupId","holder","content","expiresInDays"(0=长期，最多 3650)}`：`key` 的 subject 为 `SHA256:` 指纹，`channel` 为地址或 CIDR，`decision` 为主题，`asset_role` / `change` 须给 `assetId`（组随资产）；`holder` 写 `user:<用户名>` 或 `integration:<集成 ID>`，意图登记按它核对。只有平台管理员，落审计 `fact_created` |
+| PATCH | `/api/facts/{id}` | 改 `{"holder","content","expiresInDays"}`；平台管理员，落审计 `fact_updated` |
+| POST | `/api/facts/{id}/retire` | 停用（保留记录，引用过它的研判还说得清依据）；平台管理员，落审计 `fact_retired`，重复 409 |
+| GET | `/api/intents?active=1` | 运维意图（编号 `ref` 为 `I-` 加 UUID 末 8 位），带主机名、是否进行中、是否事后补登；只列覆盖到自己可见主机的 |
+| POST | `/api/intents` | 登记 `{"keyFingerprint","sourceAddr","assetIds","category","note","durationMinutes"(≤240),"startedAt"(可选，补登最多 2 小时前)}`。登记人为 `user:<用户名>`，只能为事实库里持有人是自己的钥匙与通道登记（403），须对全部主机有组内 analyst 权限（403），主机 1–20 台、用途在固定目录（deploy / troubleshoot / migrate / inspect / test / maintenance / backup）里（400）。落审计 `intent_registered`，实时推送到通知渠道；`note` 只给人看，不进模型 |
+| POST | `/api/intents/{id}/end` | 提前结束；登记人本人或平台管理员，落审计 `intent_ended`，重复 409 |
 
 `GET /api/events` 的条目与 `GET /api/incidents/{id}` 的告警带 `automation: {id, name, watch}`（来自可信来源时；`watch` 为高危例外）。
 
@@ -419,6 +426,13 @@ URL 更改默认保留旧积压目标；movePending=true 显式改投尚未发�
 不返回模型凭据、提示词或原始工具结果。仅有本版本上线后的记录。
 
 运行中记录的 `heartbeat_valid` 按事件当前执行身份与心跳判断；为 false 时界面显示未确认，不能据旧 running 记录断言任务仍在运行。
+
+### 运维意图登记
+
+集成 Token 授权 `intents:write` 后，可 POST `/api/integration/v1/intents` 登记运维意图，请求体与控制台的 `POST /api/intents` 相同。
+登记人记为 `integration:<集成 ID>`，只能为事实库里持有人是这个集成的钥匙与通道登记，主机限于集成被授权的组；
+返回 `{"id","ref","startsAt","expiresAt","late"}`。凯伊等运维会话动生产前用它登记，Token 不放在纳管主机上。
+研判怎么用意图见 [自治总控设计](autonomy-controller-design.md)。
 
 ### 外部流量接入
 

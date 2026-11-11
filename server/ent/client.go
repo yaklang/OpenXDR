@@ -31,6 +31,7 @@ import (
 	"openxdr/server/ent/enrolltoken"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/externalticket"
+	"openxdr/server/ent/fact"
 	"openxdr/server/ent/finding"
 	"openxdr/server/ent/group"
 	"openxdr/server/ent/groupmember"
@@ -45,6 +46,7 @@ import (
 	"openxdr/server/ent/integrationsubscription"
 	"openxdr/server/ent/integrationtoken"
 	"openxdr/server/ent/intel"
+	"openxdr/server/ent/intent"
 	"openxdr/server/ent/ipinfo"
 	"openxdr/server/ent/memory"
 	"openxdr/server/ent/processbaseline"
@@ -115,6 +117,8 @@ type Client struct {
 	Event *EventClient
 	// ExternalTicket is the client for interacting with the ExternalTicket builders.
 	ExternalTicket *ExternalTicketClient
+	// Fact is the client for interacting with the Fact builders.
+	Fact *FactClient
 	// Finding is the client for interacting with the Finding builders.
 	Finding *FindingClient
 	// Group is the client for interacting with the Group builders.
@@ -145,6 +149,8 @@ type Client struct {
 	IntegrationToken *IntegrationTokenClient
 	// Intel is the client for interacting with the Intel builders.
 	Intel *IntelClient
+	// Intent is the client for interacting with the Intent builders.
+	Intent *IntentClient
 	// Memory is the client for interacting with the Memory builders.
 	Memory *MemoryClient
 	// ProcessBaseline is the client for interacting with the ProcessBaseline builders.
@@ -208,6 +214,7 @@ func (c *Client) init() {
 	c.EnrollToken = NewEnrollTokenClient(c.config)
 	c.Event = NewEventClient(c.config)
 	c.ExternalTicket = NewExternalTicketClient(c.config)
+	c.Fact = NewFactClient(c.config)
 	c.Finding = NewFindingClient(c.config)
 	c.Group = NewGroupClient(c.config)
 	c.GroupMember = NewGroupMemberClient(c.config)
@@ -223,6 +230,7 @@ func (c *Client) init() {
 	c.IntegrationSubscription = NewIntegrationSubscriptionClient(c.config)
 	c.IntegrationToken = NewIntegrationTokenClient(c.config)
 	c.Intel = NewIntelClient(c.config)
+	c.Intent = NewIntentClient(c.config)
 	c.Memory = NewMemoryClient(c.config)
 	c.ProcessBaseline = NewProcessBaselineClient(c.config)
 	c.Report = NewReportClient(c.config)
@@ -351,6 +359,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		EnrollToken:             NewEnrollTokenClient(cfg),
 		Event:                   NewEventClient(cfg),
 		ExternalTicket:          NewExternalTicketClient(cfg),
+		Fact:                    NewFactClient(cfg),
 		Finding:                 NewFindingClient(cfg),
 		Group:                   NewGroupClient(cfg),
 		GroupMember:             NewGroupMemberClient(cfg),
@@ -366,6 +375,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		IntegrationSubscription: NewIntegrationSubscriptionClient(cfg),
 		IntegrationToken:        NewIntegrationTokenClient(cfg),
 		Intel:                   NewIntelClient(cfg),
+		Intent:                  NewIntentClient(cfg),
 		Memory:                  NewMemoryClient(cfg),
 		ProcessBaseline:         NewProcessBaselineClient(cfg),
 		Report:                  NewReportClient(cfg),
@@ -421,6 +431,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		EnrollToken:             NewEnrollTokenClient(cfg),
 		Event:                   NewEventClient(cfg),
 		ExternalTicket:          NewExternalTicketClient(cfg),
+		Fact:                    NewFactClient(cfg),
 		Finding:                 NewFindingClient(cfg),
 		Group:                   NewGroupClient(cfg),
 		GroupMember:             NewGroupMemberClient(cfg),
@@ -436,6 +447,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		IntegrationSubscription: NewIntegrationSubscriptionClient(cfg),
 		IntegrationToken:        NewIntegrationTokenClient(cfg),
 		Intel:                   NewIntelClient(cfg),
+		Intent:                  NewIntentClient(cfg),
 		Memory:                  NewMemoryClient(cfg),
 		ProcessBaseline:         NewProcessBaselineClient(cfg),
 		Report:                  NewReportClient(cfg),
@@ -484,11 +496,11 @@ func (c *Client) Use(hooks ...Hook) {
 		c.AIJob, c.AIUsage, c.AgentSession, c.Alert, c.Approval, c.Asset, c.AssetLink,
 		c.AuditLog, c.BeaconBaseline, c.Command, c.CommandPolicy, c.Containment,
 		c.CustomRule, c.DecoyDeployment, c.DecoyEngineRelease, c.DecoyObservation,
-		c.DecoyRevision, c.EnrollToken, c.Event, c.ExternalTicket, c.Finding, c.Group,
-		c.GroupMember, c.HostCredential, c.IPInfo, c.Incident, c.Integration,
+		c.DecoyRevision, c.EnrollToken, c.Event, c.ExternalTicket, c.Fact, c.Finding,
+		c.Group, c.GroupMember, c.HostCredential, c.IPInfo, c.Incident, c.Integration,
 		c.IntegrationAttempt, c.IntegrationDelivery, c.IntegrationEvent,
 		c.IntegrationGroup, c.IntegrationIdempotency, c.IntegrationSubscription,
-		c.IntegrationToken, c.Intel, c.Memory, c.ProcessBaseline, c.Report,
+		c.IntegrationToken, c.Intel, c.Intent, c.Memory, c.ProcessBaseline, c.Report,
 		c.ReportRead, c.SSHLogin, c.Session, c.SessionMessage, c.Setting,
 		c.Suppression, c.Task, c.TaskRun, c.TriageRun, c.TrustedSource, c.User,
 		c.VulnRecord, c.Zone,
@@ -504,11 +516,11 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.AIJob, c.AIUsage, c.AgentSession, c.Alert, c.Approval, c.Asset, c.AssetLink,
 		c.AuditLog, c.BeaconBaseline, c.Command, c.CommandPolicy, c.Containment,
 		c.CustomRule, c.DecoyDeployment, c.DecoyEngineRelease, c.DecoyObservation,
-		c.DecoyRevision, c.EnrollToken, c.Event, c.ExternalTicket, c.Finding, c.Group,
-		c.GroupMember, c.HostCredential, c.IPInfo, c.Incident, c.Integration,
+		c.DecoyRevision, c.EnrollToken, c.Event, c.ExternalTicket, c.Fact, c.Finding,
+		c.Group, c.GroupMember, c.HostCredential, c.IPInfo, c.Incident, c.Integration,
 		c.IntegrationAttempt, c.IntegrationDelivery, c.IntegrationEvent,
 		c.IntegrationGroup, c.IntegrationIdempotency, c.IntegrationSubscription,
-		c.IntegrationToken, c.Intel, c.Memory, c.ProcessBaseline, c.Report,
+		c.IntegrationToken, c.Intel, c.Intent, c.Memory, c.ProcessBaseline, c.Report,
 		c.ReportRead, c.SSHLogin, c.Session, c.SessionMessage, c.Setting,
 		c.Suppression, c.Task, c.TaskRun, c.TriageRun, c.TrustedSource, c.User,
 		c.VulnRecord, c.Zone,
@@ -560,6 +572,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Event.mutate(ctx, m)
 	case *ExternalTicketMutation:
 		return c.ExternalTicket.mutate(ctx, m)
+	case *FactMutation:
+		return c.Fact.mutate(ctx, m)
 	case *FindingMutation:
 		return c.Finding.mutate(ctx, m)
 	case *GroupMutation:
@@ -590,6 +604,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.IntegrationToken.mutate(ctx, m)
 	case *IntelMutation:
 		return c.Intel.mutate(ctx, m)
+	case *IntentMutation:
+		return c.Intent.mutate(ctx, m)
 	case *MemoryMutation:
 		return c.Memory.mutate(ctx, m)
 	case *ProcessBaselineMutation:
@@ -3431,6 +3447,139 @@ func (c *ExternalTicketClient) mutate(ctx context.Context, m *ExternalTicketMuta
 	}
 }
 
+// FactClient is a client for the Fact schema.
+type FactClient struct {
+	config
+}
+
+// NewFactClient returns a client for the Fact from the given config.
+func NewFactClient(c config) *FactClient {
+	return &FactClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `fact.Hooks(f(g(h())))`.
+func (c *FactClient) Use(hooks ...Hook) {
+	c.hooks.Fact = append(c.hooks.Fact, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `fact.Intercept(f(g(h())))`.
+func (c *FactClient) Intercept(interceptors ...Interceptor) {
+	c.inters.Fact = append(c.inters.Fact, interceptors...)
+}
+
+// Create returns a builder for creating a Fact entity.
+func (c *FactClient) Create() *FactCreate {
+	mutation := newFactMutation(c.config, OpCreate)
+	return &FactCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of Fact entities.
+func (c *FactClient) CreateBulk(builders ...*FactCreate) *FactCreateBulk {
+	return &FactCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *FactClient) MapCreateBulk(slice any, setFunc func(*FactCreate, int)) *FactCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &FactCreateBulk{err: fmt.Errorf("calling to FactClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*FactCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &FactCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for Fact.
+func (c *FactClient) Update() *FactUpdate {
+	mutation := newFactMutation(c.config, OpUpdate)
+	return &FactUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *FactClient) UpdateOne(_m *Fact) *FactUpdateOne {
+	mutation := newFactMutation(c.config, OpUpdateOne, withFact(_m))
+	return &FactUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *FactClient) UpdateOneID(id uuid.UUID) *FactUpdateOne {
+	mutation := newFactMutation(c.config, OpUpdateOne, withFactID(id))
+	return &FactUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for Fact.
+func (c *FactClient) Delete() *FactDelete {
+	mutation := newFactMutation(c.config, OpDelete)
+	return &FactDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *FactClient) DeleteOne(_m *Fact) *FactDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *FactClient) DeleteOneID(id uuid.UUID) *FactDeleteOne {
+	builder := c.Delete().Where(fact.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &FactDeleteOne{builder}
+}
+
+// Query returns a query builder for Fact.
+func (c *FactClient) Query() *FactQuery {
+	return &FactQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeFact},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a Fact entity by its id.
+func (c *FactClient) Get(ctx context.Context, id uuid.UUID) (*Fact, error) {
+	return c.Query().Where(fact.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *FactClient) GetX(ctx context.Context, id uuid.UUID) *Fact {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *FactClient) Hooks() []Hook {
+	return c.hooks.Fact
+}
+
+// Interceptors returns the client interceptors.
+func (c *FactClient) Interceptors() []Interceptor {
+	return c.inters.Fact
+}
+
+func (c *FactClient) mutate(ctx context.Context, m *FactMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&FactCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&FactUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&FactUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&FactDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown Fact mutation op: %q", m.Op())
+	}
+}
+
 // FindingClient is a client for the Finding schema.
 type FindingClient struct {
 	config
@@ -5439,6 +5588,139 @@ func (c *IntelClient) mutate(ctx context.Context, m *IntelMutation) (Value, erro
 		return (&IntelDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown Intel mutation op: %q", m.Op())
+	}
+}
+
+// IntentClient is a client for the Intent schema.
+type IntentClient struct {
+	config
+}
+
+// NewIntentClient returns a client for the Intent from the given config.
+func NewIntentClient(c config) *IntentClient {
+	return &IntentClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `intent.Hooks(f(g(h())))`.
+func (c *IntentClient) Use(hooks ...Hook) {
+	c.hooks.Intent = append(c.hooks.Intent, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `intent.Intercept(f(g(h())))`.
+func (c *IntentClient) Intercept(interceptors ...Interceptor) {
+	c.inters.Intent = append(c.inters.Intent, interceptors...)
+}
+
+// Create returns a builder for creating a Intent entity.
+func (c *IntentClient) Create() *IntentCreate {
+	mutation := newIntentMutation(c.config, OpCreate)
+	return &IntentCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of Intent entities.
+func (c *IntentClient) CreateBulk(builders ...*IntentCreate) *IntentCreateBulk {
+	return &IntentCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *IntentClient) MapCreateBulk(slice any, setFunc func(*IntentCreate, int)) *IntentCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &IntentCreateBulk{err: fmt.Errorf("calling to IntentClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*IntentCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &IntentCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for Intent.
+func (c *IntentClient) Update() *IntentUpdate {
+	mutation := newIntentMutation(c.config, OpUpdate)
+	return &IntentUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *IntentClient) UpdateOne(_m *Intent) *IntentUpdateOne {
+	mutation := newIntentMutation(c.config, OpUpdateOne, withIntent(_m))
+	return &IntentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *IntentClient) UpdateOneID(id uuid.UUID) *IntentUpdateOne {
+	mutation := newIntentMutation(c.config, OpUpdateOne, withIntentID(id))
+	return &IntentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for Intent.
+func (c *IntentClient) Delete() *IntentDelete {
+	mutation := newIntentMutation(c.config, OpDelete)
+	return &IntentDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *IntentClient) DeleteOne(_m *Intent) *IntentDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *IntentClient) DeleteOneID(id uuid.UUID) *IntentDeleteOne {
+	builder := c.Delete().Where(intent.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &IntentDeleteOne{builder}
+}
+
+// Query returns a query builder for Intent.
+func (c *IntentClient) Query() *IntentQuery {
+	return &IntentQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeIntent},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a Intent entity by its id.
+func (c *IntentClient) Get(ctx context.Context, id uuid.UUID) (*Intent, error) {
+	return c.Query().Where(intent.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *IntentClient) GetX(ctx context.Context, id uuid.UUID) *Intent {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *IntentClient) Hooks() []Hook {
+	return c.hooks.Intent
+}
+
+// Interceptors returns the client interceptors.
+func (c *IntentClient) Interceptors() []Interceptor {
+	return c.inters.Intent
+}
+
+func (c *IntentClient) mutate(ctx context.Context, m *IntentMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&IntentCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&IntentUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&IntentUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&IntentDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown Intent mutation op: %q", m.Op())
 	}
 }
 
@@ -7576,24 +7858,24 @@ type (
 		AIJob, AIUsage, AgentSession, Alert, Approval, Asset, AssetLink, AuditLog,
 		BeaconBaseline, Command, CommandPolicy, Containment, CustomRule,
 		DecoyDeployment, DecoyEngineRelease, DecoyObservation, DecoyRevision,
-		EnrollToken, Event, ExternalTicket, Finding, Group, GroupMember,
+		EnrollToken, Event, ExternalTicket, Fact, Finding, Group, GroupMember,
 		HostCredential, IPInfo, Incident, Integration, IntegrationAttempt,
 		IntegrationDelivery, IntegrationEvent, IntegrationGroup,
 		IntegrationIdempotency, IntegrationSubscription, IntegrationToken, Intel,
-		Memory, ProcessBaseline, Report, ReportRead, SSHLogin, Session, SessionMessage,
-		Setting, Suppression, Task, TaskRun, TriageRun, TrustedSource, User,
-		VulnRecord, Zone []ent.Hook
+		Intent, Memory, ProcessBaseline, Report, ReportRead, SSHLogin, Session,
+		SessionMessage, Setting, Suppression, Task, TaskRun, TriageRun, TrustedSource,
+		User, VulnRecord, Zone []ent.Hook
 	}
 	inters struct {
 		AIJob, AIUsage, AgentSession, Alert, Approval, Asset, AssetLink, AuditLog,
 		BeaconBaseline, Command, CommandPolicy, Containment, CustomRule,
 		DecoyDeployment, DecoyEngineRelease, DecoyObservation, DecoyRevision,
-		EnrollToken, Event, ExternalTicket, Finding, Group, GroupMember,
+		EnrollToken, Event, ExternalTicket, Fact, Finding, Group, GroupMember,
 		HostCredential, IPInfo, Incident, Integration, IntegrationAttempt,
 		IntegrationDelivery, IntegrationEvent, IntegrationGroup,
 		IntegrationIdempotency, IntegrationSubscription, IntegrationToken, Intel,
-		Memory, ProcessBaseline, Report, ReportRead, SSHLogin, Session, SessionMessage,
-		Setting, Suppression, Task, TaskRun, TriageRun, TrustedSource, User,
-		VulnRecord, Zone []ent.Interceptor
+		Intent, Memory, ProcessBaseline, Report, ReportRead, SSHLogin, Session,
+		SessionMessage, Setting, Suppression, Task, TaskRun, TriageRun, TrustedSource,
+		User, VulnRecord, Zone []ent.Interceptor
 	}
 )

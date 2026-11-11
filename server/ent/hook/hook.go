@@ -248,6 +248,18 @@ func (f ExternalTicketFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Val
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ExternalTicketMutation", m)
 }
 
+// The FactFunc type is an adapter to allow the use of ordinary
+// function as Fact mutator.
+type FactFunc func(context.Context, *ent.FactMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f FactFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.FactMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.FactMutation", m)
+}
+
 // The FindingFunc type is an adapter to allow the use of ordinary
 // function as Finding mutator.
 type FindingFunc func(context.Context, *ent.FindingMutation) (ent.Value, error)
@@ -426,6 +438,18 @@ func (f IntelFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error
 		return f(ctx, mv)
 	}
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.IntelMutation", m)
+}
+
+// The IntentFunc type is an adapter to allow the use of ordinary
+// function as Intent mutator.
+type IntentFunc func(context.Context, *ent.IntentMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f IntentFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.IntentMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.IntentMutation", m)
 }
 
 // The MemoryFunc type is an adapter to allow the use of ordinary

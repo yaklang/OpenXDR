@@ -25,6 +25,7 @@ import (
 	"openxdr/server/internal/assetmap"
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/commandgate"
+	"openxdr/server/internal/facts"
 	"openxdr/server/internal/findings"
 	"openxdr/server/internal/memories"
 	"openxdr/server/internal/modelroute"
@@ -522,12 +523,18 @@ func (s *Service) contextData(ctx context.Context, session *ent.AgentSession) (d
 	if err != nil {
 		return nil, err
 	}
+	authoritative, err := facts.ForGroup(ctx, s.DB, session.GroupID, hostnames, time.Now())
+	if err != nil {
+		return nil, err
+	}
 	exclusions, decoysTruncated, err := s.decoyExclusions(ctx, session.GroupID)
 	if err != nil {
 		return nil, err
 	}
 	data = map[string]any{"decoy_exclusions": exclusions, "decoys_truncated": decoysTruncated, "assets": inventory, "truncated": len(rows) > 200,
-		"rule_titles": titles, "open_findings": openFindings, "ignored_findings": ignoredFindings, "resolved_findings": resolvedFindings, "memories": memo}
+		"rule_titles": titles, "open_findings": openFindings, "ignored_findings": ignoredFindings, "resolved_findings": resolvedFindings, "memories": memo,
+		// 管理员或平台录入的权威事实：可作为前提引用（写编号），只在写明的范围内成立；与 AI 记忆不同，不需要再向人核实
+		"facts": authoritative}
 	decision, err := findings.DecisionForSession(ctx, s.DB, session)
 	if err != nil {
 		return nil, err

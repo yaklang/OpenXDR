@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { DownloadOutlined, ImportOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons'
+import { ControlOutlined, DownloadOutlined, ImportOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons'
 import { App, Button, Input, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
@@ -9,6 +9,7 @@ import { useSession } from '../app/session'
 import { useCanChat, useHandoff } from '../components/Handoff'
 import { ExportAssetsModal } from '../components/ExportAssetsModal'
 import { ImportHostsModal } from '../components/ImportHostsModal'
+import { IntentModal } from '../components/IntentModal'
 import { LoadError } from '../components/LoadError'
 import { AddHostModal } from '../components/AddHostModal'
 import { errText, HostStateBadge, hostSeen, hostState } from '../components/format'
@@ -31,7 +32,7 @@ export function AssetsPage() {
   const { t } = useI18n()
   const { message, modal } = App.useApp()
   const client = useQueryClient()
-  const { groups, isAdmin } = useSession()
+  const { groups, isAdmin, canWrite } = useSession()
   // 搜索与组、状态、来源筛选放 URL：从详情页返回、刷新都还在
   const [params, setParams] = useSearchParams()
   const q = params.get('q') ?? ''
@@ -45,6 +46,7 @@ export function AssetsPage() {
   const [adding, setAdding] = useState(false)
   const [importing, setImporting] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [operating, setOperating] = useState(false)
   // 组 admin 才能为本组签发接入令牌
   const canAdd = groups.some(g => g.role === 'admin')
   // 选「已下线」时才连同下线的主机一起取
@@ -112,6 +114,7 @@ export function AssetsPage() {
         groupName={groupFilter ? groupOptions.find(g => g.value === groupFilter)?.label ?? groupFilter : t('allGroups')} />
       <ImportHostsModal open={importing} onClose={() => setImporting(false)} />
       <AddHostModal open={adding} onClose={() => setAdding(false)} />
+      <IntentModal open={operating} assetIds={selected} onClose={() => setOperating(false)} />
       <FilterCard
         onReset={hasFilters ? () => { setDraft(''); setParams({}, { replace: true }) } : undefined}
         extra={(
@@ -125,6 +128,7 @@ export function AssetsPage() {
                   <Button size="small" type="primary" icon={<RobotOutlined />} loading={handoff.busy}
                     disabled={!sameGroup || picked.length > 10 || !canChat(pickedGroup)} onClick={handTo}>{t('handoffToAI')}</Button>
                 </Tooltip>
+                {canWrite && <Button size="small" icon={<ControlOutlined />} onClick={() => setOperating(true)}>{t('intentStartOps')}</Button>}
                 {isAdmin && <Select size="small" style={{ width: 160 }} placeholder={t('moveToGroup')} value={null} options={groupOptions} onChange={moveMany} />}
               </>
             )}

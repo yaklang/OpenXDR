@@ -769,6 +769,43 @@ var (
 			},
 		},
 	}
+	// FactsColumns holds the columns for the "facts" table.
+	FactsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "kind", Type: field.TypeString},
+		{Name: "subject", Type: field.TypeString, Default: ""},
+		{Name: "group_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "asset_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "holder", Type: field.TypeString, Default: ""},
+		{Name: "content", Type: field.TypeString, Size: 2147483647},
+		{Name: "source", Type: field.TypeString, Default: "human"},
+		{Name: "created_by", Type: field.TypeString},
+		{Name: "expires_at", Type: field.TypeTime, Nullable: true},
+		{Name: "retired_at", Type: field.TypeTime, Nullable: true},
+		{Name: "retired_by", Type: field.TypeString, Nullable: true},
+		{Name: "cited_count", Type: field.TypeInt, Default: 0},
+		{Name: "last_cited_at", Type: field.TypeTime, Nullable: true},
+	}
+	// FactsTable holds the schema information for the "facts" table.
+	FactsTable = &schema.Table{
+		Name:       "facts",
+		Columns:    FactsColumns,
+		PrimaryKey: []*schema.Column{FactsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "fact_kind_subject",
+				Unique:  false,
+				Columns: []*schema.Column{FactsColumns[3], FactsColumns[4]},
+			},
+			{
+				Name:    "fact_asset_id",
+				Unique:  false,
+				Columns: []*schema.Column{FactsColumns[6]},
+			},
+		},
+	}
 	// FindingsColumns holds the columns for the "findings" table.
 	FindingsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -1187,6 +1224,35 @@ var (
 				Name:    "intel_kind_value",
 				Unique:  true,
 				Columns: []*schema.Column{IntelsColumns[2], IntelsColumns[3]},
+			},
+		},
+	}
+	// IntentsColumns holds the columns for the "intents" table.
+	IntentsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "created_by", Type: field.TypeString},
+		{Name: "key_fingerprint", Type: field.TypeString},
+		{Name: "source_addr", Type: field.TypeString},
+		{Name: "asset_ids", Type: field.TypeJSON},
+		{Name: "category", Type: field.TypeString},
+		{Name: "note", Type: field.TypeString, Default: ""},
+		{Name: "starts_at", Type: field.TypeTime},
+		{Name: "expires_at", Type: field.TypeTime},
+		{Name: "ended_at", Type: field.TypeTime, Nullable: true},
+		{Name: "ended_by", Type: field.TypeString, Nullable: true},
+		{Name: "late", Type: field.TypeBool, Default: false},
+	}
+	// IntentsTable holds the schema information for the "intents" table.
+	IntentsTable = &schema.Table{
+		Name:       "intents",
+		Columns:    IntentsColumns,
+		PrimaryKey: []*schema.Column{IntentsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "intent_key_fingerprint_expires_at",
+				Unique:  false,
+				Columns: []*schema.Column{IntentsColumns[3], IntentsColumns[9]},
 			},
 		},
 	}
@@ -1639,6 +1705,7 @@ var (
 		EnrollTokensTable,
 		EventsTable,
 		ExternalTicketsTable,
+		FactsTable,
 		FindingsTable,
 		GroupsTable,
 		GroupMembersTable,
@@ -1654,6 +1721,7 @@ var (
 		IntegrationSubscriptionsTable,
 		IntegrationTokensTable,
 		IntelsTable,
+		IntentsTable,
 		MemoriesTable,
 		ProcessBaselinesTable,
 		ReportsTable,

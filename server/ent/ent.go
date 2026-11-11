@@ -26,6 +26,7 @@ import (
 	"openxdr/server/ent/enrolltoken"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/externalticket"
+	"openxdr/server/ent/fact"
 	"openxdr/server/ent/finding"
 	"openxdr/server/ent/group"
 	"openxdr/server/ent/groupmember"
@@ -40,6 +41,7 @@ import (
 	"openxdr/server/ent/integrationsubscription"
 	"openxdr/server/ent/integrationtoken"
 	"openxdr/server/ent/intel"
+	"openxdr/server/ent/intent"
 	"openxdr/server/ent/ipinfo"
 	"openxdr/server/ent/memory"
 	"openxdr/server/ent/processbaseline"
@@ -143,6 +145,7 @@ func checkColumn(t, c string) error {
 			enrolltoken.Table:             enrolltoken.ValidColumn,
 			event.Table:                   event.ValidColumn,
 			externalticket.Table:          externalticket.ValidColumn,
+			fact.Table:                    fact.ValidColumn,
 			finding.Table:                 finding.ValidColumn,
 			group.Table:                   group.ValidColumn,
 			groupmember.Table:             groupmember.ValidColumn,
@@ -158,6 +161,7 @@ func checkColumn(t, c string) error {
 			integrationsubscription.Table: integrationsubscription.ValidColumn,
 			integrationtoken.Table:        integrationtoken.ValidColumn,
 			intel.Table:                   intel.ValidColumn,
+			intent.Table:                  intent.ValidColumn,
 			memory.Table:                  memory.ValidColumn,
 			processbaseline.Table:         processbaseline.ValidColumn,
 			report.Table:                  report.ValidColumn,

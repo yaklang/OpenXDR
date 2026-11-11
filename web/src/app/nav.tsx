@@ -1,5 +1,5 @@
 import {
-  AimOutlined, AlertOutlined, AuditOutlined, BulbOutlined, CheckCircleOutlined, ClockCircleOutlined, CloudServerOutlined, DashboardOutlined, DeploymentUnitOutlined, FileSearchOutlined, FileTextOutlined, IdcardOutlined, RobotOutlined, SafetyCertificateOutlined, SafetyOutlined, SearchOutlined, SettingOutlined, StopOutlined, TeamOutlined, ThunderboltOutlined, ToolOutlined, UserOutlined,
+  AimOutlined, AlertOutlined, AuditOutlined, BulbOutlined, CheckCircleOutlined, ClockCircleOutlined, CloudServerOutlined, ControlOutlined, DashboardOutlined, DeploymentUnitOutlined, FileSearchOutlined, FileTextOutlined, IdcardOutlined, RobotOutlined, SafetyCertificateOutlined, SafetyOutlined, SearchOutlined, SettingOutlined, StopOutlined, TeamOutlined, ThunderboltOutlined, ToolOutlined, UserOutlined,
 } from '@ant-design/icons'
 import type { ReactNode } from 'react'
 import type { MsgKey } from '../i18n'
@@ -49,6 +49,7 @@ export const NAV: (NavItem | NavGroup)[] = [
     items: [
       { path: '/reports', key: 'navReports', icon: <FileTextOutlined />, hotkey: 'r' },
       { path: '/tasks', key: 'navTasks', icon: <ClockCircleOutlined />, hotkey: 't' },
+      { path: '/control', key: 'navControl', icon: <ControlOutlined /> },
       { path: '/memories', key: 'navMemories', icon: <BulbOutlined /> },
       { path: '/approvals', key: 'navApprovals', icon: <CheckCircleOutlined />, groupAdmin: true, hotkey: 'p' },
     ],

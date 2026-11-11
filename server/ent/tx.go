@@ -52,6 +52,8 @@ type Tx struct {
 	Event *EventClient
 	// ExternalTicket is the client for interacting with the ExternalTicket builders.
 	ExternalTicket *ExternalTicketClient
+	// Fact is the client for interacting with the Fact builders.
+	Fact *FactClient
 	// Finding is the client for interacting with the Finding builders.
 	Finding *FindingClient
 	// Group is the client for interacting with the Group builders.
@@ -82,6 +84,8 @@ type Tx struct {
 	IntegrationToken *IntegrationTokenClient
 	// Intel is the client for interacting with the Intel builders.
 	Intel *IntelClient
+	// Intent is the client for interacting with the Intent builders.
+	Intent *IntentClient
 	// Memory is the client for interacting with the Memory builders.
 	Memory *MemoryClient
 	// ProcessBaseline is the client for interacting with the ProcessBaseline builders.
@@ -265,6 +269,7 @@ func (tx *Tx) init() {
 	tx.EnrollToken = NewEnrollTokenClient(tx.config)
 	tx.Event = NewEventClient(tx.config)
 	tx.ExternalTicket = NewExternalTicketClient(tx.config)
+	tx.Fact = NewFactClient(tx.config)
 	tx.Finding = NewFindingClient(tx.config)
 	tx.Group = NewGroupClient(tx.config)
 	tx.GroupMember = NewGroupMemberClient(tx.config)
@@ -280,6 +285,7 @@ func (tx *Tx) init() {
 	tx.IntegrationSubscription = NewIntegrationSubscriptionClient(tx.config)
 	tx.IntegrationToken = NewIntegrationTokenClient(tx.config)
 	tx.Intel = NewIntelClient(tx.config)
+	tx.Intent = NewIntentClient(tx.config)
 	tx.Memory = NewMemoryClient(tx.config)
 	tx.ProcessBaseline = NewProcessBaselineClient(tx.config)
 	tx.Report = NewReportClient(tx.config)

@@ -637,6 +637,8 @@ html[data-theme="light"] .welcome-composer:focus-within {
 .ant-drawer .ant-drawer-footer { padding: 14px 24px; border-top-color: var(--ant-color-border-secondary); }
 .welcome-hint { display: block; text-align: center; font-size: 12px; max-width: 840px; width: 100%; }
 .row-link { cursor: pointer; }
+/* 从编号链接进来时定位到的那一行 */
+.ant-table-wrapper .ant-table-tbody > tr.row-focus > td { background: var(--ant-color-primary-bg); }
 /* 表格里的数字等宽，列内上下对齐 */
 .ant-table { font-variant-numeric: tabular-nums; }
 @keyframes row-flash { from { background: var(--ant-color-warning-bg); } to { background: transparent; } }

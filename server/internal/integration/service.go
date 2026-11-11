@@ -28,7 +28,7 @@ import (
 var RateLimitedRequests = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "openxdr_integration_rate_limited_total", Help: "集成 API 被限流的请求数"}, []string{"kind"})
 
 var ReadScopes = []string{"assets:read", "incidents:read"}
-var AllowedScopes = []string{"assets:read", "incidents:read", "tickets:write", "incidents:resolve", "suricata:write", "flows:write"}
+var AllowedScopes = []string{"assets:read", "incidents:read", "tickets:write", "incidents:resolve", "suricata:write", "flows:write", "intents:write"}
 
 func ValidScopes(scopes []string) bool {
 	if len(scopes) == 0 || len(scopes) > len(AllowedScopes) {
@@ -63,7 +63,9 @@ type Service struct {
 	DB        *ent.Client
 	CursorKey []byte
 	// Suricata 把通过认证的 EVE 告警写入持久事件队列；为空时该接口不可用
-	Suricata     func(context.Context, suricata.Origin, suricata.Event) error
+	Suricata func(context.Context, suricata.Origin, suricata.Event) error
+	// Notify 运维意图登记的实时推送；为空时不推
+	Notify       func(ctx context.Context, title, body, path string) error
 	mu           sync.Mutex
 	buckets      map[uuid.UUID]bucket
 	writeBuckets map[uuid.UUID]bucket
@@ -142,6 +144,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("POST /api/integration/v1/incidents/{id}/resolution", s.resolve)
 	mux.HandleFunc("POST /api/integration/v1/suricata/events", s.suricataEvents)
 	mux.HandleFunc("POST /api/integration/v1/flows/{source}/events", s.flowEvents)
+	mux.HandleFunc("POST /api/integration/v1/intents", s.intents)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { Error(w, 404, "not_found", "接口不存在") })
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Request-ID", uuid.NewString())
@@ -197,6 +200,9 @@ func (s *Service) Handler() http.Handler {
 		}
 		if r.Method == http.MethodPost && (r.URL.Path == "/api/integration/v1/flows/ntopng/events" || r.URL.Path == "/api/integration/v1/flows/nprobe/events") {
 			needed = "flows:write"
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/integration/v1/intents" {
+			needed = "intents:write"
 		}
 		if needed == "" {
 			Error(w, 404, "not_found", "接口不存在")
