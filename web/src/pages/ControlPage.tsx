@@ -200,7 +200,7 @@ function FactsTab({ facts, refId, adding, onAdded }: { facts: UseQueryResult<Fac
           dataSource={rows}
           pagination={pagination}
           rowClassName={rowClassName}
-          scroll={{ x: 1330 }}
+          scroll={{ x: 1200 }}
           locale={{ emptyText: <EmptyHint title={t('factEmpty')} hint={t('factEmptyHint')} /> }}
           columns={[
             {
@@ -210,20 +210,20 @@ function FactsTab({ facts, refId, adding, onAdded }: { facts: UseQueryResult<Fac
                 {f.retiredAt && <Tooltip title={`${f.retiredBy ?? ''} · ${fmtTime(f.retiredAt)}`}><Tag>{t('factRetired')}</Tag></Tooltip>}
               </Flex>,
             },
-            { title: t('factSubject'), key: 'subject', width: 240, render: (_, f) => <FactSubject f={f} /> },
-            { title: t('factHolder'), dataIndex: 'holder', width: 150, ellipsis: { showTitle: false }, render: (v: string, f) => (v ? <Tooltip title={v}><span>{f.holderName || v}</span></Tooltip> : '-') },
+            { title: t('factSubject'), key: 'subject', width: 210, render: (_, f) => <FactSubject f={f} /> },
+            { title: t('factHolder'), dataIndex: 'holder', width: 130, ellipsis: { showTitle: false }, render: (v: string, f) => (v ? <Tooltip title={v}><span>{f.holderName || v}</span></Tooltip> : '-') },
             { title: t('factContent'), dataIndex: 'content', render: v => <Clamp text={v} /> },
             {
               title: t('thSource'), dataIndex: 'source', width: 120,
               render: (v: string, f) => <Flex vertical gap={2} align="flex-start"><Tag variant="filled">{t(`factSource_${v}` as MsgKey)}</Tag><Typography.Text type="secondary" style={{ fontSize: 12 }}>{f.createdBy}</Typography.Text></Flex>,
             },
-            { title: t('thExpires'), dataIndex: 'expiresAt', width: 110, sorter: (a, b) => (a.expiresAt ?? '9999').localeCompare(b.expiresAt ?? '9999'), render: (_, f) => expiry(f) },
+            { title: t('thExpires'), dataIndex: 'expiresAt', width: 90, sorter: (a, b) => (a.expiresAt ?? '9999').localeCompare(b.expiresAt ?? '9999'), render: (_, f) => expiry(f) },
             {
-              title: t('factCited'), dataIndex: 'citedCount', width: 110, sorter: (a, b) => a.citedCount - b.citedCount,
+              title: t('factCited'), dataIndex: 'citedCount', width: 100, sorter: (a, b) => a.citedCount - b.citedCount,
               render: (v: number, f) => <Flex vertical gap={0}><span>{v}</span>{f.lastCitedAt && <Typography.Text type="secondary" style={{ fontSize: 12 }}><Ago iso={f.lastCitedAt} /></Typography.Text>}</Flex>,
             },
             ...(isAdmin ? [{
-              title: t('actions'), key: 'act', width: 130,
+              title: t('actions'), key: 'act', width: 130, fixed: 'right' as const,
               render: (_: unknown, f: Fact) => !f.retiredAt && (
                 <TableActions>
                   <Button type="link" size="small" onClick={() => setEditing(f)}>{t('factEdit')}</Button>
