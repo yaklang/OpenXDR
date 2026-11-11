@@ -338,7 +338,7 @@ function AssetDetail() {
                     : <Tag style={{ margin: 0 }}>{t('sourceLog')}</Tag>}
                 </Space>
               </Descriptions.Item>
-              <Descriptions.Item label={t('thIP')} span={2}>
+              <Descriptions.Item label={t('thIP')} span={3}>
                 {asset.ipAddrs?.length ? (
                   <Space size={[6, 4]} wrap>
                     {asset.ipAddrs.map(ip => (
@@ -353,8 +353,8 @@ function AssetDetail() {
               <Descriptions.Item label="ID">
                 <Typography.Text className="mono" copyable ellipsis style={{ maxWidth: 160, fontSize: 12 }}>{asset.id}</Typography.Text>
               </Descriptions.Item>
-              <Descriptions.Item label="Agent ID" span={2}>
-                {asset.agentId ? <Typography.Text className="mono" copyable ellipsis style={{ maxWidth: 220, fontSize: 12 }}>{asset.agentId}</Typography.Text> : '-'}
+              <Descriptions.Item label="Agent ID">
+                {asset.agentId ? <Typography.Text className="mono" copyable ellipsis style={{ maxWidth: 160, fontSize: 12 }}>{asset.agentId}</Typography.Text> : '-'}
               </Descriptions.Item>
             </Descriptions>
           </Card>

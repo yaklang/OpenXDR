@@ -178,9 +178,9 @@ export function AssetProfileView({ assetId, hostname, groupId, canEdit, isGroupA
 
   return (
     <Space orientation="vertical" size={20} style={{ width: '100%' }}>
-      {/* 说明文字可以折行，按钮固定在右侧，卡片窄时不被挤到下一行 */}
-      <Flex justify="space-between" align="center" gap={8} className="cmd-item">
-        <div style={{ minWidth: 0 }}>{annotation}</div>
+      {/* 窄边栏里放不下一行：按钮整体换到下一行，别把时间拆成三行 */}
+      <Flex justify="space-between" align="center" gap={8} wrap className="cmd-item">
+        <div style={{ whiteSpace: 'nowrap' }}>{annotation}</div>
         {canEdit && (
           <Space size={6} style={{ flex: 'none' }}>
             <Button size="small" icon={<EditOutlined />} onClick={() => setEditing(true)}>{t('editProfile')}</Button>
@@ -219,13 +219,14 @@ export function AssetProfileView({ assetId, hostname, groupId, canEdit, isGroupA
         {!p.inventoryAt ? <Alert type="info" showIcon style={{ marginTop: 8 }} title={t(noAgent ? 'noInventoryNoAgent' : 'noInventory')} /> : (() => {
           const ports = mergePorts(p.listening ?? [])
           const local = ports.filter(x => x.addrs.every(loopback))
+          const bind = (l: Port) => (l.addrs.some(anyAddr) ? t('bindAll') : l.addrs.every(loopback) ? t('bindLocal') : l.addrs.join(', '))
           const table = (rows: Port[]) => (
             <Table<Port> size="small" rowKey="key" pagination={false} style={{ marginTop: 8 }} dataSource={rows}
               locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
               columns={[
-                { title: t('thPorts'), width: 92, render: (_, l) => <span className="mono">{l.proto}/{l.port}</span> },
+                { title: t('thPorts'), width: 100, render: (_, l) => <Tooltip title={compact ? `${t('thBind')}：${bind(l)}` : undefined}><span className="mono" style={{ whiteSpace: 'nowrap' }}>{l.proto}/{l.port}</span></Tooltip> },
                 { title: t('thService'), ellipsis: true, render: (_, l) => p.services?.[`${l.proto}/${l.port}`]?.name ?? '-' },
-                { title: t('thBind'), ellipsis: true, render: (_, l) => (l.addrs.some(anyAddr) ? t('bindAll') : l.addrs.every(loopback) ? t('bindLocal') : <span className="mono">{l.addrs.join(', ')}</span>) },
+                ...(compact ? [] : [{ title: t('thBind'), ellipsis: true, render: (_: unknown, l: Port) => (l.addrs.some(anyAddr) || l.addrs.every(loopback) ? bind(l) : <span className="mono">{bind(l)}</span>) }]),
                 { title: t('listenProcess'), dataIndex: 'process', ellipsis: true, render: (_, l) => <Tooltip title={l.path}>{l.process ?? '-'}</Tooltip> },
               ]} />
           )
