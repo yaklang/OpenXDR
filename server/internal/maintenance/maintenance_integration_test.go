@@ -325,3 +325,34 @@ func TestHaltsWhenContainersDoNotComeBack(t *testing.T) {
 		t.Fatalf("应停手并点名缺的容器：%v", *notes)
 	}
 }
+
+// 切主那几秒两个执行者都拿到租约：慢的那个拿着过时状态停手，写不进去、不误报，已推进的状态不被覆盖
+func TestStaleRunnerCannotClobberState(t *testing.T) {
+	ctx, _, r, _, notes := setup(t)
+	fast, err := r.load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slow, err := r.load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fast.Night = "2026-11-12"
+	fast.Current = &Reboot{Hostname: "openxdr-node2", BootBefore: "b"}
+	if err := r.save(ctx, fast); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.halt(ctx, slow, "openxdr-node2 装更新失败：等回执超时"); !errors.Is(err, errStale) {
+		t.Fatalf("过时的执行者应写不进去：%v", err)
+	}
+	if len(*notes) != 0 {
+		t.Fatalf("过时的执行者不该通知：%v", *notes)
+	}
+	got, err := r.load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Halted != "" || got.Current == nil || got.Current.Hostname != "openxdr-node2" {
+		t.Fatalf("已推进的状态被覆盖：%+v", got)
+	}
+}

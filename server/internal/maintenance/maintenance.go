@@ -126,7 +126,13 @@ type State struct {
 	CoreDone bool                 `json:"core_done"`
 	Current  *Reboot              `json:"current,omitempty"`
 	Done     map[string]time.Time `json:"done"`
+	// Rev 每次写入加一，写入时比对：拿着过时状态的执行者写不进去，放弃本轮
+	Rev int64 `json:"rev"`
 }
+
+// errStale 状态已被别的执行者改过。切换数据库主节点的那几秒里租约可能两边都拿到
+// （2026-11-12 node1、node2 同时在跑维护，慢的那个超时后把已完成的一晚覆盖成停手并误报）
+var errStale = errors.New("维护状态已被别的执行者更新")
 
 // Reboot 已下发重启、等它回来的主机
 type Reboot struct {
@@ -176,6 +182,15 @@ func (r *Runner) Run(ctx context.Context) {
 
 // Tick 一步：等着重启的先核对；窗口内再挑下一台
 func (r *Runner) Tick(ctx context.Context) error {
+	err := r.tick(ctx)
+	if errors.Is(err, errStale) {
+		slog.Info("夜间维护：状态已被另一执行者推进，本轮放弃")
+		return nil
+	}
+	return err
+}
+
+func (r *Runner) tick(ctx context.Context) error {
 	st, err := r.load(ctx)
 	if err != nil {
 		return err
@@ -369,20 +384,27 @@ func (r *Runner) done(ctx context.Context, st *State, a *ent.Asset, note string)
 		st.Done = map[string]time.Time{}
 	}
 	st.Done[a.ID.String()] = r.now()
+	if err := r.save(ctx, st); err != nil {
+		return err
+	}
 	r.audit(ctx, "maintenance_done", a.ID.String(), a.Hostname+" 夜间维护完成"+note)
-	return r.save(ctx, st)
+	return nil
 }
 
 // halt 当晚停手、通知，第二天的窗口重新开始
 func (r *Runner) halt(ctx context.Context, st *State, why string) error {
 	st.Halted = why
+	// 先写状态再审计、通知：过时的执行者写不进去，就不会误报
+	if err := r.save(ctx, st); err != nil {
+		return err
+	}
 	r.audit(ctx, "maintenance_halted", "", why)
 	if r.Notify != nil {
 		if err := r.Notify(ctx, "夜间维护已停止", why+"\n\n今晚不再继续，明晚窗口重新开始。请检查这台主机。", "/assets"); err != nil {
 			slog.Error("夜间维护通知失败", "err", err)
 		}
 	}
-	return r.save(ctx, st)
+	return nil
 }
 
 func (r *Runner) audit(ctx context.Context, action, target, detail string) {
@@ -478,10 +500,21 @@ func (r *Runner) save(ctx context.Context, st *State) error {
 			delete(st.Done, id)
 		}
 	}
+	prev := st.Rev
+	st.Rev++
 	b, _ := json.Marshal(st)
-	_, err := r.SQL.ExecContext(ctx, `INSERT INTO settings (id, value, updated_at) VALUES ($1, $2::jsonb, now())
-ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, stateKey, string(b))
-	return err
+	res, err := r.SQL.ExecContext(ctx, `INSERT INTO settings (id, value, updated_at) VALUES ($1, $2::jsonb, now())
+ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, updated_at=now()
+WHERE COALESCE((settings.value->>'rev')::bigint, 0) = $3`, stateKey, string(b), prev)
+	if err != nil {
+		st.Rev = prev
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		st.Rev = prev
+		return errStale
+	}
+	return nil
 }
 
 // Status 给控制台与排查看的当前状态
