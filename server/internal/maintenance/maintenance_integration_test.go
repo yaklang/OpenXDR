@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,11 +43,17 @@ type fakeFleet struct {
 	pending map[string]bool // 需要重启
 	calls   []string
 	silent  map[string]bool // 重启后回不来
+	// 切换主库后 agent 重连前，下发会失败的次数
+	unreachable int
 }
 
 func (f *fakeFleet) exec(ctx context.Context, a *ent.Asset, cmd string, _ time.Duration) (string, error) {
 	switch cmd {
 	case upgradeScript, bootIDCommand:
+		if cmd == bootIDCommand && f.unreachable > 0 {
+			f.unreachable--
+			return "", errors.New("unknown：agent 未连接任何集群节点")
+		}
 		if cmd == upgradeScript {
 			f.calls = append(f.calls, "upgrade "+a.Hostname)
 		}
@@ -241,6 +248,27 @@ func TestPlatformNodeHandsOffPrimaryFirst(t *testing.T) {
 	}
 }
 
+// 平台节点不需要重启就不切主库，当晚接着轮另一台；切完主库 agent 断开重连期间先等它回来再重启
+func TestPlatformNodeHandsOffOnlyForReboot(t *testing.T) {
+	ctx, r, f, p, notes := platformOnly(t, true)
+	f.pending["openxdr-node1"] = false
+	p.roles["openxdr-node1"], p.roles["openxdr-node2"] = "replica", "primary"
+	f.unreachable = 2
+	for i := 0; i < 6; i++ {
+		f.heartbeat(ctx)
+		if err := r.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+		f.now = f.now.Add(2 * time.Minute)
+	}
+	if got := strings.Join(f.calls, ","); got != "upgrade openxdr-node1,upgrade openxdr-node2,reboot openxdr-node2" {
+		t.Fatalf("node1 不重启直接完成，node2 切主后重启：%s", got)
+	}
+	if p.switchTo != "openxdr-node1" || f.unreachable != 0 || len(*notes) != 0 {
+		t.Fatalf("只为要重启的 node2 切换，并等 agent 回来：%v %d %v", p.switchTo, f.unreachable, *notes)
+	}
+}
+
 // 切换请求等到超时也没回应答，但切换成了：以成员角色为准接着维护，不停手
 func TestPlatformNodeHandoffOutlivesRequestTimeout(t *testing.T) {
 	ctx, r, f, p, notes := platformOnly(t, true)
@@ -271,8 +299,8 @@ func TestPlatformNodeStaysWhenNoHealthyReplica(t *testing.T) {
 		}
 		f.now = f.now.Add(2 * time.Minute)
 	}
-	if p.switchTo != "" || len(f.calls) != 0 {
-		t.Fatalf("不该切换也不该动主机：%v %v", p.switchTo, f.calls)
+	if p.switchTo != "" || strings.Join(f.calls, ",") != "upgrade openxdr-node1" {
+		t.Fatalf("装了更新但不该切换、不该重启：%v %v", p.switchTo, f.calls)
 	}
 	if len(*notes) != 1 || !strings.Contains((*notes)[0], "不是健康的从节点") {
 		t.Fatalf("应停手并通知：%v", *notes)

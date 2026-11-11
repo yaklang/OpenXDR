@@ -238,13 +238,9 @@ func (r *Runner) next(ctx context.Context, st *State) (*ent.Asset, error) {
 	return core[0], nil
 }
 
-// maintain 装更新；需要重启就记下状态再下发定时重启
+// maintain 装更新；需要重启就记下状态再下发定时重启。
+// 平台节点确认要重启才切数据库主节点：2026-11-12 node1 不需要重启也先切了一次，切完的瞬间又发不出指令，当晚停手
 func (r *Runner) maintain(ctx context.Context, st *State, a *ent.Asset) error {
-	if containment.RunsServer(a) {
-		if err := r.handoff(ctx, a); err != nil {
-			return r.halt(ctx, st, err.Error())
-		}
-	}
 	out, err := r.exec(ctx, a, upgradeScript, 30*time.Minute)
 	if err != nil {
 		return r.halt(ctx, st, a.Hostname+" 装更新失败："+err.Error())
@@ -258,6 +254,14 @@ func (r *Runner) maintain(ctx context.Context, st *State, a *ent.Asset) error {
 	}
 	if boot == "" {
 		return r.halt(ctx, st, a.Hostname+" 需要重启但读不到启动 ID，不重启")
+	}
+	if containment.RunsServer(a) {
+		if err := r.handoff(ctx, a); err != nil {
+			return r.halt(ctx, st, err.Error())
+		}
+		if err := r.reachable(ctx, a); err != nil {
+			return r.halt(ctx, st, a.Hostname+" 切换数据库主节点后 agent 没回来："+err.Error())
+		}
 	}
 	st.Current = &Reboot{AssetID: a.ID, Hostname: a.Hostname, BootBefore: boot, At: r.now(), Containers: containers}
 	if containment.RunsServer(a) {
@@ -274,6 +278,26 @@ func (r *Runner) maintain(ctx context.Context, st *State, a *ent.Asset) error {
 	slog.Info("夜间维护：已下发重启", "host", a.Hostname)
 	return nil
 }
+
+// reachable 切换主库时 agent 会断开重连，切完立刻下发会回「agent 未连接任何集群节点」：
+// 用只读的 bootIDCommand 探到 agent 回来再往下走
+func (r *Runner) reachable(ctx context.Context, a *ent.Asset) error {
+	deadline := time.Now().Add(reconnectWait)
+	for {
+		_, err := r.exec(ctx, a, bootIDCommand, time.Minute)
+		if err == nil || !time.Now().Before(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(r.pollInterval()):
+		}
+	}
+}
+
+// reconnectWait 切换主库后等 agent 重连的上限
+const reconnectWait = 3 * time.Minute
 
 // verify 等着重启的主机回来：agent 在线且启动 ID 变了才算完成；超时当晚停手
 func (r *Runner) verify(ctx context.Context, st *State) error {
