@@ -66,6 +66,8 @@ func TestWatch(t *testing.T) {
 		{ID: "auditoff-low", Severity: 2, Tactics: []string{"defense-evasion"}, Techniques: []string{"T1562.012"}},
 		{ID: "wipe-low", Severity: 2, Tactics: []string{"impact"}, Techniques: []string{"T1485"}},
 		{ID: "chmod-plus-auditoff", Severity: 2, Tactics: []string{"defense-impairment"}, Techniques: []string{"T1222.002", "T1562.001"}},
+		{ID: "sshkey-backdoor", Severity: 3, Tactics: []string{"persistence"}, Techniques: []string{"T1098.004"}},
+		{ID: "cron-persist", Severity: 3, Tactics: []string{"persistence"}, Techniques: []string{"T1053.003"}},
 	}
 	cases := map[string]bool{
 		"recon": false, "revshell": false, "lookalike": false,
@@ -73,6 +75,7 @@ func TestWatch(t *testing.T) {
 		"dump": true, "logclear": true, "auditoff": true, "wipe": true,
 		"histdel-high": true, "ufw-med": true,
 		"dump-low": true, "auditoff-low": true, "wipe-low": true, "chmod-plus-auditoff": true,
+		"sshkey-backdoor": true, "cron-persist": false,
 		"intel:ip:1.2.3.4":           true,
 		"不在命中列表里":                    true,
 		sigma.RuleLateralSpray:       true,

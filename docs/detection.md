@@ -339,7 +339,7 @@ go -C server test -tags integration -p 1 ./internal/intel ./internal/api -run 'T
   - 剩下的风险：同 uid 能 ptrace 会话里的进程（`kernel.yama.ptrace_scope=0` 时）就能借会话的身份执行；
     私钥被盗则攻击者就是「可信来源」——这正是下面高危例外要兜的
 - **高危例外仍进研判**：即使来自可信来源，规则属于凭据窃取（`credential-access` 战术、T1003）、指标清除（T1070，含清日志、清历史）、
-  削弱防御（`defense-impairment`、T1562）、破坏（`impact`、T1485/T1486/T1490）或是情报命中，告警照常进关联、研判与推送，
+  削弱防御（`defense-impairment`、T1562）、破坏（`impact`、T1485/T1486/T1490）、往 SSH 授权钥匙里追加钥匙（T1098.004，只收这一项持久化技术）或是情报命中，告警照常进关联、研判与推送，
   标成 `automation_watch`。**不按 severity 阈值**：运维脚本最常误中的反弹 shell 特征本身就是 critical，按阈值等于白登记；
   按行为类别划分则是运维自动化几乎不需要做、做了也值得人看一眼的事
 - 命中的告警带 `automation_id`、单独去重（不和同规则的真实命中合并），照常入库可查；不进关联与研判、不计入态势统计。
