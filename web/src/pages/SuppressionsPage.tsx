@@ -106,7 +106,7 @@ export function SuppressionsPage() {
             {
               title: t('supConditions'), dataIndex: 'conditions', width: 340,
               render: (v: Suppression['conditions']) => (v?.length
-                ? v.map(c => <div key={c.field + c.op + c.value} className="mono" style={{ fontSize: 12 }}>{c.field} {t(OP[c.op])} {c.value}</div>)
+                ? v.map(c => <Typography.Paragraph key={c.field + c.op + c.value} className="mono" style={{ fontSize: 12, margin: 0 }} ellipsis={{ rows: 2, tooltip: c.value }}>{c.field} {t(OP[c.op])} {c.value}</Typography.Paragraph>)
                 : <Tag color="warning">{t('supWholeRule')}</Tag>),
             },
             { title: t('reason'), dataIndex: 'reason', render: v => <Clamp text={v} /> },
