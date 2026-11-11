@@ -89,7 +89,7 @@ export function SuppressionsPage() {
           loading={isPending}
           dataSource={rows}
           pagination={{ defaultPageSize: 20, showSizeChanger: true, hideOnSinglePage: true }}
-          scroll={{ x: 1580 }}
+          scroll={{ x: 1700 }}
           locale={{ emptyText: <EmptyHint title={t(hasFilters ? 'noMatch' : 'noSuppressions')} hint={hasFilters ? undefined : t('noSuppressionsHint')} /> }}
           columns={[
             {
@@ -104,7 +104,7 @@ export function SuppressionsPage() {
             },
             { title: t('thScope'), dataIndex: 'assetId', width: 130, render: v => (v ? <HostLink id={v} /> : <Tag color="warning">{t('allHosts')}</Tag>) },
             {
-              title: t('supConditions'), dataIndex: 'conditions', width: 240,
+              title: t('supConditions'), dataIndex: 'conditions', width: 340,
               render: (v: Suppression['conditions']) => (v?.length
                 ? v.map(c => <div key={c.field + c.op + c.value} className="mono" style={{ fontSize: 12 }}>{c.field} {t(OP[c.op])} {c.value}</div>)
                 : <Tag color="warning">{t('supWholeRule')}</Tag>),

@@ -185,9 +185,15 @@ export function AssetsPage() {
               render: (_: unknown, a: Asset) => a.osDisplay ?? a.os ?? '-',
             },
             {
-              responsive: WIDE_ONLY, title: t('thIP'), dataIndex: 'ipAddrs',
+              responsive: WIDE_ONLY, title: t('thIP'), dataIndex: 'ipAddrs', width: 190,
               sorter: (a, b) => (a.ipAddrs?.[0] ?? '').localeCompare(b.ipAddrs?.[0] ?? ''),
-              render: v => v?.length ? <Typography.Text className="mono" copyable={{ text: v.join(', ') }}>{v.join(', ')}</Typography.Text> : '-',
+              // 只列首个地址，其余（多是容器网桥）收进 +N，免得一台 docker 主机撑出十几行高
+              render: (v: string[] | undefined) => v?.length ? (
+                <Space size={4}>
+                  <Typography.Text className="mono" copyable>{v[0]}</Typography.Text>
+                  {v.length > 1 && <Tooltip title={<span className="mono">{v.slice(1).join(', ')}</span>}><Tag variant="filled">+{v.length - 1}</Tag></Tooltip>}
+                </Space>
+              ) : '-',
             },
             {
               responsive: WIDE_ONLY, title: t('group'), dataIndex: 'groupId', width: 200,

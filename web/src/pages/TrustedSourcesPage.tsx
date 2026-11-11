@@ -11,7 +11,7 @@ import {
 import { useSession } from '../app/session'
 import { EmptyHint } from '../components/Ago'
 import { LoadError } from '../components/LoadError'
-import { FilterCard, Page, STICKY_HEADER } from '../components/Page'
+import { FilterCard, Page, STICKY_HEADER, useWideTable } from '../components/Page'
 import { errText, fmtTime } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
 
@@ -46,6 +46,7 @@ export function TrustedSourcesPage() {
   const { group, isAdmin } = useSession()
   const groupId = group?.id ?? ''
   const manage = isAdmin || group?.role === 'admin'
+  const wideTable = useWideTable()
   const [recentOpen, setRecentOpen] = useState(false)
   const [q, setQ] = useState('')
   const [originFilter, setOriginFilter] = useState('')
@@ -201,7 +202,7 @@ export function TrustedSourcesPage() {
           loading={sources.isPending && !!groupId}
           dataSource={rows}
           pagination={{ defaultPageSize: 20, showSizeChanger: true, hideOnSinglePage: true }}
-          scroll={{ x: 1180 }}
+          scroll={{ x: 1400 }}
           locale={{ emptyText: <EmptyHint title={t(hasFilters ? 'noMatch' : 'tsEmpty')} hint={hasFilters ? undefined : t('tsEmptyHint')} /> }}
           columns={[
             {
@@ -218,19 +219,19 @@ export function TrustedSourcesPage() {
               ),
             },
             { title: t('tsStatus'), key: 'state', width: 110, sorter: (a, b) => sourceState(a).localeCompare(sourceState(b)), render: (_, s) => status(s) },
-            { title: t('tsIdentity'), key: 'identity', width: 260, render: (_, s) => identity(s) },
-            { title: t('tsEvidence'), key: 'evidence', width: 300, render: (_, s) => evidence(s) },
+            { title: t('tsIdentity'), key: 'identity', width: 240, render: (_, s) => identity(s) },
+            { title: t('tsEvidence'), key: 'evidence', width: 260, render: (_, s) => evidence(s) },
             {
-              title: <Tooltip title={t('tsMatchedHint')}>{t('tsMatched')}</Tooltip>, dataIndex: 'matchedCount', width: 130, align: 'right',
+              title: <Tooltip title={t('tsMatchedHint')}>{t('tsMatched')}</Tooltip>, dataIndex: 'matchedCount', width: 100, align: 'right',
               sorter: (a, b) => a.matchedCount - b.matchedCount,
               // 放过的告警按指纹或来源在日志检索里翻
               render: (v: number, s) => (v && (s.keyFingerprint || s.sourceCidr)
                 ? <Link to={`/events?${new URLSearchParams({ q: s.keyFingerprint ?? s.sourceCidr!.replace(/\/\d+$/, ''), hours: '168' })}`}>{v}</Link>
                 : v),
             },
-            { title: t('thLastMatched'), dataIndex: 'lastMatchedAt', width: 155, sorter: (a, b) => (a.lastMatchedAt ?? '').localeCompare(b.lastMatchedAt ?? ''), render: fmtTime },
-            { title: t('thExpires'), dataIndex: 'expiresAt', width: 155, sorter: (a, b) => a.expiresAt.localeCompare(b.expiresAt), render: fmtTime },
-            ...(manage ? [{ title: t('actions'), key: 'act', width: 170, render: (_: unknown, s: TrustedSource) => actions(s) }] : []),
+            { title: t('thLastMatched'), dataIndex: 'lastMatchedAt', width: 150, sorter: (a, b) => (a.lastMatchedAt ?? '').localeCompare(b.lastMatchedAt ?? ''), render: fmtTime },
+            { title: t('thExpires'), dataIndex: 'expiresAt', width: 150, sorter: (a, b) => a.expiresAt.localeCompare(b.expiresAt), render: fmtTime },
+            ...(manage ? [{ title: t('actions'), key: 'act', width: 170, fixed: wideTable ? 'right' as const : undefined, render: (_: unknown, s: TrustedSource) => actions(s) }] : []),
           ]}
         />}
       </FilterCard>

@@ -141,17 +141,20 @@ export function ContainmentPage() {
               { title: t('thTime'), dataIndex: 'createdAt', width: 165, render: fmtTime },
               { title: t('thHostname'), dataIndex: 'assetId', width: 150, render: (v, c) => <HostLink id={v} fallback={c.assetHostname} /> },
               {
-                title: t('cmtAction'), dataIndex: 'kind', width: 240,
-                render: (v: string, c) => <span>{commandKind(v, t)} <Typography.Text code style={{ fontSize: 12 }}>{v === 'kill_process' ? `pid ${c.pid}` : c.target}</Typography.Text></span>,
+                title: t('cmtAction'), dataIndex: 'kind', width: 200,
+                render: (v: string, c) => {
+                  const arg = v === 'kill_process' ? `pid ${c.pid}` : c.target
+                  return <span>{commandKind(v, t)} {arg && <Typography.Text code style={{ fontSize: 12 }}>{arg}</Typography.Text>}</span>
+                },
               },
-              { title: t('cmtRole'), dataIndex: 'role', width: 100, render: (v: Containment['role'], c) => <Tooltip title={c.sourceHostname ? t('cmtSourceIs', { host: c.sourceHostname }) : undefined}>{t(ROLE[v])}</Tooltip> },
+              { title: t('cmtRole'), dataIndex: 'role', width: 90, render: (v: Containment['role'], c) => <Tooltip title={c.sourceHostname ? t('cmtSourceIs', { host: c.sourceHostname }) : undefined}>{t(ROLE[v])}</Tooltip> },
               {
                 title: t('thStatus'), dataIndex: 'state', width: 110,
                 render: (v: ContainmentState, c) => <Tooltip title={c.decidedBy ? t('cmtDecidedBy', { who: c.decidedBy }) : undefined}><Tag color={STATE[v].color}>{t(STATE[v].key)}</Tag></Tooltip>,
               },
               { title: t('reason'), dataIndex: 'reason', render: v => <Clamp text={v} /> },
               {
-                title: t('cmtCommand'), dataIndex: 'commandStatus', width: 120,
+                title: t('cmtCommand'), dataIndex: 'commandStatus', width: 100,
                 render: (v: string | undefined, c) => (v ? <Tooltip title={c.commandDetail}><span><CommandStatusTag value={v} /></span></Tooltip> : '-'),
               },
               {
@@ -159,12 +162,12 @@ export function ContainmentPage() {
                 render: (v: string | null, c) => (c.endedAt ? <Tooltip title={c.liftedBy ? t('cmtLiftedBy', { who: c.liftedBy }) : undefined}>{fmtTime(c.endedAt)}</Tooltip> : v ? fmtTime(v) : '-'),
               },
               {
-                title: t('cmtSignal'), dataIndex: 'signal', width: 200,
+                title: t('cmtSignal'), dataIndex: 'signal', width: 180,
                 render: (v: string, c) => (c.incidentId ? <Link to={`/incidents/${c.incidentId}`}>{v}</Link> : v),
               },
               ...(canWrite
                 ? [{
-                    title: t('actions'), width: 120,
+                    title: t('actions'), width: 140,
                     fixed: wideTable ? 'right' as const : undefined,
                     render: (_: unknown, c: Containment) => c.state === 'proposed' ? (
                       <TableActions>
