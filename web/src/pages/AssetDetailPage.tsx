@@ -349,7 +349,7 @@ function AssetDetail() {
                   </Space>
                 ) : '-'}
               </Descriptions.Item>
-              <Descriptions.Item label={t('firstSeen')}>{fmtTime(asset.firstSeen)}</Descriptions.Item>
+              <Descriptions.Item label={t('firstSeen')}><span style={{ whiteSpace: 'nowrap' }}>{fmtTime(asset.firstSeen)}</span></Descriptions.Item>
               <Descriptions.Item label="ID">
                 <Typography.Text className="mono" copyable ellipsis style={{ maxWidth: 160, fontSize: 12 }}>{asset.id}</Typography.Text>
               </Descriptions.Item>

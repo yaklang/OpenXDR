@@ -24,14 +24,14 @@ export function AssetControlCard({ assetId }: { assetId: string }) {
               <RefTag value={f.ref} />
               <Tag variant="filled">{t(`factKind_${f.kind}` as MsgKey)}</Tag>
               <Typography.Text>{f.content}</Typography.Text>
-              {f.holder && <Typography.Text type="secondary">· {f.holder}</Typography.Text>}
+              {f.holder && <Typography.Text type="secondary">· {f.holderName || f.holder}</Typography.Text>}
             </Space>
           ))}
           {covering.map(i => (
             <Space key={i.id} size={6} wrap>
               <RefTag value={i.ref} />
               <Tag variant="filled" color="purple">{t(`intentCat_${i.category}` as MsgKey)}</Tag>
-              <Typography.Text>{i.createdBy}</Typography.Text>
+              <Typography.Text>{i.createdByName || i.createdBy}</Typography.Text>
               <Typography.Text type="secondary">{t('intentUntil', { at: fmtTime(i.expiresAt) })}</Typography.Text>
               {i.late && <Tag color="orange">{t('intentLate')}</Tag>}
             </Space>
