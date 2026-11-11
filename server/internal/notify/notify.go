@@ -44,6 +44,116 @@ type Notifier struct {
 	start time.Time
 	// 上次打"通知未送达"日志的时刻
 	warned time.Time
+	// 同一规则的推送节流：窗口内只推第一条，其余攒成一条汇总（进程内状态，重启后从头算）
+	bursts map[string]*burst
+}
+
+// burstWindow 同一规则在这段时间内只即时推第一条。2026-11-12 一次批量换钥匙让「SSH authorized_keys 持久化」
+// 等规则在 30 多台主机上各推一条，群里被刷屏；每个事件照常进复核列表，只是推送合并
+const burstWindow = 15 * time.Minute
+
+// burst 一条规则的节流状态：上次推送时刻与窗口内攒下的消息
+type burst struct {
+	last time.Time
+	held []Message
+}
+
+// burstKey 事件标题是「规则 @ 主机」，按规则合并
+func burstKey(title string) string {
+	if i := strings.LastIndex(title, " @ "); i > 0 {
+		return title[:i]
+	}
+	return title
+}
+
+// urgent 恶意或要求人审批遏制的事件从不节流
+func urgent(m Message) bool {
+	return m.Verdict == "malicious" || slices.Contains(m.ActionCodes, "review_response")
+}
+
+// hold 窗口内同规则已推过的，攒起来不即时推；返回 true 表示已攒下
+func (n *Notifier) hold(m Message, now time.Time) bool {
+	if urgent(m) {
+		return false
+	}
+	if n.bursts == nil {
+		n.bursts = map[string]*burst{}
+	}
+	b := n.bursts[burstKey(m.Title)]
+	if b == nil || now.Sub(b.last) >= burstWindow {
+		n.bursts[burstKey(m.Title)] = &burst{last: now}
+		return false
+	}
+	b.held = append(b.held, m)
+	return true
+}
+
+// flush 窗口到期的规则把攒下的合成一条汇总推出去；推不出去的留到下一轮
+func (n *Notifier) flush(ctx context.Context, t Target, now time.Time) {
+	for key, b := range n.bursts {
+		if now.Sub(b.last) < burstWindow {
+			continue
+		}
+		if len(b.held) == 0 {
+			delete(n.bursts, key)
+			continue
+		}
+		body := digest(key, b.held, t.LinkBase)
+		if err := send(ctx, n.Client, t.URL, t.Format, payload(t.Format, Text{Title: key, Body: body}, body)); err != nil {
+			n.Settings.Record(ctx, err)
+			slog.Error("webhook 汇总推送失败，下周期重试", "rule", key, "err", err)
+			continue
+		}
+		n.Settings.Record(ctx, nil)
+		b.last, b.held = now, nil
+	}
+}
+
+// digest 汇总正文：每个事件一行（主机、AI 判定、级别），最多列 20 行
+func digest(key string, held []Message, linkBase string) string {
+	var b strings.Builder
+	counts := map[string]int{}
+	var top int16
+	for _, m := range held {
+		counts[m.Verdict]++
+		top = max(top, m.Severity)
+	}
+	fmt.Fprintf(&b, "📦【OpenXDR】%s：%d 分钟内又有 %d 个事件（已合并，不逐条推送）\n", key, int(burstWindow.Minutes()), len(held))
+	var parts []string
+	for _, v := range []string{"malicious", "suspicious", "benign", ""} {
+		if counts[v] > 0 {
+			label := map[string]string{"malicious": "恶意", "suspicious": "可疑", "benign": "良性", "": "未研判"}[v]
+			parts = append(parts, fmt.Sprintf("%s %d", label, counts[v]))
+		}
+	}
+	sev := fmt.Sprint(top)
+	if int(top) < len(severityText) && top > 0 {
+		sev = severityText[top]
+	}
+	fmt.Fprintf(&b, "🤖 AI 判定：%s｜最高级别：%s\n", strings.Join(parts, "，"), sev)
+	for i, m := range held {
+		if i == 20 {
+			fmt.Fprintf(&b, "…另有 %d 个\n", len(held)-20)
+			break
+		}
+		host := m.Title
+		if j := strings.LastIndex(host, " @ "); j > 0 {
+			host = host[j+3:]
+		}
+		label := map[string]string{"malicious": "恶意", "suspicious": "可疑", "benign": "良性"}[m.Verdict]
+		if label == "" {
+			label = "未研判"
+		}
+		fmt.Fprintf(&b, "· %s｜%s", host, label)
+		if m.Link != "" {
+			fmt.Fprintf(&b, "｜%s", m.Link)
+		}
+		b.WriteString("\n")
+	}
+	if linkBase != "" {
+		fmt.Fprintf(&b, "🔗 待复核列表：%s/incidents?status=review\n", linkBase)
+	}
+	return b.String()
 }
 
 func (n *Notifier) Run(ctx context.Context) {
@@ -125,8 +235,15 @@ func (n *Notifier) sweep(ctx context.Context) error {
 			}
 			continue
 		}
+		if n.hold(msg, time.Now()) {
+			if err := n.markNotified(ctx, inc); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := n.post(ctx, target, msg); err != nil {
 			slog.Error("webhook 推送失败，下周期重试", "incident", inc.ID, "err", err)
+			delete(n.bursts, burstKey(msg.Title))
 			continue
 		}
 		if err := n.markNotified(ctx, inc); err != nil {
@@ -134,6 +251,7 @@ func (n *Notifier) sweep(ctx context.Context) error {
 		}
 		slog.Info("incident 已推送", "id", inc.ID)
 	}
+	n.flush(ctx, target, time.Now())
 	return nil
 }
 
