@@ -15,6 +15,7 @@ import (
 	"openxdr/server/ent"
 	entasset "openxdr/server/ent/asset"
 	"openxdr/server/ent/fact"
+	entintegration "openxdr/server/ent/integration"
 	"openxdr/server/ent/intent"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/auth"
@@ -32,6 +33,7 @@ type factRow struct {
 	AssetID     *uuid.UUID `json:"assetId"`
 	Hostname    string     `json:"hostname,omitempty"`
 	Holder      string     `json:"holder"`
+	HolderName  string     `json:"holderName"`
 	Content     string     `json:"content"`
 	Source      string     `json:"source"`
 	CreatedBy   string     `json:"createdBy"`
@@ -47,6 +49,7 @@ type intentRow struct {
 	Ref            string      `json:"ref"`
 	CreatedAt      time.Time   `json:"createdAt"`
 	CreatedBy      string      `json:"createdBy"`
+	CreatedByName  string      `json:"createdByName"`
 	KeyFingerprint string      `json:"keyFingerprint"`
 	SourceAddr     string      `json:"sourceAddr"`
 	AssetIDs       []uuid.UUID `json:"assetIds"`
@@ -73,8 +76,38 @@ func hostnamesOf(ctx context.Context, db *ent.Client, ids []uuid.UUID) map[uuid.
 	return out
 }
 
+// principalNames 持有人与登记人标识（user:<用户名> / integration:<集成 ID>）换成给人看的名字：
+// 集成显示集成名称，用户显示用户名，认不出的原样返回
+func principalNames(ctx context.Context, db *ent.Client, ids ...string) map[string]string {
+	out := map[string]string{}
+	var integrations []uuid.UUID
+	for _, id := range ids {
+		kind, value, _ := strings.Cut(id, ":")
+		switch kind {
+		case "user":
+			out[id] = value
+		case "integration":
+			if u, err := uuid.Parse(value); err == nil {
+				integrations = append(integrations, u)
+			}
+		}
+	}
+	if len(integrations) > 0 {
+		rows, _ := db.Integration.Query().Where(entintegration.IDIn(integrations...)).All(ctx)
+		for _, i := range rows {
+			out["integration:"+i.ID.String()] = i.Name
+		}
+	}
+	for _, id := range ids {
+		if out[id] == "" {
+			out[id] = id
+		}
+	}
+	return out
+}
+
 func toIntentRow(in *ent.Intent, names map[uuid.UUID]string, now time.Time) intentRow {
-	row := intentRow{ID: in.ID, Ref: facts.Ref("I", in.ID), CreatedAt: in.CreatedAt, CreatedBy: in.CreatedBy, KeyFingerprint: in.KeyFingerprint,
+	row := intentRow{ID: in.ID, Ref: facts.Ref("I", in.ID), CreatedAt: in.CreatedAt, CreatedBy: in.CreatedBy, CreatedByName: in.CreatedBy, KeyFingerprint: in.KeyFingerprint,
 		SourceAddr: in.SourceAddr, AssetIDs: in.AssetIds, Category: in.Category, Note: in.Note, StartsAt: in.StartsAt,
 		ExpiresAt: in.ExpiresAt, EndedAt: in.EndedAt, EndedBy: in.EndedBy, Late: in.Late,
 		Active: in.EndedAt == nil && now.Before(in.ExpiresAt)}
@@ -121,9 +154,15 @@ func Control(db *ent.Client, notify func(ctx context.Context, title, body, path 
 			}
 		}
 		names := hostnamesOf(r.Context(), db, ids)
+		var holders []string
+		for _, f := range rows {
+			holders = append(holders, f.Holder)
+		}
+		who := principalNames(r.Context(), db, holders...)
 		out := make([]factRow, len(rows))
 		for i, f := range rows {
 			out[i] = toFactRow(f, names)
+			out[i].HolderName = who[f.Holder]
 		}
 		writeJSON(w, out)
 	})
@@ -301,10 +340,16 @@ func Control(db *ent.Client, notify func(ctx context.Context, title, body, path 
 			}
 		}
 		names := hostnamesOf(r.Context(), db, ids)
+		var registrants []string
+		for _, in := range visible {
+			registrants = append(registrants, in.CreatedBy)
+		}
+		who := principalNames(r.Context(), db, registrants...)
 		now := time.Now()
 		out := make([]intentRow, len(visible))
 		for i, in := range visible {
 			out[i] = toIntentRow(in, names, now)
+			out[i].CreatedByName = who[in.CreatedBy]
 		}
 		writeJSON(w, out)
 	})
@@ -374,7 +419,7 @@ func assetIDs(f *ent.Fact) []uuid.UUID {
 func toFactRow(f *ent.Fact, names map[uuid.UUID]string) factRow {
 	row := factRow{ID: f.ID, Ref: facts.Ref("F", f.ID), CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt, Kind: f.Kind, Subject: f.Subject,
 		GroupID: f.GroupID, AssetID: f.AssetID, Holder: f.Holder, Content: f.Content, Source: f.Source, CreatedBy: f.CreatedBy,
-		ExpiresAt: f.ExpiresAt, RetiredAt: f.RetiredAt, RetiredBy: f.RetiredBy, CitedCount: f.CitedCount, LastCitedAt: f.LastCitedAt}
+		HolderName: f.Holder, ExpiresAt: f.ExpiresAt, RetiredAt: f.RetiredAt, RetiredBy: f.RetiredBy, CitedCount: f.CitedCount, LastCitedAt: f.LastCitedAt}
 	if f.AssetID != nil {
 		row.Hostname = names[*f.AssetID]
 	}

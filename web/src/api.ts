@@ -804,6 +804,8 @@ export interface Fact {
   assetId: string | null
   hostname?: string
   holder: string
+  // 持有人的可读名字：集成显示集成名称，用户显示用户名
+  holderName: string
   content: string
   source: string
   createdBy: string
@@ -820,6 +822,8 @@ export interface Intent {
   ref: string
   createdAt: string
   createdBy: string
+  // 登记人的可读名字
+  createdByName: string
   keyFingerprint: string
   sourceAddr: string
   assetIds: string[]
