@@ -49,7 +49,7 @@ func TestHealthUnconfigured(t *testing.T) {
 	oldIncident(ctx, t, client, "triaged", "malicious", 3)
 	oldIncident(ctx, t, client, "triaged", "suspicious", 4) // 高危可疑需复核
 	oldIncident(ctx, t, client, "triaged", "suspicious", 3) // 中低危可疑不推
-	oldIncident(ctx, t, client, "triaged", "benign", 5)     // 良性（含高危）不推
+	oldIncident(ctx, t, client, "triaged", "benign", 5)     // 良性严重级：进每日汇总，不算逐条积压
 	oldIncident(ctx, t, client, "triaged", "benign", 2)     // 良性低危不推
 	oldIncident(ctx, t, client, "closed", "malicious", 5)
 	pushed := oldIncident(ctx, t, client, "open", "", 5)

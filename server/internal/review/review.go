@@ -50,6 +50,21 @@ func humanEscalation() predicate.Incident {
 
 func severe() predicate.Incident { return incident.HasAlertsWith(alert.SeverityGTE(Severity)) }
 
+// uncoveredSevere 有严重告警，或有高危告警所在主机没有有效的资产角色或已授权变更事实（facts.HostKinds）：
+// 这时 AI 的良性结论没有人写过的业务依据兜底，既进不了良性结案，也不能静默
+func uncoveredSevere() predicate.Incident {
+	return func(s *sql.Selector) {
+		s.Where(sql.ExprP(fmt.Sprintf(`EXISTS (SELECT 1 FROM alerts a WHERE a.incident_id = %s AND a.severity >= %d AND (a.severity > %d OR NOT EXISTS (
+			SELECT 1 FROM facts f WHERE f.asset_id = a.asset_id AND f.kind IN ('asset_role', 'change') AND f.retired_at IS NULL AND (f.expires_at IS NULL OR f.expires_at > now()))))`,
+			s.C(incident.FieldID), Severity, Severity)))
+	}
+}
+
+// SevereBenign 未结案、AI 判良性但带没有事实兜底的高危或严重告警：要人确认，按天汇总推送而不逐条推
+func SevereBenign() predicate.Incident {
+	return incident.And(unresolved(), benign(), uncoveredSevere())
+}
+
 func decoyAlert() predicate.Alert { return alert.RuleIDHasPrefix(decoy.ObservationRulePrefix) }
 
 // decoyReview 含分析师提交的诱饵观察：人点名要复核，AI 判良性也不能替人结案。
@@ -62,7 +77,7 @@ func DecoyOnly() predicate.Incident {
 
 // quiet 已由 AI 研判（status=triaged 且无升级类待重研判证据）、不含人工提交的诱饵观察、无需隔离/阻断响应或不可避免的原始记录人工补取，
 // 且满足以下任一静默自治条件：
-//  1. AI 判良性（benign，不论原规则级别）；
+//  1. AI 判良性（benign），且没有缺少事实兜底的高危或严重告警（uncoveredSevere）；
 //  2. AI 判可疑（suspicious）且级别低于高危（< Severity）。
 //
 // 未经人工采纳的 AI 结案建议（closure_proposal）不能降低高危可疑事件的复核要求。
@@ -74,7 +89,7 @@ func quiet() predicate.Incident {
 		incident.Not(humanEscalation()),
 		managedWork(),
 		incident.Or(
-			benign(),
+			incident.And(benign(), incident.Not(uncoveredSevere())),
 			incident.And(
 				suspicious(),
 				incident.Not(severe()),
@@ -88,7 +103,7 @@ func Needed() predicate.Incident {
 	return incident.And(unresolved(), incident.Not(quiet()))
 }
 
-// StaleBenign AI 判良性、无需人工响应或原始记录补取、不含人工提交的诱饵观察、之后没有待重研判的新证据且创建早于 before：到期由系统自动按误报结案。
+// StaleBenign AI 判良性、没有缺事实兜底的高危或严重告警、无需人工响应或原始记录补取、不含人工提交的诱饵观察、之后没有待重研判的新证据且创建早于 before：到期交独立审计按误报结案。
 // 静默不通知的可疑事件（suspicious）不在此列：无需即时打扰人不等于已证明误报，不能自动按 false_positive 结案。
 // 结论之后又并入了新证据（待重研判）或分析师重开（open）的不算：旧结论没看过新证据，不能拿它结案
 func StaleBenign(before time.Time) predicate.Incident {
@@ -97,6 +112,7 @@ func StaleBenign(before time.Time) predicate.Incident {
 		incident.Not(Urgent()),
 		incident.Not(newer(incident.FieldEvidenceAt)),
 		benign(),
+		incident.Not(uncoveredSevere()),
 		incident.Not(hasEvidenceGap()),
 		managedWork(),
 		incident.Not(humanEscalation()),

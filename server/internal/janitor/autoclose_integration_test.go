@@ -34,7 +34,9 @@ func TestAutoCloseRequiresCurrentProposalAndIndependentReview(t *testing.T) {
 	}
 	benign := `{"verdict":"benign","action_codes":["monitor"]}`
 	accepted := create(benign, 3, old, true)
-	rejected := create(benign, 4, old, true)
+	rejected := create(benign, 3, old, true)
+	// 高危告警没有主机事实兜底的良性结论要人确认，不进到期结案
+	create(benign, 4, old, true)
 	noProposal := create(benign, 3, old, false)
 	staleProposal := create(benign, 3, old, true)
 	p := *staleProposal.ClosureProposal

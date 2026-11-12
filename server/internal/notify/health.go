@@ -53,11 +53,11 @@ type Health struct {
 // Delivering 渠道正常；不正常且有积压时才需要喊人
 func (h Health) Delivering() bool { return h.Status == "ok" }
 
-// Pending 该推却还没推的事件，与 sweep 同一口径：没落投递标记、不是纯诱饵观察、需人工处理（review.Needed）、
+// Pending 该推却还没推的事件，与 sweep 同一口径：没落投递标记、不是纯诱饵观察、需人工处理（review.Needed）且不走每日汇总（review.SevereBenign）、
 // 最高级别达到推送门槛，且创建早于 before。没配目标期间这些事件不会落标记，配上后启用前的不补发，
 // 所以这里数到的就是"本该有人收到却没收到"的
 func Pending(t Target, before time.Time) predicate.Incident {
-	ps := []predicate.Incident{incident.NotifiedAtIsNil(), incident.Not(review.DecoyOnly()), review.Needed(), incident.CreatedAtLT(before)}
+	ps := []predicate.Incident{incident.NotifiedAtIsNil(), incident.Not(review.DecoyOnly()), review.Needed(), incident.Not(review.SevereBenign()), incident.CreatedAtLT(before)}
 	if t.MinSeverity > 0 {
 		ps = append(ps, incident.HasAlertsWith(alert.SeverityGTE(t.MinSeverity)))
 	}

@@ -384,6 +384,14 @@ func validate(d Decision, m *material) bool {
 	if len(m.Events) == 0 || !serverScoped && (len(m.Basis) != len(m.Events) || len(m.Basis) == 0) || !d.Approve || strings.TrimSpace(d.Reason) == "" || len(strings.TrimSpace(d.PositiveEvidence)) < 20 {
 		return false
 	}
+	// 高危告警凭主机事实放行：理由里要引用覆盖该主机的事实编号
+	if m.Benign != nil {
+		for _, h := range m.Benign.Severe {
+			if !slices.ContainsFunc(h.Facts, func(ref string) bool { return strings.Contains(d.Reason, ref) }) {
+				return false
+			}
+		}
+	}
 	expected := []uuid.UUID{}
 	for _, e := range m.Events {
 		expected = append(expected, e.ID)

@@ -216,7 +216,8 @@ func TestAPIIncidentsReview(t *testing.T) {
 		{"triaged", `{"verdict":"suspicious"}`, 4, true},
 		{"triaged", `{"verdict":"malicious"}`, 2, true},
 		{"triaged", `{"verdict":"benign"}`, 3, false},
-		{"triaged", `{"verdict":"benign"}`, 4, false},
+		// 良性结论的高危告警没有主机事实兜底：要人确认
+		{"triaged", `{"verdict":"benign"}`, 4, true},
 		{"open", `{"confidence":3}`, 1, true},
 		{"closed", `{"verdict":"malicious"}`, 5, false},
 	}
@@ -247,8 +248,8 @@ func TestAPIIncidentsReview(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != len(want) || resp.Header.Get("X-Total-Count") != "4" {
-		t.Fatalf("需复核应为 4 个，得到 %d 个，总数 %s", len(got), resp.Header.Get("X-Total-Count"))
+	if len(got) != len(want) || resp.Header.Get("X-Total-Count") != "5" {
+		t.Fatalf("需复核应为 5 个，得到 %d 个，总数 %s", len(got), resp.Header.Get("X-Total-Count"))
 	}
 	for _, inc := range got {
 		if !want[inc.ID] {
@@ -262,8 +263,8 @@ func TestAPIIncidentsReview(t *testing.T) {
 	if err := json.Unmarshal(body, &stats); err != nil {
 		t.Fatal(err)
 	}
-	if stats.ReviewIncidents != 4 {
-		t.Errorf("reviewIncidents 应为 4，得到 %d", stats.ReviewIncidents)
+	if stats.ReviewIncidents != 5 {
+		t.Errorf("reviewIncidents 应为 5，得到 %d", stats.ReviewIncidents)
 	}
 }
 

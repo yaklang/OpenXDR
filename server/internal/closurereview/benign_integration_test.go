@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/schema"
 	"openxdr/server/internal/decoy"
+	"openxdr/server/internal/facts"
 	"openxdr/server/internal/sigma"
 )
 
@@ -95,7 +97,15 @@ func TestBenignDisqualifiers(t *testing.T) {
 		return func(f *fixture) { f.db.Incident.UpdateOneID(f.inc.ID).SetAiVerdict(json.RawMessage(v)).ExecX(f.ctx) }
 	}
 	tests := map[string]func(*fixture){
-		"high":      func(f *fixture) { f.db.Alert.UpdateOneID(f.al.ID).SetSeverity(4).ExecX(f.ctx) },
+		"high": func(f *fixture) { f.db.Alert.UpdateOneID(f.al.ID).SetSeverity(4).ExecX(f.ctx) },
+		"critical_with_fact": func(f *fixture) {
+			f.db.Fact.Create().SetKind("asset_role").SetAssetID(f.asset.ID).SetContent("构建机").SetCreatedBy("admin").ExecX(f.ctx)
+			f.db.Alert.UpdateOneID(f.al.ID).SetSeverity(5).ExecX(f.ctx)
+		},
+		"high_expired_fact": func(f *fixture) {
+			f.db.Fact.Create().SetKind("change").SetAssetID(f.asset.ID).SetContent("授权测试").SetCreatedBy("admin").SetExpiresAt(time.Now().Add(-time.Hour)).ExecX(f.ctx)
+			f.db.Alert.UpdateOneID(f.al.ID).SetSeverity(4).ExecX(f.ctx)
+		},
 		"intel":     func(f *fixture) { f.db.Alert.UpdateOneID(f.al.ID).SetRuleID("intel:ip:1.2.3.4").ExecX(f.ctx) },
 		"synthetic": func(f *fixture) { f.db.Alert.UpdateOneID(f.al.ID).SetRuleID("xdr:beacon").ExecX(f.ctx) },
 		"decoy": func(f *fixture) {
@@ -204,5 +214,35 @@ func TestBenignMaterialCarriesLineage(t *testing.T) {
 	}
 	if l.Ancestors[1].ProcessGUID != grand || !l.Ancestors[1].Missing {
 		t.Fatalf("别的资产上的同 guid 记录不能顶替：%+v", l.Ancestors[1])
+	}
+}
+
+// 高危告警凭主机事实交审计：材料列出覆盖它的事实编号，批准理由不引用就不算数
+func TestBenignSevereNeedsHostFact(t *testing.T) {
+	f := setupBenign(t)
+	fact := f.db.Fact.Create().SetKind("asset_role").SetAssetID(f.asset.ID).SetContent("包管理更新是业务").SetCreatedBy("admin").SaveX(f.ctx)
+	ref := facts.Ref("F", fact.ID)
+	f.db.Alert.UpdateOneID(f.al.ID).SetSeverity(4).ExecX(f.ctx)
+	var material string
+	judge := f.r.Judge
+	f.r.Judge = func(ctx context.Context, model, m string) (Decision, error) {
+		material = m
+		return judge(ctx, model, m)
+	}
+	if ok, err := f.r.Review(f.ctx, f.inc.ID); ok || err != nil || f.calls != 1 {
+		t.Fatal("理由没引用事实编号不能结案", ok, err, f.calls)
+	}
+	if !strings.Contains(material, `"severe_hosts":[{"hostname":"`+f.asset.Hostname+`","facts":["`+ref+`"]}]`) {
+		t.Fatal("材料应列出覆盖高危主机的事实编号", material)
+	}
+	f.r.Judge = func(context.Context, string, string) (Decision, error) {
+		f.calls++
+		d := benignApproval(f.ev.ID, benignCmd)
+		d.Reason += "，属 " + ref + " 写明的业务"
+		return d, nil
+	}
+	f.db.Fact.UpdateOneID(fact.ID).SetContent("包管理更新是本机业务").ExecX(f.ctx)
+	if ok, err := f.r.Review(f.ctx, f.inc.ID); !ok || err != nil {
+		t.Fatal("引用覆盖事实后应能结案", ok, err)
 	}
 }

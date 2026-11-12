@@ -106,6 +106,19 @@ func Live(now time.Time) predicate.Fact {
 	return fact.And(fact.RetiredAtIsNil(), fact.Or(fact.ExpiresAtIsNil(), fact.ExpiresAtGT(now)))
 }
 
+// HostKinds 写明一台主机做什么、授权过什么的事实：高危告警上的良性结论要有它覆盖才交审计结案
+var HostKinds = []string{"asset_role", "change"}
+
+// HostRefs 这台主机上有效的资产角色与已授权变更事实编号
+func HostRefs(ctx context.Context, db *ent.Client, asset uuid.UUID, now time.Time) ([]string, error) {
+	ids, err := db.Fact.Query().Where(fact.AssetIDEQ(asset), fact.KindIn(HostKinds...), Live(now)).IDs(ctx)
+	refs := make([]string, 0, len(ids))
+	for _, id := range ids {
+		refs = append(refs, Ref("F", id))
+	}
+	return refs, err
+}
+
 // IntentRequest 登记意图的入参
 type IntentRequest struct {
 	KeyFingerprint string

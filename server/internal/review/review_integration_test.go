@@ -62,6 +62,16 @@ func TestPredicates(t *testing.T) {
 	}
 	mk("判良性低危新", "triaged", benign, now, al{"r1", 1})
 	mk("判良性高危旧", "triaged", benign, old, al{"r1", 2}, al{"r2", 4})
+	mk("判良性严重旧", "triaged", benign, old, al{"r1", 5})
+	// 高危告警所在主机有写明业务的资产角色事实：良性结论有人写过的依据兜底，照常静默、到期交审计
+	covered := db.Asset.Create().SetHostname("ci").SaveX(ctx)
+	db.Fact.Create().SetKind("asset_role").SetAssetID(covered.ID).SetContent("CI 构建机").SetCreatedBy("admin").ExecX(ctx)
+	mk("判良性高危有事实", "triaged", benign, old)
+	for id, name := range names {
+		if name == "判良性高危有事实" {
+			db.Alert.Create().SetTs(old).SetRuleID("r2").SetSeverity(4).SetIncidentID(id).SetAssetID(covered.ID).ExecX(ctx)
+		}
+	}
 	mk("判可疑低危旧", "triaged", suspicious, old, al{"r1", 3})
 	mk("判可疑高危", "triaged", suspicious, old, al{"r1", 4})
 	mk("判可疑低危需响应", "triaged", suspiciousResp, old, al{"r1", 3})
@@ -95,10 +105,11 @@ func TestPredicates(t *testing.T) {
 	}
 
 	expect("Needed", query(Needed()),
-		"未研判", "判恶意", "重开良性低危旧", "判可疑高危", "判可疑低危需响应", "判良性含诱饵与真实告警", "判良性仅诱饵", "未研判仅诱饵", "结论缺 verdict 字段", "结论大小写不符")
-	expect("StaleBenign", query(StaleBenign(cutoff)), "判良性低危旧", "判良性高危旧")
+		"未研判", "判恶意", "重开良性低危旧", "判良性高危旧", "判良性严重旧", "判可疑高危", "判可疑低危需响应", "判良性含诱饵与真实告警", "判良性仅诱饵", "未研判仅诱饵", "结论缺 verdict 字段", "结论大小写不符")
+	expect("StaleBenign", query(StaleBenign(cutoff)), "判良性低危旧", "判良性高危有事实")
+	expect("SevereBenign", query(SevereBenign()), "判良性高危旧", "判良性严重旧")
 	// 截止时间放到未来，新创建的良性低危事件也算过期；未核实的可疑事件（判可疑低危旧）虽静默不通知，但绝不自动按误报结案
-	expect("StaleBenign(未来)", query(StaleBenign(now.Add(time.Hour))), "判良性低危旧", "判良性高危旧", "判良性低危新")
+	expect("StaleBenign(未来)", query(StaleBenign(now.Add(time.Hour))), "判良性低危旧", "判良性高危有事实", "判良性低危新")
 	expect("DecoyOnly", query(DecoyOnly()), "判良性仅诱饵", "未研判仅诱饵", "已结案含诱饵")
 
 	// 自动结案与人工复核互斥：任何事件都不能同时属于两边

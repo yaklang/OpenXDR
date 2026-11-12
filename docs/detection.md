@@ -25,7 +25,7 @@
 ```
 correlate：未归属告警 → incident（10s 一批）
 triage：   新 incident / 待重研判 → LLM 研判 → verdict（30s 一批，需 AI_MODEL；节奏见「研判节奏」）
-notify：   研判后事件 → webhook（30s 一批，benign 不推，高危 benign 照推待复核）
+notify：   研判后事件 → webhook（30s 一批，benign 不推；高危告警没有主机事实兜底、或含严重级告警的 benign 进待复核，每天合并推一条「高危良性待确认」）
 ueba：     扫进程事件维护基线，首次出现合成 low 告警进同一管线（30s 一批）
 beacon：   增量读出站连接，新出现的规律公网外联合成 medium 告警（300s 一批）
 janitor：  过期事件/会话清理（60min 一批，告警引用的证据不删）

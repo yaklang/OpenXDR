@@ -170,6 +170,9 @@ func (n *Notifier) Run(ctx context.Context) {
 			if err := n.sweep(ctx); err != nil {
 				slog.Error("通知批次失败", "err", err)
 			}
+			if err := n.severeBenignDigest(ctx, time.Now()); err != nil {
+				slog.Error("高危良性每日汇总失败", "err", err)
+			}
 			if err := n.sweepFindings(ctx); err != nil {
 				slog.Error("运维紧急风险通知失败", "err", err)
 			}
@@ -224,6 +227,17 @@ func (n *Notifier) sweep(ctx context.Context) error {
 			if !needed {
 				send = false
 				why = "AI 已接管持续跟进"
+			}
+			// AI 判良性却因高危告警没有事实兜底要人确认的，不逐条推，进每日汇总
+			if needed {
+				daily, err := n.DB.Incident.Query().Where(incident.IDEQ(inc.ID), review.SevereBenign()).Exist(ctx)
+				if err != nil {
+					return err
+				}
+				if daily {
+					send = false
+					why = "高危良性待确认，进每日汇总"
+				}
 			}
 		}
 		if why == "wait" {
