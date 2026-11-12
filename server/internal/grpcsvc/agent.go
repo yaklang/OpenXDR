@@ -26,6 +26,7 @@ import (
 	"openxdr/server/internal/intel"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/sshkeys"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/pb"
 )
@@ -49,6 +50,7 @@ type Server struct {
 	// agent 安装包与自动升级开关
 	Dist        *enroll.Dist
 	AutoUpgrade bool
+	SSHKeys     *sshkeys.Service
 }
 
 func (s *Server) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {

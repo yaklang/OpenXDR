@@ -40,6 +40,8 @@ func (Approval) Fields() []ent.Field {
 		field.Time("expires_at"),
 		field.String("decided_by").Optional().Nillable(),
 		field.Time("decided_at").Optional().Nillable(),
+		// 平台生成的异步提议（无阻塞调用方等待），组管理员批准时由 Gate.Decide 当场下发执行
+		field.Bool("async").Default(false),
 	}
 }
 func (Approval) Indexes() []ent.Index {

@@ -39,6 +39,8 @@ const (
 	FieldDecidedBy = "decided_by"
 	// FieldDecidedAt holds the string denoting the decided_at field in the database.
 	FieldDecidedAt = "decided_at"
+	// FieldAsync holds the string denoting the async field in the database.
+	FieldAsync = "async"
 	// Table holds the table name of the approval in the database.
 	Table = "approvals"
 )
@@ -58,6 +60,7 @@ var Columns = []string{
 	FieldExpiresAt,
 	FieldDecidedBy,
 	FieldDecidedAt,
+	FieldAsync,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -73,6 +76,8 @@ func ValidColumn(column string) bool {
 var (
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
+	// DefaultAsync holds the default value on creation for the "async" field.
+	DefaultAsync bool
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
@@ -196,4 +201,9 @@ func ByDecidedBy(opts ...sql.OrderTermOption) OrderOption {
 // ByDecidedAt orders the results by the decided_at field.
 func ByDecidedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldDecidedAt, opts...).ToFunc()
+}
+
+// ByAsync orders the results by the async field.
+func ByAsync(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAsync, opts...).ToFunc()
 }

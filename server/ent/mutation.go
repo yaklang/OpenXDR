@@ -53,6 +53,8 @@ import (
 	"openxdr/server/ent/session"
 	"openxdr/server/ent/sessionmessage"
 	"openxdr/server/ent/setting"
+	"openxdr/server/ent/sshkeybaseline"
+	"openxdr/server/ent/sshkeyobservation"
 	"openxdr/server/ent/sshlogin"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/task"
@@ -120,6 +122,8 @@ const (
 	TypeProcessBaseline         = "ProcessBaseline"
 	TypeReport                  = "Report"
 	TypeReportRead              = "ReportRead"
+	TypeSSHKeyBaseline          = "SSHKeyBaseline"
+	TypeSSHKeyObservation       = "SSHKeyObservation"
 	TypeSSHLogin                = "SSHLogin"
 	TypeSession                 = "Session"
 	TypeSessionMessage          = "SessionMessage"
@@ -4166,6 +4170,7 @@ type ApprovalMutation struct {
 	expires_at    *time.Time
 	decided_by    *string
 	decided_at    *time.Time
+	async         *bool
 	clearedFields map[string]struct{}
 	done          bool
 	oldValue      func(context.Context) (*Approval, error)
@@ -4767,6 +4772,42 @@ func (m *ApprovalMutation) ResetDecidedAt() {
 	delete(m.clearedFields, approval.FieldDecidedAt)
 }
 
+// SetAsync sets the "async" field.
+func (m *ApprovalMutation) SetAsync(b bool) {
+	m.async = &b
+}
+
+// Async returns the value of the "async" field in the mutation.
+func (m *ApprovalMutation) Async() (r bool, exists bool) {
+	v := m.async
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAsync returns the old "async" field's value of the Approval entity.
+// If the Approval object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ApprovalMutation) OldAsync(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAsync is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAsync requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAsync: %w", err)
+	}
+	return oldValue.Async, nil
+}
+
+// ResetAsync resets all changes to the "async" field.
+func (m *ApprovalMutation) ResetAsync() {
+	m.async = nil
+}
+
 // Where appends a list predicates to the ApprovalMutation builder.
 func (m *ApprovalMutation) Where(ps ...predicate.Approval) {
 	m.predicates = append(m.predicates, ps...)
@@ -4801,7 +4842,7 @@ func (m *ApprovalMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ApprovalMutation) Fields() []string {
-	fields := make([]string, 0, 12)
+	fields := make([]string, 0, 13)
 	if m.created_at != nil {
 		fields = append(fields, approval.FieldCreatedAt)
 	}
@@ -4838,6 +4879,9 @@ func (m *ApprovalMutation) Fields() []string {
 	if m.decided_at != nil {
 		fields = append(fields, approval.FieldDecidedAt)
 	}
+	if m.async != nil {
+		fields = append(fields, approval.FieldAsync)
+	}
 	return fields
 }
 
@@ -4870,6 +4914,8 @@ func (m *ApprovalMutation) Field(name string) (ent.Value, bool) {
 		return m.DecidedBy()
 	case approval.FieldDecidedAt:
 		return m.DecidedAt()
+	case approval.FieldAsync:
+		return m.Async()
 	}
 	return nil, false
 }
@@ -4903,6 +4949,8 @@ func (m *ApprovalMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldDecidedBy(ctx)
 	case approval.FieldDecidedAt:
 		return m.OldDecidedAt(ctx)
+	case approval.FieldAsync:
+		return m.OldAsync(ctx)
 	}
 	return nil, fmt.Errorf("unknown Approval field %s", name)
 }
@@ -4995,6 +5043,13 @@ func (m *ApprovalMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetDecidedAt(v)
+		return nil
+	case approval.FieldAsync:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAsync(v)
 		return nil
 	}
 	return fmt.Errorf("unknown Approval field %s", name)
@@ -5116,6 +5171,9 @@ func (m *ApprovalMutation) ResetField(name string) error {
 		return nil
 	case approval.FieldDecidedAt:
 		m.ResetDecidedAt()
+		return nil
+	case approval.FieldAsync:
+		m.ResetAsync()
 		return nil
 	}
 	return fmt.Errorf("unknown Approval field %s", name)
@@ -40927,6 +40985,1773 @@ func (m *ReportReadMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *ReportReadMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown ReportRead edge %s", name)
+}
+
+// SSHKeyBaselineMutation represents an operation that mutates the SSHKeyBaseline nodes in the graph.
+type SSHKeyBaselineMutation struct {
+	config
+	op                           Op
+	typ                          string
+	id                           *uuid.UUID
+	asset_id                     *uuid.UUID
+	first_reported_at            *time.Time
+	last_reported_at             *time.Time
+	authorized_keys_command      *string
+	authorized_keys_command_user *string
+	clearedFields                map[string]struct{}
+	done                         bool
+	oldValue                     func(context.Context) (*SSHKeyBaseline, error)
+	predicates                   []predicate.SSHKeyBaseline
+}
+
+var _ ent.Mutation = (*SSHKeyBaselineMutation)(nil)
+
+// sshkeybaselineOption allows management of the mutation configuration using functional options.
+type sshkeybaselineOption func(*SSHKeyBaselineMutation)
+
+// newSSHKeyBaselineMutation creates new mutation for the SSHKeyBaseline entity.
+func newSSHKeyBaselineMutation(c config, op Op, opts ...sshkeybaselineOption) *SSHKeyBaselineMutation {
+	m := &SSHKeyBaselineMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeSSHKeyBaseline,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withSSHKeyBaselineID sets the ID field of the mutation.
+func withSSHKeyBaselineID(id uuid.UUID) sshkeybaselineOption {
+	return func(m *SSHKeyBaselineMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *SSHKeyBaseline
+		)
+		m.oldValue = func(ctx context.Context) (*SSHKeyBaseline, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().SSHKeyBaseline.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withSSHKeyBaseline sets the old SSHKeyBaseline of the mutation.
+func withSSHKeyBaseline(node *SSHKeyBaseline) sshkeybaselineOption {
+	return func(m *SSHKeyBaselineMutation) {
+		m.oldValue = func(context.Context) (*SSHKeyBaseline, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m SSHKeyBaselineMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m SSHKeyBaselineMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of SSHKeyBaseline entities.
+func (m *SSHKeyBaselineMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *SSHKeyBaselineMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *SSHKeyBaselineMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().SSHKeyBaseline.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetAssetID sets the "asset_id" field.
+func (m *SSHKeyBaselineMutation) SetAssetID(u uuid.UUID) {
+	m.asset_id = &u
+}
+
+// AssetID returns the value of the "asset_id" field in the mutation.
+func (m *SSHKeyBaselineMutation) AssetID() (r uuid.UUID, exists bool) {
+	v := m.asset_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAssetID returns the old "asset_id" field's value of the SSHKeyBaseline entity.
+// If the SSHKeyBaseline object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyBaselineMutation) OldAssetID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAssetID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAssetID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAssetID: %w", err)
+	}
+	return oldValue.AssetID, nil
+}
+
+// ResetAssetID resets all changes to the "asset_id" field.
+func (m *SSHKeyBaselineMutation) ResetAssetID() {
+	m.asset_id = nil
+}
+
+// SetFirstReportedAt sets the "first_reported_at" field.
+func (m *SSHKeyBaselineMutation) SetFirstReportedAt(t time.Time) {
+	m.first_reported_at = &t
+}
+
+// FirstReportedAt returns the value of the "first_reported_at" field in the mutation.
+func (m *SSHKeyBaselineMutation) FirstReportedAt() (r time.Time, exists bool) {
+	v := m.first_reported_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFirstReportedAt returns the old "first_reported_at" field's value of the SSHKeyBaseline entity.
+// If the SSHKeyBaseline object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyBaselineMutation) OldFirstReportedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFirstReportedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFirstReportedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFirstReportedAt: %w", err)
+	}
+	return oldValue.FirstReportedAt, nil
+}
+
+// ResetFirstReportedAt resets all changes to the "first_reported_at" field.
+func (m *SSHKeyBaselineMutation) ResetFirstReportedAt() {
+	m.first_reported_at = nil
+}
+
+// SetLastReportedAt sets the "last_reported_at" field.
+func (m *SSHKeyBaselineMutation) SetLastReportedAt(t time.Time) {
+	m.last_reported_at = &t
+}
+
+// LastReportedAt returns the value of the "last_reported_at" field in the mutation.
+func (m *SSHKeyBaselineMutation) LastReportedAt() (r time.Time, exists bool) {
+	v := m.last_reported_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastReportedAt returns the old "last_reported_at" field's value of the SSHKeyBaseline entity.
+// If the SSHKeyBaseline object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyBaselineMutation) OldLastReportedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastReportedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastReportedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastReportedAt: %w", err)
+	}
+	return oldValue.LastReportedAt, nil
+}
+
+// ResetLastReportedAt resets all changes to the "last_reported_at" field.
+func (m *SSHKeyBaselineMutation) ResetLastReportedAt() {
+	m.last_reported_at = nil
+}
+
+// SetAuthorizedKeysCommand sets the "authorized_keys_command" field.
+func (m *SSHKeyBaselineMutation) SetAuthorizedKeysCommand(s string) {
+	m.authorized_keys_command = &s
+}
+
+// AuthorizedKeysCommand returns the value of the "authorized_keys_command" field in the mutation.
+func (m *SSHKeyBaselineMutation) AuthorizedKeysCommand() (r string, exists bool) {
+	v := m.authorized_keys_command
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAuthorizedKeysCommand returns the old "authorized_keys_command" field's value of the SSHKeyBaseline entity.
+// If the SSHKeyBaseline object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyBaselineMutation) OldAuthorizedKeysCommand(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAuthorizedKeysCommand is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAuthorizedKeysCommand requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAuthorizedKeysCommand: %w", err)
+	}
+	return oldValue.AuthorizedKeysCommand, nil
+}
+
+// ResetAuthorizedKeysCommand resets all changes to the "authorized_keys_command" field.
+func (m *SSHKeyBaselineMutation) ResetAuthorizedKeysCommand() {
+	m.authorized_keys_command = nil
+}
+
+// SetAuthorizedKeysCommandUser sets the "authorized_keys_command_user" field.
+func (m *SSHKeyBaselineMutation) SetAuthorizedKeysCommandUser(s string) {
+	m.authorized_keys_command_user = &s
+}
+
+// AuthorizedKeysCommandUser returns the value of the "authorized_keys_command_user" field in the mutation.
+func (m *SSHKeyBaselineMutation) AuthorizedKeysCommandUser() (r string, exists bool) {
+	v := m.authorized_keys_command_user
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAuthorizedKeysCommandUser returns the old "authorized_keys_command_user" field's value of the SSHKeyBaseline entity.
+// If the SSHKeyBaseline object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyBaselineMutation) OldAuthorizedKeysCommandUser(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAuthorizedKeysCommandUser is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAuthorizedKeysCommandUser requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAuthorizedKeysCommandUser: %w", err)
+	}
+	return oldValue.AuthorizedKeysCommandUser, nil
+}
+
+// ResetAuthorizedKeysCommandUser resets all changes to the "authorized_keys_command_user" field.
+func (m *SSHKeyBaselineMutation) ResetAuthorizedKeysCommandUser() {
+	m.authorized_keys_command_user = nil
+}
+
+// Where appends a list predicates to the SSHKeyBaselineMutation builder.
+func (m *SSHKeyBaselineMutation) Where(ps ...predicate.SSHKeyBaseline) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the SSHKeyBaselineMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *SSHKeyBaselineMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.SSHKeyBaseline, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *SSHKeyBaselineMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *SSHKeyBaselineMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (SSHKeyBaseline).
+func (m *SSHKeyBaselineMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *SSHKeyBaselineMutation) Fields() []string {
+	fields := make([]string, 0, 5)
+	if m.asset_id != nil {
+		fields = append(fields, sshkeybaseline.FieldAssetID)
+	}
+	if m.first_reported_at != nil {
+		fields = append(fields, sshkeybaseline.FieldFirstReportedAt)
+	}
+	if m.last_reported_at != nil {
+		fields = append(fields, sshkeybaseline.FieldLastReportedAt)
+	}
+	if m.authorized_keys_command != nil {
+		fields = append(fields, sshkeybaseline.FieldAuthorizedKeysCommand)
+	}
+	if m.authorized_keys_command_user != nil {
+		fields = append(fields, sshkeybaseline.FieldAuthorizedKeysCommandUser)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *SSHKeyBaselineMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case sshkeybaseline.FieldAssetID:
+		return m.AssetID()
+	case sshkeybaseline.FieldFirstReportedAt:
+		return m.FirstReportedAt()
+	case sshkeybaseline.FieldLastReportedAt:
+		return m.LastReportedAt()
+	case sshkeybaseline.FieldAuthorizedKeysCommand:
+		return m.AuthorizedKeysCommand()
+	case sshkeybaseline.FieldAuthorizedKeysCommandUser:
+		return m.AuthorizedKeysCommandUser()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *SSHKeyBaselineMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case sshkeybaseline.FieldAssetID:
+		return m.OldAssetID(ctx)
+	case sshkeybaseline.FieldFirstReportedAt:
+		return m.OldFirstReportedAt(ctx)
+	case sshkeybaseline.FieldLastReportedAt:
+		return m.OldLastReportedAt(ctx)
+	case sshkeybaseline.FieldAuthorizedKeysCommand:
+		return m.OldAuthorizedKeysCommand(ctx)
+	case sshkeybaseline.FieldAuthorizedKeysCommandUser:
+		return m.OldAuthorizedKeysCommandUser(ctx)
+	}
+	return nil, fmt.Errorf("unknown SSHKeyBaseline field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *SSHKeyBaselineMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case sshkeybaseline.FieldAssetID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAssetID(v)
+		return nil
+	case sshkeybaseline.FieldFirstReportedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFirstReportedAt(v)
+		return nil
+	case sshkeybaseline.FieldLastReportedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastReportedAt(v)
+		return nil
+	case sshkeybaseline.FieldAuthorizedKeysCommand:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAuthorizedKeysCommand(v)
+		return nil
+	case sshkeybaseline.FieldAuthorizedKeysCommandUser:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAuthorizedKeysCommandUser(v)
+		return nil
+	}
+	return fmt.Errorf("unknown SSHKeyBaseline field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *SSHKeyBaselineMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *SSHKeyBaselineMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *SSHKeyBaselineMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown SSHKeyBaseline numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *SSHKeyBaselineMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *SSHKeyBaselineMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *SSHKeyBaselineMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown SSHKeyBaseline nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *SSHKeyBaselineMutation) ResetField(name string) error {
+	switch name {
+	case sshkeybaseline.FieldAssetID:
+		m.ResetAssetID()
+		return nil
+	case sshkeybaseline.FieldFirstReportedAt:
+		m.ResetFirstReportedAt()
+		return nil
+	case sshkeybaseline.FieldLastReportedAt:
+		m.ResetLastReportedAt()
+		return nil
+	case sshkeybaseline.FieldAuthorizedKeysCommand:
+		m.ResetAuthorizedKeysCommand()
+		return nil
+	case sshkeybaseline.FieldAuthorizedKeysCommandUser:
+		m.ResetAuthorizedKeysCommandUser()
+		return nil
+	}
+	return fmt.Errorf("unknown SSHKeyBaseline field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *SSHKeyBaselineMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *SSHKeyBaselineMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *SSHKeyBaselineMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *SSHKeyBaselineMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *SSHKeyBaselineMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *SSHKeyBaselineMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *SSHKeyBaselineMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown SSHKeyBaseline unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *SSHKeyBaselineMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown SSHKeyBaseline edge %s", name)
+}
+
+// SSHKeyObservationMutation represents an operation that mutates the SSHKeyObservation nodes in the graph.
+type SSHKeyObservationMutation struct {
+	config
+	op                  Op
+	typ                 string
+	id                  *uuid.UUID
+	asset_id            *uuid.UUID
+	account             *string
+	file_path           *string
+	key_type            *string
+	fingerprint         *string
+	comment             *string
+	options             *[]string
+	appendoptions       []string
+	present             *bool
+	first_seen          *time.Time
+	last_seen           *time.Time
+	added_by_user       *string
+	added_by_ip         *string
+	added_by_key_fp     *string
+	last_login_at       *time.Time
+	last_login_ip       *string
+	removal_approval_id *uuid.UUID
+	clearedFields       map[string]struct{}
+	done                bool
+	oldValue            func(context.Context) (*SSHKeyObservation, error)
+	predicates          []predicate.SSHKeyObservation
+}
+
+var _ ent.Mutation = (*SSHKeyObservationMutation)(nil)
+
+// sshkeyobservationOption allows management of the mutation configuration using functional options.
+type sshkeyobservationOption func(*SSHKeyObservationMutation)
+
+// newSSHKeyObservationMutation creates new mutation for the SSHKeyObservation entity.
+func newSSHKeyObservationMutation(c config, op Op, opts ...sshkeyobservationOption) *SSHKeyObservationMutation {
+	m := &SSHKeyObservationMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeSSHKeyObservation,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withSSHKeyObservationID sets the ID field of the mutation.
+func withSSHKeyObservationID(id uuid.UUID) sshkeyobservationOption {
+	return func(m *SSHKeyObservationMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *SSHKeyObservation
+		)
+		m.oldValue = func(ctx context.Context) (*SSHKeyObservation, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().SSHKeyObservation.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withSSHKeyObservation sets the old SSHKeyObservation of the mutation.
+func withSSHKeyObservation(node *SSHKeyObservation) sshkeyobservationOption {
+	return func(m *SSHKeyObservationMutation) {
+		m.oldValue = func(context.Context) (*SSHKeyObservation, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m SSHKeyObservationMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m SSHKeyObservationMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of SSHKeyObservation entities.
+func (m *SSHKeyObservationMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *SSHKeyObservationMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *SSHKeyObservationMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().SSHKeyObservation.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetAssetID sets the "asset_id" field.
+func (m *SSHKeyObservationMutation) SetAssetID(u uuid.UUID) {
+	m.asset_id = &u
+}
+
+// AssetID returns the value of the "asset_id" field in the mutation.
+func (m *SSHKeyObservationMutation) AssetID() (r uuid.UUID, exists bool) {
+	v := m.asset_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAssetID returns the old "asset_id" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldAssetID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAssetID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAssetID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAssetID: %w", err)
+	}
+	return oldValue.AssetID, nil
+}
+
+// ResetAssetID resets all changes to the "asset_id" field.
+func (m *SSHKeyObservationMutation) ResetAssetID() {
+	m.asset_id = nil
+}
+
+// SetAccount sets the "account" field.
+func (m *SSHKeyObservationMutation) SetAccount(s string) {
+	m.account = &s
+}
+
+// Account returns the value of the "account" field in the mutation.
+func (m *SSHKeyObservationMutation) Account() (r string, exists bool) {
+	v := m.account
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAccount returns the old "account" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldAccount(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAccount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAccount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAccount: %w", err)
+	}
+	return oldValue.Account, nil
+}
+
+// ResetAccount resets all changes to the "account" field.
+func (m *SSHKeyObservationMutation) ResetAccount() {
+	m.account = nil
+}
+
+// SetFilePath sets the "file_path" field.
+func (m *SSHKeyObservationMutation) SetFilePath(s string) {
+	m.file_path = &s
+}
+
+// FilePath returns the value of the "file_path" field in the mutation.
+func (m *SSHKeyObservationMutation) FilePath() (r string, exists bool) {
+	v := m.file_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFilePath returns the old "file_path" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldFilePath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFilePath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFilePath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFilePath: %w", err)
+	}
+	return oldValue.FilePath, nil
+}
+
+// ResetFilePath resets all changes to the "file_path" field.
+func (m *SSHKeyObservationMutation) ResetFilePath() {
+	m.file_path = nil
+}
+
+// SetKeyType sets the "key_type" field.
+func (m *SSHKeyObservationMutation) SetKeyType(s string) {
+	m.key_type = &s
+}
+
+// KeyType returns the value of the "key_type" field in the mutation.
+func (m *SSHKeyObservationMutation) KeyType() (r string, exists bool) {
+	v := m.key_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKeyType returns the old "key_type" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldKeyType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKeyType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKeyType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKeyType: %w", err)
+	}
+	return oldValue.KeyType, nil
+}
+
+// ResetKeyType resets all changes to the "key_type" field.
+func (m *SSHKeyObservationMutation) ResetKeyType() {
+	m.key_type = nil
+}
+
+// SetFingerprint sets the "fingerprint" field.
+func (m *SSHKeyObservationMutation) SetFingerprint(s string) {
+	m.fingerprint = &s
+}
+
+// Fingerprint returns the value of the "fingerprint" field in the mutation.
+func (m *SSHKeyObservationMutation) Fingerprint() (r string, exists bool) {
+	v := m.fingerprint
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFingerprint returns the old "fingerprint" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldFingerprint(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFingerprint is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFingerprint requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFingerprint: %w", err)
+	}
+	return oldValue.Fingerprint, nil
+}
+
+// ResetFingerprint resets all changes to the "fingerprint" field.
+func (m *SSHKeyObservationMutation) ResetFingerprint() {
+	m.fingerprint = nil
+}
+
+// SetComment sets the "comment" field.
+func (m *SSHKeyObservationMutation) SetComment(s string) {
+	m.comment = &s
+}
+
+// Comment returns the value of the "comment" field in the mutation.
+func (m *SSHKeyObservationMutation) Comment() (r string, exists bool) {
+	v := m.comment
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldComment returns the old "comment" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldComment(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldComment is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldComment requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldComment: %w", err)
+	}
+	return oldValue.Comment, nil
+}
+
+// ResetComment resets all changes to the "comment" field.
+func (m *SSHKeyObservationMutation) ResetComment() {
+	m.comment = nil
+}
+
+// SetOptions sets the "options" field.
+func (m *SSHKeyObservationMutation) SetOptions(s []string) {
+	m.options = &s
+	m.appendoptions = nil
+}
+
+// Options returns the value of the "options" field in the mutation.
+func (m *SSHKeyObservationMutation) Options() (r []string, exists bool) {
+	v := m.options
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOptions returns the old "options" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldOptions(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOptions is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOptions requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOptions: %w", err)
+	}
+	return oldValue.Options, nil
+}
+
+// AppendOptions adds s to the "options" field.
+func (m *SSHKeyObservationMutation) AppendOptions(s []string) {
+	m.appendoptions = append(m.appendoptions, s...)
+}
+
+// AppendedOptions returns the list of values that were appended to the "options" field in this mutation.
+func (m *SSHKeyObservationMutation) AppendedOptions() ([]string, bool) {
+	if len(m.appendoptions) == 0 {
+		return nil, false
+	}
+	return m.appendoptions, true
+}
+
+// ClearOptions clears the value of the "options" field.
+func (m *SSHKeyObservationMutation) ClearOptions() {
+	m.options = nil
+	m.appendoptions = nil
+	m.clearedFields[sshkeyobservation.FieldOptions] = struct{}{}
+}
+
+// OptionsCleared returns if the "options" field was cleared in this mutation.
+func (m *SSHKeyObservationMutation) OptionsCleared() bool {
+	_, ok := m.clearedFields[sshkeyobservation.FieldOptions]
+	return ok
+}
+
+// ResetOptions resets all changes to the "options" field.
+func (m *SSHKeyObservationMutation) ResetOptions() {
+	m.options = nil
+	m.appendoptions = nil
+	delete(m.clearedFields, sshkeyobservation.FieldOptions)
+}
+
+// SetPresent sets the "present" field.
+func (m *SSHKeyObservationMutation) SetPresent(b bool) {
+	m.present = &b
+}
+
+// Present returns the value of the "present" field in the mutation.
+func (m *SSHKeyObservationMutation) Present() (r bool, exists bool) {
+	v := m.present
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPresent returns the old "present" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldPresent(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPresent is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPresent requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPresent: %w", err)
+	}
+	return oldValue.Present, nil
+}
+
+// ResetPresent resets all changes to the "present" field.
+func (m *SSHKeyObservationMutation) ResetPresent() {
+	m.present = nil
+}
+
+// SetFirstSeen sets the "first_seen" field.
+func (m *SSHKeyObservationMutation) SetFirstSeen(t time.Time) {
+	m.first_seen = &t
+}
+
+// FirstSeen returns the value of the "first_seen" field in the mutation.
+func (m *SSHKeyObservationMutation) FirstSeen() (r time.Time, exists bool) {
+	v := m.first_seen
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFirstSeen returns the old "first_seen" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldFirstSeen(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFirstSeen is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFirstSeen requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFirstSeen: %w", err)
+	}
+	return oldValue.FirstSeen, nil
+}
+
+// ResetFirstSeen resets all changes to the "first_seen" field.
+func (m *SSHKeyObservationMutation) ResetFirstSeen() {
+	m.first_seen = nil
+}
+
+// SetLastSeen sets the "last_seen" field.
+func (m *SSHKeyObservationMutation) SetLastSeen(t time.Time) {
+	m.last_seen = &t
+}
+
+// LastSeen returns the value of the "last_seen" field in the mutation.
+func (m *SSHKeyObservationMutation) LastSeen() (r time.Time, exists bool) {
+	v := m.last_seen
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastSeen returns the old "last_seen" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldLastSeen(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastSeen is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastSeen requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastSeen: %w", err)
+	}
+	return oldValue.LastSeen, nil
+}
+
+// ResetLastSeen resets all changes to the "last_seen" field.
+func (m *SSHKeyObservationMutation) ResetLastSeen() {
+	m.last_seen = nil
+}
+
+// SetAddedByUser sets the "added_by_user" field.
+func (m *SSHKeyObservationMutation) SetAddedByUser(s string) {
+	m.added_by_user = &s
+}
+
+// AddedByUser returns the value of the "added_by_user" field in the mutation.
+func (m *SSHKeyObservationMutation) AddedByUser() (r string, exists bool) {
+	v := m.added_by_user
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAddedByUser returns the old "added_by_user" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldAddedByUser(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAddedByUser is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAddedByUser requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAddedByUser: %w", err)
+	}
+	return oldValue.AddedByUser, nil
+}
+
+// ResetAddedByUser resets all changes to the "added_by_user" field.
+func (m *SSHKeyObservationMutation) ResetAddedByUser() {
+	m.added_by_user = nil
+}
+
+// SetAddedByIP sets the "added_by_ip" field.
+func (m *SSHKeyObservationMutation) SetAddedByIP(s string) {
+	m.added_by_ip = &s
+}
+
+// AddedByIP returns the value of the "added_by_ip" field in the mutation.
+func (m *SSHKeyObservationMutation) AddedByIP() (r string, exists bool) {
+	v := m.added_by_ip
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAddedByIP returns the old "added_by_ip" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldAddedByIP(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAddedByIP is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAddedByIP requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAddedByIP: %w", err)
+	}
+	return oldValue.AddedByIP, nil
+}
+
+// ResetAddedByIP resets all changes to the "added_by_ip" field.
+func (m *SSHKeyObservationMutation) ResetAddedByIP() {
+	m.added_by_ip = nil
+}
+
+// SetAddedByKeyFp sets the "added_by_key_fp" field.
+func (m *SSHKeyObservationMutation) SetAddedByKeyFp(s string) {
+	m.added_by_key_fp = &s
+}
+
+// AddedByKeyFp returns the value of the "added_by_key_fp" field in the mutation.
+func (m *SSHKeyObservationMutation) AddedByKeyFp() (r string, exists bool) {
+	v := m.added_by_key_fp
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAddedByKeyFp returns the old "added_by_key_fp" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldAddedByKeyFp(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAddedByKeyFp is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAddedByKeyFp requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAddedByKeyFp: %w", err)
+	}
+	return oldValue.AddedByKeyFp, nil
+}
+
+// ResetAddedByKeyFp resets all changes to the "added_by_key_fp" field.
+func (m *SSHKeyObservationMutation) ResetAddedByKeyFp() {
+	m.added_by_key_fp = nil
+}
+
+// SetLastLoginAt sets the "last_login_at" field.
+func (m *SSHKeyObservationMutation) SetLastLoginAt(t time.Time) {
+	m.last_login_at = &t
+}
+
+// LastLoginAt returns the value of the "last_login_at" field in the mutation.
+func (m *SSHKeyObservationMutation) LastLoginAt() (r time.Time, exists bool) {
+	v := m.last_login_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastLoginAt returns the old "last_login_at" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldLastLoginAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastLoginAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastLoginAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastLoginAt: %w", err)
+	}
+	return oldValue.LastLoginAt, nil
+}
+
+// ClearLastLoginAt clears the value of the "last_login_at" field.
+func (m *SSHKeyObservationMutation) ClearLastLoginAt() {
+	m.last_login_at = nil
+	m.clearedFields[sshkeyobservation.FieldLastLoginAt] = struct{}{}
+}
+
+// LastLoginAtCleared returns if the "last_login_at" field was cleared in this mutation.
+func (m *SSHKeyObservationMutation) LastLoginAtCleared() bool {
+	_, ok := m.clearedFields[sshkeyobservation.FieldLastLoginAt]
+	return ok
+}
+
+// ResetLastLoginAt resets all changes to the "last_login_at" field.
+func (m *SSHKeyObservationMutation) ResetLastLoginAt() {
+	m.last_login_at = nil
+	delete(m.clearedFields, sshkeyobservation.FieldLastLoginAt)
+}
+
+// SetLastLoginIP sets the "last_login_ip" field.
+func (m *SSHKeyObservationMutation) SetLastLoginIP(s string) {
+	m.last_login_ip = &s
+}
+
+// LastLoginIP returns the value of the "last_login_ip" field in the mutation.
+func (m *SSHKeyObservationMutation) LastLoginIP() (r string, exists bool) {
+	v := m.last_login_ip
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastLoginIP returns the old "last_login_ip" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldLastLoginIP(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastLoginIP is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastLoginIP requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastLoginIP: %w", err)
+	}
+	return oldValue.LastLoginIP, nil
+}
+
+// ResetLastLoginIP resets all changes to the "last_login_ip" field.
+func (m *SSHKeyObservationMutation) ResetLastLoginIP() {
+	m.last_login_ip = nil
+}
+
+// SetRemovalApprovalID sets the "removal_approval_id" field.
+func (m *SSHKeyObservationMutation) SetRemovalApprovalID(u uuid.UUID) {
+	m.removal_approval_id = &u
+}
+
+// RemovalApprovalID returns the value of the "removal_approval_id" field in the mutation.
+func (m *SSHKeyObservationMutation) RemovalApprovalID() (r uuid.UUID, exists bool) {
+	v := m.removal_approval_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRemovalApprovalID returns the old "removal_approval_id" field's value of the SSHKeyObservation entity.
+// If the SSHKeyObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SSHKeyObservationMutation) OldRemovalApprovalID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRemovalApprovalID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRemovalApprovalID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRemovalApprovalID: %w", err)
+	}
+	return oldValue.RemovalApprovalID, nil
+}
+
+// ClearRemovalApprovalID clears the value of the "removal_approval_id" field.
+func (m *SSHKeyObservationMutation) ClearRemovalApprovalID() {
+	m.removal_approval_id = nil
+	m.clearedFields[sshkeyobservation.FieldRemovalApprovalID] = struct{}{}
+}
+
+// RemovalApprovalIDCleared returns if the "removal_approval_id" field was cleared in this mutation.
+func (m *SSHKeyObservationMutation) RemovalApprovalIDCleared() bool {
+	_, ok := m.clearedFields[sshkeyobservation.FieldRemovalApprovalID]
+	return ok
+}
+
+// ResetRemovalApprovalID resets all changes to the "removal_approval_id" field.
+func (m *SSHKeyObservationMutation) ResetRemovalApprovalID() {
+	m.removal_approval_id = nil
+	delete(m.clearedFields, sshkeyobservation.FieldRemovalApprovalID)
+}
+
+// Where appends a list predicates to the SSHKeyObservationMutation builder.
+func (m *SSHKeyObservationMutation) Where(ps ...predicate.SSHKeyObservation) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the SSHKeyObservationMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *SSHKeyObservationMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.SSHKeyObservation, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *SSHKeyObservationMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *SSHKeyObservationMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (SSHKeyObservation).
+func (m *SSHKeyObservationMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *SSHKeyObservationMutation) Fields() []string {
+	fields := make([]string, 0, 16)
+	if m.asset_id != nil {
+		fields = append(fields, sshkeyobservation.FieldAssetID)
+	}
+	if m.account != nil {
+		fields = append(fields, sshkeyobservation.FieldAccount)
+	}
+	if m.file_path != nil {
+		fields = append(fields, sshkeyobservation.FieldFilePath)
+	}
+	if m.key_type != nil {
+		fields = append(fields, sshkeyobservation.FieldKeyType)
+	}
+	if m.fingerprint != nil {
+		fields = append(fields, sshkeyobservation.FieldFingerprint)
+	}
+	if m.comment != nil {
+		fields = append(fields, sshkeyobservation.FieldComment)
+	}
+	if m.options != nil {
+		fields = append(fields, sshkeyobservation.FieldOptions)
+	}
+	if m.present != nil {
+		fields = append(fields, sshkeyobservation.FieldPresent)
+	}
+	if m.first_seen != nil {
+		fields = append(fields, sshkeyobservation.FieldFirstSeen)
+	}
+	if m.last_seen != nil {
+		fields = append(fields, sshkeyobservation.FieldLastSeen)
+	}
+	if m.added_by_user != nil {
+		fields = append(fields, sshkeyobservation.FieldAddedByUser)
+	}
+	if m.added_by_ip != nil {
+		fields = append(fields, sshkeyobservation.FieldAddedByIP)
+	}
+	if m.added_by_key_fp != nil {
+		fields = append(fields, sshkeyobservation.FieldAddedByKeyFp)
+	}
+	if m.last_login_at != nil {
+		fields = append(fields, sshkeyobservation.FieldLastLoginAt)
+	}
+	if m.last_login_ip != nil {
+		fields = append(fields, sshkeyobservation.FieldLastLoginIP)
+	}
+	if m.removal_approval_id != nil {
+		fields = append(fields, sshkeyobservation.FieldRemovalApprovalID)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *SSHKeyObservationMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case sshkeyobservation.FieldAssetID:
+		return m.AssetID()
+	case sshkeyobservation.FieldAccount:
+		return m.Account()
+	case sshkeyobservation.FieldFilePath:
+		return m.FilePath()
+	case sshkeyobservation.FieldKeyType:
+		return m.KeyType()
+	case sshkeyobservation.FieldFingerprint:
+		return m.Fingerprint()
+	case sshkeyobservation.FieldComment:
+		return m.Comment()
+	case sshkeyobservation.FieldOptions:
+		return m.Options()
+	case sshkeyobservation.FieldPresent:
+		return m.Present()
+	case sshkeyobservation.FieldFirstSeen:
+		return m.FirstSeen()
+	case sshkeyobservation.FieldLastSeen:
+		return m.LastSeen()
+	case sshkeyobservation.FieldAddedByUser:
+		return m.AddedByUser()
+	case sshkeyobservation.FieldAddedByIP:
+		return m.AddedByIP()
+	case sshkeyobservation.FieldAddedByKeyFp:
+		return m.AddedByKeyFp()
+	case sshkeyobservation.FieldLastLoginAt:
+		return m.LastLoginAt()
+	case sshkeyobservation.FieldLastLoginIP:
+		return m.LastLoginIP()
+	case sshkeyobservation.FieldRemovalApprovalID:
+		return m.RemovalApprovalID()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *SSHKeyObservationMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case sshkeyobservation.FieldAssetID:
+		return m.OldAssetID(ctx)
+	case sshkeyobservation.FieldAccount:
+		return m.OldAccount(ctx)
+	case sshkeyobservation.FieldFilePath:
+		return m.OldFilePath(ctx)
+	case sshkeyobservation.FieldKeyType:
+		return m.OldKeyType(ctx)
+	case sshkeyobservation.FieldFingerprint:
+		return m.OldFingerprint(ctx)
+	case sshkeyobservation.FieldComment:
+		return m.OldComment(ctx)
+	case sshkeyobservation.FieldOptions:
+		return m.OldOptions(ctx)
+	case sshkeyobservation.FieldPresent:
+		return m.OldPresent(ctx)
+	case sshkeyobservation.FieldFirstSeen:
+		return m.OldFirstSeen(ctx)
+	case sshkeyobservation.FieldLastSeen:
+		return m.OldLastSeen(ctx)
+	case sshkeyobservation.FieldAddedByUser:
+		return m.OldAddedByUser(ctx)
+	case sshkeyobservation.FieldAddedByIP:
+		return m.OldAddedByIP(ctx)
+	case sshkeyobservation.FieldAddedByKeyFp:
+		return m.OldAddedByKeyFp(ctx)
+	case sshkeyobservation.FieldLastLoginAt:
+		return m.OldLastLoginAt(ctx)
+	case sshkeyobservation.FieldLastLoginIP:
+		return m.OldLastLoginIP(ctx)
+	case sshkeyobservation.FieldRemovalApprovalID:
+		return m.OldRemovalApprovalID(ctx)
+	}
+	return nil, fmt.Errorf("unknown SSHKeyObservation field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *SSHKeyObservationMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case sshkeyobservation.FieldAssetID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAssetID(v)
+		return nil
+	case sshkeyobservation.FieldAccount:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAccount(v)
+		return nil
+	case sshkeyobservation.FieldFilePath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFilePath(v)
+		return nil
+	case sshkeyobservation.FieldKeyType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKeyType(v)
+		return nil
+	case sshkeyobservation.FieldFingerprint:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFingerprint(v)
+		return nil
+	case sshkeyobservation.FieldComment:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetComment(v)
+		return nil
+	case sshkeyobservation.FieldOptions:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOptions(v)
+		return nil
+	case sshkeyobservation.FieldPresent:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPresent(v)
+		return nil
+	case sshkeyobservation.FieldFirstSeen:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFirstSeen(v)
+		return nil
+	case sshkeyobservation.FieldLastSeen:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastSeen(v)
+		return nil
+	case sshkeyobservation.FieldAddedByUser:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAddedByUser(v)
+		return nil
+	case sshkeyobservation.FieldAddedByIP:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAddedByIP(v)
+		return nil
+	case sshkeyobservation.FieldAddedByKeyFp:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAddedByKeyFp(v)
+		return nil
+	case sshkeyobservation.FieldLastLoginAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastLoginAt(v)
+		return nil
+	case sshkeyobservation.FieldLastLoginIP:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastLoginIP(v)
+		return nil
+	case sshkeyobservation.FieldRemovalApprovalID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRemovalApprovalID(v)
+		return nil
+	}
+	return fmt.Errorf("unknown SSHKeyObservation field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *SSHKeyObservationMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *SSHKeyObservationMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *SSHKeyObservationMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown SSHKeyObservation numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *SSHKeyObservationMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(sshkeyobservation.FieldOptions) {
+		fields = append(fields, sshkeyobservation.FieldOptions)
+	}
+	if m.FieldCleared(sshkeyobservation.FieldLastLoginAt) {
+		fields = append(fields, sshkeyobservation.FieldLastLoginAt)
+	}
+	if m.FieldCleared(sshkeyobservation.FieldRemovalApprovalID) {
+		fields = append(fields, sshkeyobservation.FieldRemovalApprovalID)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *SSHKeyObservationMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *SSHKeyObservationMutation) ClearField(name string) error {
+	switch name {
+	case sshkeyobservation.FieldOptions:
+		m.ClearOptions()
+		return nil
+	case sshkeyobservation.FieldLastLoginAt:
+		m.ClearLastLoginAt()
+		return nil
+	case sshkeyobservation.FieldRemovalApprovalID:
+		m.ClearRemovalApprovalID()
+		return nil
+	}
+	return fmt.Errorf("unknown SSHKeyObservation nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *SSHKeyObservationMutation) ResetField(name string) error {
+	switch name {
+	case sshkeyobservation.FieldAssetID:
+		m.ResetAssetID()
+		return nil
+	case sshkeyobservation.FieldAccount:
+		m.ResetAccount()
+		return nil
+	case sshkeyobservation.FieldFilePath:
+		m.ResetFilePath()
+		return nil
+	case sshkeyobservation.FieldKeyType:
+		m.ResetKeyType()
+		return nil
+	case sshkeyobservation.FieldFingerprint:
+		m.ResetFingerprint()
+		return nil
+	case sshkeyobservation.FieldComment:
+		m.ResetComment()
+		return nil
+	case sshkeyobservation.FieldOptions:
+		m.ResetOptions()
+		return nil
+	case sshkeyobservation.FieldPresent:
+		m.ResetPresent()
+		return nil
+	case sshkeyobservation.FieldFirstSeen:
+		m.ResetFirstSeen()
+		return nil
+	case sshkeyobservation.FieldLastSeen:
+		m.ResetLastSeen()
+		return nil
+	case sshkeyobservation.FieldAddedByUser:
+		m.ResetAddedByUser()
+		return nil
+	case sshkeyobservation.FieldAddedByIP:
+		m.ResetAddedByIP()
+		return nil
+	case sshkeyobservation.FieldAddedByKeyFp:
+		m.ResetAddedByKeyFp()
+		return nil
+	case sshkeyobservation.FieldLastLoginAt:
+		m.ResetLastLoginAt()
+		return nil
+	case sshkeyobservation.FieldLastLoginIP:
+		m.ResetLastLoginIP()
+		return nil
+	case sshkeyobservation.FieldRemovalApprovalID:
+		m.ResetRemovalApprovalID()
+		return nil
+	}
+	return fmt.Errorf("unknown SSHKeyObservation field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *SSHKeyObservationMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *SSHKeyObservationMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *SSHKeyObservationMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *SSHKeyObservationMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *SSHKeyObservationMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *SSHKeyObservationMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *SSHKeyObservationMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown SSHKeyObservation unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *SSHKeyObservationMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown SSHKeyObservation edge %s", name)
 }
 
 // SSHLoginMutation represents an operation that mutates the SSHLogin nodes in the graph.

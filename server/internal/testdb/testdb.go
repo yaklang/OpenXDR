@@ -102,6 +102,8 @@ func truncate(ctx context.Context, t *testing.T, c *ent.Client) {
 		func(ctx context.Context) (int, error) { return c.SessionMessage.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.AgentSession.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.TrustedSource.Delete().Exec(ctx) },
+		func(ctx context.Context) (int, error) { return c.SSHKeyObservation.Delete().Exec(ctx) },
+		func(ctx context.Context) (int, error) { return c.SSHKeyBaseline.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.SSHLogin.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.GroupMember.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.Group.Delete().Exec(ctx) },

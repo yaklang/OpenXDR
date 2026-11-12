@@ -41,7 +41,9 @@ type Approval struct {
 	// DecidedBy holds the value of the "decided_by" field.
 	DecidedBy *string `json:"decided_by,omitempty"`
 	// DecidedAt holds the value of the "decided_at" field.
-	DecidedAt    *time.Time `json:"decided_at,omitempty"`
+	DecidedAt *time.Time `json:"decided_at,omitempty"`
+	// Async holds the value of the "async" field.
+	Async        bool `json:"async,omitempty"`
 	selectValues sql.SelectValues
 }
 
@@ -52,6 +54,8 @@ func (*Approval) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case approval.FieldSessionID:
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
+		case approval.FieldAsync:
+			values[i] = new(sql.NullBool)
 		case approval.FieldTimeoutMs:
 			values[i] = new(sql.NullInt64)
 		case approval.FieldRequestedBy, approval.FieldOrigin, approval.FieldCmd, approval.FieldStatus, approval.FieldDecidedBy:
@@ -156,6 +160,12 @@ func (_m *Approval) assignValues(columns []string, values []any) error {
 				_m.DecidedAt = new(time.Time)
 				*_m.DecidedAt = value.Time
 			}
+		case approval.FieldAsync:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field async", values[i])
+			} else if value.Valid {
+				_m.Async = value.Bool
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -233,6 +243,9 @@ func (_m *Approval) String() string {
 		builder.WriteString("decided_at=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
+	builder.WriteString(", ")
+	builder.WriteString("async=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Async))
 	builder.WriteByte(')')
 	return builder.String()
 }

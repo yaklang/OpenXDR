@@ -94,6 +94,10 @@ type Tx struct {
 	Report *ReportClient
 	// ReportRead is the client for interacting with the ReportRead builders.
 	ReportRead *ReportReadClient
+	// SSHKeyBaseline is the client for interacting with the SSHKeyBaseline builders.
+	SSHKeyBaseline *SSHKeyBaselineClient
+	// SSHKeyObservation is the client for interacting with the SSHKeyObservation builders.
+	SSHKeyObservation *SSHKeyObservationClient
 	// SSHLogin is the client for interacting with the SSHLogin builders.
 	SSHLogin *SSHLoginClient
 	// Session is the client for interacting with the Session builders.
@@ -290,6 +294,8 @@ func (tx *Tx) init() {
 	tx.ProcessBaseline = NewProcessBaselineClient(tx.config)
 	tx.Report = NewReportClient(tx.config)
 	tx.ReportRead = NewReportReadClient(tx.config)
+	tx.SSHKeyBaseline = NewSSHKeyBaselineClient(tx.config)
+	tx.SSHKeyObservation = NewSSHKeyObservationClient(tx.config)
 	tx.SSHLogin = NewSSHLoginClient(tx.config)
 	tx.Session = NewSessionClient(tx.config)
 	tx.SessionMessage = NewSessionMessageClient(tx.config)

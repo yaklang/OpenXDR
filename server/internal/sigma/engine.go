@@ -693,6 +693,9 @@ const RuleCoreAgentSilent = "xdr:core-agent-silent"
 // RuleAuditTamper 审计链断开：已封存的审计被改或被删。逻辑在 internal/auditchain
 const RuleAuditTamper = "xdr:audit-tamper"
 
+// RuleNewSSHKey SSH 钥匙盘点合成检测：已有盘点基线的资产上新出现 SSH 授权钥匙。逻辑在 internal/sshkeys
+const RuleNewSSHKey = "xdr:new-ssh-key"
+
 var syntheticTitles = map[string]string{
 	RuleAuditTamper:        "审计记录被改或被删",
 	RuleControlPlaneChange: "平台控制面配置被改",
@@ -701,6 +704,7 @@ var syntheticTitles = map[string]string{
 	RuleLateralSpray:       "纳管主机对多台纳管主机口令喷洒",
 	RuleNewProcess:         "新进程首次出现",
 	RuleBeacon:             "新出现的周期外联",
+	RuleNewSSHKey:          "SSH 授权钥匙新增",
 }
 
 // AuthorOf 规则作者，没有写或规则已不在返回空

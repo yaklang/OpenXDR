@@ -55,6 +55,8 @@ import (
 	"openxdr/server/ent/session"
 	"openxdr/server/ent/sessionmessage"
 	"openxdr/server/ent/setting"
+	"openxdr/server/ent/sshkeybaseline"
+	"openxdr/server/ent/sshkeyobservation"
 	"openxdr/server/ent/sshlogin"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/task"
@@ -159,6 +161,10 @@ type Client struct {
 	Report *ReportClient
 	// ReportRead is the client for interacting with the ReportRead builders.
 	ReportRead *ReportReadClient
+	// SSHKeyBaseline is the client for interacting with the SSHKeyBaseline builders.
+	SSHKeyBaseline *SSHKeyBaselineClient
+	// SSHKeyObservation is the client for interacting with the SSHKeyObservation builders.
+	SSHKeyObservation *SSHKeyObservationClient
 	// SSHLogin is the client for interacting with the SSHLogin builders.
 	SSHLogin *SSHLoginClient
 	// Session is the client for interacting with the Session builders.
@@ -235,6 +241,8 @@ func (c *Client) init() {
 	c.ProcessBaseline = NewProcessBaselineClient(c.config)
 	c.Report = NewReportClient(c.config)
 	c.ReportRead = NewReportReadClient(c.config)
+	c.SSHKeyBaseline = NewSSHKeyBaselineClient(c.config)
+	c.SSHKeyObservation = NewSSHKeyObservationClient(c.config)
 	c.SSHLogin = NewSSHLoginClient(c.config)
 	c.Session = NewSessionClient(c.config)
 	c.SessionMessage = NewSessionMessageClient(c.config)
@@ -380,6 +388,8 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ProcessBaseline:         NewProcessBaselineClient(cfg),
 		Report:                  NewReportClient(cfg),
 		ReportRead:              NewReportReadClient(cfg),
+		SSHKeyBaseline:          NewSSHKeyBaselineClient(cfg),
+		SSHKeyObservation:       NewSSHKeyObservationClient(cfg),
 		SSHLogin:                NewSSHLoginClient(cfg),
 		Session:                 NewSessionClient(cfg),
 		SessionMessage:          NewSessionMessageClient(cfg),
@@ -452,6 +462,8 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ProcessBaseline:         NewProcessBaselineClient(cfg),
 		Report:                  NewReportClient(cfg),
 		ReportRead:              NewReportReadClient(cfg),
+		SSHKeyBaseline:          NewSSHKeyBaselineClient(cfg),
+		SSHKeyObservation:       NewSSHKeyObservationClient(cfg),
 		SSHLogin:                NewSSHLoginClient(cfg),
 		Session:                 NewSessionClient(cfg),
 		SessionMessage:          NewSessionMessageClient(cfg),
@@ -501,9 +513,9 @@ func (c *Client) Use(hooks ...Hook) {
 		c.IntegrationAttempt, c.IntegrationDelivery, c.IntegrationEvent,
 		c.IntegrationGroup, c.IntegrationIdempotency, c.IntegrationSubscription,
 		c.IntegrationToken, c.Intel, c.Intent, c.Memory, c.ProcessBaseline, c.Report,
-		c.ReportRead, c.SSHLogin, c.Session, c.SessionMessage, c.Setting,
-		c.Suppression, c.Task, c.TaskRun, c.TriageRun, c.TrustedSource, c.User,
-		c.VulnRecord, c.Zone,
+		c.ReportRead, c.SSHKeyBaseline, c.SSHKeyObservation, c.SSHLogin, c.Session,
+		c.SessionMessage, c.Setting, c.Suppression, c.Task, c.TaskRun, c.TriageRun,
+		c.TrustedSource, c.User, c.VulnRecord, c.Zone,
 	} {
 		n.Use(hooks...)
 	}
@@ -521,9 +533,9 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.IntegrationAttempt, c.IntegrationDelivery, c.IntegrationEvent,
 		c.IntegrationGroup, c.IntegrationIdempotency, c.IntegrationSubscription,
 		c.IntegrationToken, c.Intel, c.Intent, c.Memory, c.ProcessBaseline, c.Report,
-		c.ReportRead, c.SSHLogin, c.Session, c.SessionMessage, c.Setting,
-		c.Suppression, c.Task, c.TaskRun, c.TriageRun, c.TrustedSource, c.User,
-		c.VulnRecord, c.Zone,
+		c.ReportRead, c.SSHKeyBaseline, c.SSHKeyObservation, c.SSHLogin, c.Session,
+		c.SessionMessage, c.Setting, c.Suppression, c.Task, c.TaskRun, c.TriageRun,
+		c.TrustedSource, c.User, c.VulnRecord, c.Zone,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -614,6 +626,10 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Report.mutate(ctx, m)
 	case *ReportReadMutation:
 		return c.ReportRead.mutate(ctx, m)
+	case *SSHKeyBaselineMutation:
+		return c.SSHKeyBaseline.mutate(ctx, m)
+	case *SSHKeyObservationMutation:
+		return c.SSHKeyObservation.mutate(ctx, m)
 	case *SSHLoginMutation:
 		return c.SSHLogin.mutate(ctx, m)
 	case *SessionMutation:
@@ -6256,6 +6272,272 @@ func (c *ReportReadClient) mutate(ctx context.Context, m *ReportReadMutation) (V
 	}
 }
 
+// SSHKeyBaselineClient is a client for the SSHKeyBaseline schema.
+type SSHKeyBaselineClient struct {
+	config
+}
+
+// NewSSHKeyBaselineClient returns a client for the SSHKeyBaseline from the given config.
+func NewSSHKeyBaselineClient(c config) *SSHKeyBaselineClient {
+	return &SSHKeyBaselineClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `sshkeybaseline.Hooks(f(g(h())))`.
+func (c *SSHKeyBaselineClient) Use(hooks ...Hook) {
+	c.hooks.SSHKeyBaseline = append(c.hooks.SSHKeyBaseline, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `sshkeybaseline.Intercept(f(g(h())))`.
+func (c *SSHKeyBaselineClient) Intercept(interceptors ...Interceptor) {
+	c.inters.SSHKeyBaseline = append(c.inters.SSHKeyBaseline, interceptors...)
+}
+
+// Create returns a builder for creating a SSHKeyBaseline entity.
+func (c *SSHKeyBaselineClient) Create() *SSHKeyBaselineCreate {
+	mutation := newSSHKeyBaselineMutation(c.config, OpCreate)
+	return &SSHKeyBaselineCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of SSHKeyBaseline entities.
+func (c *SSHKeyBaselineClient) CreateBulk(builders ...*SSHKeyBaselineCreate) *SSHKeyBaselineCreateBulk {
+	return &SSHKeyBaselineCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *SSHKeyBaselineClient) MapCreateBulk(slice any, setFunc func(*SSHKeyBaselineCreate, int)) *SSHKeyBaselineCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &SSHKeyBaselineCreateBulk{err: fmt.Errorf("calling to SSHKeyBaselineClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*SSHKeyBaselineCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &SSHKeyBaselineCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for SSHKeyBaseline.
+func (c *SSHKeyBaselineClient) Update() *SSHKeyBaselineUpdate {
+	mutation := newSSHKeyBaselineMutation(c.config, OpUpdate)
+	return &SSHKeyBaselineUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *SSHKeyBaselineClient) UpdateOne(_m *SSHKeyBaseline) *SSHKeyBaselineUpdateOne {
+	mutation := newSSHKeyBaselineMutation(c.config, OpUpdateOne, withSSHKeyBaseline(_m))
+	return &SSHKeyBaselineUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *SSHKeyBaselineClient) UpdateOneID(id uuid.UUID) *SSHKeyBaselineUpdateOne {
+	mutation := newSSHKeyBaselineMutation(c.config, OpUpdateOne, withSSHKeyBaselineID(id))
+	return &SSHKeyBaselineUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for SSHKeyBaseline.
+func (c *SSHKeyBaselineClient) Delete() *SSHKeyBaselineDelete {
+	mutation := newSSHKeyBaselineMutation(c.config, OpDelete)
+	return &SSHKeyBaselineDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *SSHKeyBaselineClient) DeleteOne(_m *SSHKeyBaseline) *SSHKeyBaselineDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *SSHKeyBaselineClient) DeleteOneID(id uuid.UUID) *SSHKeyBaselineDeleteOne {
+	builder := c.Delete().Where(sshkeybaseline.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &SSHKeyBaselineDeleteOne{builder}
+}
+
+// Query returns a query builder for SSHKeyBaseline.
+func (c *SSHKeyBaselineClient) Query() *SSHKeyBaselineQuery {
+	return &SSHKeyBaselineQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeSSHKeyBaseline},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a SSHKeyBaseline entity by its id.
+func (c *SSHKeyBaselineClient) Get(ctx context.Context, id uuid.UUID) (*SSHKeyBaseline, error) {
+	return c.Query().Where(sshkeybaseline.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *SSHKeyBaselineClient) GetX(ctx context.Context, id uuid.UUID) *SSHKeyBaseline {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *SSHKeyBaselineClient) Hooks() []Hook {
+	return c.hooks.SSHKeyBaseline
+}
+
+// Interceptors returns the client interceptors.
+func (c *SSHKeyBaselineClient) Interceptors() []Interceptor {
+	return c.inters.SSHKeyBaseline
+}
+
+func (c *SSHKeyBaselineClient) mutate(ctx context.Context, m *SSHKeyBaselineMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&SSHKeyBaselineCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&SSHKeyBaselineUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&SSHKeyBaselineUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&SSHKeyBaselineDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown SSHKeyBaseline mutation op: %q", m.Op())
+	}
+}
+
+// SSHKeyObservationClient is a client for the SSHKeyObservation schema.
+type SSHKeyObservationClient struct {
+	config
+}
+
+// NewSSHKeyObservationClient returns a client for the SSHKeyObservation from the given config.
+func NewSSHKeyObservationClient(c config) *SSHKeyObservationClient {
+	return &SSHKeyObservationClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `sshkeyobservation.Hooks(f(g(h())))`.
+func (c *SSHKeyObservationClient) Use(hooks ...Hook) {
+	c.hooks.SSHKeyObservation = append(c.hooks.SSHKeyObservation, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `sshkeyobservation.Intercept(f(g(h())))`.
+func (c *SSHKeyObservationClient) Intercept(interceptors ...Interceptor) {
+	c.inters.SSHKeyObservation = append(c.inters.SSHKeyObservation, interceptors...)
+}
+
+// Create returns a builder for creating a SSHKeyObservation entity.
+func (c *SSHKeyObservationClient) Create() *SSHKeyObservationCreate {
+	mutation := newSSHKeyObservationMutation(c.config, OpCreate)
+	return &SSHKeyObservationCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of SSHKeyObservation entities.
+func (c *SSHKeyObservationClient) CreateBulk(builders ...*SSHKeyObservationCreate) *SSHKeyObservationCreateBulk {
+	return &SSHKeyObservationCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *SSHKeyObservationClient) MapCreateBulk(slice any, setFunc func(*SSHKeyObservationCreate, int)) *SSHKeyObservationCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &SSHKeyObservationCreateBulk{err: fmt.Errorf("calling to SSHKeyObservationClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*SSHKeyObservationCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &SSHKeyObservationCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for SSHKeyObservation.
+func (c *SSHKeyObservationClient) Update() *SSHKeyObservationUpdate {
+	mutation := newSSHKeyObservationMutation(c.config, OpUpdate)
+	return &SSHKeyObservationUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *SSHKeyObservationClient) UpdateOne(_m *SSHKeyObservation) *SSHKeyObservationUpdateOne {
+	mutation := newSSHKeyObservationMutation(c.config, OpUpdateOne, withSSHKeyObservation(_m))
+	return &SSHKeyObservationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *SSHKeyObservationClient) UpdateOneID(id uuid.UUID) *SSHKeyObservationUpdateOne {
+	mutation := newSSHKeyObservationMutation(c.config, OpUpdateOne, withSSHKeyObservationID(id))
+	return &SSHKeyObservationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for SSHKeyObservation.
+func (c *SSHKeyObservationClient) Delete() *SSHKeyObservationDelete {
+	mutation := newSSHKeyObservationMutation(c.config, OpDelete)
+	return &SSHKeyObservationDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *SSHKeyObservationClient) DeleteOne(_m *SSHKeyObservation) *SSHKeyObservationDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *SSHKeyObservationClient) DeleteOneID(id uuid.UUID) *SSHKeyObservationDeleteOne {
+	builder := c.Delete().Where(sshkeyobservation.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &SSHKeyObservationDeleteOne{builder}
+}
+
+// Query returns a query builder for SSHKeyObservation.
+func (c *SSHKeyObservationClient) Query() *SSHKeyObservationQuery {
+	return &SSHKeyObservationQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeSSHKeyObservation},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a SSHKeyObservation entity by its id.
+func (c *SSHKeyObservationClient) Get(ctx context.Context, id uuid.UUID) (*SSHKeyObservation, error) {
+	return c.Query().Where(sshkeyobservation.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *SSHKeyObservationClient) GetX(ctx context.Context, id uuid.UUID) *SSHKeyObservation {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *SSHKeyObservationClient) Hooks() []Hook {
+	return c.hooks.SSHKeyObservation
+}
+
+// Interceptors returns the client interceptors.
+func (c *SSHKeyObservationClient) Interceptors() []Interceptor {
+	return c.inters.SSHKeyObservation
+}
+
+func (c *SSHKeyObservationClient) mutate(ctx context.Context, m *SSHKeyObservationMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&SSHKeyObservationCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&SSHKeyObservationUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&SSHKeyObservationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&SSHKeyObservationDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown SSHKeyObservation mutation op: %q", m.Op())
+	}
+}
+
 // SSHLoginClient is a client for the SSHLogin schema.
 type SSHLoginClient struct {
 	config
@@ -7862,9 +8144,9 @@ type (
 		HostCredential, IPInfo, Incident, Integration, IntegrationAttempt,
 		IntegrationDelivery, IntegrationEvent, IntegrationGroup,
 		IntegrationIdempotency, IntegrationSubscription, IntegrationToken, Intel,
-		Intent, Memory, ProcessBaseline, Report, ReportRead, SSHLogin, Session,
-		SessionMessage, Setting, Suppression, Task, TaskRun, TriageRun, TrustedSource,
-		User, VulnRecord, Zone []ent.Hook
+		Intent, Memory, ProcessBaseline, Report, ReportRead, SSHKeyBaseline,
+		SSHKeyObservation, SSHLogin, Session, SessionMessage, Setting, Suppression,
+		Task, TaskRun, TriageRun, TrustedSource, User, VulnRecord, Zone []ent.Hook
 	}
 	inters struct {
 		AIJob, AIUsage, AgentSession, Alert, Approval, Asset, AssetLink, AuditLog,
@@ -7874,8 +8156,9 @@ type (
 		HostCredential, IPInfo, Incident, Integration, IntegrationAttempt,
 		IntegrationDelivery, IntegrationEvent, IntegrationGroup,
 		IntegrationIdempotency, IntegrationSubscription, IntegrationToken, Intel,
-		Intent, Memory, ProcessBaseline, Report, ReportRead, SSHLogin, Session,
-		SessionMessage, Setting, Suppression, Task, TaskRun, TriageRun, TrustedSource,
-		User, VulnRecord, Zone []ent.Interceptor
+		Intent, Memory, ProcessBaseline, Report, ReportRead, SSHKeyBaseline,
+		SSHKeyObservation, SSHLogin, Session, SessionMessage, Setting, Suppression,
+		Task, TaskRun, TriageRun, TrustedSource, User, VulnRecord,
+		Zone []ent.Interceptor
 	}
 )

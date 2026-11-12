@@ -18,6 +18,7 @@ import (
 	"openxdr/server/internal/identity"
 	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/sshkeys"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/temporal"
 )
@@ -220,6 +221,9 @@ ON CONFLICT DO NOTHING`, e.ID, e.Timestamp, e.ClassUID, e.Source,
 			return false, 0, nil, err
 		}
 		if err := identity.ObserveLinuxLogin(ctx, tx, e.ID); err != nil {
+			return false, 0, nil, err
+		}
+		if err := sshkeys.RecordLogin(ctx, tx, *e.AssetID, e.Raw, e.Timestamp); err != nil {
 			return false, 0, nil, err
 		}
 	}

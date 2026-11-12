@@ -48,6 +48,8 @@ import (
 	"openxdr/server/ent/session"
 	"openxdr/server/ent/sessionmessage"
 	"openxdr/server/ent/setting"
+	"openxdr/server/ent/sshkeybaseline"
+	"openxdr/server/ent/sshkeyobservation"
 	"openxdr/server/ent/sshlogin"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/task"
@@ -140,6 +142,10 @@ func init() {
 	approvalDescCreatedAt := approvalFields[1].Descriptor()
 	// approval.DefaultCreatedAt holds the default value on creation for the created_at field.
 	approval.DefaultCreatedAt = approvalDescCreatedAt.Default.(func() time.Time)
+	// approvalDescAsync is the schema descriptor for async field.
+	approvalDescAsync := approvalFields[13].Descriptor()
+	// approval.DefaultAsync holds the default value on creation for the async field.
+	approval.DefaultAsync = approvalDescAsync.Default.(bool)
 	// approvalDescID is the schema descriptor for id field.
 	approvalDescID := approvalFields[0].Descriptor()
 	// approval.DefaultID holds the default value on creation for the id field.
@@ -858,6 +864,66 @@ func init() {
 	reportreadDescID := reportreadFields[0].Descriptor()
 	// reportread.DefaultID holds the default value on creation for the id field.
 	reportread.DefaultID = reportreadDescID.Default.(func() uuid.UUID)
+	sshkeybaselineFields := schema.SSHKeyBaseline{}.Fields()
+	_ = sshkeybaselineFields
+	// sshkeybaselineDescFirstReportedAt is the schema descriptor for first_reported_at field.
+	sshkeybaselineDescFirstReportedAt := sshkeybaselineFields[2].Descriptor()
+	// sshkeybaseline.DefaultFirstReportedAt holds the default value on creation for the first_reported_at field.
+	sshkeybaseline.DefaultFirstReportedAt = sshkeybaselineDescFirstReportedAt.Default.(func() time.Time)
+	// sshkeybaselineDescLastReportedAt is the schema descriptor for last_reported_at field.
+	sshkeybaselineDescLastReportedAt := sshkeybaselineFields[3].Descriptor()
+	// sshkeybaseline.DefaultLastReportedAt holds the default value on creation for the last_reported_at field.
+	sshkeybaseline.DefaultLastReportedAt = sshkeybaselineDescLastReportedAt.Default.(func() time.Time)
+	// sshkeybaselineDescAuthorizedKeysCommand is the schema descriptor for authorized_keys_command field.
+	sshkeybaselineDescAuthorizedKeysCommand := sshkeybaselineFields[4].Descriptor()
+	// sshkeybaseline.DefaultAuthorizedKeysCommand holds the default value on creation for the authorized_keys_command field.
+	sshkeybaseline.DefaultAuthorizedKeysCommand = sshkeybaselineDescAuthorizedKeysCommand.Default.(string)
+	// sshkeybaselineDescAuthorizedKeysCommandUser is the schema descriptor for authorized_keys_command_user field.
+	sshkeybaselineDescAuthorizedKeysCommandUser := sshkeybaselineFields[5].Descriptor()
+	// sshkeybaseline.DefaultAuthorizedKeysCommandUser holds the default value on creation for the authorized_keys_command_user field.
+	sshkeybaseline.DefaultAuthorizedKeysCommandUser = sshkeybaselineDescAuthorizedKeysCommandUser.Default.(string)
+	// sshkeybaselineDescID is the schema descriptor for id field.
+	sshkeybaselineDescID := sshkeybaselineFields[0].Descriptor()
+	// sshkeybaseline.DefaultID holds the default value on creation for the id field.
+	sshkeybaseline.DefaultID = sshkeybaselineDescID.Default.(func() uuid.UUID)
+	sshkeyobservationFields := schema.SSHKeyObservation{}.Fields()
+	_ = sshkeyobservationFields
+	// sshkeyobservationDescComment is the schema descriptor for comment field.
+	sshkeyobservationDescComment := sshkeyobservationFields[6].Descriptor()
+	// sshkeyobservation.DefaultComment holds the default value on creation for the comment field.
+	sshkeyobservation.DefaultComment = sshkeyobservationDescComment.Default.(string)
+	// sshkeyobservationDescPresent is the schema descriptor for present field.
+	sshkeyobservationDescPresent := sshkeyobservationFields[8].Descriptor()
+	// sshkeyobservation.DefaultPresent holds the default value on creation for the present field.
+	sshkeyobservation.DefaultPresent = sshkeyobservationDescPresent.Default.(bool)
+	// sshkeyobservationDescFirstSeen is the schema descriptor for first_seen field.
+	sshkeyobservationDescFirstSeen := sshkeyobservationFields[9].Descriptor()
+	// sshkeyobservation.DefaultFirstSeen holds the default value on creation for the first_seen field.
+	sshkeyobservation.DefaultFirstSeen = sshkeyobservationDescFirstSeen.Default.(func() time.Time)
+	// sshkeyobservationDescLastSeen is the schema descriptor for last_seen field.
+	sshkeyobservationDescLastSeen := sshkeyobservationFields[10].Descriptor()
+	// sshkeyobservation.DefaultLastSeen holds the default value on creation for the last_seen field.
+	sshkeyobservation.DefaultLastSeen = sshkeyobservationDescLastSeen.Default.(func() time.Time)
+	// sshkeyobservationDescAddedByUser is the schema descriptor for added_by_user field.
+	sshkeyobservationDescAddedByUser := sshkeyobservationFields[11].Descriptor()
+	// sshkeyobservation.DefaultAddedByUser holds the default value on creation for the added_by_user field.
+	sshkeyobservation.DefaultAddedByUser = sshkeyobservationDescAddedByUser.Default.(string)
+	// sshkeyobservationDescAddedByIP is the schema descriptor for added_by_ip field.
+	sshkeyobservationDescAddedByIP := sshkeyobservationFields[12].Descriptor()
+	// sshkeyobservation.DefaultAddedByIP holds the default value on creation for the added_by_ip field.
+	sshkeyobservation.DefaultAddedByIP = sshkeyobservationDescAddedByIP.Default.(string)
+	// sshkeyobservationDescAddedByKeyFp is the schema descriptor for added_by_key_fp field.
+	sshkeyobservationDescAddedByKeyFp := sshkeyobservationFields[13].Descriptor()
+	// sshkeyobservation.DefaultAddedByKeyFp holds the default value on creation for the added_by_key_fp field.
+	sshkeyobservation.DefaultAddedByKeyFp = sshkeyobservationDescAddedByKeyFp.Default.(string)
+	// sshkeyobservationDescLastLoginIP is the schema descriptor for last_login_ip field.
+	sshkeyobservationDescLastLoginIP := sshkeyobservationFields[15].Descriptor()
+	// sshkeyobservation.DefaultLastLoginIP holds the default value on creation for the last_login_ip field.
+	sshkeyobservation.DefaultLastLoginIP = sshkeyobservationDescLastLoginIP.Default.(string)
+	// sshkeyobservationDescID is the schema descriptor for id field.
+	sshkeyobservationDescID := sshkeyobservationFields[0].Descriptor()
+	// sshkeyobservation.DefaultID holds the default value on creation for the id field.
+	sshkeyobservation.DefaultID = sshkeyobservationDescID.Default.(func() uuid.UUID)
 	sshloginFields := schema.SSHLogin{}.Fields()
 	_ = sshloginFields
 	// sshloginDescRecordedAt is the schema descriptor for recorded_at field.

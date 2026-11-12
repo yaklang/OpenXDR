@@ -184,6 +184,7 @@ var (
 		{Name: "expires_at", Type: field.TypeTime},
 		{Name: "decided_by", Type: field.TypeString, Nullable: true},
 		{Name: "decided_at", Type: field.TypeTime, Nullable: true},
+		{Name: "async", Type: field.TypeBool, Default: false},
 	}
 	// ApprovalsTable holds the schema information for the "approvals" table.
 	ApprovalsTable = &schema.Table{
@@ -1355,6 +1356,64 @@ var (
 			},
 		},
 	}
+	// SSHKeyBaselinesColumns holds the columns for the "ssh_key_baselines" table.
+	SSHKeyBaselinesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "asset_id", Type: field.TypeUUID, Unique: true},
+		{Name: "first_reported_at", Type: field.TypeTime},
+		{Name: "last_reported_at", Type: field.TypeTime},
+		{Name: "authorized_keys_command", Type: field.TypeString, Default: ""},
+		{Name: "authorized_keys_command_user", Type: field.TypeString, Default: ""},
+	}
+	// SSHKeyBaselinesTable holds the schema information for the "ssh_key_baselines" table.
+	SSHKeyBaselinesTable = &schema.Table{
+		Name:       "ssh_key_baselines",
+		Columns:    SSHKeyBaselinesColumns,
+		PrimaryKey: []*schema.Column{SSHKeyBaselinesColumns[0]},
+	}
+	// SSHKeyObservationsColumns holds the columns for the "ssh_key_observations" table.
+	SSHKeyObservationsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "asset_id", Type: field.TypeUUID},
+		{Name: "account", Type: field.TypeString},
+		{Name: "file_path", Type: field.TypeString},
+		{Name: "key_type", Type: field.TypeString},
+		{Name: "fingerprint", Type: field.TypeString},
+		{Name: "comment", Type: field.TypeString, Default: ""},
+		{Name: "options", Type: field.TypeJSON, Nullable: true},
+		{Name: "present", Type: field.TypeBool, Default: true},
+		{Name: "first_seen", Type: field.TypeTime},
+		{Name: "last_seen", Type: field.TypeTime},
+		{Name: "added_by_user", Type: field.TypeString, Default: ""},
+		{Name: "added_by_ip", Type: field.TypeString, Default: ""},
+		{Name: "added_by_key_fp", Type: field.TypeString, Default: ""},
+		{Name: "last_login_at", Type: field.TypeTime, Nullable: true},
+		{Name: "last_login_ip", Type: field.TypeString, Default: ""},
+		{Name: "removal_approval_id", Type: field.TypeUUID, Nullable: true},
+	}
+	// SSHKeyObservationsTable holds the schema information for the "ssh_key_observations" table.
+	SSHKeyObservationsTable = &schema.Table{
+		Name:       "ssh_key_observations",
+		Columns:    SSHKeyObservationsColumns,
+		PrimaryKey: []*schema.Column{SSHKeyObservationsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "sshkeyobservation_asset_id_account_file_path_fingerprint",
+				Unique:  true,
+				Columns: []*schema.Column{SSHKeyObservationsColumns[1], SSHKeyObservationsColumns[2], SSHKeyObservationsColumns[3], SSHKeyObservationsColumns[5]},
+			},
+			{
+				Name:    "sshkeyobservation_asset_id_present",
+				Unique:  false,
+				Columns: []*schema.Column{SSHKeyObservationsColumns[1], SSHKeyObservationsColumns[8]},
+			},
+			{
+				Name:    "sshkeyobservation_fingerprint",
+				Unique:  false,
+				Columns: []*schema.Column{SSHKeyObservationsColumns[5]},
+			},
+		},
+	}
 	// SSHLoginsColumns holds the columns for the "ssh_logins" table.
 	SSHLoginsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -1726,6 +1785,8 @@ var (
 		ProcessBaselinesTable,
 		ReportsTable,
 		ReportReadsTable,
+		SSHKeyBaselinesTable,
+		SSHKeyObservationsTable,
 		SSHLoginsTable,
 		SessionsTable,
 		SessionMessagesTable,

@@ -145,6 +145,7 @@ var syntheticWatch = map[string]bool{
 	sigma.RuleControlPlaneChange: true,
 	sigma.RuleCoreAgentSilent:    true,
 	sigma.RuleAuditTamper:        true,
+	sigma.RuleNewSSHKey:          true,
 }
 
 // Watch 来自可信来源的这条命中是否仍要进关联与研判。情报命中（已知恶意的地址、域名、文件）一律进；

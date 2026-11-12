@@ -82,6 +82,7 @@ func TestWatch(t *testing.T) {
 		sigma.RuleControlPlaneChange: true,
 		sigma.RuleCoreAgentSilent:    true,
 		sigma.RuleAuditTamper:        true,
+		sigma.RuleNewSSHKey:          true,
 	}
 	for id, want := range cases {
 		if got := Watch(id, rules); got != want {
@@ -94,7 +95,7 @@ func TestWatch(t *testing.T) {
 		"dump": true, "histdel-high": true, "ufw-med": true,
 		"intel:ip:1.2.3.4": true, "不在命中列表里": false,
 		sigma.RuleLateralSpray: true, sigma.RuleBruteforceSuccess: true,
-		sigma.RuleControlPlaneChange: true, sigma.RuleCoreAgentSilent: true, sigma.RuleAuditTamper: true,
+		sigma.RuleControlPlaneChange: true, sigma.RuleCoreAgentSilent: true, sigma.RuleAuditTamper: true, sigma.RuleNewSSHKey: true,
 		sigma.RuleNewProcess: false,
 	}
 	for id, want := range known {

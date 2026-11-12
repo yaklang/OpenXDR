@@ -50,6 +50,8 @@ import (
 	"openxdr/server/ent/session"
 	"openxdr/server/ent/sessionmessage"
 	"openxdr/server/ent/setting"
+	"openxdr/server/ent/sshkeybaseline"
+	"openxdr/server/ent/sshkeyobservation"
 	"openxdr/server/ent/sshlogin"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/task"
@@ -166,6 +168,8 @@ func checkColumn(t, c string) error {
 			processbaseline.Table:         processbaseline.ValidColumn,
 			report.Table:                  report.ValidColumn,
 			reportread.Table:              reportread.ValidColumn,
+			sshkeybaseline.Table:          sshkeybaseline.ValidColumn,
+			sshkeyobservation.Table:       sshkeyobservation.ValidColumn,
 			sshlogin.Table:                sshlogin.ValidColumn,
 			session.Table:                 session.ValidColumn,
 			sessionmessage.Table:          sessionmessage.ValidColumn,

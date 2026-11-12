@@ -75,6 +75,7 @@ import (
 	"openxdr/server/internal/schedule"
 	"openxdr/server/internal/selfwatch"
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/sshkeys"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/suppressclose"
 	"openxdr/server/internal/suppressreview"
@@ -156,7 +157,11 @@ func main() {
 	defer events.Close()
 	syslogServer := startSyslog(ctx, client, rules, dedupWindow, suppressions, intelStore, events)
 	startAuthentik(ctx, db, client, events)
-	grpcServer, dists := startGRPC(db, client, rules, dedupWindow, hub, suppressions, intelStore, events)
+	sshKeysSvc := &sshkeys.Service{
+		DB: client, SQL: db, Suppress: suppressions,
+		Gate: &commandgate.Gate{DB: client, Hub: hub, Notify: webhook.Send},
+	}
+	grpcServer, dists := startGRPC(db, client, rules, dedupWindow, hub, suppressions, intelStore, events, sshKeysSvc)
 
 	if err := cluster.WithLock(ctx, db, "bootstrap", func() error { return auth.Bootstrap(ctx, client) }); err != nil {
 		slog.Error("初始化 admin 账号失败", "err", err)
@@ -167,6 +172,7 @@ func main() {
 	slog.Info("HTTP 启动", "addr", httpAddr)
 	queryRoles := startQueryRoles(ctx, db, client, dsn)
 	chat := startChat(ctx, db, client, rules, hub, webhook, conf, queryRoles, suppressionReviewer)
+	sshKeysSvc.Gate = chat.Gate
 	triageEngine.EndpointEvidence = chat.CollectEndpointEvidence
 	chat.ReviewFinding = (&findingreview.Reviewer{DB: client, Endpoint: chat.Endpoint, OnUsage: aiconf.Recorder(client, "finding_review")}).Review
 	repair := &repairpolicy.Store{DB: client}
@@ -228,6 +234,9 @@ func main() {
 	for _, path := range []string{"/api/facts", "/api/facts/", "/api/intents", "/api/intents/"} {
 		routes.Handle(path, control)
 	}
+	sshKeysHandler := api.SSHKeys(client, sshKeysSvc)
+	routes.Handle("/api/ssh-keys", sshKeysHandler)
+	routes.Handle("/api/ssh-keys/", sshKeysHandler)
 	routes.Handle("/", api.Handler(client, archiveRead, rules, hub, suppressions, intelStore, allowlist, chat))
 	mux := publicMux(auth.Middleware(client, routes), db, client, registry, enrollSvc, dists, events, webhook.Send)
 	// 经反向代理时还原客户端地址，登录退避与审计才按真人计
@@ -746,7 +755,7 @@ func startSyslog(ctx context.Context, client *ent.Client, rules sigma.Catalog, d
 }
 
 // startGRPC 监听 agent 与 sensor 接入，返回 gRPC 服务与采集端安装包目录。
-func startGRPC(db *sql.DB, client *ent.Client, rules sigma.Catalog, dedupWindow time.Duration, hub *response.Hub, suppressions *suppress.Store, intelStore *intel.Store, events eventbus.Bus) (*grpc.Server, enroll.Dists) {
+func startGRPC(db *sql.DB, client *ent.Client, rules sigma.Catalog, dedupWindow time.Duration, hub *response.Hub, suppressions *suppress.Store, intelStore *intel.Store, events eventbus.Bus, sshKeysSvc *sshkeys.Service) (*grpc.Server, enroll.Dists) {
 	grpcAddr := getenv("GRPC_ADDR", ":8081")
 	lis, err := net.Listen("tcp", grpcAddr)
 	if err != nil {
@@ -777,6 +786,7 @@ func startGRPC(db *sql.DB, client *ent.Client, rules sigma.Catalog, dedupWindow 
 		Events:      events,
 		Dist:        dists.Agent,
 		AutoUpgrade: autoUpgrade,
+		SSHKeys:     sshKeysSvc,
 	})
 	pb.RegisterSensorServiceServer(grpcServer, &grpcsvc.SensorServer{
 		DB:          client,

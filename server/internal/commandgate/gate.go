@@ -355,7 +355,57 @@ func ViaChannel(ctx context.Context, channel string) context.Context {
 	return context.WithValue(ctx, channelKey{}, channel)
 }
 
+// Propose 创建一条无活跃会话阻塞等待的平台异步命令提议（如新出现 SSH 授权钥匙的移除提议）。
+// 提议保持 pending，从不自动执行；只有组内 admin 调用 Decide 批准时才当场消费并下发 Hub.IssueExec。
+func (g *Gate) Propose(ctx context.Context, groupID, assetID uuid.UUID, cmd string, timeoutMS uint32, ttl time.Duration) (*ent.Approval, error) {
+	if strings.TrimSpace(cmd) == "" || len(cmd) > 32768 {
+		return nil, errors.New("exec 命令长度须为 1–32768")
+	}
+	if timeoutMS == 0 {
+		timeoutMS = 30000
+	}
+	if timeoutMS > 300000 {
+		return nil, errors.New("命令超时不可超过 300 秒")
+	}
+	if ttl <= 0 {
+		ttl = 72 * time.Hour
+	}
+	now := time.Now()
+	expires := now.Add(ttl)
+	tx, err := g.DB.Tx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	a, err := tx.Approval.Create().
+		SetGroupID(groupID).
+		SetAssetID(assetID).
+		SetRequestedBy(SystemActor).
+		SetOrigin(approval.OriginHuman).
+		SetCmd(cmd).
+		SetTimeoutMs(timeoutMS).
+		SetExpiresAt(expires).
+		SetAsync(true).
+		Save(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := audit.Checked(ctx, tx.AuditLog.Create(), SystemActor, "server", "approval_proposed", a.ID.String(), assetID.String()); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	g.notify(ctx, Request{
+		GroupID: groupID,
+		Origin:  "human",
+		Command: response.Request{AssetID: assetID, Kind: "exec", Cmd: &cmd, TimeoutMS: timeoutMS},
+	}, SystemActor)
+	return a, nil
+}
+
 // Decide 在数据库中原子决定并写审计；多个节点竞争只能成功一次。
+// 若该审批为平台生成的异步提议（Async=true），批准时当场校验响应开关与资产归组并下发指令。
 func (g *Gate) Decide(ctx context.Context, id uuid.UUID, u *ent.User, approved bool) error {
 	a, err := g.DB.Approval.Get(ctx, id)
 	if err != nil {
@@ -364,16 +414,30 @@ func (g *Gate) Decide(ctx context.Context, id uuid.UUID, u *ent.User, approved b
 	if u == nil || !auth.Allowed(auth.GroupRole(ctx, g.DB, u, a.GroupID), "admin") {
 		return errors.New("只有组内 admin 可以审批")
 	}
+	if a.Async && approved {
+		if g.Hub == nil || !g.Hub.Enabled {
+			return errors.New("响应能力未启用")
+		}
+		target, err := g.DB.Asset.Get(ctx, a.AssetID)
+		if err != nil || target.GroupID == nil || *target.GroupID != a.GroupID {
+			return errors.New("资产不属于当前组")
+		}
+	}
 	tx, err := g.DB.Tx(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	now := time.Now()
 	status := approval.StatusRejected
 	if approved {
-		status = approval.StatusApproved
+		if a.Async {
+			status = approval.StatusConsumed
+		} else {
+			status = approval.StatusApproved
+		}
 	}
-	n, err := tx.Approval.Update().Where(approval.IDEQ(id), approval.StatusEQ(approval.StatusPending), approval.ExpiresAtGT(time.Now())).SetStatus(status).SetDecidedBy(u.Username).SetDecidedAt(time.Now()).Save(ctx)
+	n, err := tx.Approval.Update().Where(approval.IDEQ(id), approval.StatusEQ(approval.StatusPending), approval.ExpiresAtGT(now)).SetStatus(status).SetDecidedBy(u.Username).SetDecidedAt(now).Save(ctx)
 	if err != nil {
 		return err
 	}
@@ -387,5 +451,35 @@ func (g *Gate) Decide(ctx context.Context, id uuid.UUID, u *ent.User, approved b
 	if err := audit.Checked(ctx, tx.AuditLog.Create(), u.Username, source, "approval_decided", id.String(), string(status)); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if !a.Async || !approved {
+		return nil
+	}
+	cmdText := a.Cmd
+	out, issueErr := g.Hub.IssueExec(ctx, response.Request{
+		AssetID:   a.AssetID,
+		Kind:      "exec",
+		Cmd:       &cmdText,
+		TimeoutMS: a.TimeoutMs,
+		IssuedBy:  u.Username,
+	})
+	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	logAction, logDetail := "exec_issued", ""
+	if issueErr != nil {
+		logAction = "exec_denied"
+		logDetail = issueErr.Error()
+	}
+	if out != nil {
+		logDetail = out.ID.String() + " " + out.Status
+	}
+	if errors.Is(issueErr, response.ErrDeliveryUnknown) || (out != nil && out.Status == "unknown") {
+		logAction = "exec_unknown"
+	}
+	if err := g.log(logCtx, u.Username, logAction, a.AssetID.String(), logDetail); err != nil && issueErr == nil {
+		return fmt.Errorf("命令可能已下发，审计回写失败，禁止自动重试: %w", err)
+	}
+	return issueErr
 }

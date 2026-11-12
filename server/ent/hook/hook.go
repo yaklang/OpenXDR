@@ -500,6 +500,30 @@ func (f ReportReadFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, 
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ReportReadMutation", m)
 }
 
+// The SSHKeyBaselineFunc type is an adapter to allow the use of ordinary
+// function as SSHKeyBaseline mutator.
+type SSHKeyBaselineFunc func(context.Context, *ent.SSHKeyBaselineMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f SSHKeyBaselineFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.SSHKeyBaselineMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SSHKeyBaselineMutation", m)
+}
+
+// The SSHKeyObservationFunc type is an adapter to allow the use of ordinary
+// function as SSHKeyObservation mutator.
+type SSHKeyObservationFunc func(context.Context, *ent.SSHKeyObservationMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f SSHKeyObservationFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.SSHKeyObservationMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SSHKeyObservationMutation", m)
+}
+
 // The SSHLoginFunc type is an adapter to allow the use of ordinary
 // function as SSHLogin mutator.
 type SSHLoginFunc func(context.Context, *ent.SSHLoginMutation) (ent.Value, error)

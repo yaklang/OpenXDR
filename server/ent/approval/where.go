@@ -105,6 +105,11 @@ func DecidedAt(v time.Time) predicate.Approval {
 	return predicate.Approval(sql.FieldEQ(FieldDecidedAt, v))
 }
 
+// Async applies equality check predicate on the "async" field. It's identical to AsyncEQ.
+func Async(v bool) predicate.Approval {
+	return predicate.Approval(sql.FieldEQ(FieldAsync, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.Approval {
 	return predicate.Approval(sql.FieldEQ(FieldCreatedAt, v))
@@ -648,6 +653,16 @@ func DecidedAtIsNil() predicate.Approval {
 // DecidedAtNotNil applies the NotNil predicate on the "decided_at" field.
 func DecidedAtNotNil() predicate.Approval {
 	return predicate.Approval(sql.FieldNotNull(FieldDecidedAt))
+}
+
+// AsyncEQ applies the EQ predicate on the "async" field.
+func AsyncEQ(v bool) predicate.Approval {
+	return predicate.Approval(sql.FieldEQ(FieldAsync, v))
+}
+
+// AsyncNEQ applies the NEQ predicate on the "async" field.
+func AsyncNEQ(v bool) predicate.Approval {
+	return predicate.Approval(sql.FieldNEQ(FieldAsync, v))
 }
 
 // And groups predicates with the AND operator between them.

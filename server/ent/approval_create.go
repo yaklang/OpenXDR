@@ -133,6 +133,20 @@ func (_c *ApprovalCreate) SetNillableDecidedAt(v *time.Time) *ApprovalCreate {
 	return _c
 }
 
+// SetAsync sets the "async" field.
+func (_c *ApprovalCreate) SetAsync(v bool) *ApprovalCreate {
+	_c.mutation.SetAsync(v)
+	return _c
+}
+
+// SetNillableAsync sets the "async" field if the given value is not nil.
+func (_c *ApprovalCreate) SetNillableAsync(v *bool) *ApprovalCreate {
+	if v != nil {
+		_c.SetAsync(*v)
+	}
+	return _c
+}
+
 // SetID sets the "id" field.
 func (_c *ApprovalCreate) SetID(v uuid.UUID) *ApprovalCreate {
 	_c.mutation.SetID(v)
@@ -190,6 +204,10 @@ func (_c *ApprovalCreate) defaults() {
 		v := approval.DefaultStatus
 		_c.mutation.SetStatus(v)
 	}
+	if _, ok := _c.mutation.Async(); !ok {
+		v := approval.DefaultAsync
+		_c.mutation.SetAsync(v)
+	}
 	if _, ok := _c.mutation.ID(); !ok {
 		v := approval.DefaultID()
 		_c.mutation.SetID(v)
@@ -234,6 +252,9 @@ func (_c *ApprovalCreate) check() error {
 	}
 	if _, ok := _c.mutation.ExpiresAt(); !ok {
 		return &ValidationError{Name: "expires_at", err: errors.New(`ent: missing required field "Approval.expires_at"`)}
+	}
+	if _, ok := _c.mutation.Async(); !ok {
+		return &ValidationError{Name: "async", err: errors.New(`ent: missing required field "Approval.async"`)}
 	}
 	return nil
 }
@@ -317,6 +338,10 @@ func (_c *ApprovalCreate) createSpec() (*Approval, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.DecidedAt(); ok {
 		_spec.SetField(approval.FieldDecidedAt, field.TypeTime, value)
 		_node.DecidedAt = &value
+	}
+	if value, ok := _c.mutation.Async(); ok {
+		_spec.SetField(approval.FieldAsync, field.TypeBool, value)
+		_node.Async = value
 	}
 	return _node, _spec
 }

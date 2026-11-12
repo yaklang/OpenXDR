@@ -129,6 +129,12 @@ type Report func(*sql.Selector)
 // ReportRead is the predicate function for reportread builders.
 type ReportRead func(*sql.Selector)
 
+// SSHKeyBaseline is the predicate function for sshkeybaseline builders.
+type SSHKeyBaseline func(*sql.Selector)
+
+// SSHKeyObservation is the predicate function for sshkeyobservation builders.
+type SSHKeyObservation func(*sql.Selector)
+
 // SSHLogin is the predicate function for sshlogin builders.
 type SSHLogin func(*sql.Selector)
 

@@ -222,6 +222,20 @@ func (_u *ApprovalUpdate) ClearDecidedAt() *ApprovalUpdate {
 	return _u
 }
 
+// SetAsync sets the "async" field.
+func (_u *ApprovalUpdate) SetAsync(v bool) *ApprovalUpdate {
+	_u.mutation.SetAsync(v)
+	return _u
+}
+
+// SetNillableAsync sets the "async" field if the given value is not nil.
+func (_u *ApprovalUpdate) SetNillableAsync(v *bool) *ApprovalUpdate {
+	if v != nil {
+		_u.SetAsync(*v)
+	}
+	return _u
+}
+
 // Mutation returns the ApprovalMutation object of the builder.
 func (_u *ApprovalUpdate) Mutation() *ApprovalMutation {
 	return _u.mutation
@@ -328,6 +342,9 @@ func (_u *ApprovalUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.DecidedAtCleared() {
 		_spec.ClearField(approval.FieldDecidedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.Async(); ok {
+		_spec.SetField(approval.FieldAsync, field.TypeBool, value)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -542,6 +559,20 @@ func (_u *ApprovalUpdateOne) ClearDecidedAt() *ApprovalUpdateOne {
 	return _u
 }
 
+// SetAsync sets the "async" field.
+func (_u *ApprovalUpdateOne) SetAsync(v bool) *ApprovalUpdateOne {
+	_u.mutation.SetAsync(v)
+	return _u
+}
+
+// SetNillableAsync sets the "async" field if the given value is not nil.
+func (_u *ApprovalUpdateOne) SetNillableAsync(v *bool) *ApprovalUpdateOne {
+	if v != nil {
+		_u.SetAsync(*v)
+	}
+	return _u
+}
+
 // Mutation returns the ApprovalMutation object of the builder.
 func (_u *ApprovalUpdateOne) Mutation() *ApprovalMutation {
 	return _u.mutation
@@ -678,6 +709,9 @@ func (_u *ApprovalUpdateOne) sqlSave(ctx context.Context) (_node *Approval, err 
 	}
 	if _u.mutation.DecidedAtCleared() {
 		_spec.ClearField(approval.FieldDecidedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.Async(); ok {
+		_spec.SetField(approval.FieldAsync, field.TypeBool, value)
 	}
 	_node = &Approval{config: _u.config}
 	_spec.Assign = _node.assignValues
