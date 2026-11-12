@@ -71,9 +71,11 @@ func TestSSHKeysInventoryAndClaimAPI(t *testing.T) {
 	loginAt := now.Add(-2 * 24 * time.Hour)
 	client.SSHKeyObservation.UpdateOneID(obs1.ID).SetLastLoginAt(loginAt).SetLastLoginIP("10.1.1.36").ExecX(ctx)
 
-	// 基线之后新出现第二把钥匙：应产生高危告警并生成待批移除提议，且不自动删除
+	// 基线之后新出现第二把钥匙（agent 每次上报完整快照，sshd 配置不变）：应产生高危告警并生成待批移除提议，且不自动删除
 	if err := svc.IngestSnapshot(ctx, host.ID, &pb.ReportSSHKeysRequest{
-		ObservedAtMs: now.Add(time.Minute).UnixMilli(),
+		ObservedAtMs:              now.Add(time.Minute).UnixMilli(),
+		AuthorizedKeysCommand:     "/usr/local/bin/keys %u",
+		AuthorizedKeysCommandUser: "nobody",
 		Keys: []*pb.SSHAuthorizedKey{
 			{
 				Account:     "root",
@@ -152,5 +154,36 @@ func TestSSHKeysInventoryAndClaimAPI(t *testing.T) {
 	}
 	if len(list.HostConfigs) != 1 || list.HostConfigs[0].AuthorizedKeysCommand != "/usr/local/bin/keys %u" {
 		t.Fatalf("AuthorizedKeysCommand 配置返回不符: %+v", list.HostConfigs)
+	}
+
+	// 当主机随后移除 sshd 的 AuthorizedKeysCommand 时，新快照应同步清空 hostConfigs
+	if err := svc.IngestSnapshot(ctx, host.ID, &pb.ReportSSHKeysRequest{
+		ObservedAtMs: now.Add(2 * time.Minute).UnixMilli(),
+		Keys: []*pb.SSHAuthorizedKey{
+			{
+				Account:     "root",
+				Path:        "/root/.ssh/authorized_keys",
+				KeyType:     "ssh-ed25519",
+				Fingerprint: fp1,
+				Comment:     "kei@foghaven",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("移除 AuthorizedKeysCommand 快照入库失败: %v", err)
+	}
+	resp2, err := http.Get(asAna.URL + "/api/ssh-keys")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	var list2 sshkeys.ListResult
+	if err := json.NewDecoder(resp2.Body).Decode(&list2); err != nil {
+		t.Fatal(err)
+	}
+	if len(list2.HostConfigs) != 0 {
+		t.Fatalf("移除 AuthorizedKeysCommand 后应清空 hostConfigs, got=%+v", list2.HostConfigs)
+	}
+	if len(list2.Keys) != 1 || list2.Keys[0].Fingerprint != fp1 {
+		t.Fatalf("已移除的钥匙不应再出现在 present 列表中: %+v", list2.Keys)
 	}
 }
