@@ -13,7 +13,7 @@ const states: Record<string, { label: MsgKey; color?: string }> = {
 }
 const names: Record<string, MsgKey> = {
   process: 'collectorProcess', files: 'collectorFiles', network: 'collectorNetwork', dns: 'collectorDNS',
-  powershell: 'collectorPowerShell', auth: 'collectorAuth', inventory: 'collectorInventory', 'local-accounts': 'collectorLocalAccounts', persist: 'collectorPersist', kmod: 'collectorKmod', software: 'collectorSoftware',
+  powershell: 'collectorPowerShell', auth: 'collectorAuth', inventory: 'collectorInventory', 'local-accounts': 'collectorLocalAccounts', persist: 'collectorPersist', kmod: 'collectorKmod', software: 'collectorSoftware', 'ssh-keys': 'collectorSshKeys',
 }
 const size = (n: number) => `${(n / 1048576).toFixed(2)} MiB`
 

@@ -102,7 +102,7 @@ func parseHealth(raw string, now time.Time) (collectorHealth, error) {
 	}
 	known := func(name string) bool {
 		switch name {
-		case "process", "files", "network", "dns", "auth", "inventory", "local-accounts", "persist", "kmod", "powershell", "software":
+		case "process", "files", "network", "dns", "auth", "inventory", "local-accounts", "persist", "kmod", "powershell", "software", "ssh-keys":
 			return true
 		}
 		return false

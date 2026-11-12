@@ -29,7 +29,7 @@ const clockSkewThreshold = time.Minute
 var capabilityNames = map[string]string{
 	"process": "进程采集", "files": "文件监控", "network": "网络采集", "dns": "DNS 采集", "auth": "登录采集",
 	"inventory": "资产清单", "local-accounts": "本地账号清单", "persist": "持久化点监控", "kmod": "内核模块监控",
-	"powershell": "PowerShell 脚本块", "software": "软件清单",
+	"powershell": "PowerShell 脚本块", "software": "软件清单", "ssh-keys": "SSH 授权钥匙盘点",
 }
 
 type healthSnapshot struct {
