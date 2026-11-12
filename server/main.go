@@ -157,11 +157,6 @@ func main() {
 	defer events.Close()
 	syslogServer := startSyslog(ctx, client, rules, dedupWindow, suppressions, intelStore, events)
 	startAuthentik(ctx, db, client, events)
-	sshKeysSvc := &sshkeys.Service{
-		DB: client, SQL: db, Suppress: suppressions,
-		Gate: &commandgate.Gate{DB: client, Hub: hub, Notify: webhook.Send},
-	}
-	grpcServer, dists := startGRPC(db, client, rules, dedupWindow, hub, suppressions, intelStore, events, sshKeysSvc)
 
 	if err := cluster.WithLock(ctx, db, "bootstrap", func() error { return auth.Bootstrap(ctx, client) }); err != nil {
 		slog.Error("初始化 admin 账号失败", "err", err)
@@ -172,7 +167,10 @@ func main() {
 	slog.Info("HTTP 启动", "addr", httpAddr)
 	queryRoles := startQueryRoles(ctx, db, client, dsn)
 	chat := startChat(ctx, db, client, rules, hub, webhook, conf, queryRoles, suppressionReviewer)
-	sshKeysSvc.Gate = chat.Gate
+	sshKeysSvc := &sshkeys.Service{
+		DB: client, SQL: db, Suppress: suppressions, Gate: chat.Gate,
+	}
+	grpcServer, dists := startGRPC(db, client, rules, dedupWindow, hub, suppressions, intelStore, events, sshKeysSvc)
 	triageEngine.EndpointEvidence = chat.CollectEndpointEvidence
 	chat.ReviewFinding = (&findingreview.Reviewer{DB: client, Endpoint: chat.Endpoint, OnUsage: aiconf.Recorder(client, "finding_review")}).Review
 	repair := &repairpolicy.Store{DB: client}
