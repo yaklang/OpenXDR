@@ -10,225 +10,80 @@
 <h3 align="center">开源的自治 XDR：EDR + SIEM + 全流量分析</h3>
 <p align="center"><b>从察觉到处置，它自己走完；你只需审阅，或者推翻。</b></p>
 
-<table>
-<tr>
-<td width="33%" valign="top"><h4>它不眠</h4>采集、检测、研判与巡检日夜流转，喧嚣在它这里沉淀，留下的每一件都值得一看。</td>
-<td width="33%" valign="top"><h4>它出手</h4>攻击落地的几秒之内，作恶的容器已经断网，来源已经封死，失守的账号已经锁上。</td>
-<td width="33%" valign="top"><h4>它交代</h4>每一个决定都写下理由，每一次处置都能一键撤回。不必有人守在屏幕前，只需在天亮后读它留下的记录。</td>
-</tr>
-</table>
+## 从察觉到处置
 
-<table>
-<tr>
-<td align="center" width="25%"><h3>200+</h3><sub>Sigma 兼容检测规则，热重载</sub></td>
-<td align="center" width="25%"><h3>Linux · Windows</h3><sub>端点 agent，一条命令接入</sub></td>
-<td align="center" width="25%"><h3>3 档</h3><sub>处置等级：实验 / 生产 / 核心</sub></td>
-<td align="center" width="25%"><h3>一键撤回</h3><sub>封锁与隔离按租约生效，到期由 AI 复核</sub></td>
-</tr>
-</table>
+<p align="center"><img src="docs/images/readme/loop-zh.jpg" alt="闭环流程：采集、检测、降噪、AI 研判、处置、复核与撤回、结案审计" width="100%"></p>
 
-## 界面一览
+确定性信号秒级遏制，研判结论分级处置；每个决定写下理由，每次处置都能撤回。
+详见 [自主响应与自身防护](docs/autonomous-response-design.md)、[检测链路](docs/detection.md)、[已遏制事件自动结案](docs/contained-incident-closure.md)。
 
-<sub>以下截图来自虚构的演示环境，主机、地址与域名均为示例。</sub>
+## 能力
 
-<p align="center"><img src="docs/images/screenshots/overview-zh.png" alt="态势总览" width="100%"></p>
+<p align="center"><img src="docs/images/readme/caps-zh.jpg" alt="能力：接入与采集、检测与降噪、AI 研判与巡检、自主响应、平台自身防护、资产与攻击面" width="100%"></p>
 
-<p align="center"><b>态势总览</b><br>一天上百万条原始事件、上万条告警，最后只剩 3 件需要人看。</p>
-
-<table>
-<tr>
-<td width="50%" valign="top"><img src="docs/images/screenshots/ai-assistant-zh.png" alt="AI 助手"><br><b>AI 助手处理事件</b><br><sub>把事件交给 AI，它上机取证、查平台数据、在审批后处置，最后给出结论和结案建议。</sub></td>
-<td width="50%" valign="top"><img src="docs/images/screenshots/incidents-zh.png" alt="安全事件"><br><b>安全事件</b><br><sub>每个事件都带 AI 研判结论，良性的写明理由，真正可疑的排在最前。</sub></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><img src="docs/images/screenshots/incident-detail-zh.png" alt="事件详情"><br><b>事件详情</b><br><sub>研判结论、攻击链与处置建议在上，进程树与外联关系一张图看清。</sub></td>
-<td width="50%" valign="top"><img src="docs/images/screenshots/asset-map-zh.png" alt="资产图谱"><br><b>资产图谱</b><br><sub>按实际观测到的连接画出依赖关系，AI 标注每台机器的角色与重要程度。</sub></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><img src="docs/images/screenshots/attack-surface-zh.png" alt="攻击面"><br><b>攻击面</b><br><sub>哪些服务对公网开放、谁在访问、风险多高，按区域一目了然。</sub></td>
-<td width="50%" valign="top"><img src="docs/images/screenshots/reports-zh.png" alt="巡检报告"><br><b>每日巡检报告</b><br><sub>AI 每天巡检全组主机，只把需要人处理的事写在前面。</sub></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><img src="docs/images/screenshots/scheduled-tasks-zh.png" alt="定时任务"><br><b>定时任务</b><br><sub>每个任务像一位排班上岗的 AI 员工，上一班做了什么、交了什么报告都看得到。</sub></td>
-<td width="50%" valign="top"><img src="docs/images/screenshots/asset-detail-zh.png" alt="资产详情"><br><b>资产详情</b><br><sub>采集链路是否健康、流量探针状态、角色画像与相关事件集中在一页。</sub></td>
-</tr>
-</table>
-
-## 能做什么
-
-### 接入与采集
-
-- **一条命令接入**：控制台按组签发接入令牌，Linux（x86_64 / arm64）、Windows 一行命令装好 agent；本机生成私钥，server 签发主机绑定证书。
-  新版放进分发目录，在线 agent 自动升级。已有运维文档可直接导入，凭据加密保存，按组授权 SSH 纳管。
-- **采集不挑环境**：进程、文件、持久化点、登录与安全日志、网络连接与 DNS、内核模块、监听端口与软件清单，
-  并按 cgroup 认出容器归属。eBPF / ETW 可选，不可用时自动降级到 netlink、fanotify、轮询——宁可弱采集，也不产假数据。
-- **全流量探针**：只出会话元数据（DNS、TLS JA3 与证书、HTTP），不存 PCAP；另有 syslog 接入。
-
-### 检测与降噪
-
-- **规则与情报**：200 多条 Sigma 兼容规则（热重载、ATT&CK 矩阵标出「有规则无数据源」的缺口），时序检测（计数与序列），
-  威胁情报碰撞（内置 abuse.ch 等公开订阅），UEBA 首次出现与外联心跳检测。
-- **降噪链**：持久去重、可撤销且有有效期的误报抑制、已知自动化识别（运维脚本、容器健康检查不再刷屏）、
-  按实体关联成事件图，低危良性事件到期自动结案。
-- **跨主机攻击不再被切碎**：按资产 + 容器分桶，受害方的登录失败直接认出横向来源，跨组也成立；
-  一台纳管主机对多台主机喷洒时合成 5 级告警、立即重研判。
-- **验收在 CI 里**：真实攻击命令回放过规则引擎对拍，真实攻击事件的完整时间线回放过入库、关联与自主响应。
-
-### AI 研判、助手与巡检
-
-- **主动研判**：AI 带只读调查工具逐个研判事件，给出结论、置信度与依据；重研判有冷却与公平调度，不被噪声拖垮。
-- **对话即运维**：AI 可以在组内主机上执行命令、按组只读视图查库、登记运维待办、提交报告；事件与待办可多选「交给 AI」接着处理。
-- **定时巡检**：预设任务按 cron 拉起 AI 巡检全组主机，产出 HTML / PDF 报告。
-- **AI 审计员**：AI 发起的高风险命令、生成的抑制草案，由 AI 审计员当场评审，不再整夜等人点批准；
-  停 agent、清日志、关防火墙、格式化磁盘在硬拒绝清单里，AI 发起的一律不执行。
-- **独立结案审计**：低风险良性结案建议由独立 AI 结案审计员复核，仅在有正面证据解释全部告警时自动按误报结案（标记 `ai_review` 来源，人可随时重开）；可疑或恶意事件在全部告警均有成功遏制处置、无核心资产、至少六小时无相关新增证据且无人接管或锁定时，也可经独立审计按属实已处置结案；新证据会重开，租约继续独立运行。缺证、不确定或回复不合格一律保留事件，也不生成长期白名单。
-
-### 自主响应
-
-确定性的攻击信号命中后，平台按「谁是攻击来源、谁是受害方」和每台主机的处置等级直接遏制：
-
-| 信号 | 平台自动做什么 |
+| 能力 | 文档 |
 |---|---|
-| 内网横向喷洒 | 认出发起攻击的容器就只隔离那个容器；实验机才隔离整机；所有受害方封锁来源地址 |
-| 爆破得手 | 封锁登录来源，锁定被攻破的账号（内置账号与核心主机不锁） |
-| 数据库拉起 shell（`COPY FROM PROGRAM`、UDF） | 结束这个进程，在数据库主机上封锁发起命令的客户端 |
-| 高级别情报命中 | 封锁地址；主动外连的恶意进程直接结束，命中哈希的文件移入隔离区 |
-
-- **处置等级**：每台资产由 AI 定为实验 / 生产 / 核心三档（人可改可锁）。实验机可以断网，生产机不隔离整机，核心只做最轻的处置，平台节点之间绝不互封。
-- **可撤回、有边界**：封锁与隔离按租约生效，到期由 AI 复核解除还是续期；熔断限制每小时处置次数与每组隔离比例；
-  每个决定（包括没执行的）都有记录，控制台「自主响应」页一键撤回。
-- 默认关闭，建议先只对实验等级开启，观察后再放开。
-
-### 平台自身防护
-
-能自主动手的安全平台，本身就是攻击者最想拿下的目标。OpenXDR 默认按这个假设设计：
-
-- **指令签名**：每条处置指令都用签名信封绑定目标主机与有效期，agent 只执行验签通过的。数据库或消息总线被人摸到，也伪造不出指令。
-- **安装包签名**：agent 只接受离线发布私钥签过名的升级包，拿下 server 节点也推不了恶意 agent。
-- **审计防篡改**：审计日志封存成 HMAC 链，密钥不在数据库里；改一条、删一条都会告警，删掉最新记录由集群外的监控发现。
-- **自我监控**：数据库高可用的控制面配置一被改、平台节点的 agent 一掉线就告警；控制面端口只对固定对端开放。
-
-### 资产、攻击面与漏洞
-
-- **资产图谱**：监听端口与连接关系聚合成依赖图，AI 标注每台资产的角色、功能、重要程度与处置等级。
-- **攻击面**：资产按网段、云环境自动分区，每个对外服务按暴露级别 × 端口风险 × 重要程度排序，连过却没纳管的机器列为盲区。
-- **软件漏洞**：按 OSV 漏洞库比对 dpkg 软件清单，标出可升级修复的漏洞与受影响的对外服务（目前覆盖 Debian / Ubuntu）。
-- **身份关联**（开发中）：归一化登录与本地账号，可从 Keycloak、Entra ID、AD / LDAP 同步目录账号。
-
-### 能上生产
-
-mTLS 与按主机绑定证书、三档 RBAC 与组权限、NATS JetStream 按资产分片队列、多节点 server，
-以及 Patroni + 三节点 JetStream + Keepalived 的跨宿主机高可用部署与滚动发布。
+| 接入与采集 | [采集端](docs/collection.md) · [文档导入与主机纳管](docs/host-enrollment.md) |
+| 检测与降噪 | [检测链路](docs/detection.md) · [时序检测](docs/temporal-detection.md) · [跨主机关联](docs/attack-campaign-design.md) |
+| AI 研判与巡检 | [AI 助手与巡检](docs/pi-backend.md) · [AI 原生架构](docs/ai-native.md) |
+| 自主响应与自身防护 | [自主响应与自身防护](docs/autonomous-response-design.md) |
+| 资产、攻击面与漏洞 | [资产图谱与攻击面](docs/asset-map.md) · [软件漏洞](docs/vulns.md) |
 
 ## 架构
 
-```
-┌─────────┐  ┌──────────┐  ┌──────────┐
-│  Agent  │  │  Sensor  │  │  Syslog  │
-│ 端点采集 │  │ 全流量探针│  │ 日志接入  │
-└────┬────┘  └────┬─────┘  └────┬─────┘
-     │  ▲         │             │
-     │  │ 签名指令 │             │   gRPC (mTLS)，agent 主动连出
-     ▼  │         ▼             ▼
-   ┌──────────────────────────────────┐
-   │ Server (Go，多节点)              │
-   │  归一化 → JetStream 分片队列      │
-   │  规则 / 情报 / UEBA / 时序检测    │
-   │  去重 → 抑制 → 跨主机关联         │
-   │  AI 研判 · 助手 · 定时巡检        │
-   │  自主响应（租约 · 熔断 · AI 复核） │──→ Webhook（钉钉 / 飞书 / 企微）
-   │  自我监控 · 审计链                │
-   └────────────────┬─────────────────┘
-                    ▼
-   PostgreSQL（Patroni 高可用）←→ Web 控制台（React）
-```
+<p align="center"><img src="docs/images/readme/arch-zh.jpg" alt="架构：agent、流量探针、syslog 接入 server，经 NATS JetStream 与 PostgreSQL 输出到控制台、通知与签名处置指令；高可用为两节点加 witness" width="100%"></p>
 
-详见 [架构文档](docs/architecture.md)。
+详见 [架构](docs/architecture.md)、[高可用部署](deploy/ha/README.md)、[集群与可观测性](docs/cluster.md)。
+
+## 自治总控
+
+<p align="center"><img src="docs/images/readme/ctrl-zh.jpg" alt="自治总控：权威来源写入事实库与运维意图，AI 研判与结案审计带事实编号引用" width="100%"></p>
+
+详见 [自治总控设计](docs/autonomy-controller-design.md)。
+
+## 界面一览
+
+<sub>截图来自虚构的演示环境，主机、地址与域名均为示例。</sub>
+
+<p align="center"><img src="docs/images/screenshots/overview-zh.png" alt="态势总览" width="100%"></p>
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/screenshots/ai-assistant-zh.png" alt="AI 助手处理事件"><br><b>AI 助手处理事件</b></td>
+<td width="50%" valign="top"><img src="docs/images/screenshots/incident-detail-zh.png" alt="事件详情"><br><b>事件详情</b></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/screenshots/asset-map-zh.png" alt="资产图谱"><br><b>资产图谱</b></td>
+<td width="50%" valign="top"><img src="docs/images/screenshots/attack-surface-zh.png" alt="攻击面"><br><b>攻击面</b></td>
+</tr>
+</table>
 
 ## 安装
 
-一台装了 Docker 的 Linux 服务器，一行命令：
+一台装了 Docker 的 Linux 服务器：
 
 ```bash
 curl -fsSL https://github.com/yaklang/OpenXDR/releases/latest/download/install.sh | sudo sh -s -- <控制台域名或 IP>
 ```
 
-脚本生成口令与密钥、签发 mTLS 证书、配好 HTTPS（解析到公网的域名自动申请 Let's Encrypt，内网地址用自建 CA），
-拉起后打印控制台地址与 admin 口令。登录后在「系统设置 → AI 模型」接上任意 OpenAI 兼容端点，
-再到「资产 → 添加主机」复制安装命令到被监控主机上执行即可。再执行一遍就是升级。
-
-**或者交给你的 AI agent**（Claude Code、Codex、Cursor 等，在目标服务器上运行），把这句话发给它：
+或者把这句话发给你的 AI agent（Claude Code、Codex、Cursor 等，在目标服务器上运行）：
 
 ```text
 请在这台服务器上安装 OpenXDR，严格按照 https://github.com/yaklang/OpenXDR/blob/master/docs/install.md 操作：
 先检查环境并问我控制台用哪个域名或 IP，再执行安装，最后把控制台地址、admin 口令，以及被纳管主机信任 CA 的命令告诉我。
 ```
 
-详细步骤、核对、升级备份与常见问题见 [安装](docs/install.md)。从源码构建开发：
-
-```bash
-docker compose up -d
-# 控制台 http://localhost:5173   API :8080   gRPC 接入 :8081
-docker compose logs server | grep admin   # 首次启动生成的 admin 密码
-```
-
-## 文档
-
-| 文档 | 内容 |
-|---|---|
-| [安装](docs/install.md) | 一行安装、核对、升级备份、常见问题，也是给 AI agent 的安装说明 |
-| [部署与使用手册](docs/deployment.md) | 启动、接入主机、日志与情报、抑制与处置、mTLS、配置项全表 |
-| [高可用部署](deploy/ha/README.md) | Patroni + 三节点 JetStream + Keepalived VIP，滚动发布 |
-| [资产图谱与攻击面](docs/asset-map.md) | 设备清单、依赖边、区域划分、风险分与 AI 标注 |
-| [自主响应与自身防护](docs/autonomous-response-design.md) | 信号与处置、处置等级、租约与熔断、容器隔离、指令签名、审计链、自我监控 |
-| [跨主机攻击的关联与升级](docs/attack-campaign-design.md) | 一次真实内网跳板攻击的复盘，按实体分桶、受害方横向、喷洒合成告警 |
-| [AI 助手与巡检](docs/pi-backend.md) | 会话、命令名单与 AI 审计员、只读查询、运维待办、预设任务 |
-| [文档导入与主机纳管](docs/host-enrollment.md) | 运维文档导入、凭据加密、SSH 纳管、安装包发布签名 |
-| [软件漏洞](docs/vulns.md) | dpkg 软件清单、OSV 漏洞库同步、版本比较、已知限制 |
-| [时序检测](docs/temporal-detection.md) · [身份关联](docs/identity-correlation.md) | 计数与序列规则；登录归一化与目录同步（均开发中） |
-| [架构](docs/architecture.md) · [采集端](docs/collection.md) · [事件模型](docs/events.md) · [检测链路](docs/detection.md) | 设计与实现细节 |
-| [REST API](docs/api.md) · [集群与可观测性](docs/cluster.md) · [路线图](docs/roadmap.md) | 对接、运维与规划 |
-
-完整索引见 [docs/README.md](docs/README.md)。
-
-## 目录
-
-| 目录 | 说明 |
-|---|---|
-| `agent/` | Rust 端点 agent（Linux / Windows），含响应处置 |
-| `sensor/` | Rust 全流量探针，AF_PACKET v3 / AF_XDP 双后端 |
-| `server/` | Go 后端：接入、检测、关联、AI 研判与助手、REST / gRPC |
-| `web/` | React 管理控制台 |
-| `rules/` | Sigma 兼容检测规则 |
-| `temporal-rules/` | 时序检测规则（计数 / 序列），与 Sigma 规则分开存放 |
-| `tasks/` | 预设巡检任务（YAML） |
-| `validation/` | [检测验证语料](validation/README.md)：真实攻击命令回放过规则引擎，CI 守住检测能力 |
-| `deploy/` | 集群与高可用部署 |
-| `proto/` | gRPC 契约 |
-| `schema/` | 设计参考 DDL，实际表结构以 `server/ent/schema/` 为准 |
-| `pages/` | 项目主页（GitHub Pages），与产品代码无关 |
+详见 [安装](docs/install.md) 与 [部署与使用手册](docs/deployment.md)；完整文档索引见 [docs/README.md](docs/README.md)。
 
 ## 当前状态
 
-当前版本 v0.4.0。OpenXDR 在维护团队自己的内网以双节点高可用部署持续运行，纳管二十多台 Linux 与 Windows 主机，
-自主响应、自我监控与审计链都在生产上开着。
+v0.4.0。维护团队自己的内网以双节点高可用部署持续运行，纳管二十多台 Linux 与 Windows 主机。
+自主响应默认关闭；AI 结论的质量取决于所接模型，平台保证它越不过权限、名单与审批的边界。
+已知缺口见 [路线图](docs/roadmap.md)，版本变化见 [CHANGELOG](CHANGELOG.md)。
 
-- **Linux**：采集、检测、研判与巡检从 10 月起在生产上持续运行，自主响应从 v0.4.0 起在生产开启；eBPF 网络与 DNS 采集、容器归属已在多个发行版实机验证。
-- **Windows**：ETW 进程、网络、DNS 与安全日志采集已在 Windows 10 实机上逐项验证（见 [实机回放](validation/replay/README.md)），覆盖面仍不如 Linux。
-- **自主响应**：默认关闭。处置引擎只认确定性的合成检测与高级别情报，不凭 AI 结论直接动手（AI 只参与定级与到期复核）；建议先只对实验等级开启。
-- **AI**：效果取决于所接模型的 tool calling 能力，模型越弱越容易在长上下文里跑偏。平台保证它越不过权限、名单与硬拒绝的边界，
-  但不保证结论正确——低风险良性事件及满足严格遏制门禁的事件可经独立审计自动结案，其余事件仍留给人处理。
+## 参与与许可
 
-已知缺口与后续计划见 [路线图](docs/roadmap.md)，每个版本的变化与升级须知见 [CHANGELOG](CHANGELOG.md)。
+欢迎 Issue 与 PR，提交前请读 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
 
-## 参与
-
-欢迎 Issue 与 PR，提交前请读 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请按
-[SECURITY.md](SECURITY.md) 私下报告。
-
-## 许可证
-
-[Apache License 2.0](LICENSE)
-
-第三方数据：`rules/sigmahq/` 为 SigmaHQ 社区规则（DRL 1.1，见其 README）；发版镜像自带的离线 IP 归属库为
+[Apache License 2.0](LICENSE)。第三方数据：`rules/sigmahq/` 为 SigmaHQ 社区规则（DRL 1.1，见其 README）；发版镜像自带的离线 IP 归属库为
 [DB-IP Lite](https://db-ip.com)（IP Geolocation by DB-IP，CC BY 4.0），见 [资产图谱](docs/asset-map.md#离线归属库)。
