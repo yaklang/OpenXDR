@@ -163,6 +163,12 @@ async fn agent() {
                     session.agent_id.clone(),
                     queue.health.clone(),
                 ));
+                #[cfg(target_os = "linux")]
+                let key_reporting = tokio::spawn(collector::sshkeys::report(
+                    client.clone(),
+                    session.agent_id.clone(),
+                    collector::sshkeys::shared_state().clone(),
+                ));
                 let collection = collector_task.as_mut().expect("已注册采集任务");
                 if collection.config != session.config_json || collection.next.is_some() {
                     collection.next = Some(session.clone());
@@ -188,6 +194,8 @@ async fn agent() {
                 };
                 commands.abort();
                 reporting.abort();
+                #[cfg(target_os = "linux")]
+                key_reporting.abort();
                 if stop_requested {
                     finish(
                         &queue,
@@ -572,6 +580,12 @@ mod command_tests {
             _: Request<pb::HealthRequest>,
         ) -> Result<Response<pb::HealthAck>, Status> {
             Err(Status::unimplemented("测试不使用状态通道"))
+        }
+        async fn report_ssh_keys(
+            &self,
+            _: Request<pb::ReportSshKeysRequest>,
+        ) -> Result<Response<pb::ReportSshKeysResponse>, Status> {
+            Err(Status::unimplemented("测试不使用钥匙盘点通道"))
         }
         async fn register(
             &self,

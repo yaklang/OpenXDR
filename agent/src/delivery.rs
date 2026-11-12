@@ -238,6 +238,12 @@ mod tests {
         ) -> Result<Response<pb::HealthAck>, Status> {
             Err(Status::unimplemented("测试不使用状态通道"))
         }
+        async fn report_ssh_keys(
+            &self,
+            _: Request<pb::ReportSshKeysRequest>,
+        ) -> Result<Response<pb::ReportSshKeysResponse>, Status> {
+            Err(Status::unimplemented("测试不使用钥匙盘点通道"))
+        }
         async fn register(
             &self,
             _: Request<pb::RegisterRequest>,

@@ -17,6 +17,8 @@ mod liveness;
 mod periodic;
 mod poll;
 mod registry;
+#[cfg(any(target_os = "linux", test))]
+pub(crate) mod sshkeys;
 #[cfg(any(target_os = "windows", test))]
 mod windows_evidence;
 
@@ -129,6 +131,10 @@ pub fn spawn(
             "software",
             cfg.collect_inventory && cfg!(target_os = "linux"),
         ),
+        (
+            "ssh-keys",
+            cfg.collect_inventory && cfg!(target_os = "linux"),
+        ),
     ]);
     periodic::set_enabled(cfg.collapse_periodic);
     registry::set_suppress_trivial_exit(cfg.suppress_trivial_exit);
@@ -180,6 +186,7 @@ pub fn spawn(
     if cfg.collect_inventory {
         inventory_linux::spawn(agent_id.clone(), sink.clone());
         software::spawn(agent_id.clone(), sink.clone());
+        sshkeys::spawn(sink.clone(), sshkeys::shared_state().clone());
     }
     #[cfg(target_os = "windows")]
     if cfg.collect_inventory {

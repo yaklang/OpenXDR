@@ -11,6 +11,8 @@ service AgentService {
   rpc Register(RegisterRequest) returns (RegisterResponse);
   // 独立状态通道，不进入事件积压队列。
   rpc ReportHealth(HealthRequest) returns (HealthAck);
+  // SSH 授权钥匙盘点快照（仅指纹、账号、选项与注释，不含公钥原文）。
+  rpc ReportSSHKeys(ReportSSHKeysRequest) returns (ReportSSHKeysResponse);
   // 客户端流式上报事件，一条长连接批量推
   rpc ReportEvents(stream AgentEvent) returns (ReportAck);
   // 双向流：agent 保持连接等待指令，执行完把结果回传。
@@ -159,3 +161,23 @@ message HealthRequest {
   string health_json = 2;
 }
 message HealthAck {}
+
+message SSHAuthorizedKey {
+  string account = 1;           // Linux 账号名
+  string path = 2;              // 授权文件绝对路径
+  string key_type = 3;          // 公钥类型，如 ssh-ed25519、ssh-rsa
+  string fingerprint = 4;       // SHA256:<43位无填充base64>，与 login_session.key_fp 同格式
+  string comment = 5;           // 公钥尾部注释（仅提示，不可信）
+  repeated string options = 6;  // 授权选项，如 from=、command=、cert-authority
+}
+
+message ReportSSHKeysRequest {
+  string agent_id = 1;
+  int64 observed_at_ms = 2;
+  repeated SSHAuthorizedKey keys = 3;
+  // sshd -T 解析出的 AuthorizedKeysCommand 配置（仅记录配置文本，agent 不执行）
+  string authorized_keys_command = 4;
+  string authorized_keys_command_user = 5;
+}
+
+message ReportSSHKeysResponse {}

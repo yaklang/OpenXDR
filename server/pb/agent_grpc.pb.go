@@ -24,6 +24,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	AgentService_Register_FullMethodName            = "/openxdr.agent.v1.AgentService/Register"
 	AgentService_ReportHealth_FullMethodName        = "/openxdr.agent.v1.AgentService/ReportHealth"
+	AgentService_ReportSSHKeys_FullMethodName       = "/openxdr.agent.v1.AgentService/ReportSSHKeys"
 	AgentService_ReportEvents_FullMethodName        = "/openxdr.agent.v1.AgentService/ReportEvents"
 	AgentService_Commands_FullMethodName            = "/openxdr.agent.v1.AgentService/Commands"
 	AgentService_ReportCommandResult_FullMethodName = "/openxdr.agent.v1.AgentService/ReportCommandResult"
@@ -38,6 +39,8 @@ type AgentServiceClient interface {
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	// 独立状态通道，不进入事件积压队列。
 	ReportHealth(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthAck, error)
+	// SSH 授权钥匙盘点快照（仅指纹、账号、选项与注释，不含公钥原文）。
+	ReportSSHKeys(ctx context.Context, in *ReportSSHKeysRequest, opts ...grpc.CallOption) (*ReportSSHKeysResponse, error)
 	// 客户端流式上报事件，一条长连接批量推
 	ReportEvents(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[AgentEvent, ReportAck], error)
 	// 双向流：agent 保持连接等待指令，执行完把结果回传。
@@ -71,6 +74,16 @@ func (c *agentServiceClient) ReportHealth(ctx context.Context, in *HealthRequest
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HealthAck)
 	err := c.cc.Invoke(ctx, AgentService_ReportHealth_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) ReportSSHKeys(ctx context.Context, in *ReportSSHKeysRequest, opts ...grpc.CallOption) (*ReportSSHKeysResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportSSHKeysResponse)
+	err := c.cc.Invoke(ctx, AgentService_ReportSSHKeys_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +153,8 @@ type AgentServiceServer interface {
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	// 独立状态通道，不进入事件积压队列。
 	ReportHealth(context.Context, *HealthRequest) (*HealthAck, error)
+	// SSH 授权钥匙盘点快照（仅指纹、账号、选项与注释，不含公钥原文）。
+	ReportSSHKeys(context.Context, *ReportSSHKeysRequest) (*ReportSSHKeysResponse, error)
 	// 客户端流式上报事件，一条长连接批量推
 	ReportEvents(grpc.ClientStreamingServer[AgentEvent, ReportAck]) error
 	// 双向流：agent 保持连接等待指令，执行完把结果回传。
@@ -164,6 +179,9 @@ func (UnimplementedAgentServiceServer) Register(context.Context, *RegisterReques
 }
 func (UnimplementedAgentServiceServer) ReportHealth(context.Context, *HealthRequest) (*HealthAck, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportHealth not implemented")
+}
+func (UnimplementedAgentServiceServer) ReportSSHKeys(context.Context, *ReportSSHKeysRequest) (*ReportSSHKeysResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportSSHKeys not implemented")
 }
 func (UnimplementedAgentServiceServer) ReportEvents(grpc.ClientStreamingServer[AgentEvent, ReportAck]) error {
 	return status.Error(codes.Unimplemented, "method ReportEvents not implemented")
@@ -234,6 +252,24 @@ func _AgentService_ReportHealth_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_ReportSSHKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportSSHKeysRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ReportSSHKeys(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ReportSSHKeys_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ReportSSHKeys(ctx, req.(*ReportSSHKeysRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AgentService_ReportEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(AgentServiceServer).ReportEvents(&grpc.GenericServerStream[AgentEvent, ReportAck]{ServerStream: stream})
 }
@@ -291,6 +327,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportHealth",
 			Handler:    _AgentService_ReportHealth_Handler,
+		},
+		{
+			MethodName: "ReportSSHKeys",
+			Handler:    _AgentService_ReportSSHKeys_Handler,
 		},
 		{
 			MethodName: "ReportCommandResult",

@@ -188,6 +188,11 @@ fn default_targets() -> Vec<String> {
             targets.push(p);
         }
     }
+    for p in super::sshkeys::extra_watch_dirs() {
+        if !covered_by_dirs(&p, &targets) && !targets.contains(&p) {
+            targets.push(p);
+        }
+    }
     for p in rc_file_candidates(&users) {
         // 已被目录清单递归覆盖的文件（如 /etc 下的全局 rc）不再单挂，
         // 否则同一改动会由目录 watch 与文件 watch 各报一条
@@ -926,6 +931,7 @@ fn backfill(dirs: &[String], agent_id: &str, sink: &EventSink) -> bool {
 
 /// inotify 路径的事件：只有路径与动作，没有进程上下文。
 fn file_event(agent_id: &str, path: &str, activity: u8) -> AgentEvent {
+    super::sshkeys::notify_if_relevant(path);
     let raw = serde_json::json!({
         "activity_id": activity,
         "file": { "path": path },
@@ -936,6 +942,7 @@ fn file_event(agent_id: &str, path: &str, activity: u8) -> AgentEvent {
 /// fanotify 路径的事件：按元数据里的肇事者 pid 回填进程上下文。
 /// 进程可能已退场（写后即退），/proc 读不到就给空字段，路径事件仍要上报。
 fn file_event_proc(agent_id: &str, path: &str, activity: u8, pid: u32) -> AgentEvent {
+    super::sshkeys::notify_if_relevant(path);
     let exe = std::fs::read_link(format!("/proc/{pid}/exe"))
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
@@ -943,7 +950,7 @@ fn file_event_proc(agent_id: &str, path: &str, activity: u8, pid: u32) -> AgentE
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
     let username = username_of(pid);
-    let raw = serde_json::json!({
+    let mut raw = serde_json::json!({
         "activity_id": activity,
         "file": { "path": path },
         "process": {
@@ -952,6 +959,9 @@ fn file_event_proc(agent_id: &str, path: &str, activity: u8, pid: u32) -> AgentE
             "file": { "path": exe },
         },
     });
+    if let Some(Some(session)) = super::sshsession::of(pid, None) {
+        raw["login_session"] = (*session).clone();
+    }
     base_event(agent_id, raw, username)
 }
 

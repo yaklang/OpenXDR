@@ -1022,6 +1022,203 @@ func (*HealthAck) Descriptor() ([]byte, []int) {
 	return file_agent_proto_rawDescGZIP(), []int{11}
 }
 
+type SSHAuthorizedKey struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Account       string                 `protobuf:"bytes,1,opt,name=account,proto3" json:"account,omitempty"`                // Linux 账号名
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`                      // 授权文件绝对路径
+	KeyType       string                 `protobuf:"bytes,3,opt,name=key_type,json=keyType,proto3" json:"key_type,omitempty"` // 公钥类型，如 ssh-ed25519、ssh-rsa
+	Fingerprint   string                 `protobuf:"bytes,4,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`        // SHA256:<43位无填充base64>，与 login_session.key_fp 同格式
+	Comment       string                 `protobuf:"bytes,5,opt,name=comment,proto3" json:"comment,omitempty"`                // 公钥尾部注释（仅提示，不可信）
+	Options       []string               `protobuf:"bytes,6,rep,name=options,proto3" json:"options,omitempty"`                // 授权选项，如 from=、command=、cert-authority
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SSHAuthorizedKey) Reset() {
+	*x = SSHAuthorizedKey{}
+	mi := &file_agent_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SSHAuthorizedKey) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SSHAuthorizedKey) ProtoMessage() {}
+
+func (x *SSHAuthorizedKey) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SSHAuthorizedKey.ProtoReflect.Descriptor instead.
+func (*SSHAuthorizedKey) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *SSHAuthorizedKey) GetAccount() string {
+	if x != nil {
+		return x.Account
+	}
+	return ""
+}
+
+func (x *SSHAuthorizedKey) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *SSHAuthorizedKey) GetKeyType() string {
+	if x != nil {
+		return x.KeyType
+	}
+	return ""
+}
+
+func (x *SSHAuthorizedKey) GetFingerprint() string {
+	if x != nil {
+		return x.Fingerprint
+	}
+	return ""
+}
+
+func (x *SSHAuthorizedKey) GetComment() string {
+	if x != nil {
+		return x.Comment
+	}
+	return ""
+}
+
+func (x *SSHAuthorizedKey) GetOptions() []string {
+	if x != nil {
+		return x.Options
+	}
+	return nil
+}
+
+type ReportSSHKeysRequest struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	AgentId      string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	ObservedAtMs int64                  `protobuf:"varint,2,opt,name=observed_at_ms,json=observedAtMs,proto3" json:"observed_at_ms,omitempty"`
+	Keys         []*SSHAuthorizedKey    `protobuf:"bytes,3,rep,name=keys,proto3" json:"keys,omitempty"`
+	// sshd -T 解析出的 AuthorizedKeysCommand 配置（仅记录配置文本，agent 不执行）
+	AuthorizedKeysCommand     string `protobuf:"bytes,4,opt,name=authorized_keys_command,json=authorizedKeysCommand,proto3" json:"authorized_keys_command,omitempty"`
+	AuthorizedKeysCommandUser string `protobuf:"bytes,5,opt,name=authorized_keys_command_user,json=authorizedKeysCommandUser,proto3" json:"authorized_keys_command_user,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
+}
+
+func (x *ReportSSHKeysRequest) Reset() {
+	*x = ReportSSHKeysRequest{}
+	mi := &file_agent_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportSSHKeysRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportSSHKeysRequest) ProtoMessage() {}
+
+func (x *ReportSSHKeysRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportSSHKeysRequest.ProtoReflect.Descriptor instead.
+func (*ReportSSHKeysRequest) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ReportSSHKeysRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *ReportSSHKeysRequest) GetObservedAtMs() int64 {
+	if x != nil {
+		return x.ObservedAtMs
+	}
+	return 0
+}
+
+func (x *ReportSSHKeysRequest) GetKeys() []*SSHAuthorizedKey {
+	if x != nil {
+		return x.Keys
+	}
+	return nil
+}
+
+func (x *ReportSSHKeysRequest) GetAuthorizedKeysCommand() string {
+	if x != nil {
+		return x.AuthorizedKeysCommand
+	}
+	return ""
+}
+
+func (x *ReportSSHKeysRequest) GetAuthorizedKeysCommandUser() string {
+	if x != nil {
+		return x.AuthorizedKeysCommandUser
+	}
+	return ""
+}
+
+type ReportSSHKeysResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportSSHKeysResponse) Reset() {
+	*x = ReportSSHKeysResponse{}
+	mi := &file_agent_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportSSHKeysResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportSSHKeysResponse) ProtoMessage() {}
+
+func (x *ReportSSHKeysResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportSSHKeysResponse.ProtoReflect.Descriptor instead.
+func (*ReportSSHKeysResponse) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{14}
+}
+
 var File_agent_proto protoreflect.FileDescriptor
 
 const file_agent_proto_rawDesc = "" +
@@ -1104,7 +1301,21 @@ const file_agent_proto_rawDesc = "" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1f\n" +
 	"\vhealth_json\x18\x02 \x01(\tR\n" +
 	"healthJson\"\v\n" +
-	"\tHealthAck*\xc1\x02\n" +
+	"\tHealthAck\"\xb1\x01\n" +
+	"\x10SSHAuthorizedKey\x12\x18\n" +
+	"\aaccount\x18\x01 \x01(\tR\aaccount\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x19\n" +
+	"\bkey_type\x18\x03 \x01(\tR\akeyType\x12 \n" +
+	"\vfingerprint\x18\x04 \x01(\tR\vfingerprint\x12\x18\n" +
+	"\acomment\x18\x05 \x01(\tR\acomment\x12\x18\n" +
+	"\aoptions\x18\x06 \x03(\tR\aoptions\"\x88\x02\n" +
+	"\x14ReportSSHKeysRequest\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12$\n" +
+	"\x0eobserved_at_ms\x18\x02 \x01(\x03R\fobservedAtMs\x126\n" +
+	"\x04keys\x18\x03 \x03(\v2\".openxdr.agent.v1.SSHAuthorizedKeyR\x04keys\x126\n" +
+	"\x17authorized_keys_command\x18\x04 \x01(\tR\x15authorizedKeysCommand\x12?\n" +
+	"\x1cauthorized_keys_command_user\x18\x05 \x01(\tR\x19authorizedKeysCommandUser\"\x17\n" +
+	"\x15ReportSSHKeysResponse*\xc1\x02\n" +
 	"\vCommandKind\x12\x1c\n" +
 	"\x18COMMAND_KIND_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fKILL_PROCESS\x10\x01\x12\x10\n" +
@@ -1121,10 +1332,11 @@ const file_agent_proto_rawDesc = "" +
 	"\x11ISOLATE_CONTAINER\x10\v\x12\x17\n" +
 	"\x13UNISOLATE_CONTAINER\x10\f\x12\x13\n" +
 	"\x0fBLOCK_EXECUTION\x10\r\x12\x15\n" +
-	"\x11UNBLOCK_EXECUTION\x10\x0e2\xf8\x03\n" +
+	"\x11UNBLOCK_EXECUTION\x10\x0e2\xda\x04\n" +
 	"\fAgentService\x12Q\n" +
 	"\bRegister\x12!.openxdr.agent.v1.RegisterRequest\x1a\".openxdr.agent.v1.RegisterResponse\x12L\n" +
-	"\fReportHealth\x12\x1f.openxdr.agent.v1.HealthRequest\x1a\x1b.openxdr.agent.v1.HealthAck\x12K\n" +
+	"\fReportHealth\x12\x1f.openxdr.agent.v1.HealthRequest\x1a\x1b.openxdr.agent.v1.HealthAck\x12`\n" +
+	"\rReportSSHKeys\x12&.openxdr.agent.v1.ReportSSHKeysRequest\x1a'.openxdr.agent.v1.ReportSSHKeysResponse\x12K\n" +
 	"\fReportEvents\x12\x1c.openxdr.agent.v1.AgentEvent\x1a\x1b.openxdr.agent.v1.ReportAck(\x01\x12J\n" +
 	"\bCommands\x12\x1f.openxdr.agent.v1.CommandResult\x1a\x19.openxdr.agent.v1.Command(\x010\x01\x12Z\n" +
 	"\x13ReportCommandResult\x12\x1f.openxdr.agent.v1.CommandResult\x1a\".openxdr.agent.v1.CommandResultAck\x12R\n" +
@@ -1143,44 +1355,50 @@ func file_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_agent_proto_goTypes = []any{
-	(CommandKind)(0),          // 0: openxdr.agent.v1.CommandKind
-	(CommandResult_Status)(0), // 1: openxdr.agent.v1.CommandResult.Status
-	(*DownloadRequest)(nil),   // 2: openxdr.agent.v1.DownloadRequest
-	(*AgentChunk)(nil),        // 3: openxdr.agent.v1.AgentChunk
-	(*Command)(nil),           // 4: openxdr.agent.v1.Command
-	(*SignedCommand)(nil),     // 5: openxdr.agent.v1.SignedCommand
-	(*CommandResult)(nil),     // 6: openxdr.agent.v1.CommandResult
-	(*CommandResultAck)(nil),  // 7: openxdr.agent.v1.CommandResultAck
-	(*RegisterRequest)(nil),   // 8: openxdr.agent.v1.RegisterRequest
-	(*RegisterResponse)(nil),  // 9: openxdr.agent.v1.RegisterResponse
-	(*AgentEvent)(nil),        // 10: openxdr.agent.v1.AgentEvent
-	(*ReportAck)(nil),         // 11: openxdr.agent.v1.ReportAck
-	(*HealthRequest)(nil),     // 12: openxdr.agent.v1.HealthRequest
-	(*HealthAck)(nil),         // 13: openxdr.agent.v1.HealthAck
+	(CommandKind)(0),              // 0: openxdr.agent.v1.CommandKind
+	(CommandResult_Status)(0),     // 1: openxdr.agent.v1.CommandResult.Status
+	(*DownloadRequest)(nil),       // 2: openxdr.agent.v1.DownloadRequest
+	(*AgentChunk)(nil),            // 3: openxdr.agent.v1.AgentChunk
+	(*Command)(nil),               // 4: openxdr.agent.v1.Command
+	(*SignedCommand)(nil),         // 5: openxdr.agent.v1.SignedCommand
+	(*CommandResult)(nil),         // 6: openxdr.agent.v1.CommandResult
+	(*CommandResultAck)(nil),      // 7: openxdr.agent.v1.CommandResultAck
+	(*RegisterRequest)(nil),       // 8: openxdr.agent.v1.RegisterRequest
+	(*RegisterResponse)(nil),      // 9: openxdr.agent.v1.RegisterResponse
+	(*AgentEvent)(nil),            // 10: openxdr.agent.v1.AgentEvent
+	(*ReportAck)(nil),             // 11: openxdr.agent.v1.ReportAck
+	(*HealthRequest)(nil),         // 12: openxdr.agent.v1.HealthRequest
+	(*HealthAck)(nil),             // 13: openxdr.agent.v1.HealthAck
+	(*SSHAuthorizedKey)(nil),      // 14: openxdr.agent.v1.SSHAuthorizedKey
+	(*ReportSSHKeysRequest)(nil),  // 15: openxdr.agent.v1.ReportSSHKeysRequest
+	(*ReportSSHKeysResponse)(nil), // 16: openxdr.agent.v1.ReportSSHKeysResponse
 }
 var file_agent_proto_depIdxs = []int32{
 	0,  // 0: openxdr.agent.v1.Command.kind:type_name -> openxdr.agent.v1.CommandKind
 	4,  // 1: openxdr.agent.v1.SignedCommand.command:type_name -> openxdr.agent.v1.Command
 	1,  // 2: openxdr.agent.v1.CommandResult.status:type_name -> openxdr.agent.v1.CommandResult.Status
-	8,  // 3: openxdr.agent.v1.AgentService.Register:input_type -> openxdr.agent.v1.RegisterRequest
-	12, // 4: openxdr.agent.v1.AgentService.ReportHealth:input_type -> openxdr.agent.v1.HealthRequest
-	10, // 5: openxdr.agent.v1.AgentService.ReportEvents:input_type -> openxdr.agent.v1.AgentEvent
-	6,  // 6: openxdr.agent.v1.AgentService.Commands:input_type -> openxdr.agent.v1.CommandResult
-	6,  // 7: openxdr.agent.v1.AgentService.ReportCommandResult:input_type -> openxdr.agent.v1.CommandResult
-	2,  // 8: openxdr.agent.v1.AgentService.DownloadAgent:input_type -> openxdr.agent.v1.DownloadRequest
-	9,  // 9: openxdr.agent.v1.AgentService.Register:output_type -> openxdr.agent.v1.RegisterResponse
-	13, // 10: openxdr.agent.v1.AgentService.ReportHealth:output_type -> openxdr.agent.v1.HealthAck
-	11, // 11: openxdr.agent.v1.AgentService.ReportEvents:output_type -> openxdr.agent.v1.ReportAck
-	4,  // 12: openxdr.agent.v1.AgentService.Commands:output_type -> openxdr.agent.v1.Command
-	7,  // 13: openxdr.agent.v1.AgentService.ReportCommandResult:output_type -> openxdr.agent.v1.CommandResultAck
-	3,  // 14: openxdr.agent.v1.AgentService.DownloadAgent:output_type -> openxdr.agent.v1.AgentChunk
-	9,  // [9:15] is the sub-list for method output_type
-	3,  // [3:9] is the sub-list for method input_type
-	3,  // [3:3] is the sub-list for extension type_name
-	3,  // [3:3] is the sub-list for extension extendee
-	0,  // [0:3] is the sub-list for field type_name
+	14, // 3: openxdr.agent.v1.ReportSSHKeysRequest.keys:type_name -> openxdr.agent.v1.SSHAuthorizedKey
+	8,  // 4: openxdr.agent.v1.AgentService.Register:input_type -> openxdr.agent.v1.RegisterRequest
+	12, // 5: openxdr.agent.v1.AgentService.ReportHealth:input_type -> openxdr.agent.v1.HealthRequest
+	15, // 6: openxdr.agent.v1.AgentService.ReportSSHKeys:input_type -> openxdr.agent.v1.ReportSSHKeysRequest
+	10, // 7: openxdr.agent.v1.AgentService.ReportEvents:input_type -> openxdr.agent.v1.AgentEvent
+	6,  // 8: openxdr.agent.v1.AgentService.Commands:input_type -> openxdr.agent.v1.CommandResult
+	6,  // 9: openxdr.agent.v1.AgentService.ReportCommandResult:input_type -> openxdr.agent.v1.CommandResult
+	2,  // 10: openxdr.agent.v1.AgentService.DownloadAgent:input_type -> openxdr.agent.v1.DownloadRequest
+	9,  // 11: openxdr.agent.v1.AgentService.Register:output_type -> openxdr.agent.v1.RegisterResponse
+	13, // 12: openxdr.agent.v1.AgentService.ReportHealth:output_type -> openxdr.agent.v1.HealthAck
+	16, // 13: openxdr.agent.v1.AgentService.ReportSSHKeys:output_type -> openxdr.agent.v1.ReportSSHKeysResponse
+	11, // 14: openxdr.agent.v1.AgentService.ReportEvents:output_type -> openxdr.agent.v1.ReportAck
+	4,  // 15: openxdr.agent.v1.AgentService.Commands:output_type -> openxdr.agent.v1.Command
+	7,  // 16: openxdr.agent.v1.AgentService.ReportCommandResult:output_type -> openxdr.agent.v1.CommandResultAck
+	3,  // 17: openxdr.agent.v1.AgentService.DownloadAgent:output_type -> openxdr.agent.v1.AgentChunk
+	11, // [11:18] is the sub-list for method output_type
+	4,  // [4:11] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_agent_proto_init() }
@@ -1194,7 +1412,7 @@ func file_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   12,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
