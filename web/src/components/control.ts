@@ -4,9 +4,10 @@ export const FACT_KINDS: FactKind[] = ['key', 'channel', 'asset_role', 'decision
 // 与后端 facts.Categories 一致：研判只看类别
 export const INTENT_CATEGORIES = ['deploy', 'troubleshoot', 'migrate', 'inspect', 'test', 'maintenance', 'backup']
 
-// 编号对应总控里的条目：F- 是事实，I- 是意图
+// 编号对应总控里的条目：F- 是事实，I- 是意图，R- 是常设规矩
 export function controlLink(ref: string) {
-  return `/control?tab=${ref.startsWith('I-') ? 'intents' : 'facts'}&ref=${ref}`
+  const tab = ref.startsWith('I-') ? 'intents' : ref.startsWith('R-') ? 'rules' : 'facts'
+  return `/control?tab=${tab}&ref=${ref}`
 }
 
 export function factLive(f: Fact, now = Date.now()) {

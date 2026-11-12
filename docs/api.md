@@ -104,6 +104,12 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | GET | `/api/ssh-keys?assetId=` | SSH 授权钥匙盘点观测（按可见资产裁剪，可选按单机筛选）：返回 `{keys, hostConfigs}`，含短指纹、完整 SHA256 指纹、账号、文件路径、选项、注释（仅作提示）、最近登录时间与来源、活跃状态（`active` 90 天内有登录 / `idle` 闲置，在用排前面）、认领状态（`claimed` / `unclaimed` 及匹配的 `key` 事实引用）、新出现关联的写入会话与移除提议状态，以及配置了 `AuthorizedKeysCommand` 的主机摘要；组 viewer |
 | POST | `/api/ssh-keys/claim` | 认领钥匙 `{"fingerprint","holder","machine","purpose","groupId","assetId","expiresInDays"(0=长期，最多 3650)}`：确认持有人、所在机器与用途，写入一条权威 `key` 事实并落审计 `fact_created`（同范围已认领返回 409）；只有平台管理员（AI/Pi 无认领工具） |
 | POST | `/api/ssh-keys/{id}/propose-removal` | 为指定钥匙观测生成待批移除提议（写入现有审批队列，批准后按指纹核对移除对应行，从不自动删除；已有待批提议时幂等返回）；组管理员 |
+| GET | `/api/standing-rules/templates` | 常设规矩封闭动作模板列表（含内置 8 条与按主机长期授权模板、允许档位、默认维护窗口/冷却与默认回退说明）；组 viewer |
+| GET | `/api/standing-rules` | 常设规矩列表（编号 `ref` 为 `R-` 加 UUID 末 8 位），带档位（`auto` / `propose` / `human`）、作用范围、维护窗口、冷却、今日与 30 天命中、今日自动执行、最近执行与连续出错自动降级状态；按组裁剪，全局规矩所有人可见 |
+| POST | `/api/standing-rules` | 新建自定义或按主机长期授权规矩 `{"actionTemplate","name","conditionSummary","actionParams","tier","groupId","assetIds","maintenanceWindow","cooldownMinutes","enabled"}`；仅平台管理员，落审计 `standing_rule_created` |
+| PATCH | `/api/standing-rules/{id}` | 修改规矩启停、档位、作用范围、维护窗口、冷却或模板参数；仅平台管理员，切档落审计 `standing_rule_tier_changed`（其余 `standing_rule_updated`），显式切档或重新启用同时清除连续出错降级标记 |
+| DELETE | `/api/standing-rules/{id}` | 删除自定义常设规矩及其执行记录（内置规矩不可删除，400）；仅平台管理员，落审计 `standing_rule_deleted` |
+| GET | `/api/standing-rules/{id}/runs?skipped=` | 单条规矩最近 100 条执行记录（命中摘要、档位、状态、封闭命令、结果与明确回退方式 `rollback`）；按组裁剪，默认不含已跳过的记录（条件未满足或预探针失败暂缓重试） |
 
 `GET /api/events` 的条目与 `GET /api/incidents/{id}` 的告警带 `automation: {id, name, watch}`（来自可信来源时；`watch` 为高危例外）。
 

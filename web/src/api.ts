@@ -929,6 +929,106 @@ export async function claimSSHKey(body: {
 export async function proposeSSHKeyRemoval(id: string): Promise<Approval> {
   return (await send('POST', `/api/ssh-keys/${encodeURIComponent(id)}/propose-removal`)).json()
 }
+export type StandingRuleTier = 'auto' | 'propose' | 'human'
+
+export interface StandingRuleTemplate {
+  key: string
+  name: string
+  conditionSummary: string
+  defaultTier: StandingRuleTier
+  allowedTiers: StandingRuleTier[]
+  defaultWindow?: string
+  defaultCooldownMinutes: number
+  defaultParams?: Record<string, unknown>
+  rollbackHint: string
+  builtin: boolean
+  requiresHostScope?: boolean
+}
+
+export interface StandingRule {
+  id: string
+  ref: string
+  createdAt: string
+  updatedAt: string
+  builtinKey: string
+  name: string
+  conditionSummary: string
+  condition?: Record<string, unknown>
+  actionTemplate: string
+  actionParams?: Record<string, unknown>
+  tier: StandingRuleTier
+  allowedTiers: StandingRuleTier[]
+  rollbackHint: string
+  groupId: string | null
+  groupName?: string
+  assetIds: string[]
+  hostnames?: string[]
+  maintenanceWindow: string
+  cooldownMinutes: number
+  createdBy: string
+  createdByName: string
+  enabled: boolean
+  consecutiveFailures: number
+  degradedAt: string | null
+  degradedReason?: string
+  lastRunAt: string | null
+  lastRunStatus: string
+  hitsToday: number
+  hits30d: number
+  autoToday: number
+}
+
+export interface StandingRuleRun {
+  id: string
+  createdAt: string
+  completedAt: string | null
+  ruleId: string
+  groupId: string
+  assetId: string
+  hostname: string
+  findingId: string | null
+  tier: StandingRuleTier
+  status: string
+  hitSummary: string
+  command: string
+  commandId: string | null
+  approvalId: string | null
+  result: string
+  rollback: string
+}
+
+export const fetchStandingRules = () => get<StandingRule[]>('/api/standing-rules')
+export const fetchStandingRuleTemplates = () => get<StandingRuleTemplate[]>('/api/standing-rules/templates')
+export async function createStandingRule(body: {
+  name: string
+  conditionSummary: string
+  actionTemplate: string
+  actionParams?: Record<string, unknown>
+  tier: StandingRuleTier
+  groupId?: string | null
+  assetIds?: string[]
+  maintenanceWindow?: string
+  cooldownMinutes: number
+  enabled: boolean
+}): Promise<StandingRule> {
+  return (await send('POST', '/api/standing-rules', body)).json()
+}
+export async function updateStandingRule(id: string, body: {
+  name?: string
+  conditionSummary?: string
+  actionParams?: Record<string, unknown>
+  tier?: StandingRuleTier
+  groupId?: string | null
+  clearGroup?: boolean
+  assetIds?: string[]
+  maintenanceWindow?: string
+  cooldownMinutes?: number
+  enabled?: boolean
+}): Promise<StandingRule> {
+  return (await send('PATCH', `/api/standing-rules/${encodeURIComponent(id)}`, body)).json()
+}
+export const deleteStandingRule = (id: string) => send('DELETE', `/api/standing-rules/${encodeURIComponent(id)}`)
+export const fetchStandingRuleRuns = (id: string) => get<StandingRuleRun[]>(`/api/standing-rules/${encodeURIComponent(id)}/runs`)
 
 export async function createSuppression(body: {
   ruleId: string

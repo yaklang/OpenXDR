@@ -147,6 +147,12 @@ type SessionMessage func(*sql.Selector)
 // Setting is the predicate function for setting builders.
 type Setting func(*sql.Selector)
 
+// StandingRule is the predicate function for standingrule builders.
+type StandingRule func(*sql.Selector)
+
+// StandingRuleRun is the predicate function for standingrulerun builders.
+type StandingRuleRun func(*sql.Selector)
+
 // Suppression is the predicate function for suppression builders.
 type Suppression func(*sql.Selector)
 

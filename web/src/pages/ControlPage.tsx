@@ -3,7 +3,7 @@ import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-q
 import { App, Button, Card, Flex, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Table, Tabs, Tag, Tooltip, Typography, theme } from 'antd'
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
-import { createFact, endIntent, fetchAssets, fetchFacts, fetchIntents, fetchSSHKeys, retireFact, updateFact, type Fact, type FactKind, type Intent, type SSHKeysResponse } from '../api'
+import { createFact, endIntent, fetchAssets, fetchFacts, fetchIntents, fetchSSHKeys, fetchStandingRules, retireFact, updateFact, type Fact, type FactKind, type Intent, type SSHKeysResponse, type StandingRule } from '../api'
 import { useSession } from '../app/session'
 import { Ago, EmptyHint } from '../components/Ago'
 import { Clamp } from '../components/Clamp'
@@ -13,12 +13,13 @@ import { HostLink } from '../components/HostLink'
 import { IntentModal } from '../components/IntentModal'
 import { LoadError } from '../components/LoadError'
 import { Page, STICKY_HEADER, TableCard } from '../components/Page'
+import { StandingRulesTab } from '../components/StandingRulesTab'
 import { TableActions } from '../components/TableActions'
 import { FACT_KINDS, bareAddr, factLive } from '../components/control'
 import { errText, fmtTime } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
 
-const TABS = ['overview', 'keys', 'facts', 'intents'] as const
+const TABS = ['overview', 'keys', 'facts', 'intents', 'rules'] as const
 const PAGE = 20
 
 const shortFp = (v: string) => (v.length > 24 ? `${v.slice(0, 15)}…${v.slice(-6)}` : v)
@@ -52,27 +53,32 @@ export function ControlPage() {
   const tab = TABS.find(x => x === params.get('tab')) ?? 'overview'
   const ref = params.get('ref') ?? ''
   const [adding, setAdding] = useState(false)
+  const [addingRule, setAddingRule] = useState(false)
   const [registering, setRegistering] = useState(false)
   // 带上已停用的：研判引用过的事实停用后，编号链接仍要能定位到
   const facts = useQuery({ queryKey: ['facts', 'withRetired'], queryFn: () => fetchFacts({ retired: true }) })
   const intents = useQuery({ queryKey: ['intents'], queryFn: () => fetchIntents() })
   const sshKeys = useQuery({ queryKey: ['ssh-keys'], queryFn: () => fetchSSHKeys() })
+  const rules = useQuery({ queryKey: ['standingRules'], queryFn: fetchStandingRules })
 
   const extra = tab === 'facts' && isAdmin
     ? <Button type="primary" icon={<PlusOutlined />} onClick={() => setAdding(true)}>{t('factAdd')}</Button>
     : tab === 'intents' && canWrite
       ? <Button type="primary" icon={<PlusOutlined />} onClick={() => setRegistering(true)}>{t('intentRegister')}</Button>
-      : undefined
+      : tab === 'rules' && isAdmin
+        ? <Button type="primary" icon={<PlusOutlined />} onClick={() => setAddingRule(true)}>{t('ruleAdd')}</Button>
+        : undefined
 
   return (
     <Page title={t('navControl')} subtitle={t('controlSubtitle')} extra={extra}>
       <IntentModal open={registering} onClose={() => setRegistering(false)} />
       <Tabs activeKey={tab} onChange={k => setParams(k === 'overview' ? {} : { tab: k }, { replace: true })}
         items={[
-          { key: 'overview', label: t('controlOverview'), children: <Overview facts={facts} intents={intents} sshKeys={sshKeys} /> },
+          { key: 'overview', label: t('controlOverview'), children: <Overview facts={facts} intents={intents} sshKeys={sshKeys} rules={rules} /> },
           { key: 'keys', label: t('controlKeys'), children: <ControlKeysTab sshKeys={sshKeys} /> },
           { key: 'facts', label: t('controlFacts'), children: <FactsTab facts={facts} refId={ref} adding={adding} onAdded={() => setAdding(false)} /> },
           { key: 'intents', label: t('controlIntents'), children: <IntentsTab intents={intents} refId={ref} /> },
+          { key: 'rules', label: t('controlRules'), children: <StandingRulesTab rules={rules} refId={ref} adding={addingRule} onCloseAdd={() => setAddingRule(false)} /> },
         ]} />
     </Page>
   )
@@ -90,21 +96,27 @@ function Stat({ label, value, to }: { label: string; value: number | string; to:
   )
 }
 
-function Overview({ facts, intents, sshKeys }: { facts: UseQueryResult<Fact[]>; intents: UseQueryResult<Intent[]>; sshKeys: UseQueryResult<SSHKeysResponse> }) {
+function Overview({ facts, intents, sshKeys, rules }: { facts: UseQueryResult<Fact[]>; intents: UseQueryResult<Intent[]>; sshKeys: UseQueryResult<SSHKeysResponse>; rules: UseQueryResult<StandingRule[]> }) {
   const { t } = useI18n()
   if (facts.isError) return <LoadError error={facts.error} onRetry={() => facts.refetch()} />
   if (intents.isError) return <LoadError error={intents.error} onRetry={() => intents.refetch()} />
+  if (rules.isError) return <LoadError error={rules.error} onRetry={() => rules.refetch()} />
   const now = Date.now()
   const live = (facts.data ?? []).filter(f => factLive(f, now))
   const n = (v: number) => (facts.isPending ? '-' : v)
   const unclaimedCount = sshKeys.isPending ? '-' : (sshKeys.data?.keys ?? []).filter(k => k.claimStatus === 'unclaimed').length
   const cited = live.filter(f => f.lastCitedAt).sort((a, b) => b.lastCitedAt!.localeCompare(a.lastCitedAt!)).slice(0, 10)
+  const ruleRows = rules.data ?? []
+  const enabledRules = ruleRows.filter(r => r.enabled).length
+  const autoToday = ruleRows.reduce((sum, r) => sum + r.autoToday, 0)
   return (
     <Flex vertical gap={20}>
       <Typography.Text type="secondary">{t('controlOverviewHint')}</Typography.Text>
       <Flex wrap gap={14}>
         <Stat label={t('controlUnclaimedKeys')} value={unclaimedCount} to="/control?tab=keys" />
         <Stat label={t('controlActiveIntents')} value={intents.isPending ? '-' : (intents.data ?? []).filter(i => i.active).length} to="/control?tab=intents" />
+        <Stat label={t('controlEnabledRules')} value={rules.isPending ? '-' : enabledRules} to="/control?tab=rules" />
+        <Stat label={t('controlAutoToday')} value={rules.isPending ? '-' : autoToday} to="/control?tab=rules" />
         <Stat label={t('controlLiveFacts')} value={n(live.length)} to="/control?tab=facts" />
         {FACT_KINDS.map(k => (
           <Stat key={k} label={t(`factKind_${k}` as MsgKey)} value={n(live.filter(f => f.kind === k).length)} to={`/control?tab=facts&kind=${k}`} />

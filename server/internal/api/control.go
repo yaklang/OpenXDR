@@ -404,6 +404,7 @@ func Control(db *ent.Client, notify func(ctx context.Context, title, body, path 
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+	registerStandingRuleRoutes(mux, db)
 	return mux
 }
 

@@ -95,3 +95,67 @@ func TestControlAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestStandingRulesAPI(t *testing.T) {
+	ctx, client := testdb.New(t)
+	g := client.Group.Create().SetName("ops").SaveX(ctx)
+	osLinux := "linux"
+	host := client.Asset.Create().SetHostname("app-node").SetGroupID(g.ID).SetOs(osLinux).SaveX(ctx)
+	admin := client.User.Create().SetUsername("root").SetPasswordHash("x").SetRole("admin").SaveX(ctx)
+	ana := client.User.Create().SetUsername("ana").SetPasswordHash("x").SetRole("analyst").SaveX(ctx)
+	client.GroupMember.Create().SetGroupID(g.ID).SetUserID(ana.ID).SetRole("admin").SaveX(ctx)
+
+	h := Control(client, nil)
+	asAdmin := httptest.NewServer(as(admin, h))
+	t.Cleanup(asAdmin.Close)
+	asAna := httptest.NewServer(as(ana, h))
+	t.Cleanup(asAna.Close)
+
+	req := func(s *httptest.Server, method, path, body string) (int, []byte) {
+		t.Helper()
+		r, err := http.NewRequest(method, s.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var buf strings.Builder
+		_, _ = json.NewDecoder(resp.Body).Buffered(), buf.Len()
+		raw := make([]byte, 0)
+		var tmp [4096]byte
+		for {
+			n, rerr := resp.Body.Read(tmp[:])
+			if n > 0 {
+				raw = append(raw, tmp[:n]...)
+			}
+			if rerr != nil {
+				break
+			}
+		}
+		return resp.StatusCode, raw
+	}
+
+	createBody := fmt.Sprintf(`{"actionTemplate":"restart_failed_service","tier":"propose","groupId":%q,"assetIds":[%q],"cooldownMinutes":180,"actionParams":{"units":["worker-sync.service"]}}`, g.ID, host.ID)
+	if code, _ := req(asAna, http.MethodPost, "/api/standing-rules", createBody); code != http.StatusForbidden {
+		t.Fatalf("非平台管理员不能新建规矩：%d", code)
+	}
+	code, raw := req(asAdmin, http.MethodPost, "/api/standing-rules", createBody)
+	if code != http.StatusCreated {
+		t.Fatalf("平台管理员新建规矩失败：%d %s", code, string(raw))
+	}
+	var created standingRuleRow
+	_ = json.Unmarshal(raw, &created)
+	if code, _ := req(asAna, http.MethodPatch, "/api/standing-rules/"+created.ID.String(), `{"tier":"auto"}`); code != http.StatusForbidden {
+		t.Fatalf("非平台管理员不能切换规矩档位：%d", code)
+	}
+	if code, raw := req(asAdmin, http.MethodPatch, "/api/standing-rules/"+created.ID.String(), `{"tier":"auto","enabled":true}`); code != http.StatusOK {
+		t.Fatalf("平台管理员切换档位失败：%d %s", code, string(raw))
+	}
+	if !client.AuditLog.Query().Where(auditlog.ActionEQ("standing_rule_tier_changed")).ExistX(ctx) {
+		t.Fatal("切换档位必须写入 standing_rule_tier_changed 审计")
+	}
+}

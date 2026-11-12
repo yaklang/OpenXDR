@@ -58,6 +58,8 @@ import (
 	"openxdr/server/ent/sshkeybaseline"
 	"openxdr/server/ent/sshkeyobservation"
 	"openxdr/server/ent/sshlogin"
+	"openxdr/server/ent/standingrule"
+	"openxdr/server/ent/standingrulerun"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/task"
 	"openxdr/server/ent/taskrun"
@@ -173,6 +175,10 @@ type Client struct {
 	SessionMessage *SessionMessageClient
 	// Setting is the client for interacting with the Setting builders.
 	Setting *SettingClient
+	// StandingRule is the client for interacting with the StandingRule builders.
+	StandingRule *StandingRuleClient
+	// StandingRuleRun is the client for interacting with the StandingRuleRun builders.
+	StandingRuleRun *StandingRuleRunClient
 	// Suppression is the client for interacting with the Suppression builders.
 	Suppression *SuppressionClient
 	// Task is the client for interacting with the Task builders.
@@ -247,6 +253,8 @@ func (c *Client) init() {
 	c.Session = NewSessionClient(c.config)
 	c.SessionMessage = NewSessionMessageClient(c.config)
 	c.Setting = NewSettingClient(c.config)
+	c.StandingRule = NewStandingRuleClient(c.config)
+	c.StandingRuleRun = NewStandingRuleRunClient(c.config)
 	c.Suppression = NewSuppressionClient(c.config)
 	c.Task = NewTaskClient(c.config)
 	c.TaskRun = NewTaskRunClient(c.config)
@@ -394,6 +402,8 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		Session:                 NewSessionClient(cfg),
 		SessionMessage:          NewSessionMessageClient(cfg),
 		Setting:                 NewSettingClient(cfg),
+		StandingRule:            NewStandingRuleClient(cfg),
+		StandingRuleRun:         NewStandingRuleRunClient(cfg),
 		Suppression:             NewSuppressionClient(cfg),
 		Task:                    NewTaskClient(cfg),
 		TaskRun:                 NewTaskRunClient(cfg),
@@ -468,6 +478,8 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		Session:                 NewSessionClient(cfg),
 		SessionMessage:          NewSessionMessageClient(cfg),
 		Setting:                 NewSettingClient(cfg),
+		StandingRule:            NewStandingRuleClient(cfg),
+		StandingRuleRun:         NewStandingRuleRunClient(cfg),
 		Suppression:             NewSuppressionClient(cfg),
 		Task:                    NewTaskClient(cfg),
 		TaskRun:                 NewTaskRunClient(cfg),
@@ -514,8 +526,8 @@ func (c *Client) Use(hooks ...Hook) {
 		c.IntegrationGroup, c.IntegrationIdempotency, c.IntegrationSubscription,
 		c.IntegrationToken, c.Intel, c.Intent, c.Memory, c.ProcessBaseline, c.Report,
 		c.ReportRead, c.SSHKeyBaseline, c.SSHKeyObservation, c.SSHLogin, c.Session,
-		c.SessionMessage, c.Setting, c.Suppression, c.Task, c.TaskRun, c.TriageRun,
-		c.TrustedSource, c.User, c.VulnRecord, c.Zone,
+		c.SessionMessage, c.Setting, c.StandingRule, c.StandingRuleRun, c.Suppression,
+		c.Task, c.TaskRun, c.TriageRun, c.TrustedSource, c.User, c.VulnRecord, c.Zone,
 	} {
 		n.Use(hooks...)
 	}
@@ -534,8 +546,8 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.IntegrationGroup, c.IntegrationIdempotency, c.IntegrationSubscription,
 		c.IntegrationToken, c.Intel, c.Intent, c.Memory, c.ProcessBaseline, c.Report,
 		c.ReportRead, c.SSHKeyBaseline, c.SSHKeyObservation, c.SSHLogin, c.Session,
-		c.SessionMessage, c.Setting, c.Suppression, c.Task, c.TaskRun, c.TriageRun,
-		c.TrustedSource, c.User, c.VulnRecord, c.Zone,
+		c.SessionMessage, c.Setting, c.StandingRule, c.StandingRuleRun, c.Suppression,
+		c.Task, c.TaskRun, c.TriageRun, c.TrustedSource, c.User, c.VulnRecord, c.Zone,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -638,6 +650,10 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.SessionMessage.mutate(ctx, m)
 	case *SettingMutation:
 		return c.Setting.mutate(ctx, m)
+	case *StandingRuleMutation:
+		return c.StandingRule.mutate(ctx, m)
+	case *StandingRuleRunMutation:
+		return c.StandingRuleRun.mutate(ctx, m)
 	case *SuppressionMutation:
 		return c.Suppression.mutate(ctx, m)
 	case *TaskMutation:
@@ -7070,6 +7086,272 @@ func (c *SettingClient) mutate(ctx context.Context, m *SettingMutation) (Value, 
 	}
 }
 
+// StandingRuleClient is a client for the StandingRule schema.
+type StandingRuleClient struct {
+	config
+}
+
+// NewStandingRuleClient returns a client for the StandingRule from the given config.
+func NewStandingRuleClient(c config) *StandingRuleClient {
+	return &StandingRuleClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `standingrule.Hooks(f(g(h())))`.
+func (c *StandingRuleClient) Use(hooks ...Hook) {
+	c.hooks.StandingRule = append(c.hooks.StandingRule, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `standingrule.Intercept(f(g(h())))`.
+func (c *StandingRuleClient) Intercept(interceptors ...Interceptor) {
+	c.inters.StandingRule = append(c.inters.StandingRule, interceptors...)
+}
+
+// Create returns a builder for creating a StandingRule entity.
+func (c *StandingRuleClient) Create() *StandingRuleCreate {
+	mutation := newStandingRuleMutation(c.config, OpCreate)
+	return &StandingRuleCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of StandingRule entities.
+func (c *StandingRuleClient) CreateBulk(builders ...*StandingRuleCreate) *StandingRuleCreateBulk {
+	return &StandingRuleCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *StandingRuleClient) MapCreateBulk(slice any, setFunc func(*StandingRuleCreate, int)) *StandingRuleCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &StandingRuleCreateBulk{err: fmt.Errorf("calling to StandingRuleClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*StandingRuleCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &StandingRuleCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for StandingRule.
+func (c *StandingRuleClient) Update() *StandingRuleUpdate {
+	mutation := newStandingRuleMutation(c.config, OpUpdate)
+	return &StandingRuleUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *StandingRuleClient) UpdateOne(_m *StandingRule) *StandingRuleUpdateOne {
+	mutation := newStandingRuleMutation(c.config, OpUpdateOne, withStandingRule(_m))
+	return &StandingRuleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *StandingRuleClient) UpdateOneID(id uuid.UUID) *StandingRuleUpdateOne {
+	mutation := newStandingRuleMutation(c.config, OpUpdateOne, withStandingRuleID(id))
+	return &StandingRuleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for StandingRule.
+func (c *StandingRuleClient) Delete() *StandingRuleDelete {
+	mutation := newStandingRuleMutation(c.config, OpDelete)
+	return &StandingRuleDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *StandingRuleClient) DeleteOne(_m *StandingRule) *StandingRuleDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *StandingRuleClient) DeleteOneID(id uuid.UUID) *StandingRuleDeleteOne {
+	builder := c.Delete().Where(standingrule.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &StandingRuleDeleteOne{builder}
+}
+
+// Query returns a query builder for StandingRule.
+func (c *StandingRuleClient) Query() *StandingRuleQuery {
+	return &StandingRuleQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeStandingRule},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a StandingRule entity by its id.
+func (c *StandingRuleClient) Get(ctx context.Context, id uuid.UUID) (*StandingRule, error) {
+	return c.Query().Where(standingrule.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *StandingRuleClient) GetX(ctx context.Context, id uuid.UUID) *StandingRule {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *StandingRuleClient) Hooks() []Hook {
+	return c.hooks.StandingRule
+}
+
+// Interceptors returns the client interceptors.
+func (c *StandingRuleClient) Interceptors() []Interceptor {
+	return c.inters.StandingRule
+}
+
+func (c *StandingRuleClient) mutate(ctx context.Context, m *StandingRuleMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&StandingRuleCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&StandingRuleUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&StandingRuleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&StandingRuleDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown StandingRule mutation op: %q", m.Op())
+	}
+}
+
+// StandingRuleRunClient is a client for the StandingRuleRun schema.
+type StandingRuleRunClient struct {
+	config
+}
+
+// NewStandingRuleRunClient returns a client for the StandingRuleRun from the given config.
+func NewStandingRuleRunClient(c config) *StandingRuleRunClient {
+	return &StandingRuleRunClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `standingrulerun.Hooks(f(g(h())))`.
+func (c *StandingRuleRunClient) Use(hooks ...Hook) {
+	c.hooks.StandingRuleRun = append(c.hooks.StandingRuleRun, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `standingrulerun.Intercept(f(g(h())))`.
+func (c *StandingRuleRunClient) Intercept(interceptors ...Interceptor) {
+	c.inters.StandingRuleRun = append(c.inters.StandingRuleRun, interceptors...)
+}
+
+// Create returns a builder for creating a StandingRuleRun entity.
+func (c *StandingRuleRunClient) Create() *StandingRuleRunCreate {
+	mutation := newStandingRuleRunMutation(c.config, OpCreate)
+	return &StandingRuleRunCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of StandingRuleRun entities.
+func (c *StandingRuleRunClient) CreateBulk(builders ...*StandingRuleRunCreate) *StandingRuleRunCreateBulk {
+	return &StandingRuleRunCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *StandingRuleRunClient) MapCreateBulk(slice any, setFunc func(*StandingRuleRunCreate, int)) *StandingRuleRunCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &StandingRuleRunCreateBulk{err: fmt.Errorf("calling to StandingRuleRunClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*StandingRuleRunCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &StandingRuleRunCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for StandingRuleRun.
+func (c *StandingRuleRunClient) Update() *StandingRuleRunUpdate {
+	mutation := newStandingRuleRunMutation(c.config, OpUpdate)
+	return &StandingRuleRunUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *StandingRuleRunClient) UpdateOne(_m *StandingRuleRun) *StandingRuleRunUpdateOne {
+	mutation := newStandingRuleRunMutation(c.config, OpUpdateOne, withStandingRuleRun(_m))
+	return &StandingRuleRunUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *StandingRuleRunClient) UpdateOneID(id uuid.UUID) *StandingRuleRunUpdateOne {
+	mutation := newStandingRuleRunMutation(c.config, OpUpdateOne, withStandingRuleRunID(id))
+	return &StandingRuleRunUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for StandingRuleRun.
+func (c *StandingRuleRunClient) Delete() *StandingRuleRunDelete {
+	mutation := newStandingRuleRunMutation(c.config, OpDelete)
+	return &StandingRuleRunDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *StandingRuleRunClient) DeleteOne(_m *StandingRuleRun) *StandingRuleRunDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *StandingRuleRunClient) DeleteOneID(id uuid.UUID) *StandingRuleRunDeleteOne {
+	builder := c.Delete().Where(standingrulerun.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &StandingRuleRunDeleteOne{builder}
+}
+
+// Query returns a query builder for StandingRuleRun.
+func (c *StandingRuleRunClient) Query() *StandingRuleRunQuery {
+	return &StandingRuleRunQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeStandingRuleRun},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a StandingRuleRun entity by its id.
+func (c *StandingRuleRunClient) Get(ctx context.Context, id uuid.UUID) (*StandingRuleRun, error) {
+	return c.Query().Where(standingrulerun.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *StandingRuleRunClient) GetX(ctx context.Context, id uuid.UUID) *StandingRuleRun {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *StandingRuleRunClient) Hooks() []Hook {
+	return c.hooks.StandingRuleRun
+}
+
+// Interceptors returns the client interceptors.
+func (c *StandingRuleRunClient) Interceptors() []Interceptor {
+	return c.inters.StandingRuleRun
+}
+
+func (c *StandingRuleRunClient) mutate(ctx context.Context, m *StandingRuleRunMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&StandingRuleRunCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&StandingRuleRunUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&StandingRuleRunUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&StandingRuleRunDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown StandingRuleRun mutation op: %q", m.Op())
+	}
+}
+
 // SuppressionClient is a client for the Suppression schema.
 type SuppressionClient struct {
 	config
@@ -8145,8 +8427,9 @@ type (
 		IntegrationDelivery, IntegrationEvent, IntegrationGroup,
 		IntegrationIdempotency, IntegrationSubscription, IntegrationToken, Intel,
 		Intent, Memory, ProcessBaseline, Report, ReportRead, SSHKeyBaseline,
-		SSHKeyObservation, SSHLogin, Session, SessionMessage, Setting, Suppression,
-		Task, TaskRun, TriageRun, TrustedSource, User, VulnRecord, Zone []ent.Hook
+		SSHKeyObservation, SSHLogin, Session, SessionMessage, Setting, StandingRule,
+		StandingRuleRun, Suppression, Task, TaskRun, TriageRun, TrustedSource, User,
+		VulnRecord, Zone []ent.Hook
 	}
 	inters struct {
 		AIJob, AIUsage, AgentSession, Alert, Approval, Asset, AssetLink, AuditLog,
@@ -8157,8 +8440,8 @@ type (
 		IntegrationDelivery, IntegrationEvent, IntegrationGroup,
 		IntegrationIdempotency, IntegrationSubscription, IntegrationToken, Intel,
 		Intent, Memory, ProcessBaseline, Report, ReportRead, SSHKeyBaseline,
-		SSHKeyObservation, SSHLogin, Session, SessionMessage, Setting, Suppression,
-		Task, TaskRun, TriageRun, TrustedSource, User, VulnRecord,
-		Zone []ent.Interceptor
+		SSHKeyObservation, SSHLogin, Session, SessionMessage, Setting, StandingRule,
+		StandingRuleRun, Suppression, Task, TaskRun, TriageRun, TrustedSource, User,
+		VulnRecord, Zone []ent.Interceptor
 	}
 )

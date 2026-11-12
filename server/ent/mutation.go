@@ -56,6 +56,8 @@ import (
 	"openxdr/server/ent/sshkeybaseline"
 	"openxdr/server/ent/sshkeyobservation"
 	"openxdr/server/ent/sshlogin"
+	"openxdr/server/ent/standingrule"
+	"openxdr/server/ent/standingrulerun"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/task"
 	"openxdr/server/ent/taskrun"
@@ -128,6 +130,8 @@ const (
 	TypeSession                 = "Session"
 	TypeSessionMessage          = "SessionMessage"
 	TypeSetting                 = "Setting"
+	TypeStandingRule            = "StandingRule"
+	TypeStandingRuleRun         = "StandingRuleRun"
 	TypeSuppression             = "Suppression"
 	TypeTask                    = "Task"
 	TypeTaskRun                 = "TaskRun"
@@ -45053,6 +45057,2880 @@ func (m *SettingMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *SettingMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown Setting edge %s", name)
+}
+
+// StandingRuleMutation represents an operation that mutates the StandingRule nodes in the graph.
+type StandingRuleMutation struct {
+	config
+	op                      Op
+	typ                     string
+	id                      *uuid.UUID
+	created_at              *time.Time
+	updated_at              *time.Time
+	builtin_key             *string
+	name                    *string
+	condition_summary       *string
+	condition               *map[string]interface{}
+	action_template         *string
+	action_params           *map[string]interface{}
+	tier                    *standingrule.Tier
+	group_id                *uuid.UUID
+	asset_ids               *[]uuid.UUID
+	appendasset_ids         []uuid.UUID
+	maintenance_window      *string
+	cooldown_minutes        *int
+	addcooldown_minutes     *int
+	created_by              *string
+	enabled                 *bool
+	consecutive_failures    *int
+	addconsecutive_failures *int
+	degraded_at             *time.Time
+	degraded_reason         *string
+	last_run_at             *time.Time
+	last_run_status         *string
+	clearedFields           map[string]struct{}
+	done                    bool
+	oldValue                func(context.Context) (*StandingRule, error)
+	predicates              []predicate.StandingRule
+}
+
+var _ ent.Mutation = (*StandingRuleMutation)(nil)
+
+// standingruleOption allows management of the mutation configuration using functional options.
+type standingruleOption func(*StandingRuleMutation)
+
+// newStandingRuleMutation creates new mutation for the StandingRule entity.
+func newStandingRuleMutation(c config, op Op, opts ...standingruleOption) *StandingRuleMutation {
+	m := &StandingRuleMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeStandingRule,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withStandingRuleID sets the ID field of the mutation.
+func withStandingRuleID(id uuid.UUID) standingruleOption {
+	return func(m *StandingRuleMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *StandingRule
+		)
+		m.oldValue = func(ctx context.Context) (*StandingRule, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().StandingRule.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withStandingRule sets the old StandingRule of the mutation.
+func withStandingRule(node *StandingRule) standingruleOption {
+	return func(m *StandingRuleMutation) {
+		m.oldValue = func(context.Context) (*StandingRule, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m StandingRuleMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m StandingRuleMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of StandingRule entities.
+func (m *StandingRuleMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *StandingRuleMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *StandingRuleMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().StandingRule.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *StandingRuleMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *StandingRuleMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *StandingRuleMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *StandingRuleMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *StandingRuleMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *StandingRuleMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetBuiltinKey sets the "builtin_key" field.
+func (m *StandingRuleMutation) SetBuiltinKey(s string) {
+	m.builtin_key = &s
+}
+
+// BuiltinKey returns the value of the "builtin_key" field in the mutation.
+func (m *StandingRuleMutation) BuiltinKey() (r string, exists bool) {
+	v := m.builtin_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBuiltinKey returns the old "builtin_key" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldBuiltinKey(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBuiltinKey is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBuiltinKey requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBuiltinKey: %w", err)
+	}
+	return oldValue.BuiltinKey, nil
+}
+
+// ResetBuiltinKey resets all changes to the "builtin_key" field.
+func (m *StandingRuleMutation) ResetBuiltinKey() {
+	m.builtin_key = nil
+}
+
+// SetName sets the "name" field.
+func (m *StandingRuleMutation) SetName(s string) {
+	m.name = &s
+}
+
+// Name returns the value of the "name" field in the mutation.
+func (m *StandingRuleMutation) Name() (r string, exists bool) {
+	v := m.name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldName returns the old "name" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldName: %w", err)
+	}
+	return oldValue.Name, nil
+}
+
+// ResetName resets all changes to the "name" field.
+func (m *StandingRuleMutation) ResetName() {
+	m.name = nil
+}
+
+// SetConditionSummary sets the "condition_summary" field.
+func (m *StandingRuleMutation) SetConditionSummary(s string) {
+	m.condition_summary = &s
+}
+
+// ConditionSummary returns the value of the "condition_summary" field in the mutation.
+func (m *StandingRuleMutation) ConditionSummary() (r string, exists bool) {
+	v := m.condition_summary
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConditionSummary returns the old "condition_summary" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldConditionSummary(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConditionSummary is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConditionSummary requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConditionSummary: %w", err)
+	}
+	return oldValue.ConditionSummary, nil
+}
+
+// ResetConditionSummary resets all changes to the "condition_summary" field.
+func (m *StandingRuleMutation) ResetConditionSummary() {
+	m.condition_summary = nil
+}
+
+// SetCondition sets the "condition" field.
+func (m *StandingRuleMutation) SetCondition(value map[string]interface{}) {
+	m.condition = &value
+}
+
+// Condition returns the value of the "condition" field in the mutation.
+func (m *StandingRuleMutation) Condition() (r map[string]interface{}, exists bool) {
+	v := m.condition
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCondition returns the old "condition" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldCondition(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCondition is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCondition requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCondition: %w", err)
+	}
+	return oldValue.Condition, nil
+}
+
+// ClearCondition clears the value of the "condition" field.
+func (m *StandingRuleMutation) ClearCondition() {
+	m.condition = nil
+	m.clearedFields[standingrule.FieldCondition] = struct{}{}
+}
+
+// ConditionCleared returns if the "condition" field was cleared in this mutation.
+func (m *StandingRuleMutation) ConditionCleared() bool {
+	_, ok := m.clearedFields[standingrule.FieldCondition]
+	return ok
+}
+
+// ResetCondition resets all changes to the "condition" field.
+func (m *StandingRuleMutation) ResetCondition() {
+	m.condition = nil
+	delete(m.clearedFields, standingrule.FieldCondition)
+}
+
+// SetActionTemplate sets the "action_template" field.
+func (m *StandingRuleMutation) SetActionTemplate(s string) {
+	m.action_template = &s
+}
+
+// ActionTemplate returns the value of the "action_template" field in the mutation.
+func (m *StandingRuleMutation) ActionTemplate() (r string, exists bool) {
+	v := m.action_template
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldActionTemplate returns the old "action_template" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldActionTemplate(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldActionTemplate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldActionTemplate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldActionTemplate: %w", err)
+	}
+	return oldValue.ActionTemplate, nil
+}
+
+// ResetActionTemplate resets all changes to the "action_template" field.
+func (m *StandingRuleMutation) ResetActionTemplate() {
+	m.action_template = nil
+}
+
+// SetActionParams sets the "action_params" field.
+func (m *StandingRuleMutation) SetActionParams(value map[string]interface{}) {
+	m.action_params = &value
+}
+
+// ActionParams returns the value of the "action_params" field in the mutation.
+func (m *StandingRuleMutation) ActionParams() (r map[string]interface{}, exists bool) {
+	v := m.action_params
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldActionParams returns the old "action_params" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldActionParams(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldActionParams is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldActionParams requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldActionParams: %w", err)
+	}
+	return oldValue.ActionParams, nil
+}
+
+// ClearActionParams clears the value of the "action_params" field.
+func (m *StandingRuleMutation) ClearActionParams() {
+	m.action_params = nil
+	m.clearedFields[standingrule.FieldActionParams] = struct{}{}
+}
+
+// ActionParamsCleared returns if the "action_params" field was cleared in this mutation.
+func (m *StandingRuleMutation) ActionParamsCleared() bool {
+	_, ok := m.clearedFields[standingrule.FieldActionParams]
+	return ok
+}
+
+// ResetActionParams resets all changes to the "action_params" field.
+func (m *StandingRuleMutation) ResetActionParams() {
+	m.action_params = nil
+	delete(m.clearedFields, standingrule.FieldActionParams)
+}
+
+// SetTier sets the "tier" field.
+func (m *StandingRuleMutation) SetTier(s standingrule.Tier) {
+	m.tier = &s
+}
+
+// Tier returns the value of the "tier" field in the mutation.
+func (m *StandingRuleMutation) Tier() (r standingrule.Tier, exists bool) {
+	v := m.tier
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTier returns the old "tier" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldTier(ctx context.Context) (v standingrule.Tier, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTier is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTier requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTier: %w", err)
+	}
+	return oldValue.Tier, nil
+}
+
+// ResetTier resets all changes to the "tier" field.
+func (m *StandingRuleMutation) ResetTier() {
+	m.tier = nil
+}
+
+// SetGroupID sets the "group_id" field.
+func (m *StandingRuleMutation) SetGroupID(u uuid.UUID) {
+	m.group_id = &u
+}
+
+// GroupID returns the value of the "group_id" field in the mutation.
+func (m *StandingRuleMutation) GroupID() (r uuid.UUID, exists bool) {
+	v := m.group_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGroupID returns the old "group_id" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldGroupID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGroupID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGroupID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGroupID: %w", err)
+	}
+	return oldValue.GroupID, nil
+}
+
+// ClearGroupID clears the value of the "group_id" field.
+func (m *StandingRuleMutation) ClearGroupID() {
+	m.group_id = nil
+	m.clearedFields[standingrule.FieldGroupID] = struct{}{}
+}
+
+// GroupIDCleared returns if the "group_id" field was cleared in this mutation.
+func (m *StandingRuleMutation) GroupIDCleared() bool {
+	_, ok := m.clearedFields[standingrule.FieldGroupID]
+	return ok
+}
+
+// ResetGroupID resets all changes to the "group_id" field.
+func (m *StandingRuleMutation) ResetGroupID() {
+	m.group_id = nil
+	delete(m.clearedFields, standingrule.FieldGroupID)
+}
+
+// SetAssetIds sets the "asset_ids" field.
+func (m *StandingRuleMutation) SetAssetIds(u []uuid.UUID) {
+	m.asset_ids = &u
+	m.appendasset_ids = nil
+}
+
+// AssetIds returns the value of the "asset_ids" field in the mutation.
+func (m *StandingRuleMutation) AssetIds() (r []uuid.UUID, exists bool) {
+	v := m.asset_ids
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAssetIds returns the old "asset_ids" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldAssetIds(ctx context.Context) (v []uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAssetIds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAssetIds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAssetIds: %w", err)
+	}
+	return oldValue.AssetIds, nil
+}
+
+// AppendAssetIds adds u to the "asset_ids" field.
+func (m *StandingRuleMutation) AppendAssetIds(u []uuid.UUID) {
+	m.appendasset_ids = append(m.appendasset_ids, u...)
+}
+
+// AppendedAssetIds returns the list of values that were appended to the "asset_ids" field in this mutation.
+func (m *StandingRuleMutation) AppendedAssetIds() ([]uuid.UUID, bool) {
+	if len(m.appendasset_ids) == 0 {
+		return nil, false
+	}
+	return m.appendasset_ids, true
+}
+
+// ClearAssetIds clears the value of the "asset_ids" field.
+func (m *StandingRuleMutation) ClearAssetIds() {
+	m.asset_ids = nil
+	m.appendasset_ids = nil
+	m.clearedFields[standingrule.FieldAssetIds] = struct{}{}
+}
+
+// AssetIdsCleared returns if the "asset_ids" field was cleared in this mutation.
+func (m *StandingRuleMutation) AssetIdsCleared() bool {
+	_, ok := m.clearedFields[standingrule.FieldAssetIds]
+	return ok
+}
+
+// ResetAssetIds resets all changes to the "asset_ids" field.
+func (m *StandingRuleMutation) ResetAssetIds() {
+	m.asset_ids = nil
+	m.appendasset_ids = nil
+	delete(m.clearedFields, standingrule.FieldAssetIds)
+}
+
+// SetMaintenanceWindow sets the "maintenance_window" field.
+func (m *StandingRuleMutation) SetMaintenanceWindow(s string) {
+	m.maintenance_window = &s
+}
+
+// MaintenanceWindow returns the value of the "maintenance_window" field in the mutation.
+func (m *StandingRuleMutation) MaintenanceWindow() (r string, exists bool) {
+	v := m.maintenance_window
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMaintenanceWindow returns the old "maintenance_window" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldMaintenanceWindow(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMaintenanceWindow is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMaintenanceWindow requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMaintenanceWindow: %w", err)
+	}
+	return oldValue.MaintenanceWindow, nil
+}
+
+// ResetMaintenanceWindow resets all changes to the "maintenance_window" field.
+func (m *StandingRuleMutation) ResetMaintenanceWindow() {
+	m.maintenance_window = nil
+}
+
+// SetCooldownMinutes sets the "cooldown_minutes" field.
+func (m *StandingRuleMutation) SetCooldownMinutes(i int) {
+	m.cooldown_minutes = &i
+	m.addcooldown_minutes = nil
+}
+
+// CooldownMinutes returns the value of the "cooldown_minutes" field in the mutation.
+func (m *StandingRuleMutation) CooldownMinutes() (r int, exists bool) {
+	v := m.cooldown_minutes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCooldownMinutes returns the old "cooldown_minutes" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldCooldownMinutes(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCooldownMinutes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCooldownMinutes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCooldownMinutes: %w", err)
+	}
+	return oldValue.CooldownMinutes, nil
+}
+
+// AddCooldownMinutes adds i to the "cooldown_minutes" field.
+func (m *StandingRuleMutation) AddCooldownMinutes(i int) {
+	if m.addcooldown_minutes != nil {
+		*m.addcooldown_minutes += i
+	} else {
+		m.addcooldown_minutes = &i
+	}
+}
+
+// AddedCooldownMinutes returns the value that was added to the "cooldown_minutes" field in this mutation.
+func (m *StandingRuleMutation) AddedCooldownMinutes() (r int, exists bool) {
+	v := m.addcooldown_minutes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCooldownMinutes resets all changes to the "cooldown_minutes" field.
+func (m *StandingRuleMutation) ResetCooldownMinutes() {
+	m.cooldown_minutes = nil
+	m.addcooldown_minutes = nil
+}
+
+// SetCreatedBy sets the "created_by" field.
+func (m *StandingRuleMutation) SetCreatedBy(s string) {
+	m.created_by = &s
+}
+
+// CreatedBy returns the value of the "created_by" field in the mutation.
+func (m *StandingRuleMutation) CreatedBy() (r string, exists bool) {
+	v := m.created_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedBy returns the old "created_by" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldCreatedBy(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedBy: %w", err)
+	}
+	return oldValue.CreatedBy, nil
+}
+
+// ResetCreatedBy resets all changes to the "created_by" field.
+func (m *StandingRuleMutation) ResetCreatedBy() {
+	m.created_by = nil
+}
+
+// SetEnabled sets the "enabled" field.
+func (m *StandingRuleMutation) SetEnabled(b bool) {
+	m.enabled = &b
+}
+
+// Enabled returns the value of the "enabled" field in the mutation.
+func (m *StandingRuleMutation) Enabled() (r bool, exists bool) {
+	v := m.enabled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEnabled returns the old "enabled" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldEnabled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEnabled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEnabled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEnabled: %w", err)
+	}
+	return oldValue.Enabled, nil
+}
+
+// ResetEnabled resets all changes to the "enabled" field.
+func (m *StandingRuleMutation) ResetEnabled() {
+	m.enabled = nil
+}
+
+// SetConsecutiveFailures sets the "consecutive_failures" field.
+func (m *StandingRuleMutation) SetConsecutiveFailures(i int) {
+	m.consecutive_failures = &i
+	m.addconsecutive_failures = nil
+}
+
+// ConsecutiveFailures returns the value of the "consecutive_failures" field in the mutation.
+func (m *StandingRuleMutation) ConsecutiveFailures() (r int, exists bool) {
+	v := m.consecutive_failures
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConsecutiveFailures returns the old "consecutive_failures" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldConsecutiveFailures(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConsecutiveFailures is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConsecutiveFailures requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConsecutiveFailures: %w", err)
+	}
+	return oldValue.ConsecutiveFailures, nil
+}
+
+// AddConsecutiveFailures adds i to the "consecutive_failures" field.
+func (m *StandingRuleMutation) AddConsecutiveFailures(i int) {
+	if m.addconsecutive_failures != nil {
+		*m.addconsecutive_failures += i
+	} else {
+		m.addconsecutive_failures = &i
+	}
+}
+
+// AddedConsecutiveFailures returns the value that was added to the "consecutive_failures" field in this mutation.
+func (m *StandingRuleMutation) AddedConsecutiveFailures() (r int, exists bool) {
+	v := m.addconsecutive_failures
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetConsecutiveFailures resets all changes to the "consecutive_failures" field.
+func (m *StandingRuleMutation) ResetConsecutiveFailures() {
+	m.consecutive_failures = nil
+	m.addconsecutive_failures = nil
+}
+
+// SetDegradedAt sets the "degraded_at" field.
+func (m *StandingRuleMutation) SetDegradedAt(t time.Time) {
+	m.degraded_at = &t
+}
+
+// DegradedAt returns the value of the "degraded_at" field in the mutation.
+func (m *StandingRuleMutation) DegradedAt() (r time.Time, exists bool) {
+	v := m.degraded_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDegradedAt returns the old "degraded_at" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldDegradedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDegradedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDegradedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDegradedAt: %w", err)
+	}
+	return oldValue.DegradedAt, nil
+}
+
+// ClearDegradedAt clears the value of the "degraded_at" field.
+func (m *StandingRuleMutation) ClearDegradedAt() {
+	m.degraded_at = nil
+	m.clearedFields[standingrule.FieldDegradedAt] = struct{}{}
+}
+
+// DegradedAtCleared returns if the "degraded_at" field was cleared in this mutation.
+func (m *StandingRuleMutation) DegradedAtCleared() bool {
+	_, ok := m.clearedFields[standingrule.FieldDegradedAt]
+	return ok
+}
+
+// ResetDegradedAt resets all changes to the "degraded_at" field.
+func (m *StandingRuleMutation) ResetDegradedAt() {
+	m.degraded_at = nil
+	delete(m.clearedFields, standingrule.FieldDegradedAt)
+}
+
+// SetDegradedReason sets the "degraded_reason" field.
+func (m *StandingRuleMutation) SetDegradedReason(s string) {
+	m.degraded_reason = &s
+}
+
+// DegradedReason returns the value of the "degraded_reason" field in the mutation.
+func (m *StandingRuleMutation) DegradedReason() (r string, exists bool) {
+	v := m.degraded_reason
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDegradedReason returns the old "degraded_reason" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldDegradedReason(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDegradedReason is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDegradedReason requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDegradedReason: %w", err)
+	}
+	return oldValue.DegradedReason, nil
+}
+
+// ResetDegradedReason resets all changes to the "degraded_reason" field.
+func (m *StandingRuleMutation) ResetDegradedReason() {
+	m.degraded_reason = nil
+}
+
+// SetLastRunAt sets the "last_run_at" field.
+func (m *StandingRuleMutation) SetLastRunAt(t time.Time) {
+	m.last_run_at = &t
+}
+
+// LastRunAt returns the value of the "last_run_at" field in the mutation.
+func (m *StandingRuleMutation) LastRunAt() (r time.Time, exists bool) {
+	v := m.last_run_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastRunAt returns the old "last_run_at" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldLastRunAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastRunAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastRunAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastRunAt: %w", err)
+	}
+	return oldValue.LastRunAt, nil
+}
+
+// ClearLastRunAt clears the value of the "last_run_at" field.
+func (m *StandingRuleMutation) ClearLastRunAt() {
+	m.last_run_at = nil
+	m.clearedFields[standingrule.FieldLastRunAt] = struct{}{}
+}
+
+// LastRunAtCleared returns if the "last_run_at" field was cleared in this mutation.
+func (m *StandingRuleMutation) LastRunAtCleared() bool {
+	_, ok := m.clearedFields[standingrule.FieldLastRunAt]
+	return ok
+}
+
+// ResetLastRunAt resets all changes to the "last_run_at" field.
+func (m *StandingRuleMutation) ResetLastRunAt() {
+	m.last_run_at = nil
+	delete(m.clearedFields, standingrule.FieldLastRunAt)
+}
+
+// SetLastRunStatus sets the "last_run_status" field.
+func (m *StandingRuleMutation) SetLastRunStatus(s string) {
+	m.last_run_status = &s
+}
+
+// LastRunStatus returns the value of the "last_run_status" field in the mutation.
+func (m *StandingRuleMutation) LastRunStatus() (r string, exists bool) {
+	v := m.last_run_status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastRunStatus returns the old "last_run_status" field's value of the StandingRule entity.
+// If the StandingRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleMutation) OldLastRunStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastRunStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastRunStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastRunStatus: %w", err)
+	}
+	return oldValue.LastRunStatus, nil
+}
+
+// ResetLastRunStatus resets all changes to the "last_run_status" field.
+func (m *StandingRuleMutation) ResetLastRunStatus() {
+	m.last_run_status = nil
+}
+
+// Where appends a list predicates to the StandingRuleMutation builder.
+func (m *StandingRuleMutation) Where(ps ...predicate.StandingRule) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the StandingRuleMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *StandingRuleMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.StandingRule, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *StandingRuleMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *StandingRuleMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (StandingRule).
+func (m *StandingRuleMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *StandingRuleMutation) Fields() []string {
+	fields := make([]string, 0, 20)
+	if m.created_at != nil {
+		fields = append(fields, standingrule.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, standingrule.FieldUpdatedAt)
+	}
+	if m.builtin_key != nil {
+		fields = append(fields, standingrule.FieldBuiltinKey)
+	}
+	if m.name != nil {
+		fields = append(fields, standingrule.FieldName)
+	}
+	if m.condition_summary != nil {
+		fields = append(fields, standingrule.FieldConditionSummary)
+	}
+	if m.condition != nil {
+		fields = append(fields, standingrule.FieldCondition)
+	}
+	if m.action_template != nil {
+		fields = append(fields, standingrule.FieldActionTemplate)
+	}
+	if m.action_params != nil {
+		fields = append(fields, standingrule.FieldActionParams)
+	}
+	if m.tier != nil {
+		fields = append(fields, standingrule.FieldTier)
+	}
+	if m.group_id != nil {
+		fields = append(fields, standingrule.FieldGroupID)
+	}
+	if m.asset_ids != nil {
+		fields = append(fields, standingrule.FieldAssetIds)
+	}
+	if m.maintenance_window != nil {
+		fields = append(fields, standingrule.FieldMaintenanceWindow)
+	}
+	if m.cooldown_minutes != nil {
+		fields = append(fields, standingrule.FieldCooldownMinutes)
+	}
+	if m.created_by != nil {
+		fields = append(fields, standingrule.FieldCreatedBy)
+	}
+	if m.enabled != nil {
+		fields = append(fields, standingrule.FieldEnabled)
+	}
+	if m.consecutive_failures != nil {
+		fields = append(fields, standingrule.FieldConsecutiveFailures)
+	}
+	if m.degraded_at != nil {
+		fields = append(fields, standingrule.FieldDegradedAt)
+	}
+	if m.degraded_reason != nil {
+		fields = append(fields, standingrule.FieldDegradedReason)
+	}
+	if m.last_run_at != nil {
+		fields = append(fields, standingrule.FieldLastRunAt)
+	}
+	if m.last_run_status != nil {
+		fields = append(fields, standingrule.FieldLastRunStatus)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *StandingRuleMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case standingrule.FieldCreatedAt:
+		return m.CreatedAt()
+	case standingrule.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case standingrule.FieldBuiltinKey:
+		return m.BuiltinKey()
+	case standingrule.FieldName:
+		return m.Name()
+	case standingrule.FieldConditionSummary:
+		return m.ConditionSummary()
+	case standingrule.FieldCondition:
+		return m.Condition()
+	case standingrule.FieldActionTemplate:
+		return m.ActionTemplate()
+	case standingrule.FieldActionParams:
+		return m.ActionParams()
+	case standingrule.FieldTier:
+		return m.Tier()
+	case standingrule.FieldGroupID:
+		return m.GroupID()
+	case standingrule.FieldAssetIds:
+		return m.AssetIds()
+	case standingrule.FieldMaintenanceWindow:
+		return m.MaintenanceWindow()
+	case standingrule.FieldCooldownMinutes:
+		return m.CooldownMinutes()
+	case standingrule.FieldCreatedBy:
+		return m.CreatedBy()
+	case standingrule.FieldEnabled:
+		return m.Enabled()
+	case standingrule.FieldConsecutiveFailures:
+		return m.ConsecutiveFailures()
+	case standingrule.FieldDegradedAt:
+		return m.DegradedAt()
+	case standingrule.FieldDegradedReason:
+		return m.DegradedReason()
+	case standingrule.FieldLastRunAt:
+		return m.LastRunAt()
+	case standingrule.FieldLastRunStatus:
+		return m.LastRunStatus()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *StandingRuleMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case standingrule.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case standingrule.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case standingrule.FieldBuiltinKey:
+		return m.OldBuiltinKey(ctx)
+	case standingrule.FieldName:
+		return m.OldName(ctx)
+	case standingrule.FieldConditionSummary:
+		return m.OldConditionSummary(ctx)
+	case standingrule.FieldCondition:
+		return m.OldCondition(ctx)
+	case standingrule.FieldActionTemplate:
+		return m.OldActionTemplate(ctx)
+	case standingrule.FieldActionParams:
+		return m.OldActionParams(ctx)
+	case standingrule.FieldTier:
+		return m.OldTier(ctx)
+	case standingrule.FieldGroupID:
+		return m.OldGroupID(ctx)
+	case standingrule.FieldAssetIds:
+		return m.OldAssetIds(ctx)
+	case standingrule.FieldMaintenanceWindow:
+		return m.OldMaintenanceWindow(ctx)
+	case standingrule.FieldCooldownMinutes:
+		return m.OldCooldownMinutes(ctx)
+	case standingrule.FieldCreatedBy:
+		return m.OldCreatedBy(ctx)
+	case standingrule.FieldEnabled:
+		return m.OldEnabled(ctx)
+	case standingrule.FieldConsecutiveFailures:
+		return m.OldConsecutiveFailures(ctx)
+	case standingrule.FieldDegradedAt:
+		return m.OldDegradedAt(ctx)
+	case standingrule.FieldDegradedReason:
+		return m.OldDegradedReason(ctx)
+	case standingrule.FieldLastRunAt:
+		return m.OldLastRunAt(ctx)
+	case standingrule.FieldLastRunStatus:
+		return m.OldLastRunStatus(ctx)
+	}
+	return nil, fmt.Errorf("unknown StandingRule field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *StandingRuleMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case standingrule.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case standingrule.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case standingrule.FieldBuiltinKey:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBuiltinKey(v)
+		return nil
+	case standingrule.FieldName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetName(v)
+		return nil
+	case standingrule.FieldConditionSummary:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConditionSummary(v)
+		return nil
+	case standingrule.FieldCondition:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCondition(v)
+		return nil
+	case standingrule.FieldActionTemplate:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetActionTemplate(v)
+		return nil
+	case standingrule.FieldActionParams:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetActionParams(v)
+		return nil
+	case standingrule.FieldTier:
+		v, ok := value.(standingrule.Tier)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTier(v)
+		return nil
+	case standingrule.FieldGroupID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGroupID(v)
+		return nil
+	case standingrule.FieldAssetIds:
+		v, ok := value.([]uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAssetIds(v)
+		return nil
+	case standingrule.FieldMaintenanceWindow:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMaintenanceWindow(v)
+		return nil
+	case standingrule.FieldCooldownMinutes:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCooldownMinutes(v)
+		return nil
+	case standingrule.FieldCreatedBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedBy(v)
+		return nil
+	case standingrule.FieldEnabled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEnabled(v)
+		return nil
+	case standingrule.FieldConsecutiveFailures:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConsecutiveFailures(v)
+		return nil
+	case standingrule.FieldDegradedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDegradedAt(v)
+		return nil
+	case standingrule.FieldDegradedReason:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDegradedReason(v)
+		return nil
+	case standingrule.FieldLastRunAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastRunAt(v)
+		return nil
+	case standingrule.FieldLastRunStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastRunStatus(v)
+		return nil
+	}
+	return fmt.Errorf("unknown StandingRule field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *StandingRuleMutation) AddedFields() []string {
+	var fields []string
+	if m.addcooldown_minutes != nil {
+		fields = append(fields, standingrule.FieldCooldownMinutes)
+	}
+	if m.addconsecutive_failures != nil {
+		fields = append(fields, standingrule.FieldConsecutiveFailures)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *StandingRuleMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case standingrule.FieldCooldownMinutes:
+		return m.AddedCooldownMinutes()
+	case standingrule.FieldConsecutiveFailures:
+		return m.AddedConsecutiveFailures()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *StandingRuleMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case standingrule.FieldCooldownMinutes:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCooldownMinutes(v)
+		return nil
+	case standingrule.FieldConsecutiveFailures:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddConsecutiveFailures(v)
+		return nil
+	}
+	return fmt.Errorf("unknown StandingRule numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *StandingRuleMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(standingrule.FieldCondition) {
+		fields = append(fields, standingrule.FieldCondition)
+	}
+	if m.FieldCleared(standingrule.FieldActionParams) {
+		fields = append(fields, standingrule.FieldActionParams)
+	}
+	if m.FieldCleared(standingrule.FieldGroupID) {
+		fields = append(fields, standingrule.FieldGroupID)
+	}
+	if m.FieldCleared(standingrule.FieldAssetIds) {
+		fields = append(fields, standingrule.FieldAssetIds)
+	}
+	if m.FieldCleared(standingrule.FieldDegradedAt) {
+		fields = append(fields, standingrule.FieldDegradedAt)
+	}
+	if m.FieldCleared(standingrule.FieldLastRunAt) {
+		fields = append(fields, standingrule.FieldLastRunAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *StandingRuleMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *StandingRuleMutation) ClearField(name string) error {
+	switch name {
+	case standingrule.FieldCondition:
+		m.ClearCondition()
+		return nil
+	case standingrule.FieldActionParams:
+		m.ClearActionParams()
+		return nil
+	case standingrule.FieldGroupID:
+		m.ClearGroupID()
+		return nil
+	case standingrule.FieldAssetIds:
+		m.ClearAssetIds()
+		return nil
+	case standingrule.FieldDegradedAt:
+		m.ClearDegradedAt()
+		return nil
+	case standingrule.FieldLastRunAt:
+		m.ClearLastRunAt()
+		return nil
+	}
+	return fmt.Errorf("unknown StandingRule nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *StandingRuleMutation) ResetField(name string) error {
+	switch name {
+	case standingrule.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case standingrule.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case standingrule.FieldBuiltinKey:
+		m.ResetBuiltinKey()
+		return nil
+	case standingrule.FieldName:
+		m.ResetName()
+		return nil
+	case standingrule.FieldConditionSummary:
+		m.ResetConditionSummary()
+		return nil
+	case standingrule.FieldCondition:
+		m.ResetCondition()
+		return nil
+	case standingrule.FieldActionTemplate:
+		m.ResetActionTemplate()
+		return nil
+	case standingrule.FieldActionParams:
+		m.ResetActionParams()
+		return nil
+	case standingrule.FieldTier:
+		m.ResetTier()
+		return nil
+	case standingrule.FieldGroupID:
+		m.ResetGroupID()
+		return nil
+	case standingrule.FieldAssetIds:
+		m.ResetAssetIds()
+		return nil
+	case standingrule.FieldMaintenanceWindow:
+		m.ResetMaintenanceWindow()
+		return nil
+	case standingrule.FieldCooldownMinutes:
+		m.ResetCooldownMinutes()
+		return nil
+	case standingrule.FieldCreatedBy:
+		m.ResetCreatedBy()
+		return nil
+	case standingrule.FieldEnabled:
+		m.ResetEnabled()
+		return nil
+	case standingrule.FieldConsecutiveFailures:
+		m.ResetConsecutiveFailures()
+		return nil
+	case standingrule.FieldDegradedAt:
+		m.ResetDegradedAt()
+		return nil
+	case standingrule.FieldDegradedReason:
+		m.ResetDegradedReason()
+		return nil
+	case standingrule.FieldLastRunAt:
+		m.ResetLastRunAt()
+		return nil
+	case standingrule.FieldLastRunStatus:
+		m.ResetLastRunStatus()
+		return nil
+	}
+	return fmt.Errorf("unknown StandingRule field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *StandingRuleMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *StandingRuleMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *StandingRuleMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *StandingRuleMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *StandingRuleMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *StandingRuleMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *StandingRuleMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown StandingRule unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *StandingRuleMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown StandingRule edge %s", name)
+}
+
+// StandingRuleRunMutation represents an operation that mutates the StandingRuleRun nodes in the graph.
+type StandingRuleRunMutation struct {
+	config
+	op                 Op
+	typ                string
+	id                 *uuid.UUID
+	created_at         *time.Time
+	updated_at         *time.Time
+	rule_id            *uuid.UUID
+	group_id           *uuid.UUID
+	asset_id           *uuid.UUID
+	finding_id         *uuid.UUID
+	finding_first_seen *time.Time
+	tier               *string
+	status             *standingrulerun.Status
+	hit_summary        *string
+	command            *string
+	command_id         *uuid.UUID
+	approval_id        *uuid.UUID
+	reservation_id     *uuid.UUID
+	result             *string
+	rollback           *string
+	completed_at       *time.Time
+	clearedFields      map[string]struct{}
+	done               bool
+	oldValue           func(context.Context) (*StandingRuleRun, error)
+	predicates         []predicate.StandingRuleRun
+}
+
+var _ ent.Mutation = (*StandingRuleRunMutation)(nil)
+
+// standingrulerunOption allows management of the mutation configuration using functional options.
+type standingrulerunOption func(*StandingRuleRunMutation)
+
+// newStandingRuleRunMutation creates new mutation for the StandingRuleRun entity.
+func newStandingRuleRunMutation(c config, op Op, opts ...standingrulerunOption) *StandingRuleRunMutation {
+	m := &StandingRuleRunMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeStandingRuleRun,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withStandingRuleRunID sets the ID field of the mutation.
+func withStandingRuleRunID(id uuid.UUID) standingrulerunOption {
+	return func(m *StandingRuleRunMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *StandingRuleRun
+		)
+		m.oldValue = func(ctx context.Context) (*StandingRuleRun, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().StandingRuleRun.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withStandingRuleRun sets the old StandingRuleRun of the mutation.
+func withStandingRuleRun(node *StandingRuleRun) standingrulerunOption {
+	return func(m *StandingRuleRunMutation) {
+		m.oldValue = func(context.Context) (*StandingRuleRun, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m StandingRuleRunMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m StandingRuleRunMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of StandingRuleRun entities.
+func (m *StandingRuleRunMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *StandingRuleRunMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *StandingRuleRunMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().StandingRuleRun.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *StandingRuleRunMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *StandingRuleRunMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *StandingRuleRunMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *StandingRuleRunMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *StandingRuleRunMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *StandingRuleRunMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetRuleID sets the "rule_id" field.
+func (m *StandingRuleRunMutation) SetRuleID(u uuid.UUID) {
+	m.rule_id = &u
+}
+
+// RuleID returns the value of the "rule_id" field in the mutation.
+func (m *StandingRuleRunMutation) RuleID() (r uuid.UUID, exists bool) {
+	v := m.rule_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRuleID returns the old "rule_id" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldRuleID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRuleID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRuleID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRuleID: %w", err)
+	}
+	return oldValue.RuleID, nil
+}
+
+// ResetRuleID resets all changes to the "rule_id" field.
+func (m *StandingRuleRunMutation) ResetRuleID() {
+	m.rule_id = nil
+}
+
+// SetGroupID sets the "group_id" field.
+func (m *StandingRuleRunMutation) SetGroupID(u uuid.UUID) {
+	m.group_id = &u
+}
+
+// GroupID returns the value of the "group_id" field in the mutation.
+func (m *StandingRuleRunMutation) GroupID() (r uuid.UUID, exists bool) {
+	v := m.group_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGroupID returns the old "group_id" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldGroupID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGroupID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGroupID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGroupID: %w", err)
+	}
+	return oldValue.GroupID, nil
+}
+
+// ResetGroupID resets all changes to the "group_id" field.
+func (m *StandingRuleRunMutation) ResetGroupID() {
+	m.group_id = nil
+}
+
+// SetAssetID sets the "asset_id" field.
+func (m *StandingRuleRunMutation) SetAssetID(u uuid.UUID) {
+	m.asset_id = &u
+}
+
+// AssetID returns the value of the "asset_id" field in the mutation.
+func (m *StandingRuleRunMutation) AssetID() (r uuid.UUID, exists bool) {
+	v := m.asset_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAssetID returns the old "asset_id" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldAssetID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAssetID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAssetID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAssetID: %w", err)
+	}
+	return oldValue.AssetID, nil
+}
+
+// ResetAssetID resets all changes to the "asset_id" field.
+func (m *StandingRuleRunMutation) ResetAssetID() {
+	m.asset_id = nil
+}
+
+// SetFindingID sets the "finding_id" field.
+func (m *StandingRuleRunMutation) SetFindingID(u uuid.UUID) {
+	m.finding_id = &u
+}
+
+// FindingID returns the value of the "finding_id" field in the mutation.
+func (m *StandingRuleRunMutation) FindingID() (r uuid.UUID, exists bool) {
+	v := m.finding_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFindingID returns the old "finding_id" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldFindingID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFindingID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFindingID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFindingID: %w", err)
+	}
+	return oldValue.FindingID, nil
+}
+
+// ClearFindingID clears the value of the "finding_id" field.
+func (m *StandingRuleRunMutation) ClearFindingID() {
+	m.finding_id = nil
+	m.clearedFields[standingrulerun.FieldFindingID] = struct{}{}
+}
+
+// FindingIDCleared returns if the "finding_id" field was cleared in this mutation.
+func (m *StandingRuleRunMutation) FindingIDCleared() bool {
+	_, ok := m.clearedFields[standingrulerun.FieldFindingID]
+	return ok
+}
+
+// ResetFindingID resets all changes to the "finding_id" field.
+func (m *StandingRuleRunMutation) ResetFindingID() {
+	m.finding_id = nil
+	delete(m.clearedFields, standingrulerun.FieldFindingID)
+}
+
+// SetFindingFirstSeen sets the "finding_first_seen" field.
+func (m *StandingRuleRunMutation) SetFindingFirstSeen(t time.Time) {
+	m.finding_first_seen = &t
+}
+
+// FindingFirstSeen returns the value of the "finding_first_seen" field in the mutation.
+func (m *StandingRuleRunMutation) FindingFirstSeen() (r time.Time, exists bool) {
+	v := m.finding_first_seen
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFindingFirstSeen returns the old "finding_first_seen" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldFindingFirstSeen(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFindingFirstSeen is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFindingFirstSeen requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFindingFirstSeen: %w", err)
+	}
+	return oldValue.FindingFirstSeen, nil
+}
+
+// ClearFindingFirstSeen clears the value of the "finding_first_seen" field.
+func (m *StandingRuleRunMutation) ClearFindingFirstSeen() {
+	m.finding_first_seen = nil
+	m.clearedFields[standingrulerun.FieldFindingFirstSeen] = struct{}{}
+}
+
+// FindingFirstSeenCleared returns if the "finding_first_seen" field was cleared in this mutation.
+func (m *StandingRuleRunMutation) FindingFirstSeenCleared() bool {
+	_, ok := m.clearedFields[standingrulerun.FieldFindingFirstSeen]
+	return ok
+}
+
+// ResetFindingFirstSeen resets all changes to the "finding_first_seen" field.
+func (m *StandingRuleRunMutation) ResetFindingFirstSeen() {
+	m.finding_first_seen = nil
+	delete(m.clearedFields, standingrulerun.FieldFindingFirstSeen)
+}
+
+// SetTier sets the "tier" field.
+func (m *StandingRuleRunMutation) SetTier(s string) {
+	m.tier = &s
+}
+
+// Tier returns the value of the "tier" field in the mutation.
+func (m *StandingRuleRunMutation) Tier() (r string, exists bool) {
+	v := m.tier
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTier returns the old "tier" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldTier(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTier is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTier requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTier: %w", err)
+	}
+	return oldValue.Tier, nil
+}
+
+// ResetTier resets all changes to the "tier" field.
+func (m *StandingRuleRunMutation) ResetTier() {
+	m.tier = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *StandingRuleRunMutation) SetStatus(s standingrulerun.Status) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *StandingRuleRunMutation) Status() (r standingrulerun.Status, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldStatus(ctx context.Context) (v standingrulerun.Status, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *StandingRuleRunMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetHitSummary sets the "hit_summary" field.
+func (m *StandingRuleRunMutation) SetHitSummary(s string) {
+	m.hit_summary = &s
+}
+
+// HitSummary returns the value of the "hit_summary" field in the mutation.
+func (m *StandingRuleRunMutation) HitSummary() (r string, exists bool) {
+	v := m.hit_summary
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHitSummary returns the old "hit_summary" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldHitSummary(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHitSummary is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHitSummary requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHitSummary: %w", err)
+	}
+	return oldValue.HitSummary, nil
+}
+
+// ResetHitSummary resets all changes to the "hit_summary" field.
+func (m *StandingRuleRunMutation) ResetHitSummary() {
+	m.hit_summary = nil
+}
+
+// SetCommand sets the "command" field.
+func (m *StandingRuleRunMutation) SetCommand(s string) {
+	m.command = &s
+}
+
+// Command returns the value of the "command" field in the mutation.
+func (m *StandingRuleRunMutation) Command() (r string, exists bool) {
+	v := m.command
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCommand returns the old "command" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldCommand(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCommand is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCommand requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCommand: %w", err)
+	}
+	return oldValue.Command, nil
+}
+
+// ResetCommand resets all changes to the "command" field.
+func (m *StandingRuleRunMutation) ResetCommand() {
+	m.command = nil
+}
+
+// SetCommandID sets the "command_id" field.
+func (m *StandingRuleRunMutation) SetCommandID(u uuid.UUID) {
+	m.command_id = &u
+}
+
+// CommandID returns the value of the "command_id" field in the mutation.
+func (m *StandingRuleRunMutation) CommandID() (r uuid.UUID, exists bool) {
+	v := m.command_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCommandID returns the old "command_id" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldCommandID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCommandID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCommandID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCommandID: %w", err)
+	}
+	return oldValue.CommandID, nil
+}
+
+// ClearCommandID clears the value of the "command_id" field.
+func (m *StandingRuleRunMutation) ClearCommandID() {
+	m.command_id = nil
+	m.clearedFields[standingrulerun.FieldCommandID] = struct{}{}
+}
+
+// CommandIDCleared returns if the "command_id" field was cleared in this mutation.
+func (m *StandingRuleRunMutation) CommandIDCleared() bool {
+	_, ok := m.clearedFields[standingrulerun.FieldCommandID]
+	return ok
+}
+
+// ResetCommandID resets all changes to the "command_id" field.
+func (m *StandingRuleRunMutation) ResetCommandID() {
+	m.command_id = nil
+	delete(m.clearedFields, standingrulerun.FieldCommandID)
+}
+
+// SetApprovalID sets the "approval_id" field.
+func (m *StandingRuleRunMutation) SetApprovalID(u uuid.UUID) {
+	m.approval_id = &u
+}
+
+// ApprovalID returns the value of the "approval_id" field in the mutation.
+func (m *StandingRuleRunMutation) ApprovalID() (r uuid.UUID, exists bool) {
+	v := m.approval_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldApprovalID returns the old "approval_id" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldApprovalID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldApprovalID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldApprovalID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldApprovalID: %w", err)
+	}
+	return oldValue.ApprovalID, nil
+}
+
+// ClearApprovalID clears the value of the "approval_id" field.
+func (m *StandingRuleRunMutation) ClearApprovalID() {
+	m.approval_id = nil
+	m.clearedFields[standingrulerun.FieldApprovalID] = struct{}{}
+}
+
+// ApprovalIDCleared returns if the "approval_id" field was cleared in this mutation.
+func (m *StandingRuleRunMutation) ApprovalIDCleared() bool {
+	_, ok := m.clearedFields[standingrulerun.FieldApprovalID]
+	return ok
+}
+
+// ResetApprovalID resets all changes to the "approval_id" field.
+func (m *StandingRuleRunMutation) ResetApprovalID() {
+	m.approval_id = nil
+	delete(m.clearedFields, standingrulerun.FieldApprovalID)
+}
+
+// SetReservationID sets the "reservation_id" field.
+func (m *StandingRuleRunMutation) SetReservationID(u uuid.UUID) {
+	m.reservation_id = &u
+}
+
+// ReservationID returns the value of the "reservation_id" field in the mutation.
+func (m *StandingRuleRunMutation) ReservationID() (r uuid.UUID, exists bool) {
+	v := m.reservation_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReservationID returns the old "reservation_id" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldReservationID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReservationID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReservationID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReservationID: %w", err)
+	}
+	return oldValue.ReservationID, nil
+}
+
+// ClearReservationID clears the value of the "reservation_id" field.
+func (m *StandingRuleRunMutation) ClearReservationID() {
+	m.reservation_id = nil
+	m.clearedFields[standingrulerun.FieldReservationID] = struct{}{}
+}
+
+// ReservationIDCleared returns if the "reservation_id" field was cleared in this mutation.
+func (m *StandingRuleRunMutation) ReservationIDCleared() bool {
+	_, ok := m.clearedFields[standingrulerun.FieldReservationID]
+	return ok
+}
+
+// ResetReservationID resets all changes to the "reservation_id" field.
+func (m *StandingRuleRunMutation) ResetReservationID() {
+	m.reservation_id = nil
+	delete(m.clearedFields, standingrulerun.FieldReservationID)
+}
+
+// SetResult sets the "result" field.
+func (m *StandingRuleRunMutation) SetResult(s string) {
+	m.result = &s
+}
+
+// Result returns the value of the "result" field in the mutation.
+func (m *StandingRuleRunMutation) Result() (r string, exists bool) {
+	v := m.result
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResult returns the old "result" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldResult(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResult is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResult requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResult: %w", err)
+	}
+	return oldValue.Result, nil
+}
+
+// ResetResult resets all changes to the "result" field.
+func (m *StandingRuleRunMutation) ResetResult() {
+	m.result = nil
+}
+
+// SetRollback sets the "rollback" field.
+func (m *StandingRuleRunMutation) SetRollback(s string) {
+	m.rollback = &s
+}
+
+// Rollback returns the value of the "rollback" field in the mutation.
+func (m *StandingRuleRunMutation) Rollback() (r string, exists bool) {
+	v := m.rollback
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRollback returns the old "rollback" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldRollback(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRollback is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRollback requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRollback: %w", err)
+	}
+	return oldValue.Rollback, nil
+}
+
+// ResetRollback resets all changes to the "rollback" field.
+func (m *StandingRuleRunMutation) ResetRollback() {
+	m.rollback = nil
+}
+
+// SetCompletedAt sets the "completed_at" field.
+func (m *StandingRuleRunMutation) SetCompletedAt(t time.Time) {
+	m.completed_at = &t
+}
+
+// CompletedAt returns the value of the "completed_at" field in the mutation.
+func (m *StandingRuleRunMutation) CompletedAt() (r time.Time, exists bool) {
+	v := m.completed_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCompletedAt returns the old "completed_at" field's value of the StandingRuleRun entity.
+// If the StandingRuleRun object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *StandingRuleRunMutation) OldCompletedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCompletedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCompletedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCompletedAt: %w", err)
+	}
+	return oldValue.CompletedAt, nil
+}
+
+// ClearCompletedAt clears the value of the "completed_at" field.
+func (m *StandingRuleRunMutation) ClearCompletedAt() {
+	m.completed_at = nil
+	m.clearedFields[standingrulerun.FieldCompletedAt] = struct{}{}
+}
+
+// CompletedAtCleared returns if the "completed_at" field was cleared in this mutation.
+func (m *StandingRuleRunMutation) CompletedAtCleared() bool {
+	_, ok := m.clearedFields[standingrulerun.FieldCompletedAt]
+	return ok
+}
+
+// ResetCompletedAt resets all changes to the "completed_at" field.
+func (m *StandingRuleRunMutation) ResetCompletedAt() {
+	m.completed_at = nil
+	delete(m.clearedFields, standingrulerun.FieldCompletedAt)
+}
+
+// Where appends a list predicates to the StandingRuleRunMutation builder.
+func (m *StandingRuleRunMutation) Where(ps ...predicate.StandingRuleRun) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the StandingRuleRunMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *StandingRuleRunMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.StandingRuleRun, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *StandingRuleRunMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *StandingRuleRunMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (StandingRuleRun).
+func (m *StandingRuleRunMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *StandingRuleRunMutation) Fields() []string {
+	fields := make([]string, 0, 17)
+	if m.created_at != nil {
+		fields = append(fields, standingrulerun.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, standingrulerun.FieldUpdatedAt)
+	}
+	if m.rule_id != nil {
+		fields = append(fields, standingrulerun.FieldRuleID)
+	}
+	if m.group_id != nil {
+		fields = append(fields, standingrulerun.FieldGroupID)
+	}
+	if m.asset_id != nil {
+		fields = append(fields, standingrulerun.FieldAssetID)
+	}
+	if m.finding_id != nil {
+		fields = append(fields, standingrulerun.FieldFindingID)
+	}
+	if m.finding_first_seen != nil {
+		fields = append(fields, standingrulerun.FieldFindingFirstSeen)
+	}
+	if m.tier != nil {
+		fields = append(fields, standingrulerun.FieldTier)
+	}
+	if m.status != nil {
+		fields = append(fields, standingrulerun.FieldStatus)
+	}
+	if m.hit_summary != nil {
+		fields = append(fields, standingrulerun.FieldHitSummary)
+	}
+	if m.command != nil {
+		fields = append(fields, standingrulerun.FieldCommand)
+	}
+	if m.command_id != nil {
+		fields = append(fields, standingrulerun.FieldCommandID)
+	}
+	if m.approval_id != nil {
+		fields = append(fields, standingrulerun.FieldApprovalID)
+	}
+	if m.reservation_id != nil {
+		fields = append(fields, standingrulerun.FieldReservationID)
+	}
+	if m.result != nil {
+		fields = append(fields, standingrulerun.FieldResult)
+	}
+	if m.rollback != nil {
+		fields = append(fields, standingrulerun.FieldRollback)
+	}
+	if m.completed_at != nil {
+		fields = append(fields, standingrulerun.FieldCompletedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *StandingRuleRunMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case standingrulerun.FieldCreatedAt:
+		return m.CreatedAt()
+	case standingrulerun.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case standingrulerun.FieldRuleID:
+		return m.RuleID()
+	case standingrulerun.FieldGroupID:
+		return m.GroupID()
+	case standingrulerun.FieldAssetID:
+		return m.AssetID()
+	case standingrulerun.FieldFindingID:
+		return m.FindingID()
+	case standingrulerun.FieldFindingFirstSeen:
+		return m.FindingFirstSeen()
+	case standingrulerun.FieldTier:
+		return m.Tier()
+	case standingrulerun.FieldStatus:
+		return m.Status()
+	case standingrulerun.FieldHitSummary:
+		return m.HitSummary()
+	case standingrulerun.FieldCommand:
+		return m.Command()
+	case standingrulerun.FieldCommandID:
+		return m.CommandID()
+	case standingrulerun.FieldApprovalID:
+		return m.ApprovalID()
+	case standingrulerun.FieldReservationID:
+		return m.ReservationID()
+	case standingrulerun.FieldResult:
+		return m.Result()
+	case standingrulerun.FieldRollback:
+		return m.Rollback()
+	case standingrulerun.FieldCompletedAt:
+		return m.CompletedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *StandingRuleRunMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case standingrulerun.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case standingrulerun.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case standingrulerun.FieldRuleID:
+		return m.OldRuleID(ctx)
+	case standingrulerun.FieldGroupID:
+		return m.OldGroupID(ctx)
+	case standingrulerun.FieldAssetID:
+		return m.OldAssetID(ctx)
+	case standingrulerun.FieldFindingID:
+		return m.OldFindingID(ctx)
+	case standingrulerun.FieldFindingFirstSeen:
+		return m.OldFindingFirstSeen(ctx)
+	case standingrulerun.FieldTier:
+		return m.OldTier(ctx)
+	case standingrulerun.FieldStatus:
+		return m.OldStatus(ctx)
+	case standingrulerun.FieldHitSummary:
+		return m.OldHitSummary(ctx)
+	case standingrulerun.FieldCommand:
+		return m.OldCommand(ctx)
+	case standingrulerun.FieldCommandID:
+		return m.OldCommandID(ctx)
+	case standingrulerun.FieldApprovalID:
+		return m.OldApprovalID(ctx)
+	case standingrulerun.FieldReservationID:
+		return m.OldReservationID(ctx)
+	case standingrulerun.FieldResult:
+		return m.OldResult(ctx)
+	case standingrulerun.FieldRollback:
+		return m.OldRollback(ctx)
+	case standingrulerun.FieldCompletedAt:
+		return m.OldCompletedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown StandingRuleRun field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *StandingRuleRunMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case standingrulerun.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case standingrulerun.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case standingrulerun.FieldRuleID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRuleID(v)
+		return nil
+	case standingrulerun.FieldGroupID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGroupID(v)
+		return nil
+	case standingrulerun.FieldAssetID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAssetID(v)
+		return nil
+	case standingrulerun.FieldFindingID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFindingID(v)
+		return nil
+	case standingrulerun.FieldFindingFirstSeen:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFindingFirstSeen(v)
+		return nil
+	case standingrulerun.FieldTier:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTier(v)
+		return nil
+	case standingrulerun.FieldStatus:
+		v, ok := value.(standingrulerun.Status)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case standingrulerun.FieldHitSummary:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHitSummary(v)
+		return nil
+	case standingrulerun.FieldCommand:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCommand(v)
+		return nil
+	case standingrulerun.FieldCommandID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCommandID(v)
+		return nil
+	case standingrulerun.FieldApprovalID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetApprovalID(v)
+		return nil
+	case standingrulerun.FieldReservationID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReservationID(v)
+		return nil
+	case standingrulerun.FieldResult:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResult(v)
+		return nil
+	case standingrulerun.FieldRollback:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRollback(v)
+		return nil
+	case standingrulerun.FieldCompletedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCompletedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown StandingRuleRun field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *StandingRuleRunMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *StandingRuleRunMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *StandingRuleRunMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown StandingRuleRun numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *StandingRuleRunMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(standingrulerun.FieldFindingID) {
+		fields = append(fields, standingrulerun.FieldFindingID)
+	}
+	if m.FieldCleared(standingrulerun.FieldFindingFirstSeen) {
+		fields = append(fields, standingrulerun.FieldFindingFirstSeen)
+	}
+	if m.FieldCleared(standingrulerun.FieldCommandID) {
+		fields = append(fields, standingrulerun.FieldCommandID)
+	}
+	if m.FieldCleared(standingrulerun.FieldApprovalID) {
+		fields = append(fields, standingrulerun.FieldApprovalID)
+	}
+	if m.FieldCleared(standingrulerun.FieldReservationID) {
+		fields = append(fields, standingrulerun.FieldReservationID)
+	}
+	if m.FieldCleared(standingrulerun.FieldCompletedAt) {
+		fields = append(fields, standingrulerun.FieldCompletedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *StandingRuleRunMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *StandingRuleRunMutation) ClearField(name string) error {
+	switch name {
+	case standingrulerun.FieldFindingID:
+		m.ClearFindingID()
+		return nil
+	case standingrulerun.FieldFindingFirstSeen:
+		m.ClearFindingFirstSeen()
+		return nil
+	case standingrulerun.FieldCommandID:
+		m.ClearCommandID()
+		return nil
+	case standingrulerun.FieldApprovalID:
+		m.ClearApprovalID()
+		return nil
+	case standingrulerun.FieldReservationID:
+		m.ClearReservationID()
+		return nil
+	case standingrulerun.FieldCompletedAt:
+		m.ClearCompletedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown StandingRuleRun nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *StandingRuleRunMutation) ResetField(name string) error {
+	switch name {
+	case standingrulerun.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case standingrulerun.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case standingrulerun.FieldRuleID:
+		m.ResetRuleID()
+		return nil
+	case standingrulerun.FieldGroupID:
+		m.ResetGroupID()
+		return nil
+	case standingrulerun.FieldAssetID:
+		m.ResetAssetID()
+		return nil
+	case standingrulerun.FieldFindingID:
+		m.ResetFindingID()
+		return nil
+	case standingrulerun.FieldFindingFirstSeen:
+		m.ResetFindingFirstSeen()
+		return nil
+	case standingrulerun.FieldTier:
+		m.ResetTier()
+		return nil
+	case standingrulerun.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case standingrulerun.FieldHitSummary:
+		m.ResetHitSummary()
+		return nil
+	case standingrulerun.FieldCommand:
+		m.ResetCommand()
+		return nil
+	case standingrulerun.FieldCommandID:
+		m.ResetCommandID()
+		return nil
+	case standingrulerun.FieldApprovalID:
+		m.ResetApprovalID()
+		return nil
+	case standingrulerun.FieldReservationID:
+		m.ResetReservationID()
+		return nil
+	case standingrulerun.FieldResult:
+		m.ResetResult()
+		return nil
+	case standingrulerun.FieldRollback:
+		m.ResetRollback()
+		return nil
+	case standingrulerun.FieldCompletedAt:
+		m.ResetCompletedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown StandingRuleRun field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *StandingRuleRunMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *StandingRuleRunMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *StandingRuleRunMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *StandingRuleRunMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *StandingRuleRunMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *StandingRuleRunMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *StandingRuleRunMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown StandingRuleRun unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *StandingRuleRunMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown StandingRuleRun edge %s", name)
 }
 
 // SuppressionMutation represents an operation that mutates the Suppression nodes in the graph.

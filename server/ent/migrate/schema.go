@@ -1500,6 +1500,102 @@ var (
 		Columns:    SettingsColumns,
 		PrimaryKey: []*schema.Column{SettingsColumns[0]},
 	}
+	// StandingRulesColumns holds the columns for the "standing_rules" table.
+	StandingRulesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "builtin_key", Type: field.TypeString, Default: ""},
+		{Name: "name", Type: field.TypeString},
+		{Name: "condition_summary", Type: field.TypeString},
+		{Name: "condition", Type: field.TypeJSON, Nullable: true},
+		{Name: "action_template", Type: field.TypeString},
+		{Name: "action_params", Type: field.TypeJSON, Nullable: true},
+		{Name: "tier", Type: field.TypeEnum, Enums: []string{"auto", "propose", "human"}, Default: "propose"},
+		{Name: "group_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "asset_ids", Type: field.TypeJSON, Nullable: true},
+		{Name: "maintenance_window", Type: field.TypeString, Default: ""},
+		{Name: "cooldown_minutes", Type: field.TypeInt, Default: 360},
+		{Name: "created_by", Type: field.TypeString},
+		{Name: "enabled", Type: field.TypeBool, Default: false},
+		{Name: "consecutive_failures", Type: field.TypeInt, Default: 0},
+		{Name: "degraded_at", Type: field.TypeTime, Nullable: true},
+		{Name: "degraded_reason", Type: field.TypeString, Default: ""},
+		{Name: "last_run_at", Type: field.TypeTime, Nullable: true},
+		{Name: "last_run_status", Type: field.TypeString, Default: ""},
+	}
+	// StandingRulesTable holds the schema information for the "standing_rules" table.
+	StandingRulesTable = &schema.Table{
+		Name:       "standing_rules",
+		Columns:    StandingRulesColumns,
+		PrimaryKey: []*schema.Column{StandingRulesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "standingrule_builtin_key",
+				Unique:  false,
+				Columns: []*schema.Column{StandingRulesColumns[3]},
+			},
+			{
+				Name:    "standingrule_enabled_tier",
+				Unique:  false,
+				Columns: []*schema.Column{StandingRulesColumns[15], StandingRulesColumns[9]},
+			},
+			{
+				Name:    "standingrule_group_id",
+				Unique:  false,
+				Columns: []*schema.Column{StandingRulesColumns[10]},
+			},
+		},
+	}
+	// StandingRuleRunsColumns holds the columns for the "standing_rule_runs" table.
+	StandingRuleRunsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "rule_id", Type: field.TypeUUID},
+		{Name: "group_id", Type: field.TypeUUID},
+		{Name: "asset_id", Type: field.TypeUUID},
+		{Name: "finding_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "finding_first_seen", Type: field.TypeTime, Nullable: true},
+		{Name: "tier", Type: field.TypeString},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"succeeded", "failed", "pending_approval", "rejected", "expired", "queued_human", "skipped"}, Default: "pending_approval"},
+		{Name: "hit_summary", Type: field.TypeString, Size: 2147483647},
+		{Name: "command", Type: field.TypeString, Size: 2147483647, Default: ""},
+		{Name: "command_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "approval_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "reservation_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "result", Type: field.TypeString, Size: 2147483647, Default: ""},
+		{Name: "rollback", Type: field.TypeString, Size: 2147483647, Default: ""},
+		{Name: "completed_at", Type: field.TypeTime, Nullable: true},
+	}
+	// StandingRuleRunsTable holds the schema information for the "standing_rule_runs" table.
+	StandingRuleRunsTable = &schema.Table{
+		Name:       "standing_rule_runs",
+		Columns:    StandingRuleRunsColumns,
+		PrimaryKey: []*schema.Column{StandingRuleRunsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "standingrulerun_rule_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{StandingRuleRunsColumns[3], StandingRuleRunsColumns[1]},
+			},
+			{
+				Name:    "standingrulerun_status",
+				Unique:  false,
+				Columns: []*schema.Column{StandingRuleRunsColumns[9]},
+			},
+			{
+				Name:    "standingrulerun_finding_id_rule_id",
+				Unique:  false,
+				Columns: []*schema.Column{StandingRuleRunsColumns[6], StandingRuleRunsColumns[3]},
+			},
+			{
+				Name:    "standingrulerun_asset_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{StandingRuleRunsColumns[5], StandingRuleRunsColumns[1]},
+			},
+		},
+	}
 	// SuppressionsColumns holds the columns for the "suppressions" table.
 	SuppressionsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -1791,6 +1887,8 @@ var (
 		SessionsTable,
 		SessionMessagesTable,
 		SettingsTable,
+		StandingRulesTable,
+		StandingRuleRunsTable,
 		SuppressionsTable,
 		TasksTable,
 		TaskRunsTable,
