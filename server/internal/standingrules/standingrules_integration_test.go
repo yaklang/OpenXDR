@@ -58,8 +58,15 @@ func TestStandingRulesLifecycleAndAutoDowngrade(t *testing.T) {
 		DB:     db,
 		Repair: repair,
 		IssueAndWait: func(ctx context.Context, a *ent.Asset, cmd, issuedBy string, _ time.Duration, onIssued func(*ent.Command) error) (*ent.Command, error) {
-			now := time.Now()
-			code := int32(0)
+			created := time.Now().Truncate(time.Microsecond)
+			c := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetIssuedBy(issuedBy).SetCmd(cmd).SetStatus("sent").SetCreatedAt(created).SaveX(ctx)
+			if onIssued != nil {
+				if err := onIssued(c); err != nil {
+					return c, err
+				}
+			}
+			time.Sleep(time.Millisecond)
+			completed := time.Now().Truncate(time.Microsecond)
 			out := ""
 			switch {
 			case strings.Contains(cmd, "APT_KB|"):
@@ -74,21 +81,12 @@ func TestStandingRulesLifecycleAndAutoDowngrade(t *testing.T) {
 				out = "MEM_KB|2097152\nSWAP_KB|0\nROOT_AVAIL_KB|8388608\n"
 			default:
 				if failExec {
-					code = 1
-					c := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetIssuedBy(issuedBy).SetCmd(cmd).SetStatus("failed").SetExitCode(code).SetCompletedAt(now).SaveX(ctx)
-					if onIssued != nil {
-						_ = onIssued(c)
-					}
+					c = db.Command.UpdateOneID(c.ID).SetStatus("failed").SetExitCode(1).SetCompletedAt(completed).SaveX(ctx)
 					return c, errors.New("模拟执行错误")
 				}
 				out = "done\n"
 			}
-			c := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetIssuedBy(issuedBy).SetCmd(cmd).SetStatus("succeeded").SetExitCode(code).SetStdout(out).SetCreatedAt(now.Add(-5 * time.Millisecond)).SetCompletedAt(now).SaveX(ctx)
-			if onIssued != nil {
-				if err := onIssued(c); err != nil {
-					return c, err
-				}
-			}
+			c = db.Command.UpdateOneID(c.ID).SetStatus("succeeded").SetExitCode(0).SetStdout(out).SetCompletedAt(completed).SaveX(ctx)
 			return c, nil
 		},
 	}
