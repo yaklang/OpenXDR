@@ -15,6 +15,7 @@ import (
 	"openxdr/server/ent/approval"
 	"openxdr/server/ent/standingrule"
 	"openxdr/server/ent/standingrulerun"
+	"openxdr/server/internal/repaircmd"
 	"openxdr/server/internal/repairpolicy"
 	"openxdr/server/internal/standingrules"
 	"openxdr/server/internal/testdb"
@@ -148,6 +149,72 @@ func TestStandingRulesLifecycleAndAutoDowngrade(t *testing.T) {
 	if cleanRule.Tier != standingrule.TierPropose || cleanRule.DegradedAt == nil || cleanRule.ConsecutiveFailures < 2 {
 		t.Fatalf("连续出错后应自动降级为 propose: tier=%s degraded=%v failures=%d", cleanRule.Tier, cleanRule.DegradedAt, cleanRule.ConsecutiveFailures)
 	}
+
+	// 4. 探针失败落 skipped 记录并在 skipDedupWindow 内去重，且不计入连续出错；同时校验每轮下发上限与 ReserveStanding 目录边界
+	db.StandingRule.Update().SetEnabled(false).ExecX(ctx)
+	backupRule := db.StandingRule.Query().Where(standingrule.BuiltinKeyEQ(standingrules.TplOldBackupCompress)).OnlyX(ctx)
+	db.StandingRule.UpdateOneID(backupRule.ID).SetEnabled(true).SetMaintenanceWindow("").ExecX(ctx)
+
+	bCmd, _, ok := repaircmd.FormatBackupCompress("/var/backups", []string{"/var/backups/db.sql"})
+	if !ok {
+		t.Fatal("构造测试备份压缩命令失败")
+	}
+	dfOut := "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/vda1 1000000 800000 200000 80% /\n"
+	nowProbe := time.Now()
+	dfProbe := db.Command.Create().SetAssetID(host1.ID).SetKind("exec").SetIssuedBy("test").SetCmd("df -P /").SetStatus("succeeded").SetExitCode(0).SetStdout(dfOut).SetCreatedAt(nowProbe.Add(-time.Second)).SetCompletedAt(nowProbe).SaveX(ctx)
+	if _, err := repair.ReserveStanding(ctx, repairpolicy.StandingRequest{
+		RuleID:          backupRule.ID,
+		RuleVersion:     "v1",
+		GroupID:         grp.ID,
+		AssetID:         host1.ID,
+		Unit:            repairpolicy.ReclaimDisk,
+		Command:         bCmd,
+		Mount:           "/",
+		AllowedPaths:    []string{"/srv/backups"},
+		BeforeProbeID:   dfProbe.ID,
+		CooldownMinutes: 360,
+	}); err == nil {
+		t.Fatal("ReserveStanding 应拒绝不在规矩 AllowedPaths 内的备份文件压缩")
+	}
+
+	probeCalls := 0
+	simNow := time.Now()
+	probeRunner := &standingrules.Runner{
+		DB:                db,
+		Repair:            repair,
+		Now:               func() time.Time { return simNow },
+		MaxHostDispatches: 1,
+		IssueAndWait: func(ctx context.Context, a *ent.Asset, cmd, issuedBy string, _ time.Duration, _ func(*ent.Command) error) (*ent.Command, error) {
+			probeCalls++
+			return nil, errors.New("主机探针超时")
+		},
+	}
+	fProbe1 := db.Finding.Create().SetGroupID(grp.ID).SetAssetID(host1.ID).SetKey("backup-1").SetTitle("备份目录空间告警 1").SaveX(ctx)
+	fProbe2 := db.Finding.Create().SetGroupID(grp.ID).SetAssetID(host2.ID).SetKey("backup-2").SetTitle("备份目录空间告警 2").SaveX(ctx)
+	if err := probeRunner.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if probeCalls != 1 {
+		t.Fatalf("MaxHostDispatches=1 应将首轮探针限制为 1 次，实际 %d", probeCalls)
+	}
+	if err := probeRunner.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if probeCalls != 2 {
+		t.Fatalf("第二轮应只处理剩余第 2 条待办且第 1 条命中 skipped 去重，累计应为 2，实际 %d", probeCalls)
+	}
+	if err := probeRunner.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if probeCalls != 2 {
+		t.Fatalf("skipDedupWindow 内重复 Tick 不应再次下发探针，实际 %d", probeCalls)
+	}
+	backupRule = db.StandingRule.GetX(ctx, backupRule.ID)
+	if backupRule.ConsecutiveFailures != 0 || backupRule.Tier != standingrule.TierAuto {
+		t.Fatalf("探针失败不应计入连续出错或触发降级: %+v", backupRule)
+	}
+	_ = fProbe1
+	_ = fProbe2
 }
 
 func itoa(n int) string {

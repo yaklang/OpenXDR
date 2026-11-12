@@ -106,7 +106,7 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | POST | `/api/standing-rules` | 新建自定义或按主机长期授权规矩 `{"actionTemplate","name","conditionSummary","actionParams","tier","groupId","assetIds","maintenanceWindow","cooldownMinutes","enabled"}`；仅平台管理员，落审计 `standing_rule_created` |
 | PATCH | `/api/standing-rules/{id}` | 修改规矩启停、档位、作用范围、维护窗口、冷却或模板参数；仅平台管理员，切档落审计 `standing_rule_tier_changed`（其余 `standing_rule_updated`），显式切档或重新启用同时清除连续出错降级标记 |
 | DELETE | `/api/standing-rules/{id}` | 删除自定义常设规矩及其执行记录（内置规矩不可删除，400）；仅平台管理员，落审计 `standing_rule_deleted` |
-| GET | `/api/standing-rules/{id}/runs?skipped=` | 单条规矩最近 100 条执行记录（命中摘要、档位、状态、封闭命令、结果与明确回退方式 `rollback`）；按组裁剪，默认不含条件未满足的跳过记录 |
+| GET | `/api/standing-rules/{id}/runs?skipped=` | 单条规矩最近 100 条执行记录（命中摘要、档位、状态、封闭命令、结果与明确回退方式 `rollback`）；按组裁剪，默认不含已跳过的记录（条件未满足或预探针失败暂缓重试） |
 
 `GET /api/events` 的条目与 `GET /api/incidents/{id}` 的告警带 `automation: {id, name, watch}`（来自可信来源时；`watch` 为高危例外）。
 

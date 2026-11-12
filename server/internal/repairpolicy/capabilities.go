@@ -43,11 +43,6 @@ func (s *Store) Capabilities(ctx context.Context, group, session uuid.UUID, f *e
 		return out, err
 	}
 	now := time.Now()
-	extra, err := standingGrants(ctx, s.DB, group, actual.AssetID, now, false)
-	if err != nil {
-		return out, err
-	}
-	p.Grants = append(p.Grants, extra...)
 	versions := []string{}
 	for _, g := range p.Grants {
 		if !grantScopeValid(g, group, actual.AssetID, now) {

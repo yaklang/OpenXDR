@@ -180,21 +180,21 @@ func buildDockerPlan(mount, out string, now time.Time) (ActionPlan, error) {
 	pullCmds = slices.Compact(pullCmds)
 
 	if reclaimableImages == 0 && len(oldVols) == 0 && !hasBuildCache {
-		return ActionPlan{Applicable: false, Summary: "未发现超过 7 天未使用的 Docker 镜像、构建缓存或悬空匿名卷"}, nil
+		return ActionPlan{Applicable: false, Summary: "未发现 7 天前创建且无任何容器（含已停止）引用的 Docker 镜像、构建缓存或悬空匿名卷"}, nil
 	}
 	cmd, ok := repaircmd.FormatDockerPrune7d(oldVols)
 	if !ok {
 		return ActionPlan{}, errors.New("匿名卷标识校验未通过")
 	}
-	rollback := "本次仅清理无标签层、构建缓存或超过 7 天的悬空 64 位匿名卷，具名镜像与具名卷未改动"
+	rollback := "本次仅清理 7 天前创建且无任何容器（含已停止）引用的无标签层、构建缓存或悬空 64 位匿名卷，在用镜像与具名卷未改动"
 	if len(pullCmds) > 0 {
-		rollback = "如需恢复被清理的旧镜像可执行：\n" + strings.Join(pullCmds, "\n")
+		rollback = "删的是 7 天前创建、当前没有任何容器（含已停止）引用的镜像；如需恢复可执行：\n" + strings.Join(pullCmds, "\n")
 	}
 	return ActionPlan{
 		Applicable: true,
 		Unit:       repairpolicy.ReclaimDisk,
 		Mount:      mount,
-		Summary:    fmt.Sprintf("待清理 >7d 镜像 %d 个、悬空匿名卷 %d 个（构建缓存可回收：%v）", reclaimableImages, len(oldVols), hasBuildCache),
+		Summary:    fmt.Sprintf("待清理 7 天前创建且无容器（含已停止）引用的镜像 %d 个、悬空匿名卷 %d 个（构建缓存可回收：%v）", reclaimableImages, len(oldVols), hasBuildCache),
 		Command:    cmd,
 		Rollback:   rollback,
 	}, nil
@@ -259,11 +259,27 @@ func buildPkgJournalPlan(mount, out string) (ActionPlan, error) {
 	}, nil
 }
 
-func buildBackupCompressPlan(r *ent.StandingRule, mount, out string) (ActionPlan, error) {
-	dirs := paramStringSlice(r.ActionParams, "paths")
-	if len(dirs) == 0 {
-		dirs = []string{"/var/backups"}
+// AllowedDiskPaths 返回常设规矩允许磁盘动作触及的目录集合，供 ReserveStanding 封闭模板复核。
+func AllowedDiskPaths(r *ent.StandingRule) []string {
+	if r == nil {
+		return nil
 	}
+	switch r.ActionTemplate {
+	case TplOldBackupCompress:
+		dirs := paramStringSlice(r.ActionParams, "paths")
+		if len(dirs) == 0 {
+			return []string{"/var/backups"}
+		}
+		return dirs
+	case TplReclaimDisk:
+		return paramStringSlice(r.ActionParams, "paths")
+	default:
+		return nil
+	}
+}
+
+func buildBackupCompressPlan(r *ent.StandingRule, mount, out string) (ActionPlan, error) {
+	dirs := AllowedDiskPaths(r)
 	var allSteps, allUndos, matchedFiles []string
 	byDir := map[string][]string{}
 	for _, raw := range strings.Split(out, "\n") {
@@ -308,7 +324,7 @@ func buildBackupCompressPlan(r *ent.StandingRule, mount, out string) (ActionPlan
 		total += len(files)
 	}
 	fullCmd := strings.Join(allSteps, " &&\n")
-	if !repaircmd.IsStandingDiskAction(fullCmd) {
+	if !repaircmd.IsStandingDiskAction(fullCmd, dirs) {
 		return ActionPlan{}, errors.New("生成的备份无损压缩命令未通过封闭语法复核")
 	}
 	return ActionPlan{

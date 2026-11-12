@@ -74,8 +74,9 @@ func AnonVolumeID(id string) bool {
 	return anonVolumeID.MatchString(id)
 }
 
-// FormatDockerPrune7d 生成常设规矩「docker 未使用超过 7 天的镜像与匿名卷」的封闭命令。
-// 匿名卷列表必须由服务端预探针核实 dangling、匿名标签与创建时间超过 168h。
+// FormatDockerPrune7d 生成常设规矩 Docker 清理封闭命令。
+// 注意 docker image prune --filter until=168h 按镜像创建时间过滤（Docker 不记录最后使用时间），
+// 删除的是 7 天前创建且当前没有任何容器（含已停止）引用的镜像；匿名卷列表须由服务端预探针核实 dangling、匿名标签与创建超过 168h。
 func FormatDockerPrune7d(anonVolumes []string) (string, bool) {
 	if len(anonVolumes) > 32 {
 		return "", false
@@ -123,10 +124,10 @@ func FormatBackupCompress(dir string, files []string) (cmd string, rollback stri
 	return strings.Join(steps, " &&\n"), strings.Join(undos, " &&\n"), true
 }
 
-// IsStandingDiskAction 判断命令是否为常设规矩使用的封闭磁盘回收/压缩动作，用于落盘预留与独立 df 校验。
-func IsStandingDiskAction(cmd string) bool {
-	if _, ok := Parse(cmd); ok {
-		return true
+// IsStandingDiskAction 判断命令是否为常设规矩使用的封闭磁盘回收/压缩动作，并校验目录型命令与备份文件落在规矩配置的 allowedPaths 内。
+func IsStandingDiskAction(cmd string, allowedPaths []string) bool {
+	if dir, ok := Parse(cmd); ok {
+		return dir == "" || slices.Contains(allowedPaths, dir)
 	}
 	if cmd == FormatPkgJournalClean() {
 		return true
@@ -147,12 +148,15 @@ func IsStandingDiskAction(cmd string) bool {
 		}
 		return true
 	}
-	return isBackupCompressCmd(cmd)
+	return isBackupCompressCmd(cmd, allowedPaths)
 }
 
 var backupStepRe = regexp.MustCompile(`^\[ ! -e (/[a-zA-Z0-9_./-]+\.gz) \] && \{ gzip -9 -k -- (/[a-zA-Z0-9_./-]+) \|\| \{ rm -f -- (/[a-zA-Z0-9_./-]+\.gz); exit 1; \}; \} && gzip -t -- (/[a-zA-Z0-9_./-]+\.gz) && touch -r (/[a-zA-Z0-9_./-]+) -- (/[a-zA-Z0-9_./-]+\.gz) && rm -f -- (/[a-zA-Z0-9_./-]+)$`)
 
-func isBackupCompressCmd(cmd string) bool {
+func isBackupCompressCmd(cmd string, allowedPaths []string) bool {
+	if len(allowedPaths) == 0 {
+		return false
+	}
 	steps := strings.Split(cmd, " &&\n")
 	if len(steps) == 0 || len(steps) > 20 {
 		return false
@@ -166,8 +170,17 @@ func isBackupCompressCmd(cmd string) bool {
 		if gz != f+".gz" || m[3] != gz || m[4] != gz || m[5] != f || m[6] != gz || m[7] != f {
 			return false
 		}
-		dir := path.Dir(f)
-		if !BackupFile(dir, f) {
+		if !BackupDir(path.Dir(f)) {
+			return false
+		}
+		inAllowed := false
+		for _, allowed := range allowedPaths {
+			if BackupFile(allowed, f) {
+				inAllowed = true
+				break
+			}
+		}
+		if !inAllowed {
 			return false
 		}
 	}

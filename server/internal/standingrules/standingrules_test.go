@@ -111,7 +111,7 @@ func TestBuildPlansAndRollbacks(t *testing.T) {
 		"DF|Build Cache|1.2GB",
 	}, "\n")
 	plan, err := BuildPlan(dockerRule, nil, dockerProbe, now)
-	if err != nil || !plan.Applicable || !repaircmd.IsStandingDiskAction(plan.Command) {
+	if err != nil || !plan.Applicable || !repaircmd.IsStandingDiskAction(plan.Command, AllowedDiskPaths(dockerRule)) {
 		t.Fatalf("docker 方案构建失败: %+v err=%v", plan, err)
 	}
 	if !strings.Contains(plan.Command, anonOld) || strings.Contains(plan.Command, anonNew) || strings.Contains(plan.Command, "named_pgdata") {
@@ -128,6 +128,10 @@ func TestBuildPlansAndRollbacks(t *testing.T) {
 	backupPlan, err := BuildPlan(backupRule, nil, "/var/backups/app-2026-10-01.sql\n/var/backups/already.tar.gz\n/etc/shadow\n", now)
 	if err != nil || !backupPlan.Applicable {
 		t.Fatalf("备份压缩方案失败: %+v err=%v", backupPlan, err)
+	}
+	if !repaircmd.IsStandingDiskAction(backupPlan.Command, AllowedDiskPaths(backupRule)) ||
+		repaircmd.IsStandingDiskAction(backupPlan.Command, []string{"/srv/backups"}) {
+		t.Fatalf("备份压缩目录边界复核异常: %+v", backupPlan)
 	}
 	if !strings.Contains(backupPlan.Command, "gzip -9 -k -- /var/backups/app-2026-10-01.sql") ||
 		!strings.Contains(backupPlan.Command, "gzip -t -- /var/backups/app-2026-10-01.sql.gz") ||

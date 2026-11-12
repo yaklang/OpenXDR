@@ -2411,7 +2411,7 @@ const zh = {
   ruleRunStatus_rejected: '已拒绝',
   ruleRunStatus_expired: '审批过期',
   ruleRunStatus_queued_human: '已入人工队列',
-  ruleRunStatus_skipped: '条件未满足',
+  ruleRunStatus_skipped: '已跳过',
 }
 
 export type MsgKey = keyof typeof zh

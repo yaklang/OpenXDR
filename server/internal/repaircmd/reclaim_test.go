@@ -58,16 +58,34 @@ func TestReclaimPaths(t *testing.T) {
 func TestDockerPrune7dAndBackupCompress(t *testing.T) {
 	vol := strings.Repeat("a1", 32)
 	cmd, ok := FormatDockerPrune7d([]string{vol})
-	if !ok || !IsStandingDiskAction(cmd) {
+	if !ok || !IsStandingDiskAction(cmd, nil) {
 		t.Fatalf("合法匿名卷回收被拒绝: %q %v", cmd, ok)
 	}
 	if _, ok := FormatDockerPrune7d([]string{"pgdata"}); ok {
 		t.Fatal("具名卷不应通过匿名卷校验")
 	}
 
+	agedCmd := "find -- /srv/cache -xdev -type f -mtime +7 -delete"
+	if !IsStandingDiskAction(agedCmd, []string{"/srv/cache"}) {
+		t.Fatalf("在规矩 paths 内的目录清理被拒绝: %s", agedCmd)
+	}
+	if IsStandingDiskAction(agedCmd, []string{"/tmp/cache"}) || IsStandingDiskAction(agedCmd, nil) {
+		t.Fatalf("不在规矩 paths 内的目录清理未被拦截: %s", agedCmd)
+	}
+
 	bCmd, undo, ok := FormatBackupCompress("/var/backups", []string{"/var/backups/db-2026-10-01.sql"})
-	if !ok || !IsStandingDiskAction(bCmd) {
+	if !ok || !IsStandingDiskAction(bCmd, []string{"/var/backups"}) {
 		t.Fatalf("合法旧备份无损压缩被拒绝: %q %v", bCmd, ok)
+	}
+	if IsStandingDiskAction(bCmd, []string{"/srv/backups"}) || IsStandingDiskAction(bCmd, nil) {
+		t.Fatalf("超出规矩 paths 的备份压缩未被拦截: %q", bCmd)
+	}
+	subCmd, _, ok := FormatBackupCompress("/var/backups/mysql", []string{"/var/backups/mysql/full.sql"})
+	if !ok || !IsStandingDiskAction(subCmd, []string{"/var/backups"}) {
+		t.Fatalf("授权备份目录子目录下的合法备份压缩被拒绝: %q %v", subCmd, ok)
+	}
+	if IsStandingDiskAction(subCmd, []string{"/var/backups2"}) {
+		t.Fatalf("前缀碰撞目录未被拦截: %q", subCmd)
 	}
 	if !strings.Contains(bCmd, "gzip -9 -k -- /var/backups/db-2026-10-01.sql") ||
 		!strings.Contains(bCmd, "gzip -t -- /var/backups/db-2026-10-01.sql.gz") ||

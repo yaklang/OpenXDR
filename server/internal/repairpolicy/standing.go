@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 	"openxdr/server/ent/asset"
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/setting"
-	"openxdr/server/ent/standingrule"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/repaircmd"
@@ -130,6 +128,7 @@ type StandingRequest struct {
 	Unit            string
 	Command         string
 	Mount           string
+	AllowedPaths    []string
 	BeforeProbeID   uuid.UUID
 	CooldownMinutes int
 }
@@ -156,8 +155,8 @@ func (s *Store) ReserveStanding(ctx context.Context, req StandingRequest) (retID
 	}
 	isDisk := req.Unit == ReclaimDisk
 	if isDisk {
-		if !repaircmd.IsStandingDiskAction(req.Command) || !repaircmd.Mount(req.Mount) {
-			return uuid.Nil, errors.New("磁盘动作不属于平台支持的封闭回收或无损压缩模板")
+		if !repaircmd.IsStandingDiskAction(req.Command, req.AllowedPaths) || !repaircmd.Mount(req.Mount) {
+			return uuid.Nil, errors.New("磁盘动作不属于平台支持的封闭回收或无损压缩模板，或超出规矩授权目录")
 		}
 	} else {
 		if !validUnit(req.Unit) || req.Command != "systemctl restart -- "+req.Unit {
@@ -369,96 +368,4 @@ func (s *Store) VerifyStandingDisk(ctx context.Context, assetID, reservationID, 
 		return 0, 0, err
 	}
 	return pre.available, post.available, nil
-}
-
-// standingGrants 将已启用且处于 auto 档的常设规矩映射为长期维护委托，供运维待办跟进复用。
-func standingGrants(ctx context.Context, db *ent.Client, groupID, assetID uuid.UUID, now time.Time, forUpdate bool) ([]Grant, error) {
-	q := db.StandingRule.Query().Where(
-		standingrule.EnabledEQ(true),
-		standingrule.TierEQ(standingrule.TierAuto),
-		standingrule.Or(standingrule.GroupIDIsNil(), standingrule.GroupIDEQ(groupID)),
-		standingrule.ActionTemplateIn(RestartFailedService, ReclaimDisk, "docker_unused_7d", "pkg_journal_clean"),
-	)
-	if forUpdate {
-		q = q.Where(func(s *sql.Selector) { s.ForUpdate() })
-	}
-	rules, err := q.All(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var out []Grant
-	for _, r := range rules {
-		if len(r.AssetIds) > 0 && !slices.Contains(r.AssetIds, assetID) {
-			continue
-		}
-		if r.CooldownMinutes < 60 || r.CooldownMinutes > 10080 {
-			continue
-		}
-		active, wStart, wEnd, err := WindowBounds(r.MaintenanceWindow, time.Local, now)
-		if err != nil {
-			continue
-		}
-		var notBefore *time.Time
-		if strings.TrimSpace(r.MaintenanceWindow) != "" {
-			at := wStart
-			notBefore = &at
-		} else {
-			wEnd = wEnd.Add(time.Duration(r.UpdatedAt.Unix()%86400) * time.Second)
-		}
-		_ = active
-		g := Grant{
-			ID:              r.ID,
-			Action:          ReclaimDisk,
-			GroupID:         groupID,
-			AssetIDs:        []uuid.UUID{assetID},
-			NotBefore:       notBefore,
-			ExpiresAt:       wEnd,
-			CooldownMinutes: r.CooldownMinutes,
-		}
-		if r.ActionTemplate == RestartFailedService {
-			units := paramStrings(r.ActionParams, "units")
-			var valid []string
-			for _, u := range units {
-				if validUnit(u) {
-					valid = append(valid, u)
-				}
-			}
-			if len(valid) == 0 {
-				continue
-			}
-			g.Action = RestartFailedService
-			g.Units = valid
-		} else if r.ActionTemplate == ReclaimDisk {
-			for _, p := range paramStrings(r.ActionParams, "paths") {
-				if repaircmd.Path(p) {
-					g.Paths = append(g.Paths, p)
-				}
-			}
-		}
-		out = append(out, g)
-	}
-	return out, nil
-}
-
-func paramStrings(m map[string]any, key string) []string {
-	if m == nil {
-		return nil
-	}
-	raw, ok := m[key]
-	if !ok || raw == nil {
-		return nil
-	}
-	switch v := raw.(type) {
-	case []string:
-		return slices.Clone(v)
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
-				out = append(out, strings.TrimSpace(s))
-			}
-		}
-		return out
-	}
-	return nil
 }

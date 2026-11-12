@@ -104,6 +104,8 @@ xdr intent start --hosts dynamicdefend-v2,raid-server-test --purpose "RBI 迁移
 
 `auto` 档的动作必须在修复能力目录里有固定模板、可回退，并受维护窗口与资产冷却约束。
 
+实现说明：Docker 不记录镜像的最后使用时间，`docker image prune -a --filter until=168h -f` 按镜像创建时间过滤，实际删除的是「7 天前创建、且当前没有任何容器（含已停止）引用」的镜像；匿名卷仅在服务端预探针核实悬空（`dangling=true`）、带匿名卷标签且创建时间超过 7 天后按 64 位 ID 精确移除，不触碰具名卷。「指向不存在目标的密钥与连接配置」因单靠主机侧无法区分目标永久下线与关机/隧道离线，内置固定为 `human` 档。
+
 ### 四、提问协议（P2）
 
 子 Agent 不再直接把自己标成「需人工」，而是调用 `ask_controller`：

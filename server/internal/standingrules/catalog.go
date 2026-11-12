@@ -56,13 +56,13 @@ var templates = []Template{
 	{
 		Key:              TplDockerUnused7d,
 		Name:             "docker 未使用超过 7 天的镜像与匿名卷",
-		ConditionSummary: "磁盘容量待办命中，且主机存在超过 7 天未使用的 Docker 镜像、构建缓存或悬空匿名卷",
+		ConditionSummary: "磁盘容量待办命中，且主机存在 7 天前创建、当前没有任何容器（含已停止）引用的 Docker 镜像，或超过 7 天的构建缓存与悬空匿名卷（Docker 不记录最后使用时间，until=168h 按创建时间过滤）",
 		DefaultTier:      "auto",
 		AllowedTiers:     []string{"auto", "propose", "human"},
 		DefaultWindow:    "02:00-05:00",
 		DefaultCooldown:  360,
 		DefaultParams:    map[string]any{"mount": "/"},
-		RollbackHint:     "执行前记录被清理的带标签镜像，需要时用 docker pull <repo:tag> 重新拉取；仅清理悬空 64 位匿名卷，不触碰具名卷",
+		RollbackHint:     "删的是 7 天前创建、当前没有任何容器（含已停止）引用的镜像及悬空 64 位匿名卷，不触碰具名卷；执行前记录被清理的带标签镜像，需要时用 docker pull <repo:tag> 重新拉取",
 		Builtin:          true,
 	},
 	{
