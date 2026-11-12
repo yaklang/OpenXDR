@@ -51,3 +51,27 @@ func TestDeduperFlush(t *testing.T) {
 		t.Errorf("重复 Flush 不应二次计数，count = %d, want 4", got2.Count)
 	}
 }
+
+// 研判之后并进来的命中要记成新证据：研判没看过它们，良性结案也因此进不去
+func TestDeduperFlushMarksEvidenceAfterTriage(t *testing.T) {
+	ctx, client := testdb.New(t)
+	triaged := time.Now().Add(-time.Minute)
+	inc := client.Incident.Create().SetStatus("triaged").SetGraph([]byte(`{}`)).SetTriagedAt(triaged).SaveX(ctx)
+	before := client.Alert.Create().SetTs(triaged.Add(-time.Minute)).SetRuleID("r-1").SetSeverity(3).SetIncidentID(inc.ID).SaveX(ctx)
+	d := New(time.Hour)
+	d.Track("early", before.ID, before.Ts)
+	d.Hit("early", triaged.Add(-time.Second))
+	if err := d.Flush(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	if client.Incident.GetX(ctx, inc.ID).EvidenceAt != nil {
+		t.Fatal("研判之前的命中研判已经看过，不算新证据")
+	}
+	d.Hit("early", triaged.Add(30*time.Second))
+	if err := d.Flush(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.Incident.GetX(ctx, inc.ID).EvidenceAt; got == nil || !got.After(triaged) {
+		t.Fatal("研判之后的命中应记成新证据", got)
+	}
+}

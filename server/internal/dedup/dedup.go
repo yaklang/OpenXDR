@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"openxdr/server/ent"
+	"openxdr/server/ent/incident"
 )
 
 // Deduper 窗口内同指纹的告警只留一行，后续命中累加计数。
@@ -53,11 +54,22 @@ func (d *Deduper) Flush(ctx context.Context, db *ent.Client) error {
 		if e.pending == 0 {
 			continue
 		}
-		if err := db.Alert.UpdateOneID(e.alertID).
+		a, err := db.Alert.UpdateOneID(e.alertID).
 			AddCount(e.pending).
 			SetLastTs(e.lastTs).
-			Exec(ctx); err != nil {
+			Save(ctx)
+		if err != nil {
 			return err
+		}
+		// 指纹只到规则加主机，研判之后并进来的命中可能是研判没看过的另一条命令：
+		// 记成新证据让研判重看，不然事件既不重研判、也进不了良性结案，就此挂住
+		if a.IncidentID != nil {
+			if err := db.Incident.Update().
+				Where(incident.IDEQ(*a.IncidentID), incident.StatusEQ("triaged"), incident.TriagedAtLT(e.lastTs)).
+				SetEvidenceAt(time.Now()).ClearClosureProposal().
+				Exec(ctx); err != nil {
+				return err
+			}
 		}
 		e.pending = 0
 	}
