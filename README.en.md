@@ -1,19 +1,60 @@
-# OpenXDR
+<p align="center"><img src="docs/images/readme/hero-en.jpg" alt="OpenXDR: open-source autonomous XDR, from the first sign to the last action" width="100%"></p>
 
-[![CI](https://github.com/yaklang/OpenXDR/actions/workflows/ci.yml/badge.svg)](https://github.com/yaklang/OpenXDR/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/yaklang/OpenXDR/actions/workflows/ci.yml"><img src="https://github.com/yaklang/OpenXDR/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
+  <br>
+  <a href="README.md">中文</a> | English
+</p>
 
-[中文](README.md) | English
+<h3 align="center">An open-source autonomous XDR: EDR + SIEM + network traffic analysis</h3>
+<p align="center"><b>From the first sign to the last action, it walks the whole way on its own. You review — or overrule.</b></p>
 
-An open-source autonomous XDR: EDR + SIEM + network traffic analysis.
+<table>
+<tr>
+<td width="33%" valign="top"><h4>It never sleeps</h4>Collection, detection, triage and inspections run day and night; the noise settles here, and what remains is worth your time.</td>
+<td width="33%" valign="top"><h4>It acts</h4>Seconds after an attack lands, the offending container is cut off, the source is blocked and the fallen account is locked.</td>
+<td width="33%" valign="top"><h4>It answers for itself</h4>Every decision is written down with its reasons, every action can be undone in one click. No one has to keep watch at the screen — only read what it left behind when morning comes.</td>
+</tr>
+</table>
 
-**From the first sign to the last action, it walks the whole way on its own. You review — or overrule.**
-
-- **It never sleeps.** Collection, detection, triage and inspections run day and night; the noise settles here, and what remains is worth your time.
-- **It acts.** Seconds after an attack lands, the offending container is cut off, the source is blocked and the fallen account is locked.
-- **It answers for itself.** Every decision is written down with its reasons, every action can be undone in one click. No one has to keep watch at the screen — only read what it left behind when morning comes.
+<table>
+<tr>
+<td align="center" width="25%"><h3>200+</h3><sub>Sigma-compatible rules, hot reload</sub></td>
+<td align="center" width="25%"><h3>Linux · Windows</h3><sub>endpoint agents, one-command onboarding</sub></td>
+<td align="center" width="25%"><h3>3 tiers</h3><sub>response levels: lab / production / core</sub></td>
+<td align="center" width="25%"><h3>One-click undo</h3><sub>blocks and isolation run on leases, reviewed by AI at expiry</sub></td>
+</tr>
+</table>
 
 > Detailed documentation under `docs/` is currently written in Chinese.
+
+## Screenshots
+
+<sub>These screenshots come from a fictional demo environment; all hosts, addresses and domains are examples.</sub>
+
+<p align="center"><img src="docs/images/screenshots/overview-en.png" alt="Overview" width="100%"></p>
+
+<p align="center"><b>Overview</b><br>over a million raw events and ten thousand alerts a day, boiled down to the 3 incidents that need a human.</p>
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/screenshots/ai-assistant-en.png" alt="AI assistant"><br><b>AI assistant handling an incident</b><br><sub>hand an incident to the AI; it gathers evidence on the host, queries platform data, contains the threat after approval, and proposes how to close it.</sub></td>
+<td width="50%" valign="top"><img src="docs/images/screenshots/incidents-en.png" alt="Incidents"><br><b>Incidents</b><br><sub>every incident carries an AI verdict; benign ones say why, and the truly suspicious ones sit at the top.</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/screenshots/incident-detail-en.png" alt="Incident detail"><br><b>Incident detail</b><br><sub>verdict, kill chain and suggested actions up front, with the process tree and connections in one graph.</sub></td>
+<td width="50%" valign="top"><img src="docs/images/screenshots/asset-map-en.png" alt="Asset map"><br><b>Asset map</b><br><sub>dependencies drawn from connections actually observed, with AI-annotated roles and criticality.</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/screenshots/attack-surface-en.png" alt="Attack surface"><br><b>Attack surface</b><br><sub>which services face the internet, who reaches them and how risky they are, laid out by zone.</sub></td>
+<td width="50%" valign="top"><img src="docs/images/screenshots/reports-en.png" alt="Reports"><br><b>Daily inspection reports</b><br><sub>the AI inspects every host each day and puts what needs a human first.</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/screenshots/scheduled-tasks-en.png" alt="Scheduled tasks"><br><b>Scheduled tasks</b><br><sub>each task works like an AI teammate on a roster; see what its last shift did and which report it filed.</sub></td>
+<td width="50%" valign="top"><img src="docs/images/screenshots/asset-detail-en.png" alt="Asset detail"><br><b>Asset detail</b><br><sub>collection health, network sensor status, the asset profile and related incidents on one page.</sub></td>
+</tr>
+</table>
 
 ## What it does
 
@@ -80,46 +121,6 @@ A security platform that can act on its own is the first thing an attacker wants
 
 mTLS with host-bound certificates, three RBAC roles with group permissions, NATS JetStream queues sharded by asset, multi-node servers,
 and a cross-host HA deployment with Patroni, three-node JetStream and Keepalived, with rolling releases.
-
-## Screenshots
-
-These screenshots come from a fictional demo environment; all hosts, addresses and domains are examples.
-
-**Overview**: over a million raw events and ten thousand alerts a day, boiled down to the 3 incidents that need a human.
-
-![Overview](docs/images/screenshots/overview-en.png)
-
-**AI assistant handling an incident**: hand an incident to the AI; it gathers evidence on the host, queries platform data, contains the threat after approval, and proposes how to close it.
-
-![AI assistant](docs/images/screenshots/ai-assistant-en.png)
-
-**Incidents**: every incident carries an AI verdict; benign ones say why, and the truly suspicious ones sit at the top.
-
-![Incidents](docs/images/screenshots/incidents-en.png)
-
-**Incident detail**: verdict, kill chain and suggested actions up front, with the process tree and connections in one graph.
-
-![Incident detail](docs/images/screenshots/incident-detail-en.png)
-
-**Asset map**: dependencies drawn from connections actually observed, with AI-annotated roles and criticality.
-
-![Asset map](docs/images/screenshots/asset-map-en.png)
-
-**Attack surface**: which services face the internet, who reaches them and how risky they are, laid out by zone.
-
-![Attack surface](docs/images/screenshots/attack-surface-en.png)
-
-**Daily inspection reports**: the AI inspects every host each day and puts what needs a human first.
-
-![Reports](docs/images/screenshots/reports-en.png)
-
-**Scheduled tasks**: each task works like an AI teammate on a roster; see what its last shift did and which report it filed.
-
-![Scheduled tasks](docs/images/screenshots/scheduled-tasks-en.png)
-
-**Asset detail**: collection health, network sensor status, the asset profile and related incidents on one page.
-
-![Asset detail](docs/images/screenshots/asset-detail-en.png)
 
 ## Architecture
 

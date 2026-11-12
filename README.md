@@ -1,17 +1,58 @@
-# OpenXDR
+<p align="center"><img src="docs/images/readme/hero-zh.jpg" alt="OpenXDR：开源的自治 XDR，从察觉到处置，它自己走完" width="100%"></p>
 
-[![CI](https://github.com/yaklang/OpenXDR/actions/workflows/ci.yml/badge.svg)](https://github.com/yaklang/OpenXDR/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/yaklang/OpenXDR/actions/workflows/ci.yml"><img src="https://github.com/yaklang/OpenXDR/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
+  <br>
+  中文 | <a href="README.en.md">English</a>
+</p>
 
-中文 | [English](README.en.md)
+<h3 align="center">开源的自治 XDR：EDR + SIEM + 全流量分析</h3>
+<p align="center"><b>从察觉到处置，它自己走完；你只需审阅，或者推翻。</b></p>
 
-开源的自治 XDR：EDR + SIEM + 全流量分析。
+<table>
+<tr>
+<td width="33%" valign="top"><h4>它不眠</h4>采集、检测、研判与巡检日夜流转，喧嚣在它这里沉淀，留下的每一件都值得一看。</td>
+<td width="33%" valign="top"><h4>它出手</h4>攻击落地的几秒之内，作恶的容器已经断网，来源已经封死，失守的账号已经锁上。</td>
+<td width="33%" valign="top"><h4>它交代</h4>每一个决定都写下理由，每一次处置都能一键撤回。不必有人守在屏幕前，只需在天亮后读它留下的记录。</td>
+</tr>
+</table>
 
-**从察觉到处置，它自己走完；你只需审阅，或者推翻。**
+<table>
+<tr>
+<td align="center" width="25%"><h3>200+</h3><sub>Sigma 兼容检测规则，热重载</sub></td>
+<td align="center" width="25%"><h3>Linux · Windows</h3><sub>端点 agent，一条命令接入</sub></td>
+<td align="center" width="25%"><h3>3 档</h3><sub>处置等级：实验 / 生产 / 核心</sub></td>
+<td align="center" width="25%"><h3>一键撤回</h3><sub>封锁与隔离按租约生效，到期由 AI 复核</sub></td>
+</tr>
+</table>
 
-- **它不眠。** 采集、检测、研判与巡检日夜流转，喧嚣在它这里沉淀，留下的每一件都值得一看。
-- **它出手。** 攻击落地的几秒之内，作恶的容器已经断网，来源已经封死，失守的账号已经锁上。
-- **它交代。** 每一个决定都写下理由，每一次处置都能一键撤回。不必有人守在屏幕前，只需在天亮后读它留下的记录。
+## 界面一览
+
+<sub>以下截图来自虚构的演示环境，主机、地址与域名均为示例。</sub>
+
+<p align="center"><img src="docs/images/screenshots/overview-zh.png" alt="态势总览" width="100%"></p>
+
+<p align="center"><b>态势总览</b><br>一天上百万条原始事件、上万条告警，最后只剩 3 件需要人看。</p>
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/screenshots/ai-assistant-zh.png" alt="AI 助手"><br><b>AI 助手处理事件</b><br><sub>把事件交给 AI，它上机取证、查平台数据、在审批后处置，最后给出结论和结案建议。</sub></td>
+<td width="50%" valign="top"><img src="docs/images/screenshots/incidents-zh.png" alt="安全事件"><br><b>安全事件</b><br><sub>每个事件都带 AI 研判结论，良性的写明理由，真正可疑的排在最前。</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/screenshots/incident-detail-zh.png" alt="事件详情"><br><b>事件详情</b><br><sub>研判结论、攻击链与处置建议在上，进程树与外联关系一张图看清。</sub></td>
+<td width="50%" valign="top"><img src="docs/images/screenshots/asset-map-zh.png" alt="资产图谱"><br><b>资产图谱</b><br><sub>按实际观测到的连接画出依赖关系，AI 标注每台机器的角色与重要程度。</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/screenshots/attack-surface-zh.png" alt="攻击面"><br><b>攻击面</b><br><sub>哪些服务对公网开放、谁在访问、风险多高，按区域一目了然。</sub></td>
+<td width="50%" valign="top"><img src="docs/images/screenshots/reports-zh.png" alt="巡检报告"><br><b>每日巡检报告</b><br><sub>AI 每天巡检全组主机，只把需要人处理的事写在前面。</sub></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/images/screenshots/scheduled-tasks-zh.png" alt="定时任务"><br><b>定时任务</b><br><sub>每个任务像一位排班上岗的 AI 员工，上一班做了什么、交了什么报告都看得到。</sub></td>
+<td width="50%" valign="top"><img src="docs/images/screenshots/asset-detail-zh.png" alt="资产详情"><br><b>资产详情</b><br><sub>采集链路是否健康、流量探针状态、角色画像与相关事件集中在一页。</sub></td>
+</tr>
+</table>
 
 ## 能做什么
 
@@ -78,46 +119,6 @@
 
 mTLS 与按主机绑定证书、三档 RBAC 与组权限、NATS JetStream 按资产分片队列、多节点 server，
 以及 Patroni + 三节点 JetStream + Keepalived 的跨宿主机高可用部署与滚动发布。
-
-## 界面一览
-
-以下截图来自虚构的演示环境，主机、地址与域名均为示例。
-
-**态势总览**：一天上百万条原始事件、上万条告警，最后只剩 3 件需要人看。
-
-![态势总览](docs/images/screenshots/overview-zh.png)
-
-**AI 助手处理事件**：把事件交给 AI，它上机取证、查平台数据、在审批后处置，最后给出结论和结案建议。
-
-![AI 助手](docs/images/screenshots/ai-assistant-zh.png)
-
-**安全事件**：每个事件都带 AI 研判结论，良性的写明理由，真正可疑的排在最前。
-
-![安全事件](docs/images/screenshots/incidents-zh.png)
-
-**事件详情**：研判结论、攻击链与处置建议在上，进程树与外联关系一张图看清。
-
-![事件详情](docs/images/screenshots/incident-detail-zh.png)
-
-**资产图谱**：按实际观测到的连接画出依赖关系，AI 标注每台机器的角色与重要程度。
-
-![资产图谱](docs/images/screenshots/asset-map-zh.png)
-
-**攻击面**：哪些服务对公网开放、谁在访问、风险多高，按区域一目了然。
-
-![攻击面](docs/images/screenshots/attack-surface-zh.png)
-
-**每日巡检报告**：AI 每天巡检全组主机，只把需要人处理的事写在前面。
-
-![巡检报告](docs/images/screenshots/reports-zh.png)
-
-**定时任务**：每个任务像一位排班上岗的 AI 员工，上一班做了什么、交了什么报告都看得到。
-
-![定时任务](docs/images/screenshots/scheduled-tasks-zh.png)
-
-**资产详情**：采集链路是否健康、流量探针状态、角色画像与相关事件集中在一页。
-
-![资产详情](docs/images/screenshots/asset-detail-zh.png)
 
 ## 架构
 
