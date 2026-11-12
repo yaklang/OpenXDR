@@ -339,9 +339,15 @@ func (s *Store) RecordProbe(ctx context.Context, session *ent.AgentSession, c *e
 	if err != nil {
 		return err
 	}
+	now := time.Now()
+	extra, err := standingGrants(ctx, s.DB, current.GroupID, c.AssetID, now, false)
+	if err != nil {
+		return err
+	}
+	policy.Grants = append(policy.Grants, extra...)
 	inScope := false
 	for _, grant := range policy.Grants {
-		if grant.Action == RestartFailedService && grant.GroupID == current.GroupID && grant.ExpiresAt.After(time.Now()) && slices.Contains(grant.AssetIDs, c.AssetID) && slices.Contains(grant.Units, unit) {
+		if grant.Action == RestartFailedService && grant.GroupID == current.GroupID && grant.ExpiresAt.After(now) && slices.Contains(grant.AssetIDs, c.AssetID) && slices.Contains(grant.Units, unit) {
 			inScope = true
 			break
 		}
@@ -436,8 +442,8 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	}
 	defer tx.Rollback()
 	row, err := tx.Setting.Query().Where(setting.IDEQ(SettingKey)).Where(func(q *sql.Selector) { q.ForUpdate() }).Only(ctx)
-	if err != nil {
-		return errors.New("未配置可信维护范围，仅只读跟进")
+	if err != nil && !ent.IsNotFound(err) {
+		return err
 	}
 	if _, err := tx.Finding.Query().Where(finding.IDEQ(f.ID)).Where(func(q *sql.Selector) { q.ForUpdate() }).Only(ctx); err != nil {
 		return err
@@ -448,6 +454,13 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 		return err
 	}
 	now = time.Now()
+	extra, err := standingGrants(ctx, tx.Client(), current.GroupID, actual.AssetID, now, true)
+	if err != nil {
+		return err
+	}
+	if row == nil && len(extra) == 0 {
+		return errors.New("未配置可信维护范围，仅只读跟进")
+	}
 	if action == ReclaimDisk && !diskFinding(actual) {
 		return errors.New("待办已不属于磁盘容量问题")
 	}
@@ -482,9 +495,12 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 		}
 	}
 	var p Policy
-	if err := strict(row.Value, &p); err != nil {
-		return err
+	if row != nil {
+		if err := strict(row.Value, &p); err != nil {
+			return err
+		}
 	}
+	p.Grants = append(p.Grants, extra...)
 	var grant *Grant
 	for i := range p.Grants {
 		g := &p.Grants[i]
@@ -639,6 +655,11 @@ func (s *Store) HasGrant(ctx context.Context, groupID, assetID uuid.UUID, action
 		return false, err
 	}
 	now := time.Now()
+	extra, err := standingGrants(ctx, s.DB, groupID, assetID, now, false)
+	if err != nil {
+		return false, err
+	}
+	policy.Grants = append(policy.Grants, extra...)
 	for _, grant := range policy.Grants {
 		if grantApplies(grant, groupID, assetID, now) && actionScope(grant, action, unit, unit) {
 			return true, nil
@@ -711,6 +732,11 @@ func (s *Store) HasAssetGrant(ctx context.Context, groupID, assetID uuid.UUID) (
 		return false, err
 	}
 	now := time.Now()
+	extra, err := standingGrants(ctx, s.DB, groupID, assetID, now, false)
+	if err != nil {
+		return false, err
+	}
+	policy.Grants = append(policy.Grants, extra...)
 	for _, g := range policy.Grants {
 		if !grantApplies(g, groupID, assetID, now) {
 			continue

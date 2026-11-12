@@ -548,6 +548,30 @@ func (f SettingFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, err
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SettingMutation", m)
 }
 
+// The StandingRuleFunc type is an adapter to allow the use of ordinary
+// function as StandingRule mutator.
+type StandingRuleFunc func(context.Context, *ent.StandingRuleMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f StandingRuleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.StandingRuleMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.StandingRuleMutation", m)
+}
+
+// The StandingRuleRunFunc type is an adapter to allow the use of ordinary
+// function as StandingRuleRun mutator.
+type StandingRuleRunFunc func(context.Context, *ent.StandingRuleRunMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f StandingRuleRunFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.StandingRuleRunMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.StandingRuleRunMutation", m)
+}
+
 // The SuppressionFunc type is an adapter to allow the use of ordinary
 // function as Suppression mutator.
 type SuppressionFunc func(context.Context, *ent.SuppressionMutation) (ent.Value, error)

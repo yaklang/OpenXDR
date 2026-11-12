@@ -51,6 +51,8 @@ import (
 	"openxdr/server/ent/sessionmessage"
 	"openxdr/server/ent/setting"
 	"openxdr/server/ent/sshlogin"
+	"openxdr/server/ent/standingrule"
+	"openxdr/server/ent/standingrulerun"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/task"
 	"openxdr/server/ent/taskrun"
@@ -170,6 +172,8 @@ func checkColumn(t, c string) error {
 			session.Table:                 session.ValidColumn,
 			sessionmessage.Table:          sessionmessage.ValidColumn,
 			setting.Table:                 setting.ValidColumn,
+			standingrule.Table:            standingrule.ValidColumn,
+			standingrulerun.Table:         standingrulerun.ValidColumn,
 			suppression.Table:             suppression.ValidColumn,
 			task.Table:                    task.ValidColumn,
 			taskrun.Table:                 taskrun.ValidColumn,

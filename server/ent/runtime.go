@@ -49,6 +49,8 @@ import (
 	"openxdr/server/ent/sessionmessage"
 	"openxdr/server/ent/setting"
 	"openxdr/server/ent/sshlogin"
+	"openxdr/server/ent/standingrule"
+	"openxdr/server/ent/standingrulerun"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/ent/task"
 	"openxdr/server/ent/taskrun"
@@ -892,6 +894,90 @@ func init() {
 	setting.DefaultUpdatedAt = settingDescUpdatedAt.Default.(func() time.Time)
 	// setting.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
 	setting.UpdateDefaultUpdatedAt = settingDescUpdatedAt.UpdateDefault.(func() time.Time)
+	standingruleFields := schema.StandingRule{}.Fields()
+	_ = standingruleFields
+	// standingruleDescCreatedAt is the schema descriptor for created_at field.
+	standingruleDescCreatedAt := standingruleFields[1].Descriptor()
+	// standingrule.DefaultCreatedAt holds the default value on creation for the created_at field.
+	standingrule.DefaultCreatedAt = standingruleDescCreatedAt.Default.(func() time.Time)
+	// standingruleDescUpdatedAt is the schema descriptor for updated_at field.
+	standingruleDescUpdatedAt := standingruleFields[2].Descriptor()
+	// standingrule.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	standingrule.DefaultUpdatedAt = standingruleDescUpdatedAt.Default.(func() time.Time)
+	// standingrule.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	standingrule.UpdateDefaultUpdatedAt = standingruleDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// standingruleDescBuiltinKey is the schema descriptor for builtin_key field.
+	standingruleDescBuiltinKey := standingruleFields[3].Descriptor()
+	// standingrule.DefaultBuiltinKey holds the default value on creation for the builtin_key field.
+	standingrule.DefaultBuiltinKey = standingruleDescBuiltinKey.Default.(string)
+	// standingruleDescName is the schema descriptor for name field.
+	standingruleDescName := standingruleFields[4].Descriptor()
+	// standingrule.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	standingrule.NameValidator = standingruleDescName.Validators[0].(func(string) error)
+	// standingruleDescConditionSummary is the schema descriptor for condition_summary field.
+	standingruleDescConditionSummary := standingruleFields[5].Descriptor()
+	// standingrule.ConditionSummaryValidator is a validator for the "condition_summary" field. It is called by the builders before save.
+	standingrule.ConditionSummaryValidator = standingruleDescConditionSummary.Validators[0].(func(string) error)
+	// standingruleDescActionTemplate is the schema descriptor for action_template field.
+	standingruleDescActionTemplate := standingruleFields[7].Descriptor()
+	// standingrule.ActionTemplateValidator is a validator for the "action_template" field. It is called by the builders before save.
+	standingrule.ActionTemplateValidator = standingruleDescActionTemplate.Validators[0].(func(string) error)
+	// standingruleDescMaintenanceWindow is the schema descriptor for maintenance_window field.
+	standingruleDescMaintenanceWindow := standingruleFields[12].Descriptor()
+	// standingrule.DefaultMaintenanceWindow holds the default value on creation for the maintenance_window field.
+	standingrule.DefaultMaintenanceWindow = standingruleDescMaintenanceWindow.Default.(string)
+	// standingruleDescCooldownMinutes is the schema descriptor for cooldown_minutes field.
+	standingruleDescCooldownMinutes := standingruleFields[13].Descriptor()
+	// standingrule.DefaultCooldownMinutes holds the default value on creation for the cooldown_minutes field.
+	standingrule.DefaultCooldownMinutes = standingruleDescCooldownMinutes.Default.(int)
+	// standingruleDescEnabled is the schema descriptor for enabled field.
+	standingruleDescEnabled := standingruleFields[15].Descriptor()
+	// standingrule.DefaultEnabled holds the default value on creation for the enabled field.
+	standingrule.DefaultEnabled = standingruleDescEnabled.Default.(bool)
+	// standingruleDescConsecutiveFailures is the schema descriptor for consecutive_failures field.
+	standingruleDescConsecutiveFailures := standingruleFields[16].Descriptor()
+	// standingrule.DefaultConsecutiveFailures holds the default value on creation for the consecutive_failures field.
+	standingrule.DefaultConsecutiveFailures = standingruleDescConsecutiveFailures.Default.(int)
+	// standingruleDescDegradedReason is the schema descriptor for degraded_reason field.
+	standingruleDescDegradedReason := standingruleFields[18].Descriptor()
+	// standingrule.DefaultDegradedReason holds the default value on creation for the degraded_reason field.
+	standingrule.DefaultDegradedReason = standingruleDescDegradedReason.Default.(string)
+	// standingruleDescLastRunStatus is the schema descriptor for last_run_status field.
+	standingruleDescLastRunStatus := standingruleFields[20].Descriptor()
+	// standingrule.DefaultLastRunStatus holds the default value on creation for the last_run_status field.
+	standingrule.DefaultLastRunStatus = standingruleDescLastRunStatus.Default.(string)
+	// standingruleDescID is the schema descriptor for id field.
+	standingruleDescID := standingruleFields[0].Descriptor()
+	// standingrule.DefaultID holds the default value on creation for the id field.
+	standingrule.DefaultID = standingruleDescID.Default.(func() uuid.UUID)
+	standingrulerunFields := schema.StandingRuleRun{}.Fields()
+	_ = standingrulerunFields
+	// standingrulerunDescCreatedAt is the schema descriptor for created_at field.
+	standingrulerunDescCreatedAt := standingrulerunFields[1].Descriptor()
+	// standingrulerun.DefaultCreatedAt holds the default value on creation for the created_at field.
+	standingrulerun.DefaultCreatedAt = standingrulerunDescCreatedAt.Default.(func() time.Time)
+	// standingrulerunDescUpdatedAt is the schema descriptor for updated_at field.
+	standingrulerunDescUpdatedAt := standingrulerunFields[2].Descriptor()
+	// standingrulerun.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	standingrulerun.DefaultUpdatedAt = standingrulerunDescUpdatedAt.Default.(func() time.Time)
+	// standingrulerun.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	standingrulerun.UpdateDefaultUpdatedAt = standingrulerunDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// standingrulerunDescCommand is the schema descriptor for command field.
+	standingrulerunDescCommand := standingrulerunFields[11].Descriptor()
+	// standingrulerun.DefaultCommand holds the default value on creation for the command field.
+	standingrulerun.DefaultCommand = standingrulerunDescCommand.Default.(string)
+	// standingrulerunDescResult is the schema descriptor for result field.
+	standingrulerunDescResult := standingrulerunFields[15].Descriptor()
+	// standingrulerun.DefaultResult holds the default value on creation for the result field.
+	standingrulerun.DefaultResult = standingrulerunDescResult.Default.(string)
+	// standingrulerunDescRollback is the schema descriptor for rollback field.
+	standingrulerunDescRollback := standingrulerunFields[16].Descriptor()
+	// standingrulerun.DefaultRollback holds the default value on creation for the rollback field.
+	standingrulerun.DefaultRollback = standingrulerunDescRollback.Default.(string)
+	// standingrulerunDescID is the schema descriptor for id field.
+	standingrulerunDescID := standingrulerunFields[0].Descriptor()
+	// standingrulerun.DefaultID holds the default value on creation for the id field.
+	standingrulerun.DefaultID = standingrulerunDescID.Default.(func() uuid.UUID)
 	suppressionFields := schema.Suppression{}.Fields()
 	_ = suppressionFields
 	// suppressionDescCreatedAt is the schema descriptor for created_at field.

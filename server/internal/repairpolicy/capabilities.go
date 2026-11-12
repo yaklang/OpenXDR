@@ -17,7 +17,7 @@ import (
 
 // Capabilities 只读查询精确动作的前置条件；执行仍由 Authorize/Revalidate 独立重新核验。
 func (s *Store) Capabilities(ctx context.Context, group, session uuid.UUID, f *ent.Finding, cmd, mount string) (findings.RepairCapabilities, error) {
-	out := findings.RepairCapabilities{SupportedTemplates: []string{"systemctl restart -- <非关键服务.service>", "docker image prune -f", "docker builder prune -f", "apt-get clean", "find -- <授权目录> -xdev -type f -mtime +<7..3650> -delete"}, Grants: []findings.RepairGrant{}, Command: cmd, Status: "action_required", Reason: "请选择精确修复命令，再检查授权、窗口、冷却与本轮探针"}
+	out := findings.RepairCapabilities{SupportedTemplates: []string{"systemctl restart -- <非关键服务.service>", "docker image prune -f", "docker image prune -a --filter until=168h -f", "docker builder prune -f", "docker builder prune --filter until=168h -f", "apt-get clean", "journalctl --vacuum-size=500M", "find -- <授权目录> -xdev -type f -mtime +<7..3650> -delete"}, Grants: []findings.RepairGrant{}, Command: cmd, Status: "action_required", Reason: "请选择精确修复命令，再检查授权、窗口、冷却与本轮探针"}
 	if f == nil {
 		return out, errors.New("缺少待办")
 	}
@@ -43,6 +43,11 @@ func (s *Store) Capabilities(ctx context.Context, group, session uuid.UUID, f *e
 		return out, err
 	}
 	now := time.Now()
+	extra, err := standingGrants(ctx, s.DB, group, actual.AssetID, now, false)
+	if err != nil {
+		return out, err
+	}
+	p.Grants = append(p.Grants, extra...)
 	versions := []string{}
 	for _, g := range p.Grants {
 		if !grantScopeValid(g, group, actual.AssetID, now) {

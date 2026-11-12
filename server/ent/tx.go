@@ -102,6 +102,10 @@ type Tx struct {
 	SessionMessage *SessionMessageClient
 	// Setting is the client for interacting with the Setting builders.
 	Setting *SettingClient
+	// StandingRule is the client for interacting with the StandingRule builders.
+	StandingRule *StandingRuleClient
+	// StandingRuleRun is the client for interacting with the StandingRuleRun builders.
+	StandingRuleRun *StandingRuleRunClient
 	// Suppression is the client for interacting with the Suppression builders.
 	Suppression *SuppressionClient
 	// Task is the client for interacting with the Task builders.
@@ -294,6 +298,8 @@ func (tx *Tx) init() {
 	tx.Session = NewSessionClient(tx.config)
 	tx.SessionMessage = NewSessionMessageClient(tx.config)
 	tx.Setting = NewSettingClient(tx.config)
+	tx.StandingRule = NewStandingRuleClient(tx.config)
+	tx.StandingRuleRun = NewStandingRuleRunClient(tx.config)
 	tx.Suppression = NewSuppressionClient(tx.config)
 	tx.Task = NewTaskClient(tx.config)
 	tx.TaskRun = NewTaskRunClient(tx.config)

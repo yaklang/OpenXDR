@@ -87,9 +87,15 @@ func (s *Store) recordDiskProbe(ctx context.Context, session *ent.AgentSession, 
 	if err != nil {
 		return err
 	}
+	now := time.Now()
+	extra, err := standingGrants(ctx, s.DB, current.GroupID, c.AssetID, now, false)
+	if err != nil {
+		return err
+	}
+	policy.Grants = append(policy.Grants, extra...)
 	inScope := false
 	for _, g := range policy.Grants {
-		if g.Action == ReclaimDisk && grantApplies(g, current.GroupID, c.AssetID, time.Now()) {
+		if g.Action == ReclaimDisk && grantApplies(g, current.GroupID, c.AssetID, now) {
 			inScope = true
 			break
 		}

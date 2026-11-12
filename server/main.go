@@ -75,6 +75,7 @@ import (
 	"openxdr/server/internal/schedule"
 	"openxdr/server/internal/selfwatch"
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/standingrules"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/suppressclose"
 	"openxdr/server/internal/suppressreview"
@@ -201,6 +202,13 @@ func main() {
 	}
 	feishu.Register(routes)
 	go cluster.RunLeader(ctx, db, "feishu-approval", feishu.Run)
+	go cluster.RunLeader(ctx, db, "standing-rules", (&standingrules.Runner{
+		DB:             client,
+		Hub:            hub,
+		Repair:         repair,
+		Notify:         webhook.Send,
+		NotifyApproval: feishuapproval.ApprovalNotifier(client, webhook.Send),
+	}).Run)
 	registerSQLRoutes(routes, db)
 	routes.Handle("GET /api/trusted-sources/candidates", api.TrustedCandidates(client, db))
 	routes.Handle("POST /api/intel/threatbook/lookup", api.ThreatBookLookup(client, &threatbook.Service{
@@ -225,7 +233,7 @@ func main() {
 	routes.Handle("/api/system-integrations/", integrations)
 	startIntegrationDelivery(ctx, client, credentialVault, outboundAllow)
 	control := api.Control(client, webhook.Send)
-	for _, path := range []string{"/api/facts", "/api/facts/", "/api/intents", "/api/intents/"} {
+	for _, path := range []string{"/api/facts", "/api/facts/", "/api/intents", "/api/intents/", "/api/standing-rules", "/api/standing-rules/"} {
 		routes.Handle(path, control)
 	}
 	routes.Handle("/", api.Handler(client, archiveRead, rules, hub, suppressions, intelStore, allowlist, chat))
@@ -270,6 +278,9 @@ func migrateSchema(ctx context.Context, db *sql.DB, client *ent.Client) error {
 		return err
 	}
 	if err := commandgate.UpgradeDefaults(ctx, client); err != nil {
+		return err
+	}
+	if err := standingrules.SeedBuiltins(ctx, client); err != nil {
 		return err
 	}
 	if err := aijob.EnsureSchema(ctx, db); err != nil {
