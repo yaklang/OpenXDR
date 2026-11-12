@@ -836,6 +836,16 @@ fn ip_of(family: u16, bytes: &[u8; 16]) -> IpAddr {
     ip.to_canonical()
 }
 
+/// 截断的命令行换成 /proc 里的完整版：只有完整版以内核抓到的前缀开头才换，
+/// 进程已退场、又 exec 成别的程序或 pid 被复用时保留截断版
+fn untruncate(kernel: String, proc_line: Option<String>) -> String {
+    let prefix = kernel.trim_end_matches(" …");
+    match proc_line {
+        Some(full) if full.len() > prefix.len() && full.starts_with(prefix) => full,
+        _ => kernel,
+    }
+}
+
 fn to_agent_event(
     agent_id: &str,
     registry: &mut ProcessRegistry,
@@ -844,8 +854,13 @@ fn to_agent_event(
     let name = cstr(&ev.comm);
     let exe = cstr(&ev.filename);
     // 命令行、父进程、属主优先用内核在 exec 时抓的；没抓到（老内核、钩子没挂上）才去 /proc 读，
-    // 短命进程那时可能已退场，就只能缺省
-    let cmd_line = ev.cmd_line().or_else(|| super::container::cmd_line(ev.pid));
+    // 短命进程那时可能已退场，就只能缺省。内核只抓前 32 个参数、2KB，截断了就试 /proc 补全
+    let cmd_line = match ev.cmd_line() {
+        Some(line) if ev.argv_truncated != 0 => {
+            Some(untruncate(line, super::container::cmd_line(ev.pid)))
+        }
+        line => line.or_else(|| super::container::cmd_line(ev.pid)),
+    };
     let ppid = (ev.ppid != 0)
         .then_some(ev.ppid)
         .or_else(|| super::container::ppid(ev.pid));
@@ -1017,6 +1032,24 @@ format:
         assert_eq!(field_offset(new, "child_pid"), Some(20));
         assert_eq!(field_offset(new, "child_comm"), Some(16));
         assert_eq!(field_offset(new, "nope"), None);
+    }
+
+    #[test]
+    fn truncated_cmdline_is_completed_only_from_the_same_program() {
+        let cut = "docker run --rm -v a:b …".to_string();
+        let full = "docker run --rm -v a:b --env X=1 img sh -c true".to_string();
+        assert_eq!(untruncate(cut.clone(), Some(full.clone())), full);
+        assert_eq!(untruncate(cut.clone(), None), cut, "进程已退场");
+        assert_eq!(
+            untruncate(cut.clone(), Some("sleep 30".into())),
+            cut,
+            "又 exec 成别的程序"
+        );
+        assert_eq!(
+            untruncate(cut.clone(), Some("docker run --rm -v a:b".into())),
+            cut,
+            "/proc 不比截断版长"
+        );
     }
 
     #[test]
