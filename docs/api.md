@@ -101,6 +101,9 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | GET | `/api/intents?active=1` | 运维意图（编号 `ref` 为 `I-` 加 UUID 末 8 位），带主机名、是否进行中、是否事后补登；只列覆盖到自己可见主机的 |
 | POST | `/api/intents` | 登记 `{"keyFingerprint","sourceAddr","assetIds","category","note","durationMinutes"(≤240),"startedAt"(可选，补登最多 2 小时前)}`。登记人为 `user:<用户名>`，只能为事实库里持有人是自己的钥匙与通道登记（403），须对全部主机有组内 analyst 权限（403），主机 1–20 台、用途在固定目录（deploy / troubleshoot / migrate / inspect / test / maintenance / backup）里（400）。落审计 `intent_registered`，实时推送到通知渠道；`note` 只给人看，不进模型 |
 | POST | `/api/intents/{id}/end` | 提前结束；登记人本人或平台管理员，落审计 `intent_ended`，重复 409 |
+| GET | `/api/ssh-keys?assetId=` | SSH 授权钥匙盘点观测（按可见资产裁剪，可选按单机筛选）：返回 `{keys, hostConfigs}`，含短指纹、完整 SHA256 指纹、账号、文件路径、选项、注释（仅作提示）、最近登录时间与来源、活跃状态（`active` 90 天内有登录 / `idle` 闲置，在用排前面）、认领状态（`claimed` / `unclaimed` 及匹配的 `key` 事实引用）、新出现关联的写入会话与移除提议状态，以及配置了 `AuthorizedKeysCommand` 的主机摘要；组 viewer |
+| POST | `/api/ssh-keys/claim` | 认领钥匙 `{"fingerprint","holder","machine","purpose","groupId","assetId","expiresInDays"(0=长期，最多 3650)}`：确认持有人、所在机器与用途，写入一条权威 `key` 事实并落审计 `fact_created`（同范围已认领返回 409）；只有平台管理员（AI/Pi 无认领工具） |
+| POST | `/api/ssh-keys/{id}/propose-removal` | 为指定钥匙观测生成待批移除提议（写入现有审批队列，批准后按指纹核对移除对应行，从不自动删除；已有待批提议时幂等返回）；组管理员 |
 
 `GET /api/events` 的条目与 `GET /api/incidents/{id}` 的告警带 `automation: {id, name, watch}`（来自可信来源时；`watch` 为高危例外）。
 

@@ -869,6 +869,67 @@ export async function createIntent(body: {
 }
 export const endIntent = (id: string) => send('POST', `/api/intents/${encodeURIComponent(id)}/end`)
 
+// 自治总控：SSH 授权钥匙盘点观测与管理员认领
+export interface SSHKeyObservation {
+  id: string
+  assetId: string
+  groupId: string | null
+  hostname: string
+  account: string
+  filePath: string
+  keyType: string
+  fingerprint: string
+  comment: string
+  options: string[]
+  firstSeen: string
+  lastSeen: string
+  lastLoginAt: string | null
+  lastLoginIp?: string
+  usageStatus: 'active' | 'idle'
+  claimStatus: 'claimed' | 'unclaimed'
+  factRef?: string
+  holder?: string
+  holderName?: string
+  factContent?: string
+  addedByUser?: string
+  addedByIp?: string
+  addedByKeyFp?: string
+  removalApprovalId?: string
+  removalStatus?: string
+}
+
+export interface SSHKeyHostConfig {
+  assetId: string
+  hostname: string
+  authorizedKeysCommand: string
+  authorizedKeysCommandUser?: string
+  lastReportedAt: string
+}
+
+export interface SSHKeysResponse {
+  keys: SSHKeyObservation[]
+  hostConfigs: SSHKeyHostConfig[]
+}
+
+export const fetchSSHKeys = (assetId?: string) =>
+  get<SSHKeysResponse>(`/api/ssh-keys${assetId ? `?${new URLSearchParams({ assetId })}` : ''}`)
+
+export async function claimSSHKey(body: {
+  fingerprint: string
+  holder: string
+  machine: string
+  purpose: string
+  groupId?: string
+  assetId?: string
+  expiresInDays: number
+}): Promise<Fact> {
+  return (await send('POST', '/api/ssh-keys/claim', body)).json()
+}
+
+export async function proposeSSHKeyRemoval(id: string): Promise<Approval> {
+  return (await send('POST', `/api/ssh-keys/${encodeURIComponent(id)}/propose-removal`)).json()
+}
+
 export async function createSuppression(body: {
   ruleId: string
   assetId?: string | null

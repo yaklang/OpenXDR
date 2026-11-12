@@ -263,6 +263,14 @@ Linux 另带本机容器的地址（`device.containers`，`hosted.rs`）：按 c
 不当成待纳管的设备。
 产出 class 5001，见 [事件模型](events.md#5001-设备清单)。
 
+### SSH 授权钥匙盘点（sshkeys，仅 Linux root）
+
+`sshkeys.rs` 以 root 读取本机 SSH 公钥授权配置并经独立 gRPC `ReportSSHKeys` 上报观测快照（非事实）：
+
+- 覆盖范围：`sshd -T` 解析出的 `AuthorizedKeysFile`（展开 `%h`、`%u`、`%U`、`%%`）、`/etc/passwd` 全部用户家目录，以及 `/etc/ssh/authorized_keys.d`；`AuthorizedKeysCommand` / `AuthorizedKeysCommandUser` 只记录配置文本上报，**绝不执行**
+- 最小暴露：本地解析 OpenSSH 授权行（含双引号感知选项与注释），校验公钥 wire 头后计算 `SHA256:<43位无填充base64>` 指纹（与 `login_session.key_fp` 同格式），只上报账号、路径、算法类型、指纹、注释与选项（`from=`、`command=`、`cert-authority` 等），**不上报公钥原文**；文件以 `O_NOFOLLOW` 普通文件校验打开，单文件上限 1 MiB
+- 触发机制：启动时扫描上报一次，之后将额外授权目录并入 `fswatch` 监控目标，命中 `authorized_keys` 相关路径变更时防抖 300ms 重扫上报，不另做轮询；非 root 运行或 Windows 构建跳过采集
+
 ## Windows 采集路径
 
 ### 进程采集（ETW）

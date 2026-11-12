@@ -17,3 +17,7 @@ export function factLive(f: Fact, now = Date.now()) {
 export function bareAddr(cidr: string) {
   return cidr.replace(/\/(32|128)$/, '')
 }
+
+export function shortKeyFp(v: string) {
+  return v.length > 24 ? `${v.slice(0, 15)}…${v.slice(-6)}` : v
+}
