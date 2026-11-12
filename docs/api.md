@@ -101,6 +101,12 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | GET | `/api/intents?active=1` | 运维意图（编号 `ref` 为 `I-` 加 UUID 末 8 位），带主机名、是否进行中、是否事后补登；只列覆盖到自己可见主机的 |
 | POST | `/api/intents` | 登记 `{"keyFingerprint","sourceAddr","assetIds","category","note","durationMinutes"(≤240),"startedAt"(可选，补登最多 2 小时前)}`。登记人为 `user:<用户名>`，只能为事实库里持有人是自己的钥匙与通道登记（403），须对全部主机有组内 analyst 权限（403），主机 1–20 台、用途在固定目录（deploy / troubleshoot / migrate / inspect / test / maintenance / backup）里（400）。落审计 `intent_registered`，实时推送到通知渠道；`note` 只给人看，不进模型 |
 | POST | `/api/intents/{id}/end` | 提前结束；登记人本人或平台管理员，落审计 `intent_ended`，重复 409 |
+| GET | `/api/standing-rules/templates` | 常设规矩封闭动作模板列表（含内置 8 条与按主机长期授权模板、允许档位、默认维护窗口/冷却与默认回退说明）；组 viewer |
+| GET | `/api/standing-rules` | 常设规矩列表（编号 `ref` 为 `R-` 加 UUID 末 8 位），带档位（`auto` / `propose` / `human`）、作用范围、维护窗口、冷却、今日与 30 天命中、今日自动执行、最近执行与连续出错自动降级状态；按组裁剪，全局规矩所有人可见 |
+| POST | `/api/standing-rules` | 新建自定义或按主机长期授权规矩 `{"actionTemplate","name","conditionSummary","actionParams","tier","groupId","assetIds","maintenanceWindow","cooldownMinutes","enabled"}`；仅平台管理员，落审计 `standing_rule_created` |
+| PATCH | `/api/standing-rules/{id}` | 修改规矩启停、档位、作用范围、维护窗口、冷却或模板参数；仅平台管理员，切档落审计 `standing_rule_tier_changed`（其余 `standing_rule_updated`），显式切档或重新启用同时清除连续出错降级标记 |
+| DELETE | `/api/standing-rules/{id}` | 删除自定义常设规矩及其执行记录（内置规矩不可删除，400）；仅平台管理员，落审计 `standing_rule_deleted` |
+| GET | `/api/standing-rules/{id}/runs?skipped=` | 单条规矩最近 100 条执行记录（命中摘要、档位、状态、封闭命令、结果与明确回退方式 `rollback`）；按组裁剪，默认不含条件未满足的跳过记录 |
 
 `GET /api/events` 的条目与 `GET /api/incidents/{id}` 的告警带 `automation: {id, name, watch}`（来自可信来源时；`watch` 为高危例外）。
 

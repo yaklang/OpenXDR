@@ -2,16 +2,17 @@ import { Tag } from 'antd'
 import { Link } from 'react-router'
 import { controlLink } from './control'
 
-// 事实与意图的编号：点开跳到总控对应条目
+// 事实、意图与常设规矩的编号：点开跳到总控对应条目
 export function RefTag({ value }: { value: string }) {
+  const color = value.startsWith('I-') ? 'purple' : value.startsWith('R-') ? 'cyan' : 'blue'
   return (
     <Link to={controlLink(value)}>
-      <Tag color={value.startsWith('I-') ? 'purple' : 'blue'} className="mono" style={{ margin: '0 2px', fontSize: 11.5, cursor: 'pointer' }}>{value}</Tag>
+      <Tag color={color} className="mono" style={{ margin: '0 2px', fontSize: 11.5, cursor: 'pointer' }}>{value}</Tag>
     </Link>
   )
 }
 
-const REF = /\[?\b([FI]-[0-9a-f]{8})\b\]?/g
+const REF = /\[?\b([FIR]-[0-9a-f]{8})\b\]?/g
 
 // 研判文字里的 [F-xxxxxxxx] / [I-xxxxxxxx] 换成可点的编号，其余原样
 export function RefText({ text }: { text: string }) {
