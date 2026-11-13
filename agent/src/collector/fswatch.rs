@@ -79,6 +79,10 @@ const EVENT_MASK: u32 =
 const FILE_EVENT_MASK: u32 =
     libc::IN_MODIFY | libc::IN_ATTRIB | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF;
 
+/// 用户家目录父级监控掩码（inotify）：只盯子项创建与移入，用来即时发现启动后新建的 `.ssh`，
+/// 不订阅普通文件修改/属性/删除，避免家目录常规读写唤醒采集器。
+const PARENT_DIR_MASK: u32 = libc::IN_CREATE | libc::IN_MOVED_TO | libc::IN_ONLYDIR;
+
 /// fanotify_init 标志：FID + 目录 FID + 名字报告，事件才能还原完整路径
 const FA_INIT_FLAGS: u32 = libc::FAN_CLASS_NOTIF
     | libc::FAN_CLOEXEC
@@ -96,6 +100,10 @@ const FA_MARK_MASK: u64 = libc::FAN_CREATE
     | libc::FAN_MOVED_TO
     | libc::FAN_ONDIR
     | libc::FAN_EVENT_ON_CHILD;
+
+/// 用户家目录父级 fanotify mark 掩码：只关心直接子项创建与移入，用于发现新建的 `.ssh` 目录。
+const FA_PARENT_MARK_MASK: u64 =
+    libc::FAN_CREATE | libc::FAN_MOVED_TO | libc::FAN_ONDIR | libc::FAN_EVENT_ON_CHILD;
 
 /// 单文件目标的 fanotify mark 掩码：只关心文件本体的改/属性/删/移出。
 /// FAN_EVENT_ON_CHILD 是目录专属语义，打在文件上无意义；FAN_DELETE_SELF /
@@ -172,19 +180,24 @@ fn start(agent_id: &str, sink: &EventSink, targets: &[String]) -> io::Result<(Wo
     }
 }
 
-/// 内置清单 + /home 下各用户的 .ssh（启动时枚举 /home 一层，只收真实存在的目录）
+/// 内置清单 + /home 下各用户的 .ssh（无论启动时 .ssh 是否已存在均纳入目标，配合家目录父级监控即时补挂）
 /// + shell rc 单文件目标（/root 与各 /home 用户存在的 rc 文件，及全局 rc）。
 fn default_targets() -> Vec<String> {
     let mut targets: Vec<String> = WATCH_DIRS.iter().map(|s| s.to_string()).collect();
     let users: Vec<String> = std::fs::read_dir("/home")
         .map(|rd| {
             rd.flatten()
-                .filter_map(|e| e.file_name().into_string().ok())
+                .filter_map(|e| {
+                    e.file_type()
+                        .ok()
+                        .filter(|ft| ft.is_dir())
+                        .and_then(|_| e.file_name().into_string().ok())
+                })
                 .collect()
         })
         .unwrap_or_default();
     for p in home_ssh_dirs(&users) {
-        if std::path::Path::new(&p).is_dir() {
+        if !targets.contains(&p) {
             targets.push(p);
         }
     }
@@ -201,6 +214,30 @@ fn default_targets() -> Vec<String> {
         }
     }
     targets
+}
+
+/// 提取 `.ssh` 目标根的父目录（即用户家目录）：启动时 `~/.ssh` 尚不存在（或运行中被删重建）时，
+/// 靠家目录上的轻量目录创建监控发现 `.ssh` 新建并当场补挂。
+fn ssh_parent_dirs(targets: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for t in targets {
+        let trimmed = t.trim_end_matches('/');
+        if !trimmed.ends_with("/.ssh") {
+            continue;
+        }
+        let Some(parent) = std::path::Path::new(trimmed).parent() else {
+            continue;
+        };
+        let p = parent.to_string_lossy();
+        if p.is_empty() || p == "/" || covered_by_dirs(&p, targets) {
+            continue;
+        }
+        let p_owned = p.into_owned();
+        if !out.contains(&p_owned) {
+            out.push(p_owned);
+        }
+    }
+    out
 }
 
 /// /home 下的用户名 -> 各自的 .ssh 路径
@@ -250,15 +287,19 @@ fn collect_subdirs(root: &str, max_depth: usize) -> Vec<String> {
     out
 }
 
-/// path 相对各监控根的深度（取最浅），不在任何根下返回 None。
-/// 用于运行中给动态出现的子目录核算剩余递归预算。
+/// path 相对各监控根的深度（取最浅；等于目标根本身为 0），不在任何根下返回 None。
+/// 用于运行中给动态出现的目标根（如新建的 ~/.ssh）与子目录核算剩余递归预算。
 fn rel_depth(roots: &[String], path: &str) -> Option<usize> {
+    let path = path.trim_end_matches('/');
     roots
         .iter()
         .filter_map(|root| {
             let root = root.trim_end_matches('/');
             if root.is_empty() {
                 return None;
+            }
+            if path == root {
+                return Some(0);
             }
             path.strip_prefix(root)
                 .and_then(|rest| rest.strip_prefix('/'))
@@ -270,15 +311,17 @@ fn rel_depth(roots: &[String], path: &str) -> Option<usize> {
 // ---------------- inotify 路径（兜底，无进程上下文） ----------------
 
 /// inotify 监控表项。目录 watch 的事件要带子项名拼路径；
-/// 单文件 watch 的事件直接落在文件本体上（name 恒为空），路径即目标本身。
+/// 单文件 watch 的事件直接落在文件本体上（name 恒为空），路径即目标本身；
+/// parent_only 仅挂载在用户家目录上用于发现 `.ssh` 新建，不上报家目录下无关普通文件。
 #[derive(Clone)]
 struct WatchEntry {
     path: String,
     is_file: bool,
+    parent_only: bool,
 }
 
-/// 初始化 inotify：目录目标递归挂 watch（限深），单文件目标直接挂文件本体。
-/// 返回 (fd, wd -> 监控表项)。
+/// 初始化 inotify：目录目标递归挂 watch（限深），单文件目标直接挂文件本体，
+/// `.ssh` 的父目录（用户家目录）挂轻量目录创建 watch。返回 (fd, wd -> 监控表项)。
 fn ino_init(targets: &[String]) -> io::Result<(RawFd, HashMap<i32, WatchEntry>)> {
     // SAFETY: 纯 FFI 调用，只传整数标志，不涉及指针；返回值在下面检查 < 0。
     let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
@@ -292,6 +335,9 @@ fn ino_init(targets: &[String]) -> io::Result<(RawFd, HashMap<i32, WatchEntry>)>
         } else {
             ino_add_tree(fd, root, MAX_DEPTH, &mut watched);
         }
+    }
+    for parent in ssh_parent_dirs(targets) {
+        ino_add_parent(fd, &parent, &mut watched);
     }
     if watched.is_empty() {
         // SAFETY: fd 是上面 inotify_init1 刚返回的有效 fd，尚未交给任何人，出错返回前关掉，之后不再使用。
@@ -315,18 +361,41 @@ fn ino_add_tree(
         };
         // SAFETY: fd 是调用方持有的有效 inotify fd；c 是 NUL 结尾的 CString，调用期间一直存活，内核只读路径。
         let wd = unsafe { libc::inotify_add_watch(fd, c.as_ptr(), EVENT_MASK) };
-        if wd >= 0 && !watched.contains_key(&wd) {
+        if wd >= 0 && watched.get(&wd).is_none_or(|e| e.parent_only) {
             fresh.push(dir.clone());
             watched.insert(
                 wd,
                 WatchEntry {
                     path: dir,
                     is_file: false,
+                    parent_only: false,
                 },
             );
         }
     }
     fresh
+}
+
+/// 给 `.ssh` 的父目录（用户家目录）挂轻量 watch，仅发现子目录新建/移入。
+fn ino_add_parent(fd: RawFd, dir: &str, watched: &mut HashMap<i32, WatchEntry>) {
+    if watched.values().any(|entry| entry.path == dir) {
+        return;
+    }
+    let Ok(c) = std::ffi::CString::new(dir) else {
+        return;
+    };
+    // SAFETY: 同 ino_add_tree：fd 是有效 inotify fd，c 是调用期间存活的 NUL 结尾 CString。
+    let wd = unsafe { libc::inotify_add_watch(fd, c.as_ptr(), PARENT_DIR_MASK) };
+    if wd >= 0 && !watched.contains_key(&wd) {
+        watched.insert(
+            wd,
+            WatchEntry {
+                path: dir.to_string(),
+                is_file: false,
+                parent_only: true,
+            },
+        );
+    }
 }
 
 /// 给单个文件挂 watch（shell rc 等单文件目标）。
@@ -342,6 +411,7 @@ fn ino_add_file(fd: RawFd, path: &str, watched: &mut HashMap<i32, WatchEntry>) {
             WatchEntry {
                 path: path.to_string(),
                 is_file: true,
+                parent_only: false,
             },
         );
     }
@@ -447,11 +517,12 @@ fn ino_run(
             }
             let path = format!("{}/{}", entry.path.trim_end_matches('/'), name);
             if ev.mask & libc::IN_ISDIR != 0 {
-                // 新建/移入的子目录动态补挂 watch；目录本体的事件不上报
+                // 新建/移入的子目录（含家目录下新建的 .ssh 目标根）动态补挂 watch；目录本体的事件不上报
                 if ev.mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0
                     && let Some(d) = rel_depth(&roots, &path)
                     && d <= MAX_DEPTH
                 {
+                    super::sshkeys::notify_if_relevant(&path);
                     let fresh = ino_add_tree(fd, &path, MAX_DEPTH - d, &mut watched);
                     if !backfill(&fresh, agent_id, sink) {
                         // SAFETY: 同上：关闭独占的 fd 后立即 return。
@@ -459,6 +530,9 @@ fn ino_run(
                         return;
                     }
                 }
+                continue;
+            }
+            if entry.parent_only {
                 continue;
             }
             if super::liveness::files_pulse(&path) {
@@ -482,7 +556,10 @@ fn ino_reconcile(
 ) -> Vec<String> {
     let mut fresh = Vec::new();
     for root in roots {
-        if watched.values().any(|entry| entry.path == *root) {
+        if watched
+            .values()
+            .any(|entry| !entry.parent_only && entry.path == *root)
+        {
             continue;
         }
         if std::path::Path::new(root).is_file() {
@@ -490,6 +567,9 @@ fn ino_reconcile(
         } else if std::path::Path::new(root).is_dir() {
             fresh.extend(ino_add_tree(fd, root, MAX_DEPTH, watched));
         }
+    }
+    for parent in ssh_parent_dirs(roots) {
+        ino_add_parent(fd, &parent, watched);
     }
     fresh
 }
@@ -510,12 +590,14 @@ struct FaState {
     fd: RawFd,
     roots: Vec<String>,
     marked: HashSet<String>,
+    parent_marked: HashSet<String>,
     mounts: HashMap<(i32, i32), RawFd>,
     warned_overflow: bool,
     warned_resolve: bool,
 }
 
-/// 初始化 fanotify：目录目标递归打标（限深），单文件目标直接打在文件上。
+/// 初始化 fanotify：目录目标递归打标（限深），单文件目标直接打在文件上，
+/// `.ssh` 的父目录（用户家目录）打轻量目录创建标。
 /// 需要 CAP_SYS_ADMIN；内核 < 5.9 不支持 FAN_REPORT_NAME 会在 fanotify_init
 /// 直接 EINVAL。任何失败都由调用方回落 inotify。
 fn fa_setup(targets: &[String]) -> io::Result<(FaState, usize)> {
@@ -527,12 +609,16 @@ fn fa_setup(targets: &[String]) -> io::Result<(FaState, usize)> {
     }
     let mut n = 0;
     let mut marked = HashSet::new();
+    let mut parent_marked = HashSet::new();
     for root in targets {
         if std::path::Path::new(root).is_file() {
             n += fa_mark_file(fd, root, &mut marked);
         } else {
             n += fa_mark_tree(fd, root, MAX_DEPTH, &mut marked).len();
         }
+    }
+    for parent in ssh_parent_dirs(targets) {
+        n += fa_mark_parent(fd, &parent, &marked, &mut parent_marked);
     }
     if n == 0 {
         // SAFETY: fd 是上面 fanotify_init 刚返回的有效 fd，尚未放进 FaState，出错返回前关掉，之后不再使用。
@@ -543,6 +629,7 @@ fn fa_setup(targets: &[String]) -> io::Result<(FaState, usize)> {
         fd,
         roots: targets.to_vec(),
         marked,
+        parent_marked,
         mounts: HashMap::new(),
         warned_overflow: false,
         warned_resolve: false,
@@ -613,9 +700,42 @@ fn fa_mark_file(fd: RawFd, path: &str, marked: &mut HashSet<String>) -> usize {
     }
 }
 
+/// 给 `.ssh` 的父目录（用户家目录）打轻量 mark，仅订阅子项创建与移入以发现 `.ssh` 新建。
+fn fa_mark_parent(
+    fd: RawFd,
+    dir: &str,
+    marked: &HashSet<String>,
+    parent_marked: &mut HashSet<String>,
+) -> usize {
+    if marked.contains(dir) || parent_marked.contains(dir) {
+        return 0;
+    }
+    let Ok(c) = std::ffi::CString::new(dir) else {
+        return 0;
+    };
+    // SAFETY: 同 fa_mark_tree：fd 是有效 fanotify fd，c 是调用期间存活的 NUL 结尾 CString。
+    let rc = unsafe {
+        libc::fanotify_mark(
+            fd,
+            libc::FAN_MARK_ADD | libc::FAN_MARK_ONLYDIR,
+            FA_PARENT_MARK_MASK,
+            libc::AT_FDCWD,
+            c.as_ptr(),
+        )
+    };
+    if rc == 0 {
+        parent_marked.insert(dir.to_string());
+        1
+    } else {
+        0
+    }
+}
+
 /// 补标消失又出现的目标，返回新打上 mark 的目录。
 fn fa_reconcile(st: &mut FaState) -> Vec<String> {
     st.marked.retain(|path| std::path::Path::new(path).exists());
+    st.parent_marked
+        .retain(|path| std::path::Path::new(path).exists());
     let mut fresh = Vec::new();
     for root in st.roots.clone() {
         if std::path::Path::new(&root).is_file() {
@@ -623,6 +743,9 @@ fn fa_reconcile(st: &mut FaState) -> Vec<String> {
         } else if std::path::Path::new(&root).is_dir() {
             fresh.extend(fa_mark_tree(st.fd, &root, MAX_DEPTH, &mut st.marked));
         }
+    }
+    for parent in ssh_parent_dirs(&st.roots) {
+        fa_mark_parent(st.fd, &parent, &st.marked, &mut st.parent_marked);
     }
     fresh
 }
@@ -868,17 +991,22 @@ fn fa_run(mut st: FaState, agent_id: &str, sink: &EventSink, stop: &Stop) {
                 }
                 continue;
             };
-            // 新建/移入的子目录动态补打 mark（受深度限制）
+            // 新建/移入的子目录（含家目录下新建的 .ssh 目标根）动态补打 mark（受深度限制）
             if ev.mask & libc::FAN_ONDIR != 0
                 && ev.mask & (libc::FAN_CREATE | libc::FAN_MOVED_TO) != 0
                 && let Some(d) = rel_depth(&st.roots, &path)
                 && d <= MAX_DEPTH
             {
+                super::sshkeys::notify_if_relevant(&path);
                 let fresh = fa_mark_tree(st.fd, &path, MAX_DEPTH - d, &mut st.marked);
                 if !backfill(&fresh, agent_id, sink) {
                     fa_close(st);
                     return;
                 }
+            }
+            // 父目录仅用于发现 .ssh 新建，不在目标根范围内的家目录普通文件/子目录不上报
+            if rel_depth(&st.roots, &path).is_none() {
+                continue;
             }
             if super::liveness::files_pulse(&path) {
                 continue;
@@ -1201,9 +1329,54 @@ mod tests {
         let roots = vec!["/etc".to_string(), "/etc/ssh".to_string()];
         assert_eq!(rel_depth(&roots, "/etc/ssh/sshd_config.d/x"), Some(2));
         assert_eq!(rel_depth(&roots, "/etc/cron.d"), Some(1));
+        assert_eq!(rel_depth(&roots, "/etc/ssh"), Some(0));
         assert_eq!(rel_depth(&roots, "/var/log/x"), None);
         // /etcfoo 只是字符串前缀，不是目录前缀
         assert_eq!(rel_depth(&roots, "/etcfoo/x"), None);
+    }
+
+    #[test]
+    fn watch_picks_up_newly_created_user_ssh_dir_via_parent() {
+        let dir = temp_root("user-ssh");
+        let _ = std::fs::remove_dir_all(&dir);
+        let alice_home = dir.join("alice");
+        std::fs::create_dir_all(&alice_home).unwrap();
+        let ssh_dir = alice_home.join(".ssh");
+        let targets = vec![ssh_dir.to_string_lossy().into_owned()];
+
+        assert_eq!(
+            ssh_parent_dirs(&targets),
+            vec![alice_home.to_string_lossy().into_owned()]
+        );
+
+        let (fd, watched) = ino_init(&targets).unwrap();
+        let (sink, mut rx) = test_sink();
+        std::thread::spawn(move || {
+            ino_run(fd, watched, targets, "agent-t", &sink, &Stop::default())
+        });
+
+        // 家目录下普通文件与无关子目录不应产生监控噪音
+        std::fs::write(alice_home.join("notes.txt"), b"hello").unwrap();
+        std::fs::create_dir(alice_home.join("work")).unwrap();
+        std::fs::write(alice_home.join("work").join("main.rs"), b"fn main(){}").unwrap();
+        assert!(
+            paths_within(&mut rx, 60).is_empty(),
+            "家目录无关文件不应上报"
+        );
+
+        // 启动时尚不存在的 ~/.ssh 新建并追加 authorized_keys，无需等待周期扫描即可补挂并捕获
+        std::fs::create_dir(&ssh_dir).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let ak = ssh_dir.join("authorized_keys");
+        std::fs::write(&ak, b"ssh-ed25519 AAAA test@host\n").unwrap();
+
+        let ev = rx
+            .blocking_recv()
+            .expect("新建 ~/.ssh 后写入的 authorized_keys 应立即上报");
+        let v: serde_json::Value = serde_json::from_str(&ev.raw_json).unwrap();
+        assert_eq!(v["file"]["path"], ak.to_str().unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

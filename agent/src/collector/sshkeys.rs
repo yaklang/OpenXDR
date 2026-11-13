@@ -15,8 +15,10 @@
 
 #[cfg(target_os = "linux")]
 use std::sync::{Arc, Mutex, OnceLock};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 use std::time::Duration;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "linux")]
@@ -32,6 +34,22 @@ const MAX_CMD_CONFIG_CHARS: usize = 512;
 const MAX_KEY_FILE_BYTES: usize = 1024 * 1024;
 #[cfg(target_os = "linux")]
 const MAX_KEYS_TOTAL: usize = 4096;
+#[cfg(target_os = "linux")]
+const REPORT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(any(target_os = "linux", test))]
+const RETRY_BASE_SECS: u64 = 15;
+#[cfg(any(target_os = "linux", test))]
+const RETRY_MAX_SECS: u64 = 10 * 60;
+
+/// 上报失败指数退避：首次失败退避 15 秒，之后逐次翻倍，封顶 10 分钟
+#[cfg(any(target_os = "linux", test))]
+pub fn retry_backoff(failures: u32) -> Duration {
+    let shift = failures.saturating_sub(1).min(10);
+    let secs = RETRY_BASE_SECS
+        .saturating_mul(1u64 << shift)
+        .min(RETRY_MAX_SECS);
+    Duration::from_secs(secs)
+}
 
 /// 单次盘点快照（不含任何公钥原文）
 #[cfg(target_os = "linux")]
@@ -54,36 +72,65 @@ pub struct KeyEntry {
     pub options: Vec<String>,
 }
 
-/// 跨采集协程与 gRPC 上报协程共享的最新盘点状态
+/// 跨采集协程与 gRPC 上报协程共享的最新盘点状态（含跨重连保留的失败退避状态）
 #[cfg(target_os = "linux")]
 pub struct State {
-    inner: Mutex<Option<(u64, Snapshot)>>,
+    inner: Mutex<StateInner>,
     notify: Notify,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct StateInner {
+    latest: Option<(u64, Snapshot)>,
+    failures: u32,
+    retry_not_before: Option<Instant>,
 }
 
 #[cfg(target_os = "linux")]
 impl State {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            inner: Mutex::new(None),
+            inner: Mutex::new(StateInner::default()),
             notify: Notify::new(),
         })
     }
 
     pub fn update(&self, snap: Snapshot) {
         let mut guard = self.inner.lock().unwrap();
-        let next_seq = guard.as_ref().map_or(1, |(seq, _)| seq + 1);
-        *guard = Some((next_seq, snap));
+        let next_seq = guard.latest.as_ref().map_or(1, |(seq, _)| seq + 1);
+        guard.latest = Some((next_seq, snap));
         drop(guard);
         self.notify.notify_waiters();
     }
 
     fn latest_after(&self, sent_seq: u64) -> Option<(u64, Snapshot)> {
         let guard = self.inner.lock().unwrap();
-        match guard.as_ref() {
+        match guard.latest.as_ref() {
             Some((seq, snap)) if *seq > sent_seq => Some((*seq, snap.clone())),
             _ => None,
         }
+    }
+
+    fn pending_retry_wait(&self) -> Option<Duration> {
+        let guard = self.inner.lock().unwrap();
+        guard
+            .retry_not_before
+            .and_then(|until| until.checked_duration_since(Instant::now()))
+    }
+
+    fn record_success(&self) {
+        let mut guard = self.inner.lock().unwrap();
+        guard.failures = 0;
+        guard.retry_not_before = None;
+    }
+
+    fn record_failure(&self) -> (u32, Duration) {
+        let mut guard = self.inner.lock().unwrap();
+        guard.failures = guard.failures.saturating_add(1);
+        let backoff = retry_backoff(guard.failures);
+        guard.retry_not_before = Some(Instant::now() + backoff);
+        (guard.failures, backoff)
     }
 }
 
@@ -118,7 +165,7 @@ pub fn is_relevant_path(path: &str) -> bool {
         || path.contains("authorized_keys")
 }
 
-/// gRPC 上报循环：连接建立后把最新盘点快照推给 server，之后仅在快照更新时上报
+/// gRPC 上报循环：连接建立后把最新盘点快照推给 server，之后仅在快照更新时上报；失败按指数退避重试
 #[cfg(target_os = "linux")]
 pub async fn report(
     mut client: AgentServiceClient<tonic::transport::Channel>,
@@ -130,6 +177,10 @@ pub async fn report(
         // 先注册 notified，避免在读取与等待之间漏掉刚发生的更新
         let notified = state.notify.notified();
         if let Some((seq, snap)) = state.latest_after(sent_seq) {
+            if let Some(wait) = state.pending_retry_wait() {
+                tokio::time::sleep(wait).await;
+                continue;
+            }
             let mut req = tonic::Request::new(ReportSshKeysRequest {
                 agent_id: agent_id.clone(),
                 observed_at_ms: snap.observed_at_ms,
@@ -148,19 +199,34 @@ pub async fn report(
                 authorized_keys_command: snap.authorized_keys_command,
                 authorized_keys_command_user: snap.authorized_keys_command_user,
             });
-            req.set_timeout(Duration::from_secs(10));
-            match client.report_ssh_keys(req).await {
-                Ok(_) => {
+            req.set_timeout(REPORT_RPC_TIMEOUT);
+            match tokio::time::timeout(REPORT_RPC_TIMEOUT, client.report_ssh_keys(req)).await {
+                Ok(Ok(_)) => {
+                    state.record_success();
                     sent_seq = seq;
                     continue;
                 }
-                Err(err) if err.code() == tonic::Code::Unimplemented => {
+                Ok(Err(err)) if err.code() == tonic::Code::Unimplemented => {
                     eprintln!("服务端尚不支持 SSH 钥匙盘点上报");
                     return;
                 }
-                Err(err) => {
-                    eprintln!("SSH 钥匙盘点上报失败：{}", err.code());
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                Ok(Err(err)) => {
+                    let (failures, backoff) = state.record_failure();
+                    eprintln!(
+                        "SSH 钥匙盘点上报失败（第 {failures} 次，{}s 后重试）：{}",
+                        backoff.as_secs(),
+                        err.code()
+                    );
+                    tokio::time::sleep(backoff).await;
+                    continue;
+                }
+                Err(_) => {
+                    let (failures, backoff) = state.record_failure();
+                    eprintln!(
+                        "SSH 钥匙盘点上报超时（第 {failures} 次，{}s 后重试）",
+                        backoff.as_secs()
+                    );
+                    tokio::time::sleep(backoff).await;
                     continue;
                 }
             }
@@ -950,5 +1016,17 @@ authorizedkeyscommanduser nobody\n";
                 home: "/home/alice".into()
             }
         );
+    }
+
+    #[test]
+    fn exponential_backoff_starts_at_15s_and_caps_at_10m() {
+        assert_eq!(retry_backoff(1), Duration::from_secs(15));
+        assert_eq!(retry_backoff(2), Duration::from_secs(30));
+        assert_eq!(retry_backoff(3), Duration::from_secs(60));
+        assert_eq!(retry_backoff(4), Duration::from_secs(120));
+        assert_eq!(retry_backoff(5), Duration::from_secs(240));
+        assert_eq!(retry_backoff(6), Duration::from_secs(480));
+        assert_eq!(retry_backoff(7), Duration::from_secs(600));
+        assert_eq!(retry_backoff(50), Duration::from_secs(600));
     }
 }
