@@ -1004,8 +1004,9 @@ fn fa_run(mut st: FaState, agent_id: &str, sink: &EventSink, stop: &Stop) {
                     return;
                 }
             }
-            // 父目录仅用于发现 .ssh 新建，不在目标根范围内的家目录普通文件/子目录不上报
-            if rel_depth(&st.roots, &path).is_none() {
+            // 父目录 mark 仅用于发现 .ssh 新建：只有父目录在 parent_marked 中且不在监控根下的无关子项才跳过，
+            // 符号链接或挂载点解析后与 roots 字面不一致的原有监控事件仍照常上报
+            if fa_is_parent_only_noise(&st.roots, &st.parent_marked, &path) {
                 continue;
             }
             if super::liveness::files_pulse(&path) {
@@ -1034,6 +1035,23 @@ fn fa_close(st: FaState) {
         // SAFETY: mounts 里每个 fd 都是 mount_fd_for 打开后只插入一次的，随 FaState 一起按值消费，各关一次。
         unsafe { libc::close(fd) };
     }
+}
+
+/// 判断 fanotify 事件是否属于家目录 parent mark 产生的无关子项噪音：
+/// 只有当事件路径的父目录在 `parent_marked` 里、且该路径不在任何监控根下时才跳过；
+/// 其余事件（如符号链接、bind mount 解析后不匹配 `roots` 前缀的目标事件）保持原样上报。
+fn fa_is_parent_only_noise(roots: &[String], parent_marked: &HashSet<String>, path: &str) -> bool {
+    if parent_marked.is_empty() {
+        return false;
+    }
+    let trimmed = path.trim_end_matches('/');
+    let Some(parent) = std::path::Path::new(trimmed)
+        .parent()
+        .map(|p| p.to_string_lossy())
+    else {
+        return false;
+    };
+    parent_marked.contains(parent.as_ref()) && rel_depth(roots, trimmed).is_none()
 }
 
 // ---------------- 事件组装 ----------------
@@ -1377,6 +1395,58 @@ mod tests {
         assert_eq!(v["file"]["path"], ak.to_str().unwrap());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fa_parent_noise_filter_preserves_non_parent_unmatched_events() {
+        let roots = vec![
+            "/etc".to_string(),
+            "/var/spool/cron".to_string(),
+            "/home/alice/.ssh".to_string(),
+            "/home/alice/.bashrc".to_string(),
+        ];
+        let parent_marked = HashSet::from(["/home/alice".to_string()]);
+
+        // 家目录 parent mark 下的无关普通文件与无关子目录应被过滤
+        assert!(fa_is_parent_only_noise(
+            &roots,
+            &parent_marked,
+            "/home/alice/notes.txt"
+        ));
+        assert!(fa_is_parent_only_noise(
+            &roots,
+            &parent_marked,
+            "/home/alice/work"
+        ));
+
+        // 家目录下属于监控根的 .ssh、.bashrc 及其子文件不应被过滤
+        assert!(!fa_is_parent_only_noise(
+            &roots,
+            &parent_marked,
+            "/home/alice/.ssh"
+        ));
+        assert!(!fa_is_parent_only_noise(
+            &roots,
+            &parent_marked,
+            "/home/alice/.bashrc"
+        ));
+        assert!(!fa_is_parent_only_noise(
+            &roots,
+            &parent_marked,
+            "/home/alice/.ssh/authorized_keys"
+        ));
+
+        // 不在 roots 字面下、但也不是 parent mark 产生的事件（如符号链接/bind mount 解析后的真实路径）必须保留上报
+        assert!(!fa_is_parent_only_noise(
+            &roots,
+            &parent_marked,
+            "/data/spool/cron/root"
+        ));
+        assert!(!fa_is_parent_only_noise(
+            &roots,
+            &parent_marked,
+            "/mnt/rootfs/etc/passwd"
+        ));
     }
 
     #[test]
