@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"slices"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	"openxdr/server/ent/predicate"
 	"openxdr/server/ent/sshkeybaseline"
 	"openxdr/server/ent/sshkeyobservation"
+	"openxdr/server/ent/sshlogin"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/facts"
 	"openxdr/server/internal/sigma"
@@ -119,6 +121,8 @@ type Service struct {
 	Gate     *commandgate.Gate
 	Suppress *suppress.Store
 	Now      func() time.Time
+	// OnBackfill 测试钩子：仅在主机首次建基线触发登录历史回填时回调
+	OnBackfill func(assetID uuid.UUID)
 }
 
 func (s *Service) now() time.Time {
@@ -141,6 +145,16 @@ type sanitizedKey struct {
 	options []string
 }
 
+type loginKey struct {
+	account     string
+	fingerprint string
+}
+
+type loginInfo struct {
+	ts    time.Time
+	srcIP string
+}
+
 type writerSession struct {
 	User  string `json:"user,omitempty"`
 	SrcIP string `json:"src_ip,omitempty"`
@@ -152,10 +166,25 @@ func (s *Service) IngestSnapshot(ctx context.Context, assetID uuid.UUID, req *pb
 	if s == nil || s.DB == nil || req == nil {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	assetRow, err := s.DB.Asset.Get(ctx, assetID)
 	if err != nil {
 		return err
 	}
+	return s.IngestAssetSnapshot(ctx, assetRow, req)
+}
+
+// IngestAssetSnapshot 物化已查出资产实体的 SSH 授权钥匙盘点快照
+func (s *Service) IngestAssetSnapshot(ctx context.Context, assetRow *ent.Asset, req *pb.ReportSSHKeysRequest) error {
+	if s == nil || s.DB == nil || assetRow == nil || req == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	assetID := assetRow.ID
 	now := s.now()
 	observedAt := now
 	if req.ObservedAtMs > 0 {
@@ -169,6 +198,42 @@ func (s *Service) IngestSnapshot(ctx context.Context, assetID uuid.UUID, req *pb
 	akCmd := cleanText(req.AuthorizedKeysCommand, 512)
 	akUser := cleanText(req.AuthorizedKeysCommandUser, 256)
 
+	base, err := s.DB.SSHKeyBaseline.Query().Where(sshkeybaseline.AssetIDEQ(assetID)).Only(ctx)
+	hadBaseline := err == nil
+	if err != nil && !ent.IsNotFound(err) {
+		return err
+	}
+
+	// 快路径：已有基线且快照内容完全未变时，只批量刷新在位钥匙的 last_seen，不开事务、不改基线表、不回填
+	if hadBaseline {
+		presentRows, err := s.DB.SSHKeyObservation.Query().
+			Where(sshkeyobservation.AssetIDEQ(assetID), sshkeyobservation.PresentEQ(true)).
+			All(ctx)
+		if err != nil {
+			return err
+		}
+		if snapshotUnchanged(base, presentRows, cleaned, akCmd, akUser) {
+			if len(presentRows) > 0 {
+				if err := s.DB.SSHKeyObservation.Update().
+					Where(sshkeyobservation.AssetIDEQ(assetID), sshkeyobservation.PresentEQ(true)).
+					SetLastSeen(observedAt).
+					Exec(ctx); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+
+	// 仅在该主机首次建基线时从 ssh_logins 物化表回填一次最近登录信息；后续快照由 ingest 实时刷新
+	var backfilled map[loginKey]loginInfo
+	if !hadBaseline {
+		backfilled, err = s.loadBackfillLogins(ctx, assetID, now, len(cleaned) > 0)
+		if err != nil {
+			return err
+		}
+	}
+
 	var newlyAppeared []*ent.SSHKeyObservation
 	tx, err := s.DB.Tx(ctx)
 	if err != nil {
@@ -176,19 +241,12 @@ func (s *Service) IngestSnapshot(ctx context.Context, assetID uuid.UUID, req *pb
 	}
 	defer tx.Rollback()
 
-	// 同一资产盘点更新串行化，防重连并发上报交错判断基线
-	if s.SQL != nil {
-		if _, err := tx.Client().SSHKeyBaseline.Query().Where(sshkeybaseline.AssetIDEQ(assetID)).Count(ctx); err != nil {
-			return err
-		}
-	}
-
-	base, err := tx.SSHKeyBaseline.Query().Where(sshkeybaseline.AssetIDEQ(assetID)).Only(ctx)
-	hadBaseline := err == nil
+	baseInTx, err := tx.SSHKeyBaseline.Query().Where(sshkeybaseline.AssetIDEQ(assetID)).Only(ctx)
+	hadBaselineInTx := err == nil
 	if err != nil && !ent.IsNotFound(err) {
 		return err
 	}
-	if !hadBaseline {
+	if !hadBaselineInTx {
 		if _, err := tx.SSHKeyBaseline.Create().
 			SetAssetID(assetID).
 			SetFirstReportedAt(observedAt).
@@ -199,7 +257,7 @@ func (s *Service) IngestSnapshot(ctx context.Context, assetID uuid.UUID, req *pb
 			return err
 		}
 	} else {
-		if err := tx.SSHKeyBaseline.UpdateOneID(base.ID).
+		if err := tx.SSHKeyBaseline.UpdateOneID(baseInTx.ID).
 			SetLastReportedAt(observedAt).
 			SetAuthorizedKeysCommand(akCmd).
 			SetAuthorizedKeysCommandUser(akUser).
@@ -218,11 +276,12 @@ func (s *Service) IngestSnapshot(ctx context.Context, assetID uuid.UUID, req *pb
 	}
 
 	seen := make(map[tupleKey]bool, len(cleaned))
+	var unchangedIDs []uuid.UUID
 	for _, item := range cleaned {
 		seen[item.tupleKey] = true
 		prev, ok := existing[item.tupleKey]
 		if !ok {
-			created, err := tx.SSHKeyObservation.Create().
+			c := tx.SSHKeyObservation.Create().
 				SetAssetID(assetID).
 				SetAccount(item.account).
 				SetFilePath(item.filePath).
@@ -232,23 +291,45 @@ func (s *Service) IngestSnapshot(ctx context.Context, assetID uuid.UUID, req *pb
 				SetOptions(item.options).
 				SetPresent(true).
 				SetFirstSeen(observedAt).
-				SetLastSeen(observedAt).
-				Save(ctx)
+				SetLastSeen(observedAt)
+			if !hadBaselineInTx {
+				if li, hasLogin := backfilled[loginKey{account: item.account, fingerprint: item.fingerprint}]; hasLogin {
+					c.SetLastLoginAt(li.ts).SetLastLoginIP(li.srcIP)
+				}
+			}
+			created, err := c.Save(ctx)
 			if err != nil {
 				return err
 			}
-			if hadBaseline {
+			if hadBaselineInTx {
 				newlyAppeared = append(newlyAppeared, created)
 			}
 			continue
 		}
 		wasAbsent := !prev.Present
+		var backfillHit *loginInfo
+		if !hadBaselineInTx {
+			if li, hasLogin := backfilled[loginKey{account: item.account, fingerprint: item.fingerprint}]; hasLogin &&
+				(prev.LastLoginAt == nil || prev.LastLoginAt.Before(li.ts)) {
+				backfillHit = &li
+			}
+		}
+		if !wasAbsent && backfillHit == nil &&
+			prev.KeyType == item.keyType &&
+			prev.Comment == item.comment &&
+			slices.Equal(prev.Options, item.options) {
+			unchangedIDs = append(unchangedIDs, prev.ID)
+			continue
+		}
 		u := tx.SSHKeyObservation.UpdateOneID(prev.ID).
 			SetKeyType(item.keyType).
 			SetComment(item.comment).
 			SetOptions(item.options).
 			SetPresent(true).
 			SetLastSeen(observedAt)
+		if backfillHit != nil {
+			u.SetLastLoginAt(backfillHit.ts).SetLastLoginIP(backfillHit.srcIP)
+		}
 		if wasAbsent {
 			u.SetFirstSeen(observedAt).
 				SetAddedByUser("").
@@ -260,16 +341,32 @@ func (s *Service) IngestSnapshot(ctx context.Context, assetID uuid.UUID, req *pb
 		if err != nil {
 			return err
 		}
-		if hadBaseline && wasAbsent {
+		if hadBaselineInTx && wasAbsent {
 			newlyAppeared = append(newlyAppeared, updated)
 		}
 	}
 
+	if len(unchangedIDs) > 0 {
+		if err := tx.SSHKeyObservation.Update().
+			Where(sshkeyobservation.IDIn(unchangedIDs...)).
+			SetLastSeen(observedAt).
+			Exec(ctx); err != nil {
+			return err
+		}
+	}
+
+	var removedIDs []uuid.UUID
 	for tk, prev := range existing {
 		if prev.Present && !seen[tk] {
-			if err := tx.SSHKeyObservation.UpdateOneID(prev.ID).SetPresent(false).Exec(ctx); err != nil {
-				return err
-			}
+			removedIDs = append(removedIDs, prev.ID)
+		}
+	}
+	if len(removedIDs) > 0 {
+		if err := tx.SSHKeyObservation.Update().
+			Where(sshkeyobservation.IDIn(removedIDs...)).
+			SetPresent(false).
+			Exec(ctx); err != nil {
+			return err
 		}
 	}
 
@@ -277,12 +374,38 @@ func (s *Service) IngestSnapshot(ctx context.Context, assetID uuid.UUID, req *pb
 		return err
 	}
 
-	s.backfillLogins(ctx, assetID, now)
-
 	for _, obs := range newlyAppeared {
-		s.handleNewKey(ctx, assetRow, obs, observedAt)
+		if err := s.handleNewKey(ctx, assetRow, obs, observedAt); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func snapshotUnchanged(base *ent.SSHKeyBaseline, presentRows []*ent.SSHKeyObservation, cleaned []sanitizedKey, akCmd, akUser string) bool {
+	if base == nil ||
+		base.AuthorizedKeysCommand != akCmd ||
+		base.AuthorizedKeysCommandUser != akUser ||
+		len(presentRows) != len(cleaned) {
+		return false
+	}
+	if len(cleaned) == 0 {
+		return true
+	}
+	byTuple := make(map[tupleKey]*ent.SSHKeyObservation, len(presentRows))
+	for _, r := range presentRows {
+		byTuple[tupleKey{account: r.Account, filePath: r.FilePath, fingerprint: r.Fingerprint}] = r
+	}
+	for _, item := range cleaned {
+		prev, ok := byTuple[item.tupleKey]
+		if !ok ||
+			prev.KeyType != item.keyType ||
+			prev.Comment != item.comment ||
+			!slices.Equal(prev.Options, item.options) {
+			return false
+		}
+	}
+	return true
 }
 
 func sanitizeKeys(in []*pb.SSHAuthorizedKey) []sanitizedKey {
@@ -340,48 +463,127 @@ func cleanText(s string, maxRunes int) string {
 	return strings.TrimSpace(b.String())
 }
 
-// backfillLogins 用 ssh_logins 与近 90 天 3002 登录事件补齐该资产钥匙的最后登录时间与来源 IP
-func (s *Service) backfillLogins(ctx context.Context, assetID uuid.UUID, now time.Time) {
-	if s.SQL == nil {
-		return
+// loadBackfillLogins 仅在资产首次建立基线时从 ssh_logins 物化表查询各钥匙的最近登录信息。
+// 不再扫描 events 分区表，且通过只读短事务的 SET LOCAL statement_timeout 绑定 RPC 超时边界。
+func (s *Service) loadBackfillLogins(ctx context.Context, assetID uuid.UUID, now time.Time, hasKeys bool) (map[loginKey]loginInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.OnBackfill != nil {
+		s.OnBackfill(assetID)
+	}
+	if !hasKeys {
+		return nil, nil
 	}
 	since := now.Add(-IdleWindow)
-	_, _ = s.SQL.ExecContext(ctx, `WITH latest AS (
-  SELECT account, fingerprint, ts, src_ip FROM (
-    SELECT login_user AS account, key_fp AS fingerprint, ts, src_ip,
-           ROW_NUMBER() OVER (PARTITION BY login_user, key_fp ORDER BY ts DESC) AS rn
-    FROM (
-      SELECT login_user, key_fp, ts, src_ip
-      FROM ssh_logins
-      WHERE asset_id = $1 AND key_fp IS NOT NULL AND ts >= $2
-      UNION ALL
-      SELECT raw->'login_session'->>'user' AS login_user,
-             raw->'login_session'->>'key_fp' AS key_fp,
-             ts,
-             COALESCE(raw->'login_session'->>'src_ip', '') AS src_ip
-      FROM events
-      WHERE asset_id = $1 AND class_uid = 3002 AND source = 'agent' AND ts >= $2
-        AND jsonb_typeof(raw->'login_session') = 'object'
-        AND COALESCE(raw->'login_session'->>'key_fp', '') <> ''
-    ) combined
-  ) ranked WHERE rn = 1
-)
-UPDATE ssh_key_observations o
-SET last_login_at = latest.ts, last_login_ip = latest.src_ip
-FROM latest
-WHERE o.asset_id = $1 AND o.account = latest.account AND o.fingerprint = latest.fingerprint
-  AND (o.last_login_at IS NULL OR o.last_login_at < latest.ts)`, assetID, since)
+	out := make(map[loginKey]loginInfo)
+	if s.SQL != nil {
+		ms, err := statementTimeoutMillis(ctx, 10*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		tx, err := s.SQL.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL statement_timeout = '%dms'", ms)); err != nil {
+			return nil, err
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT ON (login_user, key_fp)
+  login_user, key_fp, ts, src_ip
+FROM ssh_logins
+WHERE asset_id = $1 AND key_fp IS NOT NULL AND ts >= $2
+ORDER BY login_user, key_fp, ts DESC`, assetID, since)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var acct, fp, srcIP string
+			var ts time.Time
+			if err := rows.Scan(&acct, &fp, &ts, &srcIP); err != nil {
+				return nil, err
+			}
+			out[loginKey{account: acct, fingerprint: fp}] = loginInfo{
+				ts:    ts,
+				srcIP: cleanText(srcIP, 128),
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+
+	rows, err := s.DB.SSHLogin.Query().
+		Where(
+			sshlogin.AssetIDEQ(assetID),
+			sshlogin.KeyFpNotNil(),
+			sshlogin.TsGTE(since),
+		).
+		Order(ent.Desc(sshlogin.FieldTs)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		if r.KeyFp == nil {
+			continue
+		}
+		k := loginKey{account: r.LoginUser, fingerprint: *r.KeyFp}
+		if _, exists := out[k]; !exists {
+			out[k] = loginInfo{
+				ts:    r.Ts,
+				srcIP: cleanText(r.SrcIP, 128),
+			}
+		}
+	}
+	return out, nil
+}
+
+func statementTimeoutMillis(ctx context.Context, maxDuration time.Duration) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	d := maxDuration
+	if dl, ok := ctx.Deadline(); ok {
+		rem := time.Until(dl)
+		if rem <= 0 {
+			return 0, context.DeadlineExceeded
+		}
+		if rem < d {
+			d = rem
+		}
+	}
+	return max(d.Milliseconds(), 1), nil
 }
 
 // handleNewKey 对基线之后新出现的钥匙：关联写入会话、产生高危告警、生成待批移除提议（绝不自动删除）
-func (s *Service) handleNewKey(ctx context.Context, assetRow *ent.Asset, obs *ent.SSHKeyObservation, observedAt time.Time) {
-	writer := s.findWriterSession(ctx, assetRow.ID, obs.FilePath, observedAt)
+func (s *Service) handleNewKey(ctx context.Context, assetRow *ent.Asset, obs *ent.SSHKeyObservation, observedAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	writer, err := s.findWriterSession(ctx, assetRow.ID, obs.FilePath, observedAt)
+	if err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if writer.User != "" || writer.SrcIP != "" || writer.KeyFP != "" {
-		_ = s.DB.SSHKeyObservation.UpdateOneID(obs.ID).
+		if err := s.DB.SSHKeyObservation.UpdateOneID(obs.ID).
 			SetAddedByUser(writer.User).
 			SetAddedByIP(writer.SrcIP).
 			SetAddedByKeyFp(writer.KeyFP).
-			Exec(ctx)
+			Exec(ctx); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			slog.Warn("更新新 SSH 钥匙写入会话归属失败",
+				"asset_id", assetRow.ID,
+				"obs_id", obs.ID,
+				"fingerprint", obs.Fingerprint,
+				"err", err,
+			)
+		}
 	}
 
 	rawForSuppress := map[string]any{
@@ -401,28 +603,66 @@ func (s *Service) handleNewKey(ctx context.Context, assetRow *ent.Asset, obs *en
 		}
 		enc, _ := json.Marshal(evidence)
 		detail := "SSH 授权钥匙盘点发现新钥匙（注释字段攻击者可控，仅作提示，不作归属依据）：\n" + string(enc)
-		_ = s.DB.Alert.Create().
+		if err := s.DB.Alert.Create().
 			SetTs(observedAt).
 			SetLastTs(observedAt).
 			SetRuleID(sigma.RuleNewSSHKey).
 			SetSeverity(4).
 			SetAssetID(assetRow.ID).
 			SetDetail(detail).
-			Exec(ctx)
+			Exec(ctx); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			slog.Warn("创建新 SSH 钥匙告警失败",
+				"asset_id", assetRow.ID,
+				"obs_id", obs.ID,
+				"fingerprint", obs.Fingerprint,
+				"err", err,
+			)
+		}
 	}
 
-	if assetRow.GroupID != nil && s.Gate != nil {
-		_, _ = s.EnsureRemovalProposal(ctx, obs.ID)
+	if s.Gate != nil {
+		if _, err := s.EnsureRemovalProposal(ctx, obs.ID); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			slog.Warn("新出现的 SSH 钥匙生成移除提议失败",
+				"asset_id", assetRow.ID,
+				"hostname", assetRow.Hostname,
+				"obs_id", obs.ID,
+				"account", obs.Account,
+				"fingerprint", obs.Fingerprint,
+				"err", err,
+			)
+		}
 	}
+	return nil
 }
 
 // findWriterSession 从同资产近期文件监控（1001）或进程（1007）事件中查找写入该钥匙文件的登录会话
-func (s *Service) findWriterSession(ctx context.Context, assetID uuid.UUID, filePath string, observedAt time.Time) writerSession {
+func (s *Service) findWriterSession(ctx context.Context, assetID uuid.UUID, filePath string, observedAt time.Time) (writerSession, error) {
+	if err := ctx.Err(); err != nil {
+		return writerSession{}, err
+	}
 	if s.SQL == nil {
-		return writerSession{}
+		return writerSession{}, nil
+	}
+	ms, err := statementTimeoutMillis(ctx, 5*time.Second)
+	if err != nil {
+		return writerSession{}, err
+	}
+	tx, err := s.SQL.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return writerSession{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL statement_timeout = '%dms'", ms)); err != nil {
+		return writerSession{}, err
 	}
 	var user, srcIP, keyFP string
-	err := s.SQL.QueryRowContext(ctx, `SELECT
+	err = tx.QueryRowContext(ctx, `SELECT
   COALESCE(raw->'login_session'->>'user', ''),
   COALESCE(raw->'login_session'->>'src_ip', ''),
   COALESCE(raw->'login_session'->>'key_fp', '')
@@ -442,13 +682,16 @@ LIMIT 1`,
 		filePath, "authorized_keys",
 	).Scan(&user, &srcIP, &keyFP)
 	if err != nil {
-		return writerSession{}
+		if errors.Is(err, sql.ErrNoRows) {
+			return writerSession{}, nil
+		}
+		return writerSession{}, err
 	}
 	return writerSession{
 		User:  cleanText(user, 64),
 		SrcIP: cleanText(srcIP, 128),
 		KeyFP: cleanText(keyFP, 64),
-	}
+	}, nil
 }
 
 // EnsureRemovalProposal 为指定钥匙观测条目生成（或复用仍有效的）待批移除提议。从不自动删除钥匙。

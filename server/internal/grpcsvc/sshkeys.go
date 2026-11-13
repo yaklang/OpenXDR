@@ -3,6 +3,7 @@ package grpcsvc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,9 +31,16 @@ func (s *Server) ReportSSHKeys(ctx context.Context, req *pb.ReportSSHKeysRequest
 		return nil, status.Error(codes.NotFound, "agent 尚未注册")
 	}
 	if err != nil {
+		if ctxErr := rpcContextError(ctx, err); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, status.Error(codes.Internal, "资产查询失败")
 	}
-	_ = s.DB.Asset.UpdateOneID(a.ID).SetLastSeen(time.Now()).Exec(ctx)
+	if err := s.DB.Asset.UpdateOneID(a.ID).SetLastSeen(time.Now()).Exec(ctx); err != nil {
+		if ctxErr := rpcContextError(ctx, err); ctxErr != nil {
+			return nil, ctxErr
+		}
+	}
 
 	svc := s.SSHKeys
 	if svc == nil {
@@ -47,8 +55,21 @@ func (s *Server) ReportSSHKeys(ctx context.Context, req *pb.ReportSSHKeysRequest
 			Suppress: s.Suppress,
 		}
 	}
-	if err := svc.IngestSnapshot(ctx, a.ID, req); err != nil {
+	if err := svc.IngestAssetSnapshot(ctx, a, req); err != nil {
+		if ctxErr := rpcContextError(ctx, err); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, status.Errorf(codes.Internal, "钥匙盘点保存失败: %v", err)
 	}
 	return &pb.ReportSSHKeysResponse{}, nil
+}
+
+func rpcContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return status.FromContextError(ctxErr).Err()
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return status.FromContextError(err).Err()
+	}
+	return nil
 }

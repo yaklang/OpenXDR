@@ -1,11 +1,14 @@
 package sshkeys
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -113,5 +116,59 @@ func TestMatchKeyFactSpecificity(t *testing.T) {
 	}
 	if got := matchKeyFact(candidates, fp, assetB, &group2); got != fGlobal {
 		t.Fatalf("其他组资产应回退全局事实，got=%v", got)
+	}
+}
+
+func TestSnapshotUnchangedAndStatementTimeout(t *testing.T) {
+	const fp = "SHA256:SQfC+vTbLURn9cTkVxIS8fGQ3FKNAJWeB0o139+gV4M"
+	base := &ent.SSHKeyBaseline{
+		AuthorizedKeysCommand:     "/usr/local/bin/keys %u",
+		AuthorizedKeysCommandUser: "nobody",
+	}
+	present := []*ent.SSHKeyObservation{
+		{
+			Account:     "root",
+			FilePath:    "/root/.ssh/authorized_keys",
+			KeyType:     "ssh-ed25519",
+			Fingerprint: fp,
+			Comment:     "kei@foghaven",
+			Options:     nil,
+			Present:     true,
+		},
+	}
+	cleaned := []sanitizedKey{
+		{
+			tupleKey: tupleKey{
+				account:     "root",
+				filePath:    "/root/.ssh/authorized_keys",
+				fingerprint: fp,
+			},
+			keyType: "ssh-ed25519",
+			comment: "kei@foghaven",
+			options: []string{},
+		},
+	}
+	if !snapshotUnchanged(base, present, cleaned, "/usr/local/bin/keys %u", "nobody") {
+		t.Fatal("相同钥匙与 AuthorizedKeysCommand 应判定为未变更")
+	}
+	if snapshotUnchanged(base, present, cleaned, "", "") {
+		t.Fatal("AuthorizedKeysCommand 变化应判定为已变更")
+	}
+	cleaned[0].options = []string{"no-pty"}
+	if snapshotUnchanged(base, present, cleaned, "/usr/local/bin/keys %u", "nobody") {
+		t.Fatal("钥匙选项变化应判定为已变更")
+	}
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := statementTimeoutMillis(canceledCtx, 10*time.Second); !errors.Is(err, context.Canceled) {
+		t.Fatalf("已取消 ctx 应返回 context.Canceled, got=%v", err)
+	}
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer shortCancel()
+	ms, err := statementTimeoutMillis(shortCtx, 10*time.Second)
+	if err != nil || ms <= 0 || ms > 250 {
+		t.Fatalf("statement_timeout 应收敛到 ctx 剩余时间: ms=%d err=%v", ms, err)
 	}
 }
