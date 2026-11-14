@@ -100,6 +100,16 @@ func Status(v string) predicate.Suppression {
 	return predicate.Suppression(sql.FieldEQ(FieldStatus, v))
 }
 
+// BuiltinKey applies equality check predicate on the "builtin_key" field. It's identical to BuiltinKeyEQ.
+func BuiltinKey(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldEQ(FieldBuiltinKey, v))
+}
+
+// BuiltinTitle applies equality check predicate on the "builtin_title" field. It's identical to BuiltinTitleEQ.
+func BuiltinTitle(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldEQ(FieldBuiltinTitle, v))
+}
+
 // SessionID applies equality check predicate on the "session_id" field. It's identical to SessionIDEQ.
 func SessionID(v uuid.UUID) predicate.Suppression {
 	return predicate.Suppression(sql.FieldEQ(FieldSessionID, v))
@@ -613,6 +623,156 @@ func StatusEqualFold(v string) predicate.Suppression {
 // StatusContainsFold applies the ContainsFold predicate on the "status" field.
 func StatusContainsFold(v string) predicate.Suppression {
 	return predicate.Suppression(sql.FieldContainsFold(FieldStatus, v))
+}
+
+// BuiltinKeyEQ applies the EQ predicate on the "builtin_key" field.
+func BuiltinKeyEQ(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldEQ(FieldBuiltinKey, v))
+}
+
+// BuiltinKeyNEQ applies the NEQ predicate on the "builtin_key" field.
+func BuiltinKeyNEQ(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldNEQ(FieldBuiltinKey, v))
+}
+
+// BuiltinKeyIn applies the In predicate on the "builtin_key" field.
+func BuiltinKeyIn(vs ...string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldIn(FieldBuiltinKey, vs...))
+}
+
+// BuiltinKeyNotIn applies the NotIn predicate on the "builtin_key" field.
+func BuiltinKeyNotIn(vs ...string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldNotIn(FieldBuiltinKey, vs...))
+}
+
+// BuiltinKeyGT applies the GT predicate on the "builtin_key" field.
+func BuiltinKeyGT(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldGT(FieldBuiltinKey, v))
+}
+
+// BuiltinKeyGTE applies the GTE predicate on the "builtin_key" field.
+func BuiltinKeyGTE(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldGTE(FieldBuiltinKey, v))
+}
+
+// BuiltinKeyLT applies the LT predicate on the "builtin_key" field.
+func BuiltinKeyLT(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldLT(FieldBuiltinKey, v))
+}
+
+// BuiltinKeyLTE applies the LTE predicate on the "builtin_key" field.
+func BuiltinKeyLTE(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldLTE(FieldBuiltinKey, v))
+}
+
+// BuiltinKeyContains applies the Contains predicate on the "builtin_key" field.
+func BuiltinKeyContains(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldContains(FieldBuiltinKey, v))
+}
+
+// BuiltinKeyHasPrefix applies the HasPrefix predicate on the "builtin_key" field.
+func BuiltinKeyHasPrefix(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldHasPrefix(FieldBuiltinKey, v))
+}
+
+// BuiltinKeyHasSuffix applies the HasSuffix predicate on the "builtin_key" field.
+func BuiltinKeyHasSuffix(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldHasSuffix(FieldBuiltinKey, v))
+}
+
+// BuiltinKeyIsNil applies the IsNil predicate on the "builtin_key" field.
+func BuiltinKeyIsNil() predicate.Suppression {
+	return predicate.Suppression(sql.FieldIsNull(FieldBuiltinKey))
+}
+
+// BuiltinKeyNotNil applies the NotNil predicate on the "builtin_key" field.
+func BuiltinKeyNotNil() predicate.Suppression {
+	return predicate.Suppression(sql.FieldNotNull(FieldBuiltinKey))
+}
+
+// BuiltinKeyEqualFold applies the EqualFold predicate on the "builtin_key" field.
+func BuiltinKeyEqualFold(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldEqualFold(FieldBuiltinKey, v))
+}
+
+// BuiltinKeyContainsFold applies the ContainsFold predicate on the "builtin_key" field.
+func BuiltinKeyContainsFold(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldContainsFold(FieldBuiltinKey, v))
+}
+
+// BuiltinTitleEQ applies the EQ predicate on the "builtin_title" field.
+func BuiltinTitleEQ(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldEQ(FieldBuiltinTitle, v))
+}
+
+// BuiltinTitleNEQ applies the NEQ predicate on the "builtin_title" field.
+func BuiltinTitleNEQ(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldNEQ(FieldBuiltinTitle, v))
+}
+
+// BuiltinTitleIn applies the In predicate on the "builtin_title" field.
+func BuiltinTitleIn(vs ...string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldIn(FieldBuiltinTitle, vs...))
+}
+
+// BuiltinTitleNotIn applies the NotIn predicate on the "builtin_title" field.
+func BuiltinTitleNotIn(vs ...string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldNotIn(FieldBuiltinTitle, vs...))
+}
+
+// BuiltinTitleGT applies the GT predicate on the "builtin_title" field.
+func BuiltinTitleGT(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldGT(FieldBuiltinTitle, v))
+}
+
+// BuiltinTitleGTE applies the GTE predicate on the "builtin_title" field.
+func BuiltinTitleGTE(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldGTE(FieldBuiltinTitle, v))
+}
+
+// BuiltinTitleLT applies the LT predicate on the "builtin_title" field.
+func BuiltinTitleLT(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldLT(FieldBuiltinTitle, v))
+}
+
+// BuiltinTitleLTE applies the LTE predicate on the "builtin_title" field.
+func BuiltinTitleLTE(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldLTE(FieldBuiltinTitle, v))
+}
+
+// BuiltinTitleContains applies the Contains predicate on the "builtin_title" field.
+func BuiltinTitleContains(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldContains(FieldBuiltinTitle, v))
+}
+
+// BuiltinTitleHasPrefix applies the HasPrefix predicate on the "builtin_title" field.
+func BuiltinTitleHasPrefix(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldHasPrefix(FieldBuiltinTitle, v))
+}
+
+// BuiltinTitleHasSuffix applies the HasSuffix predicate on the "builtin_title" field.
+func BuiltinTitleHasSuffix(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldHasSuffix(FieldBuiltinTitle, v))
+}
+
+// BuiltinTitleIsNil applies the IsNil predicate on the "builtin_title" field.
+func BuiltinTitleIsNil() predicate.Suppression {
+	return predicate.Suppression(sql.FieldIsNull(FieldBuiltinTitle))
+}
+
+// BuiltinTitleNotNil applies the NotNil predicate on the "builtin_title" field.
+func BuiltinTitleNotNil() predicate.Suppression {
+	return predicate.Suppression(sql.FieldNotNull(FieldBuiltinTitle))
+}
+
+// BuiltinTitleEqualFold applies the EqualFold predicate on the "builtin_title" field.
+func BuiltinTitleEqualFold(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldEqualFold(FieldBuiltinTitle, v))
+}
+
+// BuiltinTitleContainsFold applies the ContainsFold predicate on the "builtin_title" field.
+func BuiltinTitleContainsFold(v string) predicate.Suppression {
+	return predicate.Suppression(sql.FieldContainsFold(FieldBuiltinTitle, v))
 }
 
 // ConditionsIsNil applies the IsNil predicate on the "conditions" field.

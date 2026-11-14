@@ -1608,6 +1608,8 @@ var (
 		{Name: "matched_count", Type: field.TypeInt, Default: 0},
 		{Name: "last_matched_at", Type: field.TypeTime, Nullable: true},
 		{Name: "status", Type: field.TypeString, Default: "active"},
+		{Name: "builtin_key", Type: field.TypeString, Unique: true, Nullable: true},
+		{Name: "builtin_title", Type: field.TypeString, Nullable: true},
 		{Name: "conditions", Type: field.TypeJSON, Nullable: true},
 		{Name: "session_id", Type: field.TypeUUID, Nullable: true},
 		{Name: "reviewed_by", Type: field.TypeString, Nullable: true},

@@ -1,0 +1,27 @@
+id: pve-guest-scope-systemctl
+title: PVE 虚机启停清理瞬态单元（qm / pvedaemon → systemctl <vmid>.scope）
+description: >-
+  Proxmox VE 通过 qm start/stop/shutdown/reboot/reset <vmid> 或 pvedaemon worker 管理虚机时，
+  会调用 /bin/systemctl stop <vmid>.scope 与 reset-failed <vmid>.scope 清理残留 systemd 瞬态 scope，
+  误中通用停止服务规则。仅放行纯数字 <vmid>.scope（不含任何 .service），且父进程必须为 PVE 的 perl/qm 进程。
+sample: >-
+  /usr/bin/perl /usr/sbin/qm start 103 → /bin/systemctl stop 103.scope；
+  pvedaemon worker → /bin/systemctl reset-failed 103.scope
+rules:
+  - de25eeb8-3655-4643-ac3a-b662d3f26b6b
+  - xdr:new-process
+conditions:
+  - field: process.file.path
+    op: in
+    values:
+      - /bin/systemctl
+      - /usr/bin/systemctl
+  - field: process.cmd_line
+    op: regex
+    value: '^(/usr)?/bin/systemctl\s+(stop|reset-failed)\s+[0-9]+\.scope$'
+  - field: process.parent_process.file.path
+    op: regex
+    value: '^/usr/(bin/perl([0-9.]*)?|sbin/qm)$'
+  - field: process.parent_process.cmd_line
+    op: regex
+    value: '^((/usr/bin/perl([0-9.]*)?\s+)?(/usr/sbin/)?qm\s+(start|stop|shutdown|reboot|reset)\s+[0-9]+\b|pvedaemon worker\b|task UPID:[^:\s]+:[0-9A-Fa-f]+:[0-9A-Fa-f]+:[0-9A-Fa-f]+:qm(start|stop|shutdown|reboot|reset):[0-9]+:)'

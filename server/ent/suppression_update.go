@@ -188,6 +188,46 @@ func (_u *SuppressionUpdate) SetNillableStatus(v *string) *SuppressionUpdate {
 	return _u
 }
 
+// SetBuiltinKey sets the "builtin_key" field.
+func (_u *SuppressionUpdate) SetBuiltinKey(v string) *SuppressionUpdate {
+	_u.mutation.SetBuiltinKey(v)
+	return _u
+}
+
+// SetNillableBuiltinKey sets the "builtin_key" field if the given value is not nil.
+func (_u *SuppressionUpdate) SetNillableBuiltinKey(v *string) *SuppressionUpdate {
+	if v != nil {
+		_u.SetBuiltinKey(*v)
+	}
+	return _u
+}
+
+// ClearBuiltinKey clears the value of the "builtin_key" field.
+func (_u *SuppressionUpdate) ClearBuiltinKey() *SuppressionUpdate {
+	_u.mutation.ClearBuiltinKey()
+	return _u
+}
+
+// SetBuiltinTitle sets the "builtin_title" field.
+func (_u *SuppressionUpdate) SetBuiltinTitle(v string) *SuppressionUpdate {
+	_u.mutation.SetBuiltinTitle(v)
+	return _u
+}
+
+// SetNillableBuiltinTitle sets the "builtin_title" field if the given value is not nil.
+func (_u *SuppressionUpdate) SetNillableBuiltinTitle(v *string) *SuppressionUpdate {
+	if v != nil {
+		_u.SetBuiltinTitle(*v)
+	}
+	return _u
+}
+
+// ClearBuiltinTitle clears the value of the "builtin_title" field.
+func (_u *SuppressionUpdate) ClearBuiltinTitle() *SuppressionUpdate {
+	_u.mutation.ClearBuiltinTitle()
+	return _u
+}
+
 // SetConditions sets the "conditions" field.
 func (_u *SuppressionUpdate) SetConditions(v []schema.SuppressCondition) *SuppressionUpdate {
 	_u.mutation.SetConditions(v)
@@ -360,6 +400,18 @@ func (_u *SuppressionUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(suppression.FieldStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BuiltinKey(); ok {
+		_spec.SetField(suppression.FieldBuiltinKey, field.TypeString, value)
+	}
+	if _u.mutation.BuiltinKeyCleared() {
+		_spec.ClearField(suppression.FieldBuiltinKey, field.TypeString)
+	}
+	if value, ok := _u.mutation.BuiltinTitle(); ok {
+		_spec.SetField(suppression.FieldBuiltinTitle, field.TypeString, value)
+	}
+	if _u.mutation.BuiltinTitleCleared() {
+		_spec.ClearField(suppression.FieldBuiltinTitle, field.TypeString)
 	}
 	if value, ok := _u.mutation.Conditions(); ok {
 		_spec.SetField(suppression.FieldConditions, field.TypeJSON, value)
@@ -573,6 +625,46 @@ func (_u *SuppressionUpdateOne) SetNillableStatus(v *string) *SuppressionUpdateO
 	return _u
 }
 
+// SetBuiltinKey sets the "builtin_key" field.
+func (_u *SuppressionUpdateOne) SetBuiltinKey(v string) *SuppressionUpdateOne {
+	_u.mutation.SetBuiltinKey(v)
+	return _u
+}
+
+// SetNillableBuiltinKey sets the "builtin_key" field if the given value is not nil.
+func (_u *SuppressionUpdateOne) SetNillableBuiltinKey(v *string) *SuppressionUpdateOne {
+	if v != nil {
+		_u.SetBuiltinKey(*v)
+	}
+	return _u
+}
+
+// ClearBuiltinKey clears the value of the "builtin_key" field.
+func (_u *SuppressionUpdateOne) ClearBuiltinKey() *SuppressionUpdateOne {
+	_u.mutation.ClearBuiltinKey()
+	return _u
+}
+
+// SetBuiltinTitle sets the "builtin_title" field.
+func (_u *SuppressionUpdateOne) SetBuiltinTitle(v string) *SuppressionUpdateOne {
+	_u.mutation.SetBuiltinTitle(v)
+	return _u
+}
+
+// SetNillableBuiltinTitle sets the "builtin_title" field if the given value is not nil.
+func (_u *SuppressionUpdateOne) SetNillableBuiltinTitle(v *string) *SuppressionUpdateOne {
+	if v != nil {
+		_u.SetBuiltinTitle(*v)
+	}
+	return _u
+}
+
+// ClearBuiltinTitle clears the value of the "builtin_title" field.
+func (_u *SuppressionUpdateOne) ClearBuiltinTitle() *SuppressionUpdateOne {
+	_u.mutation.ClearBuiltinTitle()
+	return _u
+}
+
 // SetConditions sets the "conditions" field.
 func (_u *SuppressionUpdateOne) SetConditions(v []schema.SuppressCondition) *SuppressionUpdateOne {
 	_u.mutation.SetConditions(v)
@@ -775,6 +867,18 @@ func (_u *SuppressionUpdateOne) sqlSave(ctx context.Context) (_node *Suppression
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(suppression.FieldStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BuiltinKey(); ok {
+		_spec.SetField(suppression.FieldBuiltinKey, field.TypeString, value)
+	}
+	if _u.mutation.BuiltinKeyCleared() {
+		_spec.ClearField(suppression.FieldBuiltinKey, field.TypeString)
+	}
+	if value, ok := _u.mutation.BuiltinTitle(); ok {
+		_spec.SetField(suppression.FieldBuiltinTitle, field.TypeString, value)
+	}
+	if _u.mutation.BuiltinTitleCleared() {
+		_spec.ClearField(suppression.FieldBuiltinTitle, field.TypeString)
 	}
 	if value, ok := _u.mutation.Conditions(); ok {
 		_spec.SetField(suppression.FieldConditions, field.TypeJSON, value)

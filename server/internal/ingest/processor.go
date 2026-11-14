@@ -271,10 +271,14 @@ ON CONFLICT DO NOTHING`, e.ID, e.Timestamp, e.ClassUID, e.Source,
 			from.healthcheck = automation.Healthcheck(raw)
 		}
 	}
+	var lineage []map[string]any
+	if len(hits) > 0 && e.ClassUID == 1007 && p.Suppress != nil && p.Suppress.NeedsLineage() {
+		lineage = suppress.ResolveLineage(ctx, tx, e.AssetID, e.ParentProcessGUID, e.Timestamp, raw)
+	}
 	// alerted 这条事件产出了进关联的告警（来源已知的不算），内部横向喷洒据此认「被告警命中的入站」
 	alerted := false
 	for _, hit := range hits {
-		if p.Suppress.Suppressed(hit.RuleID, e.AssetID, raw, e.Timestamp) {
+		if p.Suppress.SuppressedWithLineage(hit.RuleID, e.AssetID, raw, lineage, e.Timestamp) {
 			continue
 		}
 		hitFrom := from

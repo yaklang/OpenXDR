@@ -1,0 +1,44 @@
+id: pve-pbs-backup-usernsexec
+title: PVE 快照备份用户命名空间映射（pvescheduler → proxmox-backup-client → lxc-usernsexec）
+description: >-
+  Proxmox VE 的 pvescheduler 定时触发 PBS 快照备份时，由 /usr/bin/proxmox-backup-client 调用
+  /usr/bin/lxc-usernsexec 为非特权容器建立 UID/GID 映射并卸载快照挂载点，派生 newuidmap、newgidmap 与 umount。
+  要求叶子可执行路径、父进程 lxc-usernsexec、祖先 proxmox-backup-client 与根进程 pvescheduler/vzdump 同时成立。
+sample: >-
+  pvescheduler → /usr/bin/proxmox-backup-client backup root.pxar:/mnt/vzsnap0 →
+  /usr/bin/lxc-usernsexec -m u:0:100000:65536 → /usr/bin/newuidmap 48210 0 100000 65536
+rules:
+  - "*"
+conditions:
+  - field: process.file.path
+    op: in
+    values:
+      - /usr/bin/newuidmap
+      - /usr/bin/newgidmap
+      - /bin/umount
+      - /usr/bin/umount
+  - field: process.cmd_line
+    op: regex
+    value: '^((/usr)?/bin/(newuidmap|newgidmap)\s+[0-9]+(\s+[0-9]+){3,}|((/usr)?/bin/)?umount\s+\S+)'
+  - field: process.parent_process.file.path
+    op: equals
+    value: /usr/bin/lxc-usernsexec
+  - field: process.parent_process.cmd_line
+    op: regex
+    value: '^(/usr/bin/)?lxc-usernsexec\b'
+  - field: ancestor.file.path
+    op: equals
+    value: /usr/bin/proxmox-backup-client
+    group: 1
+  - field: ancestor.cmd_line
+    op: regex
+    value: '^(/usr/bin/)?proxmox-backup-client\s+backup\b'
+    group: 1
+  - field: ancestor.file.path
+    op: regex
+    value: '^/usr/bin/perl([0-9.]*)?$'
+    group: 2
+  - field: ancestor.cmd_line
+    op: regex
+    value: '^(pvescheduler\b|(/usr/bin/perl([0-9.]*)?\s+)?/usr/sbin/vzdump\b|task UPID:[^:\s]+:[0-9A-Fa-f]+:[0-9A-Fa-f]+:[0-9A-Fa-f]+:vzdump:)'
+    group: 2

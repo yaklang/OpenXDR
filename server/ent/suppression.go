@@ -38,6 +38,10 @@ type Suppression struct {
 	LastMatchedAt *time.Time `json:"last_matched_at,omitempty"`
 	// Status holds the value of the "status" field.
 	Status string `json:"status,omitempty"`
+	// BuiltinKey holds the value of the "builtin_key" field.
+	BuiltinKey *string `json:"builtin_key,omitempty"`
+	// BuiltinTitle holds the value of the "builtin_title" field.
+	BuiltinTitle *string `json:"builtin_title,omitempty"`
 	// Conditions holds the value of the "conditions" field.
 	Conditions []schema.SuppressCondition `json:"conditions,omitempty"`
 	// SessionID holds the value of the "session_id" field.
@@ -62,7 +66,7 @@ func (*Suppression) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case suppression.FieldMatchedCount:
 			values[i] = new(sql.NullInt64)
-		case suppression.FieldRuleID, suppression.FieldReason, suppression.FieldCreatedBy, suppression.FieldStatus, suppression.FieldReviewedBy:
+		case suppression.FieldRuleID, suppression.FieldReason, suppression.FieldCreatedBy, suppression.FieldStatus, suppression.FieldBuiltinKey, suppression.FieldBuiltinTitle, suppression.FieldReviewedBy:
 			values[i] = new(sql.NullString)
 		case suppression.FieldCreatedAt, suppression.FieldExpiresAt, suppression.FieldLastMatchedAt, suppression.FieldReviewedAt:
 			values[i] = new(sql.NullTime)
@@ -146,6 +150,20 @@ func (_m *Suppression) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field status", values[i])
 			} else if value.Valid {
 				_m.Status = value.String
+			}
+		case suppression.FieldBuiltinKey:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field builtin_key", values[i])
+			} else if value.Valid {
+				_m.BuiltinKey = new(string)
+				*_m.BuiltinKey = value.String
+			}
+		case suppression.FieldBuiltinTitle:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field builtin_title", values[i])
+			} else if value.Valid {
+				_m.BuiltinTitle = new(string)
+				*_m.BuiltinTitle = value.String
 			}
 		case suppression.FieldConditions:
 			if value, ok := values[i].(*[]byte); !ok {
@@ -254,6 +272,16 @@ func (_m *Suppression) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("status=")
 	builder.WriteString(_m.Status)
+	builder.WriteString(", ")
+	if v := _m.BuiltinKey; v != nil {
+		builder.WriteString("builtin_key=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.BuiltinTitle; v != nil {
+		builder.WriteString("builtin_title=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
 	builder.WriteString("conditions=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Conditions))

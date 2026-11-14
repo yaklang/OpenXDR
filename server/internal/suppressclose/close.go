@@ -19,11 +19,13 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/incident"
+	"openxdr/server/ent/predicate"
 	"openxdr/server/ent/suppression"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/incidentstate"
 	"openxdr/server/internal/incidentwork"
 	"openxdr/server/internal/review"
+	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 )
 
@@ -66,7 +68,14 @@ func (c *Closer) Sweep(ctx context.Context, now time.Time) (int, error) {
 	}
 	seen, closed := map[uuid.UUID]bool{}, 0
 	for _, s := range subs {
-		hits := alert.RuleIDEQ(s.RuleID)
+		var hits predicate.Alert
+		if s.RuleID == suppress.WildcardRule {
+			hits = alert.SeverityLTE(suppress.MaxBuiltinSeverity)
+		} else if rids := suppress.SplitRuleIDs(s.RuleID); len(rids) > 1 {
+			hits = alert.RuleIDIn(rids...)
+		} else {
+			hits = alert.RuleIDEQ(s.RuleID)
+		}
 		if s.AssetID != nil {
 			hits = alert.And(hits, alert.AssetIDEQ(*s.AssetID))
 		}
@@ -115,7 +124,15 @@ func (c *Closer) close(ctx context.Context, inc *ent.Incident, now time.Time) (b
 		if a.Edges.Event == nil || json.Unmarshal(a.Edges.Event.Raw, &raw) != nil {
 			return false, nil
 		}
-		id := c.Store.Covering(a.RuleID, a.AssetID, raw, now)
+		ev := a.Edges.Event
+		if ev.Username != nil {
+			sigma.WithActor(raw, *ev.Username)
+		}
+		var lineage []map[string]any
+		if ev.ClassUID == 1007 && c.Store.NeedsLineage() {
+			lineage = suppress.ResolveLineageEnt(ctx, c.DB, a.AssetID, ev.ParentProcessGUID, ev.Ts, raw)
+		}
+		id := c.Store.CoveringWithLineage(a.RuleID, a.AssetID, raw, lineage, now)
 		if id == nil {
 			return false, nil
 		}

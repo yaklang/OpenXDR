@@ -421,9 +421,17 @@ func (st *agentStream) detect(ev *pb.AgentEvent, eventID uuid.UUID, rawMap map[s
 			healthcheck = automation.Healthcheck(rawMap)
 		}
 	}
+	var lineage []map[string]any
+	if len(hits) > 0 && ev.ClassUid == 1007 && st.s.Suppress != nil && st.s.Suppress.NeedsLineage() {
+		var parentGUID *uuid.UUID
+		if id, parseErr := uuid.Parse(ev.ParentProcessGuid); parseErr == nil {
+			parentGUID = &id
+		}
+		lineage = suppress.ResolveLineageEnt(st.ctx, st.s.DB, st.assetID, parentGUID, ts, rawMap)
+	}
 	for _, h := range hits {
 		// 抑制先于去重：被压掉的命中不该占用去重槽位
-		if st.s.Suppress.Suppressed(h.RuleID, st.assetID, rawMap, ts) {
+		if st.s.Suppress.SuppressedWithLineage(h.RuleID, st.assetID, rawMap, lineage, ts) {
 			continue
 		}
 		fingerprint := h.RuleID + fpSuffix

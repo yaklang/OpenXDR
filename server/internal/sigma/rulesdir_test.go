@@ -63,7 +63,7 @@ func TestRepoRulesAllLoad(t *testing.T) {
 func TestRepoRulesAllTagged(t *testing.T) {
 	var own []*Rule
 	_ = filepath.WalkDir("../../../rules", func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() && d.Name() == "sigmahq" {
+		if err != nil || d.IsDir() && (d.Name() == "sigmahq" || d.Name() == "benign-chains") {
 			return filepath.SkipDir
 		}
 		if d.IsDir() || filepath.Ext(path) != ".yml" {

@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"time"
 
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/suppress"
 )
 
 // 一条典型的进程创建事件，用于测量单事件过全量规则的成本
@@ -117,6 +119,16 @@ func main() {
 			}
 			fmt.Printf("          %s\n", f)
 		}
+	}
+
+	chains, chainErr := suppress.LoadBuiltinDir(filepath.Join(args[0], "benign-chains"), engine)
+	if chainErr != nil {
+		fmt.Fprintf(os.Stderr, "\n内置良性链加载失败: %v\n", chainErr)
+		if strict {
+			os.Exit(1)
+		}
+	} else if len(chains) > 0 {
+		fmt.Printf("\n内置已知良性链: %d 条校验通过\n", len(chains))
 	}
 
 	if strict && report.Loaded != report.Total {

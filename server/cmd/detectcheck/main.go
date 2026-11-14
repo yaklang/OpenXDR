@@ -1,7 +1,7 @@
-// detectcheck 检测验证对拍：把攻击手法的真实事件回放过规则引擎，
-// 报告每个 ATT&CK 技术是否真的被抓住。
+// detectcheck 检测验证对拍：把攻击手法的真实事件回放过规则引擎与内置良性链闸门，
+// 报告每个 ATT&CK 技术是否真的被抓住、良性例行链是否被正确放行且仿冒血缘仍照常告警。
 //
-// 语料来自 Atomic Red Team 的测试过程（命令行原文），归一化成本平台的
+// 语料来自 Atomic Red Team 的测试过程（命令行原文）与生产脱敏样本，归一化成本平台的
 // 事件格式。这是合成回放，不是实机执行——它验证"规则能否匹配真实命令"，
 // 不验证"采集端能否看见这个动作"。后者要实机跑。
 //
@@ -22,6 +22,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/suppress"
 )
 
 type corpusFile struct {
@@ -36,7 +37,11 @@ type corpusFile struct {
 		Class     int            `yaml:"class"`
 		OS        string         `yaml:"os"`
 		Event     map[string]any `yaml:"event"`
-		// expect: detected（默认）| undetected（已知缺口，显式记录）
+		// Ancestors 可选：父进程之上的多跳祖先链（[祖父进程, 曾祖父进程, ...]），验证内置良性链多跳血缘匹配
+		Ancestors []map[string]any `yaml:"ancestors"`
+		// NewProcess 可选：模拟 UEBA 学习期后的首次出现进程命中（xdr:ueba:new_process）
+		NewProcess bool `yaml:"new_process"`
+		// expect: detected（默认）| undetected（已知缺口或良性对照，显式记录）
 		// | signal（不出告警，但有标了该技术的信号规则命中，供时序规则关联，见 temporal-rules/README.md）
 		Expect string `yaml:"expect"`
 		// level 可选：命中规则里最高的级别必须正好是它——降噪后的维护动作必须停在 low，
@@ -80,7 +85,12 @@ func main() {
 	}
 
 	engine, report := sigma.LoadDirReport(rulesDir)
-	fmt.Printf("规则: %d 条已加载（共 %d）\n", report.Loaded, report.Total)
+	chains, err := suppress.LoadBuiltinDir(filepath.Join(rulesDir, "benign-chains"), engine)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "加载内置良性链失败: %v\n", err)
+		os.Exit(2)
+	}
+	fmt.Printf("规则: %d 条已加载（共 %d），内置良性链: %d 条\n", report.Loaded, report.Total, len(chains))
 
 	files, err := filepath.Glob(filepath.Join(corpusDir, "*.yml"))
 	if err != nil || len(files) == 0 {
@@ -120,12 +130,16 @@ func main() {
 				os.Exit(2)
 			}
 			r := result{technique: technique, group: group, caseName: c.Name, source: c.Source, expect: expect, wantLevel: c.Level}
-			hits := engine.Evaluate(c.Class, c.OS, c.Event)
+			lineage := buildLineage(c.Event, c.Ancestors)
+			hits := filterBuiltinChains(engine.Evaluate(c.Class, c.OS, c.Event), c.Event, lineage, chains, engine)
 			if c.Level != "" {
 				r.gotLevel = maxLevel(hits)
 			}
 			if r.by = matchedBy(hits, technique); r.by != "" {
 				r.detected = true
+			} else if c.NewProcess && strings.EqualFold(technique, "UEBA-NEW-PROCESS") && !suppressedByBuiltin(sigma.RuleNewProcess, c.Event, lineage, chains, engine) {
+				r.detected = true
+				r.by = "首次出现进程 (" + sigma.RuleNewProcess + ")"
 			} else if r.by = matchedBy(engine.EvaluateSignals(c.Class, c.OS, c.Event), technique); r.by != "" {
 				r.signal = true
 			}
@@ -137,6 +151,44 @@ func main() {
 	if strict && countMismatch(results) > 0 {
 		os.Exit(1)
 	}
+}
+
+func buildLineage(raw map[string]any, ancestors []map[string]any) []map[string]any {
+	base := suppress.DefaultLineage(raw)
+	if len(ancestors) == 0 {
+		return base
+	}
+	return append(base, ancestors...)
+}
+
+func filterBuiltinChains(hits []*sigma.Rule, raw map[string]any, lineage []map[string]any, chains []suppress.BuiltinChain, catalog sigma.Catalog) []*sigma.Rule {
+	if len(hits) == 0 || len(chains) == 0 {
+		return hits
+	}
+	out := make([]*sigma.Rule, 0, len(hits))
+	for _, h := range hits {
+		if !suppressedByBuiltin(h.ID, raw, lineage, chains, catalog) {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+func suppressedByBuiltin(ruleID string, raw map[string]any, lineage []map[string]any, chains []suppress.BuiltinChain, catalog sigma.Catalog) bool {
+	for _, ch := range chains {
+		wildcard := slices.Contains(ch.Rules, suppress.WildcardRule)
+		explicit := !wildcard && slices.Contains(ch.Rules, ruleID)
+		if !wildcard && !explicit {
+			continue
+		}
+		if !suppress.BuiltinAllowedRule(ruleID, catalog, explicit) {
+			continue
+		}
+		if suppress.MatchesWithLineage(ch.Conditions, raw, lineage) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchedBy 返回命中的规则标题，未命中返回空。
@@ -191,7 +243,7 @@ func printReport(results []result) {
 			case got == r.expect && got == "signal":
 				fmt.Printf("  ◇ %-46s （仅信号，供时序关联）→ %s\n", trim(r.caseName), r.by)
 			case got == r.expect:
-				fmt.Printf("  ○ %-46s （已知缺口）\n", trim(r.caseName))
+				fmt.Printf("  ○ %-46s （已知缺口/良性放行）\n", trim(r.caseName))
 			case got == "undetected":
 				fmt.Printf("  ✗ %-46s 无规则命中（预期 %s）\n", trim(r.caseName), r.expect)
 			default:
@@ -215,7 +267,7 @@ func printReport(results []result) {
 			gaps++
 		}
 	}
-	fmt.Printf("\n合计 %d 个用例：%d 命中，%d 仅信号，%d 已知缺口，%d 不符合预期\n",
+	fmt.Printf("\n合计 %d 个用例：%d 命中，%d 仅信号，%d 已知缺口/良性放行，%d 不符合预期\n",
 		len(results), detected, signals, gaps, mismatch)
 	fmt.Printf("覆盖技术数：%d / %d\n", len(techCovered), len(byTech))
 	if mismatch > 0 {
