@@ -173,6 +173,9 @@ func (n *Notifier) Run(ctx context.Context) {
 			if err := n.severeBenignDigest(ctx, time.Now()); err != nil {
 				slog.Error("高危良性每日汇总失败", "err", err)
 			}
+			if err := n.questionDigest(ctx, time.Now()); err != nil {
+				slog.Error("总控待答问题汇总失败", "err", err)
+			}
 			if err := n.sweepFindings(ctx); err != nil {
 				slog.Error("运维紧急风险通知失败", "err", err)
 			}

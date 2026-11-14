@@ -68,6 +68,7 @@ import (
 	"openxdr/server/internal/notify"
 	"openxdr/server/internal/piruntime"
 	"openxdr/server/internal/queryrole"
+	"openxdr/server/internal/questions"
 	"openxdr/server/internal/realip"
 	"openxdr/server/internal/repairpolicy"
 	"openxdr/server/internal/report"
@@ -191,6 +192,7 @@ func main() {
 		return repair.HasAssetGrant(ctx, session.GroupID, f.AssetID)
 	}
 	go cluster.RunLeader(ctx, db, "closure-review", closureReviewer.Run)
+	go cluster.RunLeader(ctx, db, "questions-renewal", func(ctx context.Context) { questions.Run(ctx, client) })
 	go cluster.RunLeader(ctx, db, "triage", triageEngine.Run)
 	scheduler := startScheduler(ctx, db, client, chat, conf, webhook)
 	enrollSvc := loadEnroll(client, silentAfter)
@@ -237,7 +239,7 @@ func main() {
 	routes.Handle("/api/system-integrations/", integrations)
 	startIntegrationDelivery(ctx, client, credentialVault, outboundAllow)
 	control := api.Control(client, webhook.Send)
-	for _, path := range []string{"/api/facts", "/api/facts/", "/api/intents", "/api/intents/", "/api/standing-rules", "/api/standing-rules/"} {
+	for _, path := range []string{"/api/facts", "/api/facts/", "/api/intents", "/api/intents/", "/api/standing-rules", "/api/standing-rules/", "/api/questions", "/api/questions/"} {
 		routes.Handle(path, control)
 	}
 	sshKeysHandler := api.SSHKeys(client, sshKeysSvc)
