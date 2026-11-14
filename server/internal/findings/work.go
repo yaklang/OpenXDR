@@ -45,15 +45,17 @@ type Work struct {
 	BlockedRounds         int         `json:"blocked_rounds,omitempty"`
 	BlockedReason         string      `json:"blocked_reason,omitempty"`
 	Blocker               string      `json:"blocker,omitempty"`
-	EvidenceCommands      []uuid.UUID `json:"evidence_commands,omitempty"`
-	EvidenceAt            *time.Time  `json:"evidence_at,omitempty"`
-	EvidenceStale         bool        `json:"evidence_stale,omitempty"`
-	RiskSince             *time.Time  `json:"risk_since,omitempty"`
-	RiskObservedAt        *time.Time  `json:"risk_observed_at,omitempty"`
-	RiskKind              string      `json:"risk_kind,omitempty"`
-	RiskTarget            *RiskTarget `json:"risk_target,omitempty"`
-	EscalatedAt           *time.Time  `json:"escalated_at,omitempty"`
-	EscalationNotifiedAt  *time.Time  `json:"escalation_notified_at,omitempty"`
+	// Question 因等管理员作答而阻塞时关联的总控问题编号（Q-…），作答后由总控解除阻塞
+	Question             string      `json:"question,omitempty"`
+	EvidenceCommands     []uuid.UUID `json:"evidence_commands,omitempty"`
+	EvidenceAt           *time.Time  `json:"evidence_at,omitempty"`
+	EvidenceStale        bool        `json:"evidence_stale,omitempty"`
+	RiskSince            *time.Time  `json:"risk_since,omitempty"`
+	RiskObservedAt       *time.Time  `json:"risk_observed_at,omitempty"`
+	RiskKind             string      `json:"risk_kind,omitempty"`
+	RiskTarget           *RiskTarget `json:"risk_target,omitempty"`
+	EscalatedAt          *time.Time  `json:"escalated_at,omitempty"`
+	EscalationNotifiedAt *time.Time  `json:"escalation_notified_at,omitempty"`
 }
 
 type RiskTarget struct {

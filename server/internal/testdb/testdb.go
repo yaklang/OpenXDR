@@ -93,6 +93,7 @@ func truncate(ctx context.Context, t *testing.T, c *ent.Client) {
 		func(ctx context.Context) (int, error) { return c.Memory.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.StandingRuleRun.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.StandingRule.Delete().Exec(ctx) },
+		func(ctx context.Context) (int, error) { return c.Question.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.Fact.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.Intent.Delete().Exec(ctx) },
 		func(ctx context.Context) (int, error) { return c.TaskRun.Delete().Exec(ctx) },
