@@ -63,10 +63,11 @@ export interface IncidentSummary {
   severity: number
   // 告警主机所在组，逐行判断能否处置
   groupId: string | null
-  // 结案：谁、何时、为什么
+  // 结案：谁、何时、为什么、哪条机制
   resolution: string | null
   resolvedBy: string | null
   resolvedAt: string | null
+  resolutionSource?: string | null
   // AI 的结案建议：人一键采纳（结案仍记在人名下）或忽略
   closureProposal: ClosureProposal | null
   // 研判节奏：上次研判时刻与累计次数；retriage 为 pending（研判后又有新证据，冷却到期重研判）或 urgent（升级类，立即重研判）
@@ -410,14 +411,16 @@ export interface Suppression {
   createdAt: string
   ruleId: string
   ruleTitle: string | null
+  builtinKey?: string | null
+  builtinTitle?: string | null
   assetId: string | null
   reason: string | null
   createdBy: string
   expiresAt: string | null
   matchedCount: number
   lastMatchedAt: string | null
-  // active 生效 / proposed AI 提议待 AI 审计员或组管理员批准 / rejected 已拒绝
-  status: 'active' | 'proposed' | 'rejected'
+  // active 生效 / disabled 已停用（内置良性链）/ proposed AI 提议待批准 / rejected 已拒绝
+  status: 'active' | 'disabled' | 'proposed' | 'rejected'
   sessionId: string | null
   reviewedBy: string | null
   reviewedAt: string | null
@@ -446,12 +449,17 @@ export interface SuppressEvidence {
 
 export interface SuppressCondition {
   field: string
-  op: 'equals' | 'contains' | 'endswith'
-  value: string
+  op: 'equals' | 'contains' | 'startswith' | 'endswith' | 'in' | 'not_contains' | 'regex'
+  value?: string
+  values?: string[]
+  group?: number
 }
 
 export const reviewSuppression = (id: string, decision: 'approve' | 'reject') =>
   send('POST', `/api/suppressions/${id}/review`, { decision })
+
+export const setSuppressionEnabled = (id: string, enabled: boolean) =>
+  send('PATCH', `/api/suppressions/${id}`, { enabled })
 
 // reason：agent 活性检测判定通道开着却持续收不到事件时给出（只跟着 degraded），文字由 agent 生成；
 // rebuilds：本轮静默里已自动重建几次仍未恢复（只跟着 reason）；recoveries：静默后靠自动重建恢复的累计次数

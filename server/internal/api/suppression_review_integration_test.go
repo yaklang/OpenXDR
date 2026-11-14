@@ -11,6 +11,7 @@ import (
 
 	"openxdr/server/internal/intel"
 	"openxdr/server/internal/response"
+	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 )
@@ -61,5 +62,89 @@ func TestSuppressionReview(t *testing.T) {
 	}
 	if code := review(asLead, "reject"); code != http.StatusConflict {
 		t.Fatalf("已处理的提议不能再审，得到 %d", code)
+	}
+}
+
+// 内置良性链 API 权限与保护：viewer 可见；仅全局 admin 可启停（PATCH）；禁止硬删除（DELETE）与人工创建通配规则
+func TestBuiltinSuppressionToggleAndProtection(t *testing.T) {
+	ctx, client := testdb.New(t)
+	rules := sigma.LoadDir("../../../rules")
+	if _, err := suppress.SyncBuiltins(ctx, client, rules, "../../../rules/benign-chains"); err != nil {
+		t.Fatalf("SyncBuiltins: %v", err)
+	}
+	store := suppress.New(client, time.Hour)
+	store.SetRules(rules)
+	store.Reload(ctx)
+
+	admin := client.User.Create().SetUsername("root-admin").SetPasswordHash("x").SetRole("admin").SaveX(ctx)
+	analyst := client.User.Create().SetUsername("sec-ana").SetPasswordHash("x").SetRole("analyst").SaveX(ctx)
+
+	h := Handler(client, nil, rules, response.NewHub(client, false), store, intel.New(client, time.Hour), nil)
+	asAdmin := httptest.NewServer(as(admin, h))
+	t.Cleanup(asAdmin.Close)
+	asAnalyst := httptest.NewServer(as(analyst, h))
+	t.Cleanup(asAnalyst.Close)
+
+	// analyst GET /api/suppressions 能看到内置良性链
+	resp, err := http.Get(asAnalyst.URL + "/api/suppressions")
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/suppressions: %v %v", resp, err)
+	}
+	resp.Body.Close()
+
+	var targetID string
+	for _, s := range client.Suppression.Query().AllX(ctx) {
+		if s.BuiltinKey != nil && *s.BuiltinKey == "kafka-tool-uname" {
+			targetID = s.ID.String()
+		}
+	}
+	if targetID == "" {
+		t.Fatal("未找到 kafka-tool-uname 内置链")
+	}
+
+	req := func(ts *httptest.Server, method, path, body string) int {
+		r, err := http.NewRequest(method, ts.URL+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Header.Set("Content-Type", "application/json")
+		res, err := http.DefaultClient.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+
+	if code := req(asAnalyst, http.MethodPatch, "/api/suppressions/"+targetID, `{"enabled":false}`); code != http.StatusForbidden {
+		t.Fatalf("非 admin 不能启停内置链，得到 %d", code)
+	}
+	if code := req(asAdmin, http.MethodDelete, "/api/suppressions/"+targetID, ""); code != http.StatusBadRequest {
+		t.Fatalf("内置链禁止 DELETE，得到 %d", code)
+	}
+	if code := req(asAdmin, http.MethodPost, "/api/suppressions", `{"ruleId":"*"}`); code != http.StatusBadRequest {
+		t.Fatalf("人工接口禁止创建通配 * 抑制，得到 %d", code)
+	}
+	if code := req(asAdmin, http.MethodPatch, "/api/suppressions/"+targetID, `{"enabled":false}`); code != http.StatusOK {
+		t.Fatalf("admin 停用内置链应 200，得到 %d", code)
+	}
+	raw := map[string]any{
+		"process": map[string]any{
+			"file":     map[string]any{"path": "/bin/uname"},
+			"cmd_line": "/bin/uname -a",
+			"parent_process": map[string]any{
+				"file":     map[string]any{"path": "/bin/bash"},
+				"cmd_line": "/bin/bash /opt/kafka/bin/kafka-run-class.sh kafka.admin.TopicCommand --list",
+			},
+		},
+	}
+	if store.Suppressed(sigma.RuleNewProcess, nil, raw, time.Now()) {
+		t.Fatal("停用后不应再抑制")
+	}
+	if code := req(asAdmin, http.MethodPatch, "/api/suppressions/"+targetID, `{"enabled":true}`); code != http.StatusOK {
+		t.Fatalf("admin 重新启用内置链应 200，得到 %d", code)
+	}
+	if !store.Suppressed(sigma.RuleNewProcess, nil, raw, time.Now()) {
+		t.Fatal("重新启用后应立即抑制")
 	}
 }

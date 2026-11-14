@@ -163,3 +163,19 @@ export function CommandStatusTag({ value }: { value: string }) {
   const s = COMMAND_STATUS[value]
   return <Tag color={s?.color}>{s ? t(s.key) : value}</Tag>
 }
+
+const RESOLUTION_SOURCE: Record<string, { key: MsgKey; color: string }> = {
+  asset_retired: { key: 'resSrcAssetRetired', color: 'default' },
+  suppression: { key: 'resSrcSuppression', color: 'cyan' },
+  ai_review: { key: 'resSrcAIReview', color: 'purple' },
+  ai_proposal: { key: 'resSrcAIProposal', color: 'geekblue' },
+  ai_verdict: { key: 'resSrcAIVerdict', color: 'blue' },
+  external_integration: { key: 'resSrcExternal', color: 'gold' },
+}
+
+export function ResolutionSourceTag({ source }: { source?: string | null }) {
+  const { t } = useI18n()
+  if (!source) return null
+  const s = RESOLUTION_SOURCE[source]
+  return <Tag color={s?.color}>{s ? t(s.key) : source}</Tag>
+}

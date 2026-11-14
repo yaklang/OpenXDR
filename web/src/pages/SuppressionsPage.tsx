@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Input, Popconfirm, Popover, Select, Space, Table, Tag, Tooltip, Typography } from 'antd'
 import { useState } from 'react'
 import { Link } from 'react-router'
-import { deleteSuppression, fetchAssets, fetchSuppressions, reviewSuppression, type SuppressEvidence, type Suppression } from '../api'
+import { deleteSuppression, fetchAssets, fetchSuppressions, reviewSuppression, setSuppressionEnabled, type SuppressCondition, type SuppressEvidence, type Suppression } from '../api'
 import { useSession } from '../app/session'
 import { EmptyHint } from '../components/Ago'
 import { HostLink } from '../components/HostLink'
@@ -13,9 +13,21 @@ import { fmtTime, errText } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
 import { LoadError } from '../components/LoadError'
 
-const OP: Record<string, MsgKey> = { equals: 'supOpEquals', contains: 'supOpContains', endswith: 'supOpEndswith' }
+const OP: Record<string, MsgKey> = {
+  equals: 'supOpEquals',
+  contains: 'supOpContains',
+  startswith: 'supOpStartswith',
+  endswith: 'supOpEndswith',
+  in: 'supOpIn',
+  not_contains: 'supOpNotContains',
+  regex: 'supOpRegex',
+}
 
-// 抑制规则：最怕被遗忘——列出压掉的次数，让长期无人过问的抑制显形
+function condValueText(c: SuppressCondition): string {
+  return c.values?.length ? `[${c.values.join(', ')}]` : (c.value ?? '')
+}
+
+// 抑制规则：最怕被遗忘——列出压掉的次数，让长期无人过问的抑制显形；内置良性链由管理员随时启停
 export function SuppressionsPage() {
   const { t } = useI18n()
   const wideTable = useWideTable()
@@ -33,22 +45,35 @@ export function SuppressionsPage() {
   }
   const activeQ = q.trim().toLowerCase()
   const hasFilters = Boolean(activeQ || statusFilter)
-  // 待批准的排在最前
+  // 待批准的排在最前，其次内置良性链
   const rows = [...(data ?? [])]
     .filter(s =>
       (!statusFilter || s.status === statusFilter) &&
       (!activeQ ||
+        (s.builtinTitle ?? '').toLowerCase().includes(activeQ) ||
+        (s.builtinKey ?? '').toLowerCase().includes(activeQ) ||
         (s.ruleTitle ?? '').toLowerCase().includes(activeQ) ||
         s.ruleId.toLowerCase().includes(activeQ) ||
         (s.reason ?? '').toLowerCase().includes(activeQ) ||
         s.createdBy.toLowerCase().includes(activeQ) ||
-        (s.conditions ?? []).some(c => (c.field + ' ' + c.value).toLowerCase().includes(activeQ)))
+        (s.conditions ?? []).some(c => (c.field + ' ' + condValueText(c)).toLowerCase().includes(activeQ)))
     )
-    .sort((a, b) => Number(b.status === 'proposed') - Number(a.status === 'proposed'))
+    .sort((a, b) =>
+      Number(b.status === 'proposed') - Number(a.status === 'proposed') ||
+      Number(b.createdBy === 'builtin') - Number(a.createdBy === 'builtin'))
 
   const review = async (id: string, decision: 'approve' | 'reject') => {
     try {
       await reviewSuppression(id, decision)
+      await client.invalidateQueries({ queryKey: ['suppressions'] })
+    } catch (e) {
+      message.error(errText(e, t))
+    }
+  }
+
+  const toggleBuiltin = async (id: string, enabled: boolean) => {
+    try {
+      await setSuppressionEnabled(id, enabled)
       await client.invalidateQueries({ queryKey: ['suppressions'] })
     } catch (e) {
       message.error(errText(e, t))
@@ -77,6 +102,7 @@ export function SuppressionsPage() {
                 { value: '', label: t('allStatuses') },
                 { value: 'proposed', label: t('supProposed') },
                 { value: 'active', label: t('supActive') },
+                { value: 'disabled', label: t('supDisabled') },
                 { value: 'rejected', label: t('supRejected') },
               ]}
             />
@@ -93,20 +119,40 @@ export function SuppressionsPage() {
           locale={{ emptyText: <EmptyHint title={t(hasFilters ? 'noMatch' : 'noSuppressions')} hint={hasFilters ? undefined : t('noSuppressionsHint')} /> }}
           columns={[
             {
-              title: t('thRule'), dataIndex: 'ruleTitle', width: 220,
-              sorter: (a, b) => (a.ruleTitle ?? a.ruleId).localeCompare(b.ruleTitle ?? b.ruleId),
-              render: (v, s) => <Tooltip title={s.ruleId}>{v ?? s.ruleId}</Tooltip>,
+              title: t('thRule'), dataIndex: 'ruleTitle', width: 240,
+              sorter: (a, b) => (a.builtinTitle ?? a.ruleTitle ?? a.ruleId).localeCompare(b.builtinTitle ?? b.ruleTitle ?? b.ruleId),
+              render: (v, s) => s.builtinTitle ? (
+                <div>
+                  <Tooltip title={s.builtinKey ?? s.ruleId}><Typography.Text strong>{s.builtinTitle}</Typography.Text></Tooltip>
+                  <div><Typography.Text type="secondary" style={{ fontSize: 12 }}>{s.ruleId === '*' ? t('supWildcardRules') : (v ?? s.ruleId)}</Typography.Text></div>
+                </div>
+              ) : <Tooltip title={s.ruleId}>{v ?? s.ruleId}</Tooltip>,
             },
             {
               title: t('thStatus'), dataIndex: 'status', width: 105,
               sorter: (a, b) => a.status.localeCompare(b.status),
-              render: (v: Suppression['status'], s) => <Tag color={v === 'proposed' ? 'gold' : v === 'rejected' ? 'default' : 'green'}>{t(v === 'proposed' ? (s.evidence ? (s.evidence.basis === 'ai_benign' ? 'supAIStatsDraft' : 'supStatsDraft') : 'supProposed') : v === 'rejected' ? 'supRejected' : 'supActive')}</Tag>,
+              render: (v: Suppression['status'], s) => (
+                <Tag color={v === 'proposed' ? 'gold' : v === 'rejected' || v === 'disabled' ? 'default' : 'green'}>
+                  {t(v === 'proposed'
+                    ? (s.evidence ? (s.evidence.basis === 'ai_benign' ? 'supAIStatsDraft' : 'supStatsDraft') : 'supProposed')
+                    : v === 'disabled' ? 'supDisabled' : v === 'rejected' ? 'supRejected' : 'supActive')}
+                </Tag>
+              ),
             },
             { title: t('thScope'), dataIndex: 'assetId', width: 130, render: v => (v ? <HostLink id={v} /> : <Tag color="warning">{t('allHosts')}</Tag>) },
             {
-              title: t('supConditions'), dataIndex: 'conditions', width: 340,
+              title: t('supConditions'), dataIndex: 'conditions', width: 360,
               render: (v: Suppression['conditions']) => (v?.length
-                ? v.map(c => <Typography.Paragraph key={c.field + c.op + c.value} className="mono" style={{ fontSize: 12, margin: 0 }} ellipsis={{ rows: 2, tooltip: c.value }}>{c.field} {t(OP[c.op])} {c.value}</Typography.Paragraph>)
+                ? v.map((c, idx) => {
+                    const val = condValueText(c)
+                    const prefix = c.group ? `[#${c.group}] ` : ''
+                    const opLabel = OP[c.op] ? t(OP[c.op]) : c.op
+                    return (
+                      <Typography.Paragraph key={`${idx}:${c.field}:${c.op}:${val}`} className="mono" style={{ fontSize: 12, margin: 0 }} ellipsis={{ rows: 2, tooltip: val }}>
+                        {prefix}{c.field} {opLabel} {val}
+                      </Typography.Paragraph>
+                    )
+                  })
                 : <Tag color="warning">{t('supWholeRule')}</Tag>),
             },
             { title: t('reason'), dataIndex: 'reason', render: v => <Clamp text={v} /> },
@@ -114,11 +160,13 @@ export function SuppressionsPage() {
             { title: t('thLastMatched'), dataIndex: 'lastMatchedAt', width: 165, sorter: (a, b) => (a.lastMatchedAt ?? '').localeCompare(b.lastMatchedAt ?? ''), render: fmtTime },
             { title: t('thExpires'), dataIndex: 'expiresAt', width: 165, sorter: (a, b) => (a.expiresAt ?? '9999').localeCompare(b.expiresAt ?? '9999'), render: v => (v ? fmtTime(v) : t('longTerm')) },
             {
-              title: t('thCreatedBy'), dataIndex: 'createdBy', width: 120,
+              title: t('thCreatedBy'), dataIndex: 'createdBy', width: 125,
               sorter: (a, b) => a.createdBy.localeCompare(b.createdBy),
-              render: (v: string, s) => (s.evidence
-                ? <Popover title={t(s.evidence.basis === 'ai_benign' ? 'supFromAIStats' : 'supFromStats')} content={<StatsEvidence e={s.evidence} />}><Tag color={s.evidence.basis === 'ai_benign' ? 'orange' : 'cyan'} style={{ cursor: 'help' }}>{t(s.evidence.basis === 'ai_benign' ? 'supFromAIStats' : 'supFromStats')}</Tag></Popover>
-                : s.sessionId ? <Space size={4}><Tag color="purple" variant="filled">AI</Tag><Link to={`/chat/${s.sessionId}`}>{t('openSession')}</Link></Space> : v),
+              render: (v: string, s) => (s.createdBy === 'builtin'
+                ? <Tag color="blue">{t('supBuiltin')}</Tag>
+                : s.evidence
+                  ? <Popover title={t(s.evidence.basis === 'ai_benign' ? 'supFromAIStats' : 'supFromStats')} content={<StatsEvidence e={s.evidence} />}><Tag color={s.evidence.basis === 'ai_benign' ? 'orange' : 'cyan'} style={{ cursor: 'help' }}>{t(s.evidence.basis === 'ai_benign' ? 'supFromAIStats' : 'supFromStats')}</Tag></Popover>
+                  : s.sessionId ? <Space size={4}><Tag color="purple" variant="filled">AI</Tag><Link to={`/chat/${s.sessionId}`}>{t('openSession')}</Link></Space> : v),
             },
             ...(canWrite
               ? [{
@@ -127,14 +175,24 @@ export function SuppressionsPage() {
                   fixed: wideTable ? 'right' as const : undefined,
                   render: (_: unknown, s: Suppression) => (
                     <TableActions>
-                      {s.status === 'proposed' && canReview(s) && <>
-                        <Button type="link" size="small" onClick={() => review(s.id, 'approve')}>{t('supApprove')}</Button>
-                        <Button type="link" size="small" onClick={() => review(s.id, 'reject')}>{t('supReject')}</Button>
-                      </>}
-                      {s.status !== 'proposed' && (
-                        <Popconfirm title={t('confirmRevoke')} onConfirm={() => revoke(s.id)}>
-                          <Button type="link" danger size="small">{t('revoke')}</Button>
-                        </Popconfirm>
+                      {s.createdBy === 'builtin' ? (
+                        isAdmin && (
+                          <Button type="link" size="small" danger={s.status === 'active'} onClick={() => toggleBuiltin(s.id, s.status !== 'active')}>
+                            {t(s.status === 'active' ? 'supDisable' : 'supEnable')}
+                          </Button>
+                        )
+                      ) : (
+                        <>
+                          {s.status === 'proposed' && canReview(s) && <>
+                            <Button type="link" size="small" onClick={() => review(s.id, 'approve')}>{t('supApprove')}</Button>
+                            <Button type="link" size="small" onClick={() => review(s.id, 'reject')}>{t('supReject')}</Button>
+                          </>}
+                          {s.status !== 'proposed' && (
+                            <Popconfirm title={t('confirmRevoke')} onConfirm={() => revoke(s.id)}>
+                              <Button type="link" danger size="small">{t('revoke')}</Button>
+                            </Popconfirm>
+                          )}
+                        </>
                       )}
                     </TableActions>
                   ),

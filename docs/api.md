@@ -16,8 +16,8 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/incidents?status=&assetId=&limit=&offset=` | incident 列表（按创建时间倒序），含派生严重度、告警数与 `groupId`（第一条有资产的告警所在资产的组，无则 null）；`status` 另支持 `unresolved`（= open + triaged）与 `review`（需人工复核：未结案，且 AI 未判良性或最高告警级别 ≥ 4，与 Webhook 推送同一口径）；`limit` 默认 50、范围 1..500，`offset` 默认 0；响应头 `X-Total-Count` 为分页前的匹配总数；`assetId` 筛涉及该主机的事件 |
-| GET | `/api/incidents/{id}` | 详情：实体图、告警明细（含原始事件）、AI verdict、`groupId` |
+| GET | `/api/incidents?status=&assetId=&limit=&offset=` | incident 列表（按创建时间倒序），含派生严重度、告警数、`resolutionSource`（结案来源：`asset_retired` / `suppression` / `ai_review` / `ai_proposal` / `ai_verdict` / `janitor` / `external_integration`，独立人工复核为空）与 `groupId`（第一条有资产的告警所在资产的组，无则 null）；`status` 另支持 `unresolved`（= open + triaged）与 `review`（需人工复核：未结案，且 AI 未判良性或最高告警级别 ≥ 4，与 Webhook 推送同一口径）；`limit` 默认 50、范围 1..500，`offset` 默认 0；响应头 `X-Total-Count` 为分页前的匹配总数；`assetId` 筛涉及该主机的事件 |
+| GET | `/api/incidents/{id}` | 详情：实体图、告警明细（含原始事件）、AI verdict、`resolutionSource`、`groupId` |
 | POST | `/api/incidents/{id}/status` | `{"status":"open\|closed\|false_positive","note":"…"}`；closed 为属实已处置、false_positive 为误报或良性，两者必须写 `note`（1–2000 字），记录结案人与时间并作为案例喂回研判；改回 open 清掉结案信息 |
 | GET | `/api/incidents/groups?status=review\|unresolved` | 按规则归并（只是视图，不改 incident）：未结案事件按「主告警的规则 + 主机」分组，主告警取事件里级别最高的告警（同级取最早）；情报命中的规则 ID 形如 `intel:ip:1.2.3.4`，同一目标自然归一组。每组含 `ruleId`、`ruleTitle`、`assetId`、`hostname`、`count`、`severity`、`firstAt` / `lastAt`（事件创建时间）、`verdicts`（`benign` / `suspicious` / `malicious` / `none` 各几个）与组内事件 `incidents`（同列表项）；按事件数、最近时间倒序。`status` 默认 `review`，只接受 `review` / `unresolved`；最多扫最近 2000 个事件，超出时 `X-Truncated: 1`，`X-Total-Count` 为匹配总数 |
 | POST | `/api/incidents/batch-status` | 批量结案 `{"ids":[…],"status":"closed\|false_positive","note":"…","confirmMalicious":false}`：一次 1–200 个，口径与单个结案一致（理由规则、结案人与时间、作为人工案例回喂研判），一个事务内全部成功或全部不动，逐条写 `incident_status` 审计。任一事件不存在（404）、不在调用者有 analyst 权限的组内（403）、已被结案（409）或需写理由却没写（400）都整批拒绝；含 AI 判恶意的事件按 `false_positive` 结案必须 `confirmMalicious: true`，否则 409。说明原样等于这批里某个事件的 AI 结案建议时，整批记为 `resolution_source=ai_proposal`。返回 `{"resolved":n}` |
@@ -76,9 +76,10 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/suppressions` | 抑制清单（含压掉次数）；非 admin 只见本组资产的抑制，全局抑制仅 admin 可见 |
+| GET | `/api/suppressions` | 抑制清单（含压掉次数、内置良性链 `builtinKey`/`builtinTitle`）；非 admin 见本组资产的抑制与仓库内置良性链，人工全局抑制仅 admin 可见 |
 | POST | `/api/suppressions` | `{"ruleId","assetId"(空=全局),"reason","expiresInDays"(0=长期)}`；需该资产所在组的 analyst，全局抑制仅 admin，否则 403 |
-| DELETE | `/api/suppressions/{id}` | 撤销，权限同创建（按该抑制的资产判断） |
+| PATCH | `/api/suppressions/{id}` | 全局 admin；`{"enabled":true\|false}` 启停内置良性链（`createdBy="builtin"`），保留累计命中数、重启不丢开关，落审计 `suppression_enabled` / `suppression_disabled` |
+| DELETE | `/api/suppressions/{id}` | 撤销，权限同创建（按该抑制的资产判断）；内置良性链不可删除（400，用 `PATCH` 停用） |
 | POST | `/api/suppressions/{id}/review` | 资产所在组 admin；`{"decision":"approve\|reject","note"}`，处理 AI 提议的抑制草案。仅 `proposed` 且绑定资产的可审批；批准时有效期从批准那一刻重算；已处理返回 409；落审计 `suppression_approved` / `suppression_rejected`。草案平时由 AI 审计员评审（`reviewedBy = ai-reviewer`，审计 `suppression_ai_reviewed`），这里处理仍待批准的 |
 
 ## 已知自动化
@@ -165,8 +166,8 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/assets` | 资产清单（含 `groupId`，未分组为 null；`agentVersion` 为 agent 自报版本）；默认不含已下线的主机，`?retired=1` 一起列出（带 `retiredAt`、`retiredBy`、`retiredReason`） |
-| POST | `/api/assets/{id}/retire` | 下线主机（组 admin，body `{"reason"}` 必填）：保留记录与历史证据，清掉 agent_id，agent 与探针注册被拒（旧证书也接不回来），不再下发指令，待审批处置作废、生效中的标记解除。已经连着的会话在下次重连时被拒 |
-| POST | `/api/assets/{id}/restore` | 取消下线（组 admin）；agent 重新注册拿新的 agent_id。用接入令牌重新接入同样会取消下线 |
+| POST | `/api/assets/{id}/retire` | 下线主机（组 admin，body `{"reason"}` 必填）：保留记录与历史证据，清掉 agent_id，agent 与探针注册被拒（旧证书也接不回来），不再下发指令，待审批处置作废、生效中的标记解除；全部告警都落在该台或已下线资产上、且无人工接管或锁定的未结案事件自动以 `closed`（`resolvedBy="system"`、`resolutionSource="asset_retired"`）结案并记 `incident_status` 审计（单活循环 `asset-retire-close` 定期兜底）。已经连着的会话在下次重连时被拒 |
+| POST | `/api/assets/{id}/restore` | 取消下线（组 admin）；agent 重新注册拿新的 agent_id，已因下线结案的事件不重开。用接入令牌重新接入同样会取消下线 |
 | GET | `/api/assets/{id}/config` | 该主机的采集配置 |
 | PUT | `/api/assets/{id}/config` | 设置采集配置：`{"fileWatchDirs":[...],"collectFiles":true,"collectAuth":true,"collectPersist":true,"collectNetwork":true,"collectInventory":true,"collapsePeriodic":true}`。随 agent 下次注册（重连或重启）生效；`collectNetwork` 在 Linux eBPF 与 Windows ETW 路径生效 |
 | GET | `/api/assets/{id}/profile` | 资产画像：区域、暴露级别、云环境、监听端口、依赖与 AI 标注。改标注、指派区域与资产图谱、攻击面、区域定义等接口见 [资产图谱与攻击面](asset-map.md#接口) |
