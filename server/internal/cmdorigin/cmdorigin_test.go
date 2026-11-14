@@ -60,3 +60,30 @@ func TestOfShortCircuit(t *testing.T) {
 		}
 	}
 }
+
+func TestShellLine(t *testing.T) {
+	agent := map[string]any{"file": map[string]any{"path": "/usr/local/bin/openxdr-agent"}}
+	if line, ok := shellLine(map[string]any{"cmd_line": "sh -c uptime; df -P"}, agent); !ok || line != "uptime; df -P" {
+		t.Fatalf("agent 拉起的 sh -c 应取出原文: %q %v", line, ok)
+	}
+	for name, c := range map[string]struct{ proc, parent map[string]any }{
+		"不是 sh -c":    {map[string]any{"cmd_line": "bash -c uptime"}, agent},
+		"sh -c 后为空":   {map[string]any{"cmd_line": "sh -c "}, agent},
+		"父进程不是 agent": {map[string]any{"cmd_line": "sh -c uptime"}, map[string]any{"file": map[string]any{"path": "/usr/sbin/sshd"}}},
+		"没有父进程":       {map[string]any{"cmd_line": "sh -c uptime"}, nil},
+		"没有命令行":       {map[string]any{}, agent},
+	} {
+		if _, ok := shellLine(c.proc, c.parent); ok {
+			t.Errorf("%s 不应认作指令的 sh", name)
+		}
+	}
+}
+
+// 宿主机观测但不是指令 sh、又没有父进程 guid 的事件，不该查库
+func TestOfHostObservedNoShellNoQuery(t *testing.T) {
+	asset := uuid.New()
+	raw := map[string]any{"observed_by": map[string]any{"asset_id": uuid.NewString()}, "process": map[string]any{"cmd_line": "uptime"}}
+	if got, err := Of(context.Background(), failQuerier{t}, raw, &asset, time.Now()); got != nil || err != nil {
+		t.Fatalf("应返回 nil, nil，实际 %v %v", got, err)
+	}
+}
