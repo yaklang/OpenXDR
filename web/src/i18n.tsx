@@ -2446,6 +2446,18 @@ const zh = {
   ruleRunStatus_expired: '审批过期',
   ruleRunStatus_queued_human: '已入人工队列',
   ruleRunStatus_skipped: '已跳过',
+  resSourceLabel: '结案机制',
+  resSourceAttemptVerified: '未得手核验',
+  resSourceAttemptVerifiedHint: '平台确定性核验同来源无成功认证且已过静默期，按未得手攻击关闭',
+  resSourceAiReview: 'AI 独立复核',
+  resSourceSuppression: '抑制回头结案',
+  resSourceAiVerdict: '采纳 AI 研判',
+  resSourceAiProposal: '采纳 AI 建议',
+  resSourceExternal: '外部集成',
+  resSourceManual: '人工结案',
+  actIncidentAttemptVerified: '认证未得手自动结案',
+  actIncidentAttemptReopened: '认证未得手结案重开',
+  actorAttemptOutcome: '系统 · 未得手核验',
 }
 
 export type MsgKey = keyof typeof zh
@@ -4867,6 +4879,18 @@ const en = {
   ruleRunStatus_expired: 'Expired',
   ruleRunStatus_queued_human: 'Queued for human',
   ruleRunStatus_skipped: 'Skipped',
+  resSourceLabel: 'Resolution mechanism',
+  resSourceAttemptVerified: 'Verified unsuccessful',
+  resSourceAttemptVerifiedHint: 'Closed automatically after deterministic verification found no successful login from the same external source',
+  resSourceAiReview: 'AI review',
+  resSourceSuppression: 'Suppression',
+  resSourceAiVerdict: 'Adopted AI verdict',
+  resSourceAiProposal: 'Adopted AI proposal',
+  resSourceExternal: 'External integration',
+  resSourceManual: 'Manual',
+  actIncidentAttemptVerified: 'Auto-closed verified unsuccessful attempt',
+  actIncidentAttemptReopened: 'Reopened attempt-verified incident',
+  actorAttemptOutcome: 'System · Attempt Outcome',
 } satisfies Record<MsgKey, string>
 
 const dicts = { zh, en }

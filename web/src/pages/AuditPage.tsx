@@ -106,6 +106,8 @@ const ACTION: Record<string, { key: MsgKey; color?: string }> = {
   finding_work_orphan_recovered: { key: 'actFindingWorkOrphanRecovered' },
   finding_work_woken: { key: 'actFindingWorkWoken' },
   incident_closure_ai_reviewed: { key: 'actIncidentClosureAiReviewed', color: 'purple' },
+  incident_attempt_verified: { key: 'actIncidentAttemptVerified', color: 'blue' },
+  incident_attempt_reopened: { key: 'actIncidentAttemptReopened', color: 'red' },
   incident_contained_reopened: { key: 'actIncidentContainedReopened', color: 'red' },
   incident_proposal_dismissed: { key: 'actIncidentProposalDismissed' },
   integration_delivery_retired: { key: 'actIntegrationDeliveryRetired', color: 'geekblue' },
@@ -143,6 +145,7 @@ const ACTION: Record<string, { key: MsgKey; color?: string }> = {
 // 平台自身的操作者：审计里记的是身份代码，界面显示可读名称，悬停可看原值
 const ACTOR: Record<string, MsgKey> = {
   system: 'actorSystem',
+  'system:attempt-outcome': 'actorAttemptOutcome',
   'system:closure-review': 'actorClosureReview',
   'system:containment': 'actorContainment',
   'system:maintenance': 'actorMaintenance',

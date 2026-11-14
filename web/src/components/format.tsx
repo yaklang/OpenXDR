@@ -55,6 +55,29 @@ export function IncidentStatusTag({ value, retriage, triageStartedAt }: { value:
 export const INCIDENT_STATUSES = Object.keys(INCIDENT_STATUS)
 export const incidentStatusKey = (s: string) => INCIDENT_STATUS[s]?.key
 
+const RESOLUTION_SOURCE: Record<string, { key: MsgKey; hint?: MsgKey; color: string; system: boolean }> = {
+  attempt_verified: { key: 'resSourceAttemptVerified', hint: 'resSourceAttemptVerifiedHint', color: 'cyan', system: true },
+  ai_review: { key: 'resSourceAiReview', color: 'purple', system: true },
+  suppression: { key: 'resSourceSuppression', color: 'geekblue', system: true },
+  ai_verdict: { key: 'resSourceAiVerdict', color: 'blue', system: false },
+  ai_proposal: { key: 'resSourceAiProposal', color: 'blue', system: false },
+  external: { key: 'resSourceExternal', color: 'gold', system: false },
+}
+
+export function ResolutionSourceTag({ value, systemOnly }: { value?: string | null; systemOnly?: boolean }) {
+  const { t } = useI18n()
+  if (!value) {
+    return systemOnly ? null : <Tag>{t('resSourceManual')}</Tag>
+  }
+  const s = RESOLUTION_SOURCE[value]
+  if (!s) {
+    return systemOnly ? null : <Tag>{value}</Tag>
+  }
+  if (systemOnly && !s.system) return null
+  const tag = <Tag color={s.color}>{t(s.key)}</Tag>
+  return s.hint ? <Tooltip title={t(s.hint)}>{tag}</Tooltip> : tag
+}
+
 const SESSION_STATUS: Record<string, { key: MsgKey; color: string }> = {
   running: { key: 'sessionRunning', color: 'processing' },
   idle: { key: 'sessionIdle', color: 'default' },

@@ -17,6 +17,7 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/finding"
 	"openxdr/server/ent/incident"
+	"openxdr/server/internal/attemptoutcome"
 	"openxdr/server/internal/findings"
 )
 
@@ -138,9 +139,16 @@ func (s *Service) incidentSubject(ctx context.Context, id, group uuid.UUID, host
 	row := map[string]any{
 		"alert_count": total, "alerts_truncated": total > len(rows), "recent_commands": receipts,
 		"triaged_at": inc.TriagedAt, "evidence_at": inc.EvidenceAt, "closure_proposal": inc.ClosureProposal,
-		"resolution": inc.Resolution, "resolved_at": inc.ResolvedAt,
+		"resolution": inc.Resolution, "resolved_at": inc.ResolvedAt, "resolution_source": inc.ResolutionSource,
 		"kind": "incident", "id": inc.ID, "title": inc.Title, "status": inc.Status,
 		"created_at": inc.CreatedAt, "ai_verdict": inc.AiVerdict, "alerts": rows,
+	}
+	if attemptoutcome.IncidentHasAuthFailures(alerts) {
+		if v, err := attemptoutcome.Verify(ctx, s.DB, s.SQL, id, attemptoutcome.Options{Now: time.Now()}); err == nil {
+			if summary := v.SubjectSummary(); summary != nil {
+				row["attempt_verification"] = summary
+			}
+		}
 	}
 
 	return row, nil

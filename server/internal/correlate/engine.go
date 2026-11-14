@@ -20,6 +20,7 @@ import (
 	"openxdr/server/ent/asset"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
+	"openxdr/server/internal/attemptoutcome"
 	"openxdr/server/internal/automation"
 	"openxdr/server/internal/closurereview"
 	"openxdr/server/internal/incidentstate"
@@ -90,6 +91,9 @@ func (e *Engine) batchTx(ctx context.Context, tx *ent.Tx) error {
 		WithAsset().
 		All(ctx)
 	if err != nil || len(pending) == 0 {
+		return err
+	}
+	if err := attemptoutcome.ReopenForPendingAlerts(ctx, tx, pending, time.Now()); err != nil {
 		return err
 	}
 

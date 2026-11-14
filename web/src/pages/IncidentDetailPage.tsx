@@ -22,7 +22,7 @@ import { agreesWithAI, verdictStatus } from '../components/verdict'
 import { SuppressModal } from '../components/SuppressModal'
 import { TemporalRuleAtAlert } from '../components/TemporalRuleAtAlert'
 import { VerdictCard } from '../components/VerdictCard'
-import { IncidentStatusTag, SeverityTag, fmtTime, errText } from '../components/format'
+import { IncidentStatusTag, ResolutionSourceTag, SeverityTag, fmtTime, errText } from '../components/format'
 import { ExternalTickets } from '../components/ExternalTickets'
 import { useI18n } from '../i18n'
 
@@ -269,6 +269,7 @@ export function IncidentDetailPage() {
                 {!inc.triageStartedAt && !!inc.triageFailures && <Descriptions.Item label={t('triageFailed')}>{t('triageFailedDetail', { n: inc.triageFailures, at: fmtTime(inc.triageRetryAt) })}</Descriptions.Item>}
                 {!inc.triageStartedAt && !inc.triageFailures && inc.triageRetryAt && <Descriptions.Item label={t('triageSlow')}>{t('triageSlowDetail', { at: fmtTime(inc.triageRetryAt) })}</Descriptions.Item>}
                 <Descriptions.Item label={t('group')}>{groups.find(g => g.id === inc.groupId)?.name ?? '-'}</Descriptions.Item>
+                {inc.resolvedAt && <Descriptions.Item label={t('resSourceLabel')}><ResolutionSourceTag value={inc.resolutionSource} /></Descriptions.Item>}
                 {inc.resolvedAt && <Descriptions.Item label={t('resolution')}>{inc.resolution}</Descriptions.Item>}
                 {inc.resolvedAt && <Descriptions.Item label={t('resolvedBy')}>{inc.resolvedBy} · {fmtTime(inc.resolvedAt)}</Descriptions.Item>}
               </Descriptions>

@@ -63,8 +63,9 @@ export interface IncidentSummary {
   severity: number
   // 告警主机所在组，逐行判断能否处置
   groupId: string | null
-  // 结案：谁、何时、为什么
+  // 结案：谁、何时、为什么、哪条机制
   resolution: string | null
+  resolutionSource?: string | null
   resolvedBy: string | null
   resolvedAt: string | null
   // AI 的结案建议：人一键采纳（结案仍记在人名下）或忽略

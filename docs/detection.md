@@ -829,6 +829,8 @@ POST /api/commands → Hub.Issue 落 command 行并发往 agent 指令通道
 | `WEBHOOK_INTERVAL_SECONDS` | `30` | 通知扫描周期 |
 | `WEBHOOK_LINK_BASE` | 空 | 控制台链接前缀 |
 | `WEBHOOK_MIN_SEVERITY` | `0`（全推） | 通知最低严重度（1 信息 ~ 5 严重） |
+| `ATTEMPT_QUIET_HOURS` | `6` | 外部认证失败未得手自动结案静默期（小时），`0` 关闭 |
+| `ATTEMPT_CHECK_SECONDS` | `120` | 认证尝试结果核验与重开扫描周期（秒） |
 
 采集端环境变量见 [collection.md](collection.md)（agent 与 sensor 各一张表）。
 
