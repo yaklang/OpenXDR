@@ -22,6 +22,7 @@ import (
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
+	"openxdr/server/internal/questions"
 	"openxdr/server/internal/repaircmd"
 )
 
@@ -266,6 +267,17 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 				return err
 			}
 		}
+	}
+	// 子 Agent 不再直接把自己标成需人工业务决定：先问总控，答不了进了待答问题才能标，并记下问题编号
+	if blocker == "manual_business_decision" && oldBlocker != blocker {
+		ref, err := questions.OpenFor(ctx, s.DB, f.ID)
+		if err != nil {
+			return err
+		}
+		if ref == "" {
+			return errors.New("需要业务决定前先用 ask_controller 带 finding_id 提问总控：总控答得出就按依据继续，答不了进入待答问题后再标 manual_business_decision")
+		}
+		prior.Question = ref
 	}
 	if !decisionAcknowledged && (oldBlocker == "manual_business_decision" || oldBlocker == "legacy_decommission_confirm") && blocker != "" && blocker != oldBlocker {
 		return errors.New("业务决策或退役阻塞不能由模型改写为机器前置条件")

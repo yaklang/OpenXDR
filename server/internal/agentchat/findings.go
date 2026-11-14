@@ -26,7 +26,7 @@ import (
 const trackDescription = "登记或复查一条运维待办。登记需要持续调查、修复或监测的具体问题，默认由平台负责，一个问题一条；" +
 	"正常项、正向确认、改进建议、对平台或对自己登记的说明、一次性的观察与「本轮未复发」都不登记，写进报告即可。" +
 	"同一主机同一问题每轮用同一个 key（小写字母、数字、. _ -），如 backup-service-failed。" +
-	"status=open 写具体 next_step；resolved 须附 evidence_commands 的本轮独立只读复查回执，不能仅凭修复回执或空日志关单；resolution 说明结案理由：repaired 修好了（默认）、authorized 人工环境记忆或管理员决定确认属授权或良性、subsided 现象不再出现（须 recurrence_rules 列出代表该现象的规则 ID，平台按过去出现间隔自适应判断安静期）；withdrawn 撤回本轮登记错的条目。blocker 区分缺策略、维护窗口、业务决定、退役确认、上游依赖、权限拒绝与能力不支持。policy_required由服务端查询真实授权；其他阻塞须引用本轮真实只读证据，不能猜测。" +
+	"status=open 写具体 next_step；resolved 须附 evidence_commands 的本轮独立只读复查回执，不能仅凭修复回执或空日志关单；resolution 说明结案理由：repaired 修好了（默认）、authorized 人工环境记忆或管理员决定确认属授权或良性、subsided 现象不再出现（须 recurrence_rules 列出代表该现象的规则 ID，平台按过去出现间隔自适应判断安静期）；withdrawn 撤回本轮登记错的条目。blocker 区分缺策略、维护窗口、业务决定、退役确认、上游依赖、权限拒绝与能力不支持。policy_required由服务端查询真实授权；manual_business_decision 须先用 ask_controller 带 finding_id 提问总控，排进待答问题后才能标；其他阻塞须引用本轮真实只读证据，不能猜测。" +
 	"人工忽略的待办会返回 ignored，不要再登记，也不要列进报告的待处理事项。每轮最多新登记 10 条。"
 
 // maxNewFindings 一轮会话最多新登记的待办数：超出说明在把报告内容往待办里倒

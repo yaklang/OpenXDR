@@ -51,6 +51,15 @@ type Decision struct {
 	PositiveEvidence string      `json:"positive_evidence"`
 	EventIDs         []uuid.UUID `json:"event_ids"`
 	Claims           []Claim     `json:"claims"`
+	// MissingFacts 拒绝的原因是行为超出已登记事实的范围时，审计员列出缺的对象；服务端核对后向总控提问
+	MissingFacts []MissingFact `json:"missing_facts,omitempty"`
+}
+
+// MissingFact 缺的一条事实：授权、归属或策略，对象是域名、地址、钥匙指纹或主机名
+type MissingFact struct {
+	Kind        string `json:"kind"`
+	SubjectKind string `json:"subject_kind"`
+	Subject     string `json:"subject"`
 }
 type Judge func(context.Context, string, string) (Decision, error)
 type Reviewer struct {
@@ -118,6 +127,9 @@ func ParseDecision(text string) (Decision, error) {
 	}
 	if d.Approve && (len(strings.TrimSpace(d.PositiveEvidence)) < 20 || len(d.EventIDs) == 0 || len(d.Claims) == 0) {
 		return d, errors.New("批准必须给出正面证据与原始事件引用")
+	}
+	if len(d.MissingFacts) > 3 || d.Approve && len(d.MissingFacts) > 0 {
+		return d, errors.New("missing_facts 只用于拒绝，最多 3 条")
 	}
 	return d, nil
 }
@@ -534,6 +546,9 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 	}
 	if err = tx.Commit(); err != nil {
 		return false, err
+	}
+	if !approved && m.Benign != nil {
+		r.askMissing(ctx, m, d, hash)
 	}
 	return approved, nil
 }

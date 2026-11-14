@@ -14,6 +14,7 @@ import (
 	"openxdr/server/ent/event"
 	"openxdr/server/internal/decoy"
 	"openxdr/server/internal/facts"
+	"openxdr/server/internal/questions"
 	"openxdr/server/internal/review"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/triage"
@@ -32,7 +33,8 @@ benign.severe_hosts 列出有高危告警的主机与覆盖它的资产角色或
 临时目录例外：authoritative 里有覆盖该主机的资产角色或已授权变更事实，明确写明本机在临时目录构建、测试或运行构建产物属于业务时，被执行程序位于临时目录本身不再是拒绝理由；批准须在 reason 里引用该事实编号，并用命令行与父进程说明它确是构建、测试链路的产物。事实只放宽这一条，冒充系统命令名及其余必须拒绝的情形不变；没有这类事实的主机照旧。
 出现以下任一情况必须拒绝：被执行的程序本身位于 /tmp、/dev/shm、/var/tmp 等可写临时目录却冒充系统命令名；下载后执行；编码或混淆载荷被执行（如 base64 解码结果交给 shell）；反弹或可疑外联；读取凭据或密钥（shadow、.ssh、云凭据、浏览器数据）；清除日志或痕迹；写入持久化（cron、systemd、authorized_keys、启动脚本）；提权；关闭安全防护；横向登录；关键字段被截断导致看不到实际行为；或你无法给出具体的正面解释。
 批准必须引用材料中的全部原始事件 id，并为每个事件给出至少一条 claims：field 是材料中该事件的字段路径（如 raw.process.cmd_line、raw.process.parent_process.cmd_line），value 是该字段的完整原值，服务端逐字比对。理由与正面证据保持简短。
-仅输出JSON：{"approve":false,"reason":"理由","positive_evidence":"每条告警为何良性的具体证据，不能是缺失/未发现","event_ids":["原始事件UUID"],"claims":[{"event_id":"原始事件UUID","field":"process.cmd_line 等原始结构化字段","value":"完整原值"}]}`
+拒绝时，如果原因是行为落在已登记事实写明的范围之外——事实只授权了某个客户或目标、实际访问的是另一个域名或地址；登录用的钥匙或来源地址没有归属事实；主机没有写明业务的资产角色——在 missing_facts 里列出缺的那条事实（最多 3 条）：kind 取 authorization（是否授权）/ owner（归谁）/ policy（是否允许这类操作），subject_kind 取 domain / ip / key / asset，subject 是材料里出现的原值（域名、IP、SHA256 指纹或 hosts 里的主机名）。平台会据此向管理员提问，事实补上后按新事实重审。其他拒绝理由（攻击特征、截断、看不到内容、无法给出正面解释）不填 missing_facts；批准时不填。
+仅输出JSON：{"approve":false,"reason":"理由","positive_evidence":"每条告警为何良性的具体证据，不能是缺失/未发现","event_ids":["原始事件UUID"],"claims":[{"event_id":"原始事件UUID","field":"process.cmd_line 等原始结构化字段","value":"完整原值"}],"missing_facts":[{"kind":"authorization","subject_kind":"domain","subject":"材料里的原值"}]}`
 
 type benignHost struct {
 	ID       uuid.UUID `json:"id"`
@@ -121,7 +123,7 @@ func loadBenign(ctx context.Context, db *ent.Client, inc *ent.Incident) (*materi
 	if len(raw) > materialBytes {
 		return nil, ErrIneligible
 	}
-	if m.Authoritative, err = authoritative(ctx, db, alerts, m.Events); err != nil {
+	if m.Authoritative, err = authoritative(ctx, db, inc.ID, alerts, m.Events); err != nil {
 		return nil, err
 	}
 	raw, _ = json.Marshal(m)
@@ -132,8 +134,8 @@ func loadBenign(ctx context.Context, db *ent.Client, inc *ent.Incident) (*materi
 	return m, err
 }
 
-// authoritative 与告警资产、登录身份相关的权威事实与覆盖这些登录的运维意图，渲染成审计员能读的一节
-func authoritative(ctx context.Context, db *ent.Client, alerts []*ent.Alert, events []*ent.Event) (string, error) {
+// authoritative 与告警资产、登录身份相关的权威事实、覆盖这些登录的运维意图，以及总控问题为本事件写回的事实，渲染成审计员能读的一节
+func authoritative(ctx context.Context, db *ent.Client, incident uuid.UUID, alerts []*ent.Alert, events []*ent.Event) (string, error) {
 	hostnames := map[uuid.UUID]string{}
 	var assets, groups []uuid.UUID
 	for _, a := range alerts {
@@ -163,6 +165,15 @@ func authoritative(ctx context.Context, db *ent.Client, alerts []*ent.Alert, eve
 	b, err := facts.Lookup(ctx, db, groups, assets, logins, time.Now())
 	if err != nil {
 		return "", err
+	}
+	answered, err := questions.FactsForIncident(ctx, db, incident, time.Now())
+	if err != nil {
+		return "", err
+	}
+	for _, f := range answered {
+		if !slices.ContainsFunc(b.Facts, func(x *ent.Fact) bool { return x.ID == f.ID }) {
+			b.Facts = append(b.Facts, f)
+		}
 	}
 	return facts.Render(b, hostnames), nil
 }

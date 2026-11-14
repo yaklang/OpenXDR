@@ -755,6 +755,7 @@ func (s *Service) tools(ctx context.Context, group uuid.UUID) []piruntime.Tool {
 		{Name: "exec", Description: "对组内资产执行命令，命中高风险名单的由 AI 审计员当场评审，拒绝时附理由。host 为资产 UUID；同一主机领取多个待办时，写操作必须用 finding_id 指定本轮待办 UUID。", Parameters: json.RawMessage(`{"type":"object","properties":{"host":{"type":"string"},"cmd":{"type":"string","minLength":1,"maxLength":32768},"timeout":{"type":"integer","minimum":1,"maximum":300},"finding_id":{"type":"string","format":"uuid"}},"required":["host","cmd"],"additionalProperties":false}`)},
 		{Name: "track", Description: trackDescription, Parameters: trackParameters},
 		{Name: "identify", Description: identifyDescription, Parameters: identifyParameters},
+		{Name: "ask_controller", Description: askDescription, Parameters: askParameters},
 		{Name: "egress", Description: egressDescription, Parameters: egressParameters},
 		{Name: "memories", Description: memoriesDescription, Parameters: memoriesParameters},
 		{Name: "remember", Description: rememberDescription, Parameters: rememberParameters},
@@ -877,6 +878,8 @@ func (s *Service) tool(ctx context.Context, session *ent.AgentSession, who comma
 		return s.ignore(ctx, session, who, args)
 	case "identify":
 		return s.identify(ctx, session, args)
+	case "ask_controller":
+		return s.ask(ctx, session, args)
 	case "egress":
 		return s.egress(ctx, session, args)
 	case "memories":
