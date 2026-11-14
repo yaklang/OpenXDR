@@ -250,6 +250,8 @@ export async function resolveIncidents(ids: string[], status: 'closed' | 'false_
 // 运维待办：巡检 AI 登记与复查；人标已处理或忽略（须写原因，忽略原因会告诉 AI）
 export interface FindingWork {
   blocker_detail?: string
+  // 等管理员作答时关联的总控问题 Q-xxxxxxxx
+  question?: string
   repair_command?: string
   repair_mount?: string
   retry_at?: string
@@ -1028,6 +1030,66 @@ export async function updateStandingRule(id: string, body: {
   return (await send('PATCH', `/api/standing-rules/${encodeURIComponent(id)}`, body)).json()
 }
 export const deleteStandingRule = (id: string) => send('DELETE', `/api/standing-rules/${encodeURIComponent(id)}`)
+
+// 总控待答问题：子 Agent 与结案审计答不了的归属、授权、策略、权限问题，按主题合并，只有平台管理员在这里作答
+export type QuestionKind = 'owner' | 'authorization' | 'policy' | 'permission'
+export type QuestionSubjectKind = 'key' | 'ip' | 'asset' | 'domain' | 'change' | 'rule' | 'fact'
+export interface QuestionAnswer {
+  choice: string
+  holder?: string
+  content?: string
+  ruleId?: string
+  tier?: StandingRuleTier
+  expiresAt?: string
+}
+export interface Question {
+  id: string
+  // Q-xxxxxxxx
+  ref: string
+  createdAt: string
+  updatedAt: string
+  kind: QuestionKind
+  subjectKind: QuestionSubjectKind
+  subject: string
+  subjectLabel: string
+  status: 'open' | 'answered'
+  incidentCount: number
+  findingCount: number
+  askedCount: number
+  answer?: QuestionAnswer
+  answeredBy?: string
+  answeredAt?: string
+  factRef?: string
+  ruleRef?: string
+  ruleId?: string
+}
+export interface QuestionEvidence {
+  at: string
+  source: string
+  incident?: string
+  finding?: string
+  session?: string
+  ref?: string
+  // 可能含攻击者可控的原文，只在控制台显示
+  note?: string
+}
+export interface QuestionDetail extends Question {
+  evidence: QuestionEvidence[]
+  incidents: { id: string; title: string; status: string }[]
+  findings: { id: string; title: string; hostname: string; status: string }[]
+}
+export const fetchQuestions = (status: 'open' | 'answered' = 'open') => get<Question[]>(`/api/questions?status=${status}`)
+export const fetchQuestion = (id: string) => get<QuestionDetail>(`/api/questions/${encodeURIComponent(id)}`)
+export async function answerQuestion(id: string, body: {
+  choice: string
+  holder?: string
+  content?: string
+  ruleId?: string
+  tier?: StandingRuleTier
+  expiresInDays?: number
+}): Promise<{ factRef?: string; ruleRef?: string; requeuedFindings: number }> {
+  return (await send('POST', `/api/questions/${encodeURIComponent(id)}/answer`, body)).json()
+}
 export const fetchStandingRuleRuns = (id: string) => get<StandingRuleRun[]>(`/api/standing-rules/${encodeURIComponent(id)}/runs`)
 
 export async function createSuppression(body: {
