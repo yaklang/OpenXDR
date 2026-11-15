@@ -17,7 +17,6 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
-	"golang.org/x/net/publicsuffix"
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/command"
@@ -101,7 +100,7 @@ var (
 	fpRE     = regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{20,64}=*$`)
 )
 
-// Normalize 校验类型组合并规范化主题：域名归到注册域（同一客户的子域只问一次），地址去掉多余写法
+// Normalize 校验类型组合并规范化主题：域名小写去尾点、保留完整主机名，地址去掉多余写法
 func Normalize(kind, subjectKind, subject string) (string, error) {
 	subject = strings.TrimSpace(subject)
 	switch {
@@ -134,9 +133,7 @@ func Normalize(kind, subjectKind, subject string) (string, error) {
 		if len(d) > 253 || !domainRE.MatchString(d) {
 			return "", errors.New("域名格式不对")
 		}
-		if root, err := publicsuffix.EffectiveTLDPlusOne(d); err == nil {
-			d = root
-		}
+		// 用完整主机名，不归到注册域：同一云厂商域下是互不相干的租户，归并会把授权悄悄扩大
 		return d, nil
 	default: // asset change rule fact
 		id, err := uuid.Parse(subject)
@@ -280,6 +277,9 @@ func Lookup(ctx context.Context, db *ent.Client, req Request, now time.Time) (*R
 		match = append(match, fact.SubjectEQ(own))
 	case "domain":
 		match = append(match, fact.SubjectEQ(own))
+		if tree := treeSubjects(req.Kind, req.Subject); len(tree) > 0 {
+			match = append(match, fact.SubjectIn(tree...))
+		}
 	case "asset", "change":
 		id := uuid.MustParse(req.Subject)
 		switch req.Kind {

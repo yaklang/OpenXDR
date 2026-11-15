@@ -16,7 +16,7 @@ import (
 	"openxdr/server/internal/questions"
 )
 
-// 审计员因目标不在已登记事实范围拒绝时给出结构化缺口：服务端核对对象在材料里出现过才提问，同一注册域合并；
+// 审计员因目标不在已登记事实范围拒绝时给出结构化缺口：服务端核对对象在材料里出现过才提问，按完整主机名合并；
 // 管理员作答后新事实进入材料，快照变化，审计员按新事实重审
 func TestMissingFactAsksControllerAndReReviews(t *testing.T) {
 	f := setupBenign(t)
@@ -48,8 +48,8 @@ func TestMissingFactAsksControllerAndReReviews(t *testing.T) {
 		switch q.SubjectKind {
 		case "domain":
 			domainQ = q.ID
-			if q.Subject != "gzmpc.com" || q.Kind != "authorization" {
-				t.Fatalf("域名归到注册域：%+v", q)
+			if q.Subject != "scan.gzmpc.com" || q.Kind != "authorization" {
+				t.Fatalf("域名按完整主机名提问：%+v", q)
 			}
 		case "asset":
 			if q.Subject != f.asset.ID.String() {
@@ -65,7 +65,7 @@ func TestMissingFactAsksControllerAndReReviews(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := questions.Answer(f.ctx, txn, domainQ, questions.AnswerInput{Choice: "grant", Content: "SoulRaid 红队对 gzmpc.com 全域授权测试"}, "admin", "", time.Now())
+	out, err := questions.Answer(f.ctx, txn, domainQ, questions.AnswerInput{Choice: "grant", Content: "SoulRaid 红队授权测试", Scope: "gzmpc.com"}, "admin", "", time.Now())
 	if err != nil {
 		_ = txn.Rollback()
 		t.Fatal(err)

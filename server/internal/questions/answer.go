@@ -35,7 +35,10 @@ const (
 //	owner：Choice=claim（Holder + Content 用途）或 unknown（Content 可选说明）
 //	authorization / permission：Choice=grant 或 deny，Content 范围，ExpiresInDays 1–365（续期问题 grant 即续期）
 //	policy：Choice=rule（RuleID + Tier）或 decision（Content）
+//
+// 域名问题另有 Scope：空为仅此主机名（默认）；或 DomainScopes 给出的某一级父域，表示该父域及其全部子域
 type AnswerInput struct {
+	Scope         string     `json:"scope"`
 	Choice        string     `json:"choice"`
 	Holder        string     `json:"holder"`
 	Content       string     `json:"content"`
@@ -68,13 +71,16 @@ func Answer(ctx context.Context, tx *ent.Tx, id uuid.UUID, in AnswerInput, actor
 	if utf8.RuneCountInString(in.Content) > maxContent || utf8.RuneCountInString(in.Holder) > 200 {
 		return nil, ErrInvalid{fmt.Errorf("内容最多 %d 字，持有人最多 200 字", maxContent)}
 	}
+	if in.Scope != "" && q.SubjectKind != "domain" {
+		return nil, ErrInvalid{errors.New("只有域名问题能选范围")}
+	}
 	out := &Outcome{}
 	record := &schema.QuestionAnswer{Choice: in.Choice, Holder: in.Holder, Content: in.Content}
 	switch {
 	case q.SubjectKind == "fact":
 		err = renew(ctx, tx, q, in, record, actor, remote, now, out)
 	case q.Kind == "owner":
-		err = owner(ctx, tx, q, in, actor, now, out)
+		err = owner(ctx, tx, q, in, record, actor, out)
 	case q.Kind == "authorization" || q.Kind == "permission":
 		err = grant(ctx, tx, q, in, record, actor, now, out)
 	case q.Kind == "policy":
@@ -112,6 +118,25 @@ func Answer(ctx context.Context, tx *ent.Tx, id uuid.UUID, in AnswerInput, actor
 	}
 	detail := fmt.Sprintf("%s %s %s %s choice=%s 写回=%s 重新排队待办=%d 关联事件=%d", Ref(q.ID), q.Kind, q.SubjectKind, q.Subject, in.Choice, target, out.Findings, len(q.IncidentIds))
 	return out, audit.Checked(ctx, tx.AuditLog.Create(), actor, remote, "question_answered", q.ID.String(), detail)
+}
+
+// subjectFor 写回事实的主题与范围说明。域名问题按选中的范围：仅此主机名写 <类型>:domain:<主机名>，
+// 父域写 <类型>:domain-tree:<父域>；父域只能从 DomainScopes 里选，共享托管、外带、隧道类域一个都不给
+func subjectFor(q *ent.Question, in AnswerInput, record *schema.QuestionAnswer) (subject, scope string, err error) {
+	if q.SubjectKind != "domain" {
+		if in.Scope != "" {
+			return "", "", ErrInvalid{errors.New("只有域名问题能选范围")}
+		}
+		return FactSubject(q.Kind, q.SubjectKind, q.Subject), "", nil
+	}
+	if in.Scope == "" || in.Scope == q.Subject {
+		return FactSubject(q.Kind, "domain", q.Subject), "仅 " + q.Subject + "：", nil
+	}
+	if !slices.Contains(DomainScopes(q.Subject), in.Scope) {
+		return "", "", ErrInvalid{errors.New("范围只能是这个主机名，或它到注册域为止的某一级父域；共享托管、外带、隧道类域只能按完整主机名")}
+	}
+	record.Scope = in.Scope
+	return FactSubject(q.Kind, "domain-tree", in.Scope), in.Scope + " 及其全部子域：", nil
 }
 
 // scopeGroup 证据只涉及一个组就写到该组，否则写全局（只有平台管理员能作答，与录入全局事实同一权限）
@@ -159,7 +184,7 @@ func createFact(ctx context.Context, tx *ent.Tx, q *ent.Question, kind, subject,
 }
 
 // owner 归属：钥匙 → key 事实，地址 → channel 事实，主机 → asset_role 事实，其余写决定或变更事实
-func owner(ctx context.Context, tx *ent.Tx, q *ent.Question, in AnswerInput, actor string, now time.Time, out *Outcome) error {
+func owner(ctx context.Context, tx *ent.Tx, q *ent.Question, in AnswerInput, record *schema.QuestionAnswer, actor string, out *Outcome) error {
 	holder, content := in.Holder, in.Content
 	switch in.Choice {
 	case "claim":
@@ -174,7 +199,11 @@ func owner(ctx context.Context, tx *ent.Tx, q *ent.Question, in AnswerInput, act
 		return ErrInvalid{errors.New("归属问题只能认领（claim）或不认识（unknown）")}
 	}
 	// 主机的「不认识」写决定事实而不是资产角色：资产角色与已授权变更会被当作高危告警的业务兜底
-	kind, subject := "decision", FactSubject(q.Kind, q.SubjectKind, q.Subject)
+	subject, scope, err := subjectFor(q, in, record)
+	if err != nil {
+		return err
+	}
+	kind, content := "decision", scope+content
 	switch {
 	case q.SubjectKind == "key":
 		kind, subject = "key", q.Subject
@@ -183,7 +212,6 @@ func owner(ctx context.Context, tx *ent.Tx, q *ent.Question, in AnswerInput, act
 	case q.SubjectKind == "asset" && in.Choice == "claim":
 		kind = "asset_role"
 	}
-	var err error
 	out.Fact, err = createFact(ctx, tx, q, kind, subject, holder, content, actor, nil)
 	return err
 }
@@ -204,13 +232,17 @@ func grant(ctx context.Context, tx *ent.Tx, q *ent.Question, in AnswerInput, rec
 	if err != nil {
 		return err
 	}
+	subject, scope, err := subjectFor(q, in, record)
+	if err != nil {
+		return err
+	}
 	record.ExpiresAt = &exp
 	// 只有授权写成主机的已授权变更；不授权写决定事实，免得被当成高危告警的业务兜底
 	kind := "decision"
 	if in.Choice == "grant" && (q.SubjectKind == "asset" || q.SubjectKind == "change") {
 		kind = "change"
 	}
-	out.Fact, err = createFact(ctx, tx, q, kind, FactSubject(q.Kind, q.SubjectKind, q.Subject), "", prefix+in.Content, actor, &exp)
+	out.Fact, err = createFact(ctx, tx, q, kind, subject, "", prefix+scope+in.Content, actor, &exp)
 	return err
 }
 
@@ -252,8 +284,11 @@ func policy(ctx context.Context, tx *ent.Tx, q *ent.Question, in AnswerInput, re
 		if in.Content == "" {
 			return ErrInvalid{errors.New("须写明决定内容")}
 		}
-		var err error
-		out.Fact, err = createFact(ctx, tx, q, "decision", FactSubject(q.Kind, q.SubjectKind, q.Subject), "", in.Content, actor, nil)
+		subject, scope, err := subjectFor(q, in, record)
+		if err != nil {
+			return err
+		}
+		out.Fact, err = createFact(ctx, tx, q, "decision", subject, "", scope+in.Content, actor, nil)
 		return err
 	case "rule":
 	default:

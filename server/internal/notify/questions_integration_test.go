@@ -41,7 +41,7 @@ func TestQuestionDailyDigest(t *testing.T) {
 	if err := n.questionDigest(ctx, now); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || !strings.Contains(got[0], "总控待答问题：2 个") || !strings.Contains(got[0], "gzmpc[.]com") ||
+	if len(got) != 1 || !strings.Contains(got[0], "总控待答问题：3 个") || !strings.Contains(got[0], "gzmpc[.]com") ||
 		!strings.Contains(got[0], "http://console/control?tab=questions") || strings.Contains(got[0], "curl") || strings.Contains(got[0], "token") {
 		t.Fatalf("应推一条只含主题与数量的汇总：%v", got)
 	}

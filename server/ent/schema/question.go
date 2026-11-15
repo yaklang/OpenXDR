@@ -25,11 +25,13 @@ type QuestionEvidence struct {
 // QuestionAnswer 管理员的结构化作答
 type QuestionAnswer struct {
 	// grant 授权/续期；deny 不授权/不续期；claim 认领归属；unknown 不认识；rule 改规矩档位；decision 写决定
-	Choice    string     `json:"choice"`
-	Holder    string     `json:"holder,omitempty"`
-	Content   string     `json:"content,omitempty"`
-	RuleID    *uuid.UUID `json:"ruleId,omitempty"`
-	Tier      string     `json:"tier,omitempty"`
+	Choice  string     `json:"choice"`
+	Holder  string     `json:"holder,omitempty"`
+	Content string     `json:"content,omitempty"`
+	RuleID  *uuid.UUID `json:"ruleId,omitempty"`
+	Tier    string     `json:"tier,omitempty"`
+	// Scope 域名问题选的范围：空为仅此主机名，否则是「该父域及其全部子域」
+	Scope     string     `json:"scope,omitempty"`
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 

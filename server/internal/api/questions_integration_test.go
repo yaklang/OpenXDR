@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestQuestionsAPI(t *testing.T) {
 		return resp.StatusCode
 	}
 	var rows []questionRow
-	if get(asAna, "/api/questions", &rows); len(rows) != 1 || rows[0].ID != mine.Question.ID || rows[0].SubjectLabel != "gzmpc[.]com" || rows[0].FindingCount != 1 {
+	if get(asAna, "/api/questions", &rows); len(rows) != 1 || rows[0].ID != mine.Question.ID || rows[0].SubjectLabel != "scan[.]gzmpc[.]com" || rows[0].DomainGroup != "gzmpc.com" || len(rows[0].Scopes) != 1 || rows[0].Scopes[0] != "gzmpc.com" || rows[0].FindingCount != 1 {
 		t.Fatalf("组管理员只看本组问题：%+v", rows)
 	}
 	if get(asAdmin, "/api/questions", &rows); len(rows) != 2 {
@@ -93,6 +94,18 @@ func TestQuestionsAPI(t *testing.T) {
 	}
 	if get(asAdmin, "/api/questions?status=answered", &rows); len(rows) != 1 || rows[0].FactRef == "" || rows[0].Answer == nil || rows[0].Answer.ExpiresAt == nil {
 		t.Fatalf("已答历史带写回的事实与到期：%+v", rows)
+	}
+	// 共享托管类域：API 层拒绝父域范围，只能按完整主机名授权
+	cos, _ := questions.Ask(ctx, client, questions.Request{Kind: "authorization", SubjectKind: "domain", Subject: "sip-1302072249.cos.ap-guangzhou.myqcloud.com", Groups: []uuid.UUID{g.ID}}, time.Now())
+	cosPath := "/api/questions/" + cos.Question.ID.String() + "/answer"
+	if get(asAdmin, "/api/questions", &rows); !slices.ContainsFunc(rows, func(r questionRow) bool { return r.ID == cos.Question.ID && len(r.Scopes) == 0 }) {
+		t.Fatalf("共享域不给父域选项：%+v", rows)
+	}
+	if code := post(asAdmin, cosPath, `{"choice":"grant","content":"客户桶","scope":"myqcloud.com"}`); code != http.StatusBadRequest {
+		t.Fatalf("共享域的父域范围应拒绝：%d", code)
+	}
+	if code := post(asAdmin, cosPath, `{"choice":"grant","content":"客户桶"}`); code != http.StatusOK {
+		t.Fatalf("按完整主机名授权：%d", code)
 	}
 	// 档位受规矩模板约束：「指向不存在目标的密钥」只允许 human
 	var stale, swap string

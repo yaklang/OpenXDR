@@ -40,6 +40,9 @@ type questionRow struct {
 	FactRef       string                 `json:"factRef,omitempty"`
 	RuleRef       string                 `json:"ruleRef,omitempty"`
 	RuleID        *uuid.UUID             `json:"ruleId,omitempty"`
+	// 域名问题：注册域只用于界面分组；Scopes 是作答可选的父域（共享托管、外带、隧道类域为空，只能按完整主机名）
+	DomainGroup string   `json:"domainGroup,omitempty"`
+	Scopes      []string `json:"scopes,omitempty"`
 }
 
 type questionDetail struct {
@@ -70,6 +73,9 @@ func toQuestionRow(q *ent.Question, names map[uuid.UUID]string) questionRow {
 		if h := names[uuid.MustParse(q.Subject)]; h != "" {
 			row.SubjectLabel = h
 		}
+	}
+	if q.SubjectKind == "domain" {
+		row.DomainGroup, row.Scopes = questions.RegistrableDomain(q.Subject), questions.DomainScopes(q.Subject)
 	}
 	if q.SubjectKind == "rule" {
 		id := uuid.MustParse(q.Subject)

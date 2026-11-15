@@ -64,14 +64,17 @@ func TestAskMergesAnswersOnceAndRequeues(t *testing.T) {
 	if q.AskedCount != 5 || len(q.FindingIds) != 5 || refs[0] != refs[4] {
 		t.Fatalf("同一把钥匙出现在五条待办里只问一次：%+v", q)
 	}
-	// 子域归到注册域：同一客户域名只问一次
-	for _, d := range []string{"scan.gzmpc.com", "WWW.gzmpc.com.", "gzmpc.com"} {
+	// 同一完整主机名只问一次（大小写、尾点不算不同）；不归到注册域，免得授权悄悄扩大
+	for _, d := range []string{"scan.gzmpc.com", "SCAN.gzmpc.com.", "gzmpc.com"} {
 		if _, err := Ask(ctx, db, Request{Kind: "authorization", SubjectKind: "domain", Subject: d, Groups: []uuid.UUID{g.ID}, Source: "closure_review"}, now); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if n := db.Question.Query().Where(question.SubjectKindEQ("domain"), question.SubjectEQ("gzmpc.com")).CountX(ctx); n != 1 {
-		t.Fatalf("同一注册域只应有一个问题：%d", n)
+	if n := db.Question.Query().Where(question.SubjectKindEQ("domain"), question.SubjectEQ("scan.gzmpc.com")).CountX(ctx); n != 1 {
+		t.Fatalf("同一主机名只应有一个问题：%d", n)
+	}
+	if n := db.Question.Query().Where(question.SubjectKindEQ("domain")).CountX(ctx); n != 2 {
+		t.Fatalf("不同主机名各自一个问题：%d", n)
 	}
 	if _, err := Ask(ctx, db, Request{Kind: "owner", SubjectKind: "key", Subject: "kei@foghaven"}, now); !errors.As(err, new(ErrInvalid)) {
 		t.Fatalf("钥匙注释不是指纹，应拒绝：%v", err)
@@ -128,14 +131,14 @@ func TestAuthorizationExpiresAndAsksRenewal(t *testing.T) {
 		t.Fatalf("授权最长 365 天：%v", err)
 	}
 	out, err := answer(t, ctx, db, res.Question.ID, AnswerInput{Choice: "grant", Content: "proj_090 红队测试"})
-	if err != nil || out.Fact.Kind != "decision" || out.Fact.Subject != "authorization:domain:gzmpc.com" || out.Fact.ExpiresAt == nil {
+	if err != nil || out.Fact.Kind != "decision" || out.Fact.Subject != "authorization:domain:a.gzmpc.com" || out.Fact.ExpiresAt == nil || !strings.Contains(out.Fact.Content, "仅 a.gzmpc.com") {
 		t.Fatalf("授权写成带到期的决定事实：%v %+v", err, out)
 	}
 	if d := out.Fact.ExpiresAt.Sub(now); d < 29*24*time.Hour || d > 31*24*time.Hour {
 		t.Fatalf("默认 30 天：%v", d)
 	}
-	if res, _ := Ask(ctx, db, Request{Kind: "authorization", SubjectKind: "domain", Subject: "b.gzmpc.com", Groups: []uuid.UUID{g.ID}}, now); !res.Answered {
-		t.Fatal("整个注册域的授权覆盖子域")
+	if res, _ := Ask(ctx, db, Request{Kind: "authorization", SubjectKind: "domain", Subject: "b.gzmpc.com", Groups: []uuid.UUID{g.ID}}, now); res.Answered {
+		t.Fatal("仅此主机名的授权不覆盖兄弟主机名")
 	}
 	if n, err := RenewalSweep(ctx, db, now); err != nil || n != 0 {
 		t.Fatalf("还早不提醒：%d %v", n, err)
@@ -245,5 +248,84 @@ func TestPolicyAnswerChangesRuleTier(t *testing.T) {
 	}
 	if res, _ := Ask(ctx, db, Request{Kind: "policy", SubjectKind: "rule", Subject: rule.ID.String(), Groups: []uuid.UUID{g.ID}}, time.Now()); !res.Answered {
 		t.Fatal("规矩已不是人工档，总控直接答")
+	}
+}
+
+func TestDomainScopeOptions(t *testing.T) {
+	if got := strings.Join(DomainScopes("a.b.gzmpc.com"), ","); got != "b.gzmpc.com,gzmpc.com" {
+		t.Fatalf("父域逐级取到注册域为止：%s", got)
+	}
+	if got := DomainScopes("gzmpc.com"); len(got) != 0 {
+		t.Fatalf("注册域没有更上一级：%v", got)
+	}
+	for _, h := range []string{"sip-1302072249.cos.ap-guangzhou.myqcloud.com", "x.oss-cn-hangzhou.aliyuncs.com", "test-cve-36401.oast.pro", "x.requestrepo.com", "abc.ngrok-free.app", "myqcloud.com"} {
+		if got := DomainScopes(h); len(got) != 0 || !Shared(h) {
+			t.Fatalf("%s 是共享托管、外带或隧道类，不给父域：%v", h, got)
+		}
+	}
+	if Shared("evilmyqcloud.com") || Shared("myqcloud.com.cn") {
+		t.Fatal("只按点号边界认后缀")
+	}
+}
+
+func TestDomainScopeWriteBackAndSuffixLookup(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("g").SaveX(ctx)
+	now := time.Now()
+	ask := func(host string) *Result {
+		t.Helper()
+		res, err := Ask(ctx, db, Request{Kind: "authorization", SubjectKind: "domain", Subject: host, Groups: []uuid.UUID{g.ID}, Source: "closure_review"}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	// 客户的一个 COS 桶：父域范围一律拒绝，只能按完整主机名授权，授权不覆盖别的桶
+	bucket := "sip-1302072249.cos.ap-guangzhou.myqcloud.com"
+	res := ask(bucket)
+	for _, scope := range []string{"myqcloud.com", "cos.ap-guangzhou.myqcloud.com", "ap-guangzhou.myqcloud.com"} {
+		if _, err := answer(t, ctx, db, res.Question.ID, AnswerInput{Choice: "grant", Content: "客户 COS 桶", Scope: scope}); !errors.As(err, new(ErrInvalid)) {
+			t.Fatalf("共享域不给父域范围 %s：%v", scope, err)
+		}
+	}
+	out, err := answer(t, ctx, db, res.Question.ID, AnswerInput{Choice: "grant", Content: "客户 COS 桶"})
+	if err != nil || out.Fact.Subject != "authorization:domain:"+bucket || !strings.Contains(out.Fact.Content, "仅 "+bucket) {
+		t.Fatalf("按完整主机名写回：%v %+v", err, out)
+	}
+	if ask("other-bucket-1250000000.cos.ap-guangzhou.myqcloud.com").Answered {
+		t.Fatal("一个桶的授权不能覆盖别的桶")
+	}
+	// 父域授权：写明「及其全部子域」，能答子域与父域本身的问题
+	res = ask("x.scan.gzmpc.com")
+	if _, err := answer(t, ctx, db, res.Question.ID, AnswerInput{Choice: "grant", Content: "红队", Scope: "evil.com"}); !errors.As(err, new(ErrInvalid)) {
+		t.Fatalf("范围只能是自己的父域：%v", err)
+	}
+	out, err = answer(t, ctx, db, res.Question.ID, AnswerInput{Choice: "grant", Content: "SoulRaid 红队 proj_090", Scope: "gzmpc.com"})
+	if err != nil || out.Fact.Subject != "authorization:domain-tree:gzmpc.com" || !strings.Contains(out.Fact.Content, "gzmpc.com 及其全部子域") {
+		t.Fatalf("父域范围写清楚：%v %+v", err, out)
+	}
+	if a := db.Question.GetX(ctx, res.Question.ID).Answer; a == nil || a.Scope != "gzmpc.com" {
+		t.Fatal("作答记录写明范围")
+	}
+	for _, h := range []string{"y.gzmpc.com", "gzmpc.com", "deep.x.scan.gzmpc.com"} {
+		if !ask(h).Answered {
+			t.Fatalf("父域授权答得了 %s", h)
+		}
+	}
+	if ask("gzmpc.com.evil.net").Answered || ask("xgzmpc.com").Answered {
+		t.Fatal("后缀链只按点号边界")
+	}
+	// 反过来不行：子域的授权答不了父域或兄弟
+	res = ask("api.example.org")
+	if _, err := answer(t, ctx, db, res.Question.ID, AnswerInput{Choice: "grant", Content: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if ask("example.org").Answered || ask("www.example.org").Answered {
+		t.Fatal("子域授权不外推到父域")
+	}
+	// 非域名问题不能选范围
+	res, _ = Ask(ctx, db, Request{Kind: "authorization", SubjectKind: "ip", Subject: "203.0.113.5", Groups: []uuid.UUID{g.ID}}, now)
+	if _, err := answer(t, ctx, db, res.Question.ID, AnswerInput{Choice: "grant", Content: "x", Scope: "example.org"}); !errors.As(err, new(ErrInvalid)) {
+		t.Fatalf("非域名不能选范围：%v", err)
 	}
 }
