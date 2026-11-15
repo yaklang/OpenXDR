@@ -502,6 +502,24 @@ func OpenFor(ctx context.Context, db *ent.Client, finding uuid.UUID) (string, er
 	return Ref(q.ID), nil
 }
 
+// AnswersForFinding 管理员在总控对这条待办所提问题的答复（未过期的），一行一条。命令审计员与待办结案复核把它当人工决定：
+// 管理员答了「批准退役」，执行与结案就不该再被「没有管理员决定」挡回去。系统自动作答的不算
+func AnswersForFinding(ctx context.Context, db *ent.Client, finding uuid.UUID, now time.Time) ([]string, error) {
+	rows, err := db.Question.Query().Where(question.StatusEQ("answered"), question.AnsweredByNEQ("system"), containsID(question.FieldFindingIds, finding)).
+		Order(ent.Desc(question.FieldAnsweredAt)).Limit(10).All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, q := range rows {
+		if q.Answer == nil || q.AnsweredAt == nil || q.AnsweredBy == nil || (q.Answer.ExpiresAt != nil && !q.Answer.ExpiresAt.After(now)) {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s %s 于 %s 答复（%s）：%s", Ref(q.ID), *q.AnsweredBy, q.AnsweredAt.Format("2006-01-02 15:04"), q.Answer.Choice, q.Answer.Content))
+	}
+	return out, nil
+}
+
 // FactsForIncident 已答问题为这个事件写回、仍有效的事实：结案审计把它们放进权威事实一节，
 // 审计员看得到新事实，快照指纹随之变化，被拒过的事件按新事实重审
 func FactsForIncident(ctx context.Context, db *ent.Client, incident uuid.UUID, now time.Time) ([]*ent.Fact, error) {

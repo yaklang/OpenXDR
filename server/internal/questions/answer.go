@@ -106,6 +106,7 @@ func Answer(ctx context.Context, tx *ent.Tx, id uuid.UUID, in AnswerInput, actor
 	if n != 1 {
 		return nil, ErrAnswered
 	}
+	q.Answer = record
 	if out.Findings, err = requeue(ctx, tx, q, now); err != nil {
 		return nil, err
 	}
@@ -340,6 +341,9 @@ func requeue(ctx context.Context, tx *ent.Tx, q *ent.Question, now time.Time) (i
 		w.Blocker, w.BlockedReason, w.BlockerDetail, w.BlockedRounds = "", "", "", 0
 		w.Stage, w.WakeOn, w.LastWakeReason = "waiting", "next_check", "总控问题 "+ref+" 已答"
 		w.Plan = "总控问题 " + ref + " 已由管理员作答，按新事实重新评估"
+		if q.Answer != nil && q.Answer.Content != "" {
+			w.Plan = "总控问题 " + ref + " 已由管理员作答（" + q.Answer.Choice + "）：" + q.Answer.Content + "。按此重新评估，不重复提问"
+		}
 		w.Question = ""
 		c, err := tx.Finding.Update().Where(finding.IDEQ(f.ID), finding.StatusEQ("open"), findings.Snapshot(f)).
 			SetWorkOwner("ai").SetWorkNextCheckAt(now).SetWork(findings.EncodeWork(w)).Save(ctx)

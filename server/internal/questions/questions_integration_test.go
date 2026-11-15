@@ -100,6 +100,13 @@ func TestAskMergesAnswersOnceAndRequeues(t *testing.T) {
 		if w.Blocker != "" || w.Question != "" || got.WorkOwner != "ai" || got.WorkNextCheckAt == nil || got.WorkNextCheckAt.After(time.Now()) {
 			t.Fatalf("作答后待办解除阻塞立即排队：%+v %+v", got, w)
 		}
+		if !strings.Contains(w.Plan, "凯伊运维钥匙") {
+			t.Fatalf("被唤醒的待办应带上答复内容，免得再问一遍：%s", w.Plan)
+		}
+		lines, err := AnswersForFinding(ctx, db, f.ID, time.Now())
+		if err != nil || len(lines) != 1 || !strings.Contains(lines[0], "admin") || !strings.Contains(lines[0], "凯伊运维钥匙") {
+			t.Fatalf("审计员与结案复核应读得到管理员的答复：%v %v", err, lines)
+		}
 	}
 	if _, err := answer(t, ctx, db, q.ID, AnswerInput{Choice: "claim", Holder: "x", Content: "y"}); !errors.Is(err, ErrAnswered) {
 		t.Fatalf("不能重复作答：%v", err)
