@@ -135,7 +135,7 @@ func (s *Store) Capabilities(ctx context.Context, group, session uuid.UUID, f *e
 	if owned.Os == nil || *owned.Os != "linux" {
 		return reject("action_unsupported", "修复模板仅支持指定组内的 Linux 资产")
 	}
-	if w.RepairAttempts < 0 || w.RepairAttempts >= findings.RepairBudget {
+	if w.RepairAttempts < 0 || w.RepairSpent(time.Now()) >= findings.RepairBudget {
 		return reject("budget_exhausted", "修复预算已耗尽或异常，只读调查仍可继续")
 	}
 	if actual.WorkOwner == "human" {

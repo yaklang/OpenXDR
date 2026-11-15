@@ -20,7 +20,6 @@ import (
 	"github.com/google/uuid"
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
-	"openxdr/server/ent/command"
 	"openxdr/server/ent/finding"
 	"openxdr/server/ent/predicate"
 	"openxdr/server/ent/setting"
@@ -563,14 +562,10 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 			return errors.New("诊断未证明精确目标服务为 failed 且 enabled，禁止猜测或别名绕过")
 		}
 	}
-	pending, err := tx.Command.Query().Where(command.AssetIDEQ(actual.AssetID), command.StatusIn("pending", "sent", "unknown")).All(ctx)
-	if err != nil {
+	if unsettled, err := commandgate.UnsettledWrite(ctx, tx.Command, actual.AssetID, time.Now()); err != nil {
 		return err
-	}
-	for _, c := range pending {
-		if c.Kind != "exec" || c.Cmd == nil || !commandgate.ReadOnly(*c.Cmd) {
-			return errors.New("存在未知写动作，禁止自动重放或新增修复")
-		}
+	} else if unsettled != nil {
+		return errors.New("存在未知写动作，禁止自动重放或新增修复")
 	}
 	if finalize {
 		reservation := reservationID(*grant, current.ID, actual, unit, problem, version)
@@ -613,8 +608,9 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	if rawWork == nil {
 		rawWork = make(map[string]json.RawMessage)
 	}
-	count, _ := json.Marshal(work.RepairAttempts + 1)
+	count, _ := json.Marshal(work.RepairSpent(now) + 1)
 	rawWork["repair_attempts"] = count
+	rawWork["repair_at"], _ = json.Marshal(now)
 	if work.Version < 2 {
 		rawWork["version"] = json.RawMessage(`2`)
 	}
@@ -660,7 +656,8 @@ func repairWork(f *ent.Finding, finalize bool) (findings.Work, error) {
 			return work, errors.New("维护预算状态损坏，禁止修复")
 		}
 	}
-	if work.RepairAttempts < 0 || work.RepairAttempts > findings.RepairBudget || (!finalize && work.RepairAttempts == findings.RepairBudget) {
+	spent := work.RepairSpent(time.Now())
+	if work.RepairAttempts < 0 || work.RepairAttempts > findings.RepairBudget || (!finalize && spent == findings.RepairBudget) {
 		return work, errors.New("实际修复预算已耗尽或状态无效")
 	}
 	switch work.Blocker {

@@ -107,7 +107,7 @@ func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSessi
 			if err := json.Unmarshal(f.Work, &work); err != nil && len(f.Work) > 0 {
 				return nil, false, errors.New("待办计划损坏，拒绝自动修复")
 			}
-			if work.RepairAttempts >= findings.RepairBudget && !readOnly {
+			if work.RepairSpent(time.Now()) >= findings.RepairBudget && !readOnly {
 				return nil, false, errors.New("主动修复预算已用尽，本轮只允许只读观察")
 			}
 		}
@@ -121,14 +121,10 @@ func (s *Service) findingExecTarget(ctx context.Context, session *ent.AgentSessi
 	_, reclaim := repaircmd.Parse(cmd)
 	templated := findingRestart.MatchString(cmd) || reclaim
 	// 无法确认归属到某次待办的旧写操作也不能冒险重放；先只读查清或由人确认。
-	unknown, err := s.DB.Command.Query().Where(command.AssetIDEQ(host), command.StatusIn("pending", "sent", "unknown")).All(ctx)
-	if err != nil {
+	if unsettled, err := commandgate.UnsettledWrite(ctx, s.DB.Command, host, time.Now()); err != nil {
 		return nil, false, err
-	}
-	for _, c := range unknown {
-		if c.Kind != "exec" || c.Cmd == nil || !commandgate.ReadOnly(*c.Cmd) {
-			return nil, false, errors.New("主机存在未确认的写操作，禁止自动新增修复指令；先查回执与只读效果")
-		}
+	} else if unsettled != nil {
+		return nil, false, errors.New("主机存在未确认的写操作，禁止自动新增修复指令；先查回执与只读效果")
 	}
 	if !templated {
 		return target, false, nil
@@ -161,14 +157,10 @@ func (s *Service) findingEvidence(ctx context.Context, session *ent.AgentSession
 		return errors.New("主机已移出本组")
 	}
 	if resolved {
-		pending, err := s.DB.Command.Query().Where(command.AssetIDEQ(f.AssetID), command.StatusIn("pending", "sent", "unknown")).All(ctx)
-		if err != nil {
+		if unsettled, err := commandgate.UnsettledWrite(ctx, s.DB.Command, f.AssetID, time.Now()); err != nil {
 			return err
-		}
-		for _, c := range pending {
-			if c.Kind != "exec" || c.Cmd == nil || !commandgate.ReadOnly(*c.Cmd) {
-				return errors.New("存在未确认写操作，不能宣称已修复")
-			}
+		} else if unsettled != nil {
+			return errors.New("存在未确认写操作，不能宣称已修复")
 		}
 	}
 	now, err := clockskew.DBNow(ctx, s.DB)
@@ -273,8 +265,9 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 			}
 		}
 	}
-	// 子 Agent 不再直接把自己标成需人工业务决定：先问总控，答不了进了待答问题才能标，并记下问题编号
-	if blocker == "manual_business_decision" && oldBlocker != blocker {
+	// 子 Agent 不再直接把自己标成需人工业务决定：先问总控，答不了进了待答问题才能标，并记下问题编号。
+	// 没挂着待答问题的旧阻塞续标时同样要先问——等人决定却没有问题送到人面前，等于没人知道
+	if blocker == "manual_business_decision" && (oldBlocker != blocker || prior.Question == "") {
 		ref, err := questions.OpenFor(ctx, s.DB, f.ID)
 		if err != nil {
 			return err
@@ -381,7 +374,7 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 		prior.EvidenceAt, prior.EvidenceStale = &now, false
 	}
 	next := time.Now().Add(time.Hour)
-	if f.WorkAttempts >= 3 || prior.RepairAttempts >= findings.RepairBudget {
+	if f.WorkAttempts >= 3 || prior.RepairSpent(time.Now()) >= findings.RepairBudget {
 		next = time.Now().Add(24 * time.Hour)
 		stage = "monitoring"
 	}

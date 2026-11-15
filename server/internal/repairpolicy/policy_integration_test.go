@@ -427,7 +427,8 @@ func TestRepairLastBudgetReservationCanFinalize(t *testing.T) {
 	x := setup(t)
 	x.save(t)
 	x.bind(t)
-	x.f.Update().SetWorkAttempts(99).SetWork(findings.EncodeWork(findings.Work{RepairAttempts: 2})).ExecX(x.ctx)
+	recent := time.Now().Add(-time.Hour)
+	x.f.Update().SetWorkAttempts(99).SetWork(findings.EncodeWork(findings.Work{RepairAttempts: 2, RepairAt: &recent})).ExecX(x.ctx)
 	if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err != nil {
 		t.Fatal(err)
 	}

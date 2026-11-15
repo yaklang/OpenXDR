@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
-	"openxdr/server/ent/command"
 	"openxdr/server/ent/finding"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/auth"
@@ -125,14 +124,10 @@ func GuardDecisionWrite(ctx context.Context, db *ent.Client, session *ent.AgentS
 	if f.WorkOwner != "ai" {
 		return errors.New("人工持有待办不能由执行决定自动接管")
 	}
-	rows, err := db.Command.Query().Where(command.AssetIDEQ(host), command.StatusIn("pending", "sent", "unknown")).All(ctx)
-	if err != nil {
+	if unsettled, err := commandgate.UnsettledWrite(ctx, db.Command, host, time.Now()); err != nil {
 		return err
-	}
-	for _, c := range rows {
-		if c.Kind != "exec" || c.Cmd == nil || !commandgate.ReadOnly(*c.Cmd) {
-			return errors.New("主机存在未确认写操作，先查原回执，不新增或重放写动作：" + c.ID.String())
-		}
+	} else if unsettled != nil {
+		return errors.New("主机存在未确认写操作，先查原回执，不新增或重放写动作：" + unsettled.ID.String())
 	}
 	return nil
 }

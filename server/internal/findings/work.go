@@ -21,6 +21,18 @@ const FollowupTask = "ops-followup"
 const BatchSize = 3
 const RepairBudget = 3
 
+// RepairBudgetWindow 修复预算的恢复期：距最后一次真实预留超过它，之前的次数不再计入。
+// 构建缓存这类会长回来的问题要周期性回收，终身 3 次用完就只能看着；频率仍由授权冷却限制。
+const RepairBudgetWindow = 7 * 24 * time.Hour
+
+// RepairSpent 当前仍计入预算的修复次数。没记预留时间的旧计数早于恢复期功能上线，按已恢复算
+func (w Work) RepairSpent(now time.Time) int {
+	if w.RepairAt == nil || now.Sub(*w.RepairAt) > RepairBudgetWindow {
+		return 0
+	}
+	return w.RepairAttempts
+}
+
 // Work 只记录当前调查计划与真实引用，不把模型判断当成人工授权。
 type Work struct {
 	BlockerDetail         string      `json:"blocker_detail,omitempty"`
@@ -35,6 +47,7 @@ type Work struct {
 	Version               int         `json:"version,omitempty"`
 	InvestigationAttempts int         `json:"investigation_attempts,omitempty"`
 	RepairAttempts        int         `json:"repair_attempts,omitempty"`
+	RepairAt              *time.Time  `json:"repair_at,omitempty"`
 	VerificationAttempts  int         `json:"verification_attempts,omitempty"`
 	TransportFailures     int         `json:"transport_failures,omitempty"`
 	OriginalTitle         string      `json:"original_title,omitempty"`
@@ -139,7 +152,7 @@ func Claim(ctx context.Context, db *ent.Client, session *ent.AgentSession, now t
 		if prior.Plan == "" {
 			prior.Plan = "先只读复查现状；在明确授权范围内最小修复，再独立验证"
 		}
-		if prior.RepairAttempts >= RepairBudget {
+		if prior.RepairSpent(now) >= RepairBudget {
 			prior.Stage = "monitoring"
 		}
 		if prior.Blocker != "" {
@@ -190,7 +203,7 @@ func Release(ctx context.Context, db *ent.Client, session uuid.UUID, now time.Ti
 			w.TransportFailures++
 		}
 		delay := time.Hour
-		if w.RepairAttempts >= RepairBudget || w.Blocker != "" || f.WorkAttempts >= 3 {
+		if w.RepairSpent(now) >= RepairBudget || w.Blocker != "" || f.WorkAttempts >= 3 {
 			delay = 24 * time.Hour
 		} else if f.WorkAttempts > 1 {
 			delay = 4 * time.Hour

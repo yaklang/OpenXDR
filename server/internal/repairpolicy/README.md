@@ -35,6 +35,9 @@ mux.Handle("/api/settings/repair-policy", store.Handler())
 6. 审批等待结束后、Hub真正下发前通过内部 BeforeIssue 再验当前授权、租约、原诊断和原预留；
    撤销/到期/转组/新未知动作均阻断下发，原预留只消费一次，不因再次检查而重新预留。
 
+「尚未确认的写动作」只看最近 24 小时（`commandgate.UnsettledWindow`）内回执仍是 pending / sent / unknown 的写指令：
+指令超时上限 5 分钟且不会从库里重投，过了窗口不可能还在执行，丢失的旧回执不再永久挡住这台主机的修复与结案。
+
 预留不代表已执行。Gate拒绝、进程退出或投递未知都不能删除预留后重发；后续只读检查和回执查询仍可继续。
 同会话不重复预留，同资产/精确服务的冷却不因更新策略而消失。诊断绑定只保留每资产/服务的最近记录，
 并在使用时核对真实 session ID，避免按每次巡检无界积累配置行。
@@ -45,7 +48,9 @@ mux.Handle("/api/settings/repair-policy", store.Handler())
 
 调查与修复分开计数：`work_attempts` / `work.investigation_attempts` 是领取轮次，不是修复预算。
 `work.repair_attempts` 仅在写动作预留与审计同事务成功时增加；拒绝、冷却、重复与事务失败不增加。
-第三次已预留动作仍可完成审批后复核，但不能再创建第四次预留。预留绑定原始问题摘要与精确授权版本，
+第三次已预留动作仍可完成审批后复核，但不能再创建第四次预留。预算按恢复期计：`work.repair_at` 记最后一次预留时间，
+距它超过 7 天（`findings.RepairBudgetWindow`）之前的次数不再计入——构建缓存这类会长回来的问题要周期性回收，
+频率仍由授权冷却限制；没有 `repair_at` 的旧计数按已恢复算。预留绑定原始问题摘要与精确授权版本，
 其它授权的修改不改变本动作身份。`legacy_decommission_confirm`、`manual_business_decision`、
 `external_dependency` 阻止自动重启；不能把旧失败服务当作仍需运行的服务。
 

@@ -14,7 +14,6 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/approval"
-	"openxdr/server/ent/command"
 	"openxdr/server/ent/finding"
 	"openxdr/server/ent/standingrule"
 	"openxdr/server/ent/standingrulerun"
@@ -689,18 +688,8 @@ func (r *Runner) finalizeProposalRun(ctx context.Context, run *ent.StandingRuleR
 }
 
 func (r *Runner) hasPendingWrite(ctx context.Context, assetID uuid.UUID) (bool, error) {
-	rows, err := r.DB.Command.Query().
-		Where(command.AssetIDEQ(assetID), command.StatusIn("pending", "sent", "unknown")).
-		All(ctx)
-	if err != nil {
-		return false, err
-	}
-	for _, c := range rows {
-		if c.Kind != "exec" || c.Cmd == nil || !commandgate.ReadOnly(*c.Cmd) {
-			return true, nil
-		}
-	}
-	return false, nil
+	unsettled, err := commandgate.UnsettledWrite(ctx, r.DB.Command, assetID, time.Now())
+	return unsettled != nil, err
 }
 
 func (r *Runner) canExec(a *ent.Asset) bool {

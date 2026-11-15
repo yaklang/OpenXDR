@@ -13,7 +13,6 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
-	"openxdr/server/ent/command"
 	"openxdr/server/ent/setting"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/clockskew"
@@ -226,14 +225,10 @@ func (s *Store) ReserveStanding(ctx context.Context, req StandingRequest) (retID
 		}
 	}
 
-	pending, err := tx.Command.Query().Where(command.AssetIDEQ(req.AssetID), command.StatusIn("pending", "sent", "unknown")).All(ctx)
-	if err != nil {
+	if unsettled, err := commandgate.UnsettledWrite(ctx, tx.Command, req.AssetID, time.Now()); err != nil {
 		return uuid.Nil, err
-	}
-	for _, c := range pending {
-		if c.Kind != "exec" || c.Cmd == nil || !commandgate.ReadOnly(*c.Cmd) {
-			return uuid.Nil, errors.New("存在未知写动作，禁止自动新增修复")
-		}
+	} else if unsettled != nil {
+		return uuid.Nil, errors.New("存在未知写动作，禁止自动新增修复")
 	}
 
 	problem := digest([]string{req.RuleID.String(), req.FindingID.String(), req.AssetID.String(), req.Command, now.UTC().Format(time.RFC3339Nano)})
