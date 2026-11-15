@@ -61,6 +61,8 @@ func TestAskMergesAnswersOnceAndRequeues(t *testing.T) {
 		fs = append(fs, f)
 		blockOn(t, ctx, db, f, refs[i])
 	}
+	// 以退役确认等状态提问的待办不记 work.question，同样在等这个答案
+	db.Finding.UpdateOneID(fs[4].ID).SetWork(findings.EncodeWork(findings.Work{Stage: "blocked", Blocker: "legacy_decommission_confirm"})).ExecX(ctx)
 	q := db.Question.Query().OnlyX(ctx)
 	if q.AskedCount != 5 || len(q.FindingIds) != 5 || refs[0] != refs[4] {
 		t.Fatalf("同一把钥匙出现在五条待办里只问一次：%+v", q)

@@ -119,12 +119,12 @@ func IsSilenceFinding(key, title string) bool {
 	if strings.HasPrefix(k, "collect:") {
 		return true
 	}
-	for _, kw := range []string{"silent", "offline", "unreachable", "telemetry-lost", "agent-down", "agent_down"} {
+	for _, kw := range []string{"silent", "offline", "unreachable", "telemetry-lost", "telemetry-outage", "agent-down", "agent_down"} {
 		if strings.Contains(k, kw) {
 			return true
 		}
 	}
-	for _, kw := range []string{"静默", "失联", "离线", "遥测中断", "采集中断"} {
+	for _, kw := range []string{"静默", "失联", "离线", "遥测中断", "遥测归零", "采集中断"} {
 		if strings.Contains(title, kw) {
 			return true
 		}
@@ -226,9 +226,6 @@ func answerParkedQuestion(ctx context.Context, db *ent.Client, qID uuid.UUID, su
 			}
 			var w findings.Work
 			if err := json.Unmarshal(f.Work, &w); err != nil && len(f.Work) > 0 {
-				continue
-			}
-			if w.Question != ref {
 				continue
 			}
 			w.Blocker, w.BlockedReason, w.BlockerDetail, w.BlockedRounds = "", "", "", 0

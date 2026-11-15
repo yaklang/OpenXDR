@@ -216,6 +216,8 @@ func TestParkAssetSuppressesSilenceAndPiFollowup(t *testing.T) {
 
 	fSilent := db.Finding.Create().SetGroupID(g.ID).SetAssetID(testSrv.ID).SetKey("collect:silent").SetTitle("TESTSRV 整机静默").
 		SetStatus("open").SetWorkOwner("ai").SetWorkNextCheckAt(now).SaveX(ctx)
+	fOutage := db.Finding.Create().SetGroupID(g.ID).SetAssetID(testSrv.ID).SetKey("group-telemetry-outage").SetTitle("全组三台测试 VM 遥测归零 29.5h").
+		SetStatus("open").SetWorkOwner("ai").SetWorkNextCheckAt(now).SaveX(ctx)
 	fOther := db.Finding.Create().SetGroupID(g.ID).SetAssetID(testSrv.ID).SetKey("weak-sshd").SetTitle("SSH 配置待加固").
 		SetStatus("open").SetWorkOwner("ai").SetWorkNextCheckAt(now).SaveX(ctx)
 	qPlan := db.Question.Create().SetKind("policy").SetSubjectKind("asset").SetSubject(testSrv.ID.String()).
@@ -230,6 +232,9 @@ func TestParkAssetSuppressesSilenceAndPiFollowup(t *testing.T) {
 	}
 	if got := db.Finding.GetX(ctx, fSilent.ID); got.Status != "resolved" || got.Note == nil || !strings.Contains(*got.Note, "停机保留") {
 		t.Fatalf("静默类待办应在停机保留时自动解决：%+v", got)
+	}
+	if got := db.Finding.GetX(ctx, fOutage.ID); got.Status != "resolved" {
+		t.Fatalf("遥测归零类待办应在停机保留时自动解决：%+v", got)
 	}
 	if got := db.Finding.GetX(ctx, fOther.ID); got.Status != "open" || got.WorkNextCheckAt != nil {
 		t.Fatalf("非静默待办应保持 open 但停止轮询调度：%+v", got)

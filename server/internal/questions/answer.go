@@ -320,7 +320,9 @@ func policy(ctx context.Context, tx *ent.Tx, q *ent.Question, in AnswerInput, re
 		fmt.Sprintf("ref=%s tier=%s->%s（总控问题 %s）", facts.Ref("R", rule.ID), old, in.Tier, Ref(q.ID)))
 }
 
-// requeue 关联待办里因这个问题阻塞的，解除阻塞、交回平台、立即重新排队，下一轮跟进按新事实重新评估
+// requeue 提过这个问题的关联待办解除阻塞、交回平台、立即重新排队，下一轮跟进按新事实重新评估。
+// 以问题自己的 finding_ids 为准：待办只在转成 manual_business_decision 时才记 work.question，
+// 以退役确认、外部依赖或观察状态提问的待办没有这个字段，同样在等这个答案
 func requeue(ctx context.Context, tx *ent.Tx, q *ent.Question, now time.Time) (int, error) {
 	if len(q.FindingIds) == 0 {
 		return 0, nil
@@ -333,9 +335,6 @@ func requeue(ctx context.Context, tx *ent.Tx, q *ent.Question, now time.Time) (i
 	for _, f := range rows {
 		var w findings.Work
 		if err := json.Unmarshal(f.Work, &w); err != nil && len(f.Work) > 0 {
-			continue
-		}
-		if w.Question != ref {
 			continue
 		}
 		w.Blocker, w.BlockedReason, w.BlockerDetail, w.BlockedRounds = "", "", "", 0
