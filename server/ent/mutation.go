@@ -5268,6 +5268,9 @@ type AssetMutation struct {
 	retired_at             *time.Time
 	retired_by             *string
 	retired_reason         *string
+	parked_at              *time.Time
+	parked_by              *string
+	parked_reason          *string
 	health_problem         *string
 	health_dropped         *int64
 	addhealth_dropped      *int64
@@ -6373,6 +6376,153 @@ func (m *AssetMutation) RetiredReasonCleared() bool {
 func (m *AssetMutation) ResetRetiredReason() {
 	m.retired_reason = nil
 	delete(m.clearedFields, asset.FieldRetiredReason)
+}
+
+// SetParkedAt sets the "parked_at" field.
+func (m *AssetMutation) SetParkedAt(t time.Time) {
+	m.parked_at = &t
+}
+
+// ParkedAt returns the value of the "parked_at" field in the mutation.
+func (m *AssetMutation) ParkedAt() (r time.Time, exists bool) {
+	v := m.parked_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldParkedAt returns the old "parked_at" field's value of the Asset entity.
+// If the Asset object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AssetMutation) OldParkedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldParkedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldParkedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldParkedAt: %w", err)
+	}
+	return oldValue.ParkedAt, nil
+}
+
+// ClearParkedAt clears the value of the "parked_at" field.
+func (m *AssetMutation) ClearParkedAt() {
+	m.parked_at = nil
+	m.clearedFields[asset.FieldParkedAt] = struct{}{}
+}
+
+// ParkedAtCleared returns if the "parked_at" field was cleared in this mutation.
+func (m *AssetMutation) ParkedAtCleared() bool {
+	_, ok := m.clearedFields[asset.FieldParkedAt]
+	return ok
+}
+
+// ResetParkedAt resets all changes to the "parked_at" field.
+func (m *AssetMutation) ResetParkedAt() {
+	m.parked_at = nil
+	delete(m.clearedFields, asset.FieldParkedAt)
+}
+
+// SetParkedBy sets the "parked_by" field.
+func (m *AssetMutation) SetParkedBy(s string) {
+	m.parked_by = &s
+}
+
+// ParkedBy returns the value of the "parked_by" field in the mutation.
+func (m *AssetMutation) ParkedBy() (r string, exists bool) {
+	v := m.parked_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldParkedBy returns the old "parked_by" field's value of the Asset entity.
+// If the Asset object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AssetMutation) OldParkedBy(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldParkedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldParkedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldParkedBy: %w", err)
+	}
+	return oldValue.ParkedBy, nil
+}
+
+// ClearParkedBy clears the value of the "parked_by" field.
+func (m *AssetMutation) ClearParkedBy() {
+	m.parked_by = nil
+	m.clearedFields[asset.FieldParkedBy] = struct{}{}
+}
+
+// ParkedByCleared returns if the "parked_by" field was cleared in this mutation.
+func (m *AssetMutation) ParkedByCleared() bool {
+	_, ok := m.clearedFields[asset.FieldParkedBy]
+	return ok
+}
+
+// ResetParkedBy resets all changes to the "parked_by" field.
+func (m *AssetMutation) ResetParkedBy() {
+	m.parked_by = nil
+	delete(m.clearedFields, asset.FieldParkedBy)
+}
+
+// SetParkedReason sets the "parked_reason" field.
+func (m *AssetMutation) SetParkedReason(s string) {
+	m.parked_reason = &s
+}
+
+// ParkedReason returns the value of the "parked_reason" field in the mutation.
+func (m *AssetMutation) ParkedReason() (r string, exists bool) {
+	v := m.parked_reason
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldParkedReason returns the old "parked_reason" field's value of the Asset entity.
+// If the Asset object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AssetMutation) OldParkedReason(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldParkedReason is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldParkedReason requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldParkedReason: %w", err)
+	}
+	return oldValue.ParkedReason, nil
+}
+
+// ClearParkedReason clears the value of the "parked_reason" field.
+func (m *AssetMutation) ClearParkedReason() {
+	m.parked_reason = nil
+	m.clearedFields[asset.FieldParkedReason] = struct{}{}
+}
+
+// ParkedReasonCleared returns if the "parked_reason" field was cleared in this mutation.
+func (m *AssetMutation) ParkedReasonCleared() bool {
+	_, ok := m.clearedFields[asset.FieldParkedReason]
+	return ok
+}
+
+// ResetParkedReason resets all changes to the "parked_reason" field.
+func (m *AssetMutation) ResetParkedReason() {
+	m.parked_reason = nil
+	delete(m.clearedFields, asset.FieldParkedReason)
 }
 
 // SetHealthProblem sets the "health_problem" field.
@@ -7852,7 +8002,7 @@ func (m *AssetMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AssetMutation) Fields() []string {
-	fields := make([]string, 0, 42)
+	fields := make([]string, 0, 45)
 	if m.hostname != nil {
 		fields = append(fields, asset.FieldHostname)
 	}
@@ -7909,6 +8059,15 @@ func (m *AssetMutation) Fields() []string {
 	}
 	if m.retired_reason != nil {
 		fields = append(fields, asset.FieldRetiredReason)
+	}
+	if m.parked_at != nil {
+		fields = append(fields, asset.FieldParkedAt)
+	}
+	if m.parked_by != nil {
+		fields = append(fields, asset.FieldParkedBy)
+	}
+	if m.parked_reason != nil {
+		fields = append(fields, asset.FieldParkedReason)
 	}
 	if m.health_problem != nil {
 		fields = append(fields, asset.FieldHealthProblem)
@@ -8025,6 +8184,12 @@ func (m *AssetMutation) Field(name string) (ent.Value, bool) {
 		return m.RetiredBy()
 	case asset.FieldRetiredReason:
 		return m.RetiredReason()
+	case asset.FieldParkedAt:
+		return m.ParkedAt()
+	case asset.FieldParkedBy:
+		return m.ParkedBy()
+	case asset.FieldParkedReason:
+		return m.ParkedReason()
 	case asset.FieldHealthProblem:
 		return m.HealthProblem()
 	case asset.FieldHealthDropped:
@@ -8118,6 +8283,12 @@ func (m *AssetMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldRetiredBy(ctx)
 	case asset.FieldRetiredReason:
 		return m.OldRetiredReason(ctx)
+	case asset.FieldParkedAt:
+		return m.OldParkedAt(ctx)
+	case asset.FieldParkedBy:
+		return m.OldParkedBy(ctx)
+	case asset.FieldParkedReason:
+		return m.OldParkedReason(ctx)
 	case asset.FieldHealthProblem:
 		return m.OldHealthProblem(ctx)
 	case asset.FieldHealthDropped:
@@ -8305,6 +8476,27 @@ func (m *AssetMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetRetiredReason(v)
+		return nil
+	case asset.FieldParkedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetParkedAt(v)
+		return nil
+	case asset.FieldParkedBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetParkedBy(v)
+		return nil
+	case asset.FieldParkedReason:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetParkedReason(v)
 		return nil
 	case asset.FieldHealthProblem:
 		v, ok := value.(string)
@@ -8572,6 +8764,15 @@ func (m *AssetMutation) ClearedFields() []string {
 	if m.FieldCleared(asset.FieldRetiredReason) {
 		fields = append(fields, asset.FieldRetiredReason)
 	}
+	if m.FieldCleared(asset.FieldParkedAt) {
+		fields = append(fields, asset.FieldParkedAt)
+	}
+	if m.FieldCleared(asset.FieldParkedBy) {
+		fields = append(fields, asset.FieldParkedBy)
+	}
+	if m.FieldCleared(asset.FieldParkedReason) {
+		fields = append(fields, asset.FieldParkedReason)
+	}
 	if m.FieldCleared(asset.FieldHealthProblem) {
 		fields = append(fields, asset.FieldHealthProblem)
 	}
@@ -8702,6 +8903,15 @@ func (m *AssetMutation) ClearField(name string) error {
 		return nil
 	case asset.FieldRetiredReason:
 		m.ClearRetiredReason()
+		return nil
+	case asset.FieldParkedAt:
+		m.ClearParkedAt()
+		return nil
+	case asset.FieldParkedBy:
+		m.ClearParkedBy()
+		return nil
+	case asset.FieldParkedReason:
+		m.ClearParkedReason()
 		return nil
 	case asset.FieldHealthProblem:
 		m.ClearHealthProblem()
@@ -8836,6 +9046,15 @@ func (m *AssetMutation) ResetField(name string) error {
 		return nil
 	case asset.FieldRetiredReason:
 		m.ResetRetiredReason()
+		return nil
+	case asset.FieldParkedAt:
+		m.ResetParkedAt()
+		return nil
+	case asset.FieldParkedBy:
+		m.ResetParkedBy()
+		return nil
+	case asset.FieldParkedReason:
+		m.ResetParkedReason()
 		return nil
 	case asset.FieldHealthProblem:
 		m.ResetHealthProblem()

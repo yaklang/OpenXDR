@@ -468,15 +468,24 @@ func (s *Service) contextData(ctx context.Context, session *ent.AgentSession) (d
 	}
 	inventory := make([]map[string]any, 0, len(rows))
 	hostnames := map[uuid.UUID]string{}
-	for i, a := range rows {
-		if i == 200 {
-			break
+	for _, a := range rows {
+		hostnames[a.ID] = a.Hostname
+		if a.RetiredAt != nil {
+			continue
+		}
+		if len(inventory) == 200 {
+			continue
 		}
 		// 角色与重要程度来自资产标注，区域按组内网段判定：让模型分得清哪台是要紧的、哪台对外
 		entry := map[string]any{"id": a.ID, "hostname": a.Hostname, "os": a.Os, "role": a.Role, "criticality": a.Criticality}
+		if a.ParkedAt != nil {
+			entry["parked"] = true
+			if a.ParkedReason != nil {
+				entry["parked_reason"] = *a.ParkedReason
+			}
+		}
 		entry["zone"], entry["exposure"] = assetmap.ZoneOf(a, zones)
 		inventory = append(inventory, entry)
-		hostnames[a.ID] = a.Hostname
 	}
 	titles, err := s.ruleTitles(ctx, session.GroupID)
 	if err != nil {
@@ -591,6 +600,7 @@ func (s *Service) request(ctx context.Context, session *ent.AgentSession, prompt
 func focus(kind string, turns int) string {
 	if kind == "task" {
 		return "open_findings 是本组遗留的运维待办：复查其中与本任务主题相关的（按 key 与标题判断，任务说明要求全量复查时才全部复查），已修复须附本轮独立只读复查 evidence_commands，经独立复核通过后 track 标 resolved；仍存在用 track 标 open 并写 next_step；新发现的问题也用 track 登记，key 按任务说明的前缀起名。" +
+			"assets 中 parked=true（或库表 parked_at 不为空）的主机由管理员设为停机保留，retired_at 不为空的主机已退役，一律跳过失联/静默检查与巡检跟进，不对其下发命令或登记待办。" +
 			"对比上一轮报告时只查 reports 的 created_at, level, summary，严禁读取历史报告的 markdown 正文（防止旧报告冗长篇幅传染本轮）。" +
 			"报告编写必须精炼、异常先行、凸显 AI 自治（全文尽量控制在 1,500–2,500 字以内）：把「## 已执行的操作」放在「## 结论」之后展示本轮已自主完成的待办同步、记忆更新或服务/外联标记；「## 需要人处理」只列不可避免的人工阻塞；普通缺证与日常待办由平台负责并写明下一步，不堆进人工事项；「## 证据」中无异常主机合并为一张紧凑表格或一句话，严禁逐台罗列「未见异常」流水账。" +
 			"report 的 level 如实选择：没有需要人处理的事项写 ok，有日常待办写 attention（ok 与 attention 均只存档、不推送打扰人），疑似入侵或服务即将中断等需要人立即介入的大事写 urgent（推送通知）。" +
@@ -710,7 +720,7 @@ func storableJSON(raw json.RawMessage) json.RawMessage {
 
 // queryDescription 与 queryrole 的视图定义同一口径，改视图时一起改。
 const queryDescription = "通过当前组专属只读数据库身份查询授权视图，最多返回 200 行和 8 KiB。" +
-	"视图：assets(id, hostname, os, ip_addrs, last_seen, agent_version, silent_since, role, criticality, summary, listening, cloud, service_notes, egress_notes)；" +
+	"视图：assets(id, hostname, os, ip_addrs, last_seen, agent_version, silent_since, role, criticality, summary, listening, cloud, service_notes, egress_notes, retired_at, retired_reason, parked_at, parked_reason)；" +
 	"findings(id, asset_id, key, title, severity, status, first_seen, last_seen, resolved_at, note)；" +
 	"suppressions(id, rule_id, asset_id, reason, status, conditions, expires_at, matched_count, last_matched_at)；" +
 	"memories(id, asset_id, content, source, author, updated_at)；asset_links(src_asset_id, dst_ip, dst_port, proto, process, count, first_seen, last_seen)；" +
@@ -801,6 +811,16 @@ func (s *Service) tool(ctx context.Context, session *ent.AgentSession, who comma
 		}
 		if body.Timeout > 300 {
 			return "", errors.New("timeout 超过 300 秒")
+		}
+		if session.Kind == "task" {
+			if host, err := s.DB.Asset.Get(ctx, body.Host); err == nil {
+				if host.RetiredAt != nil {
+					return "", errors.New("主机已退役，不执行巡检与跟进命令")
+				}
+				if host.ParkedAt != nil {
+					return "", errors.New("主机已由管理员设为停机保留，不再对其执行巡检与跟进命令")
+				}
+			}
 		}
 		if decision != nil && !commandgate.ReadOnly(body.Cmd) {
 			if err := findings.GuardDecisionWrite(ctx, s.DB, session, body.Host, decision.RequestID); err != nil {

@@ -54,6 +54,12 @@ const (
 	FieldRetiredBy = "retired_by"
 	// FieldRetiredReason holds the string denoting the retired_reason field in the database.
 	FieldRetiredReason = "retired_reason"
+	// FieldParkedAt holds the string denoting the parked_at field in the database.
+	FieldParkedAt = "parked_at"
+	// FieldParkedBy holds the string denoting the parked_by field in the database.
+	FieldParkedBy = "parked_by"
+	// FieldParkedReason holds the string denoting the parked_reason field in the database.
+	FieldParkedReason = "parked_reason"
 	// FieldHealthProblem holds the string denoting the health_problem field in the database.
 	FieldHealthProblem = "health_problem"
 	// FieldHealthDropped holds the string denoting the health_dropped field in the database.
@@ -153,6 +159,9 @@ var Columns = []string{
 	FieldRetiredAt,
 	FieldRetiredBy,
 	FieldRetiredReason,
+	FieldParkedAt,
+	FieldParkedBy,
+	FieldParkedReason,
 	FieldHealthProblem,
 	FieldHealthDropped,
 	FieldHealthDroppedAt,
@@ -302,6 +311,21 @@ func ByRetiredBy(opts ...sql.OrderTermOption) OrderOption {
 // ByRetiredReason orders the results by the retired_reason field.
 func ByRetiredReason(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRetiredReason, opts...).ToFunc()
+}
+
+// ByParkedAt orders the results by the parked_at field.
+func ByParkedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldParkedAt, opts...).ToFunc()
+}
+
+// ByParkedBy orders the results by the parked_by field.
+func ByParkedBy(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldParkedBy, opts...).ToFunc()
+}
+
+// ByParkedReason orders the results by the parked_reason field.
+func ByParkedReason(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldParkedReason, opts...).ToFunc()
 }
 
 // ByHealthProblem orders the results by the health_problem field.

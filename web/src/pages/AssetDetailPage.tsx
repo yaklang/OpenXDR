@@ -11,7 +11,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import {
-  createAgentSession, fetchAgentConfig, fetchAssets, fetchCommandsPage, fetchFindingsPage, fetchIncidents, restoreAsset, retireAsset, saveAgentConfig, searchEvents,
+  createAgentSession, fetchAgentConfig, fetchAssets, fetchCommandsPage, fetchFindingsPage, fetchIncidents, parkAsset, restoreAsset, retireAsset, saveAgentConfig, searchEvents, unparkAsset,
   type AgentConfig, type CommandRow, type EventRow, type FindingRow, type IncidentSummary,
 } from '../api'
 import { useRemember } from '../app/recent'
@@ -287,6 +287,50 @@ function AssetDetail() {
       }
     },
   })
+  const park = () => {
+    let reason = ''
+    modal.confirm({
+      title: t('parkHostConfirm', { host: asset.hostname }),
+      content: <Space direction="vertical" style={{ width: '100%' }}>
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12.5, marginBottom: 0 }}>{t('parkHostHint')}</Typography.Paragraph>
+        <Input.TextArea autoSize={{ minRows: 2 }} maxLength={500} placeholder={t('parkReason')} onChange={e => { reason = e.target.value }} />
+      </Space>,
+      okText: t('parkHost'),
+      onOk: async () => {
+        if (!reason.trim()) {
+          message.error(t('parkReason'))
+          throw new Error('reason required')
+        }
+        try {
+          await parkAsset(asset.id, reason.trim())
+          await Promise.all([
+            refreshAssets(),
+            client.invalidateQueries({ queryKey: ['findings'] }),
+            client.invalidateQueries({ queryKey: ['questions'] }),
+          ])
+          message.success(t('parkDone'))
+        } catch (e) {
+          message.error(errText(e, t))
+          throw e
+        }
+      },
+    })
+  }
+  const unpark = () => modal.confirm({
+    title: t('unparkHostConfirm', { host: asset.hostname }),
+    onOk: async () => {
+      try {
+        await unparkAsset(asset.id)
+        await Promise.all([
+          refreshAssets(),
+          client.invalidateQueries({ queryKey: ['findings'] }),
+        ])
+        message.success(t('unparkDone'))
+      } catch (e) {
+        message.error(errText(e, t))
+      }
+    },
+  })
 
   // 一键排查：在主机所在组新建对话，把主机名预填进提问
   const investigate = async () => {
@@ -312,6 +356,9 @@ function AssetDetail() {
         <Space wrap>
           <Button icon={<SearchOutlined />} onClick={() => navigate(`/events?assetId=${asset.id}`)}>{t('openInEvents')}</Button>
           {canChat && asset.groupId && !asset.retiredAt && <Button type="primary" icon={<RobotOutlined />} loading={starting} onClick={investigate}>{t('investigateHost')}</Button>}
+          {groupAdmin && !asset.retiredAt && (asset.parkedAt
+            ? <Button onClick={unpark}>{t('unparkHost')}</Button>
+            : <Button onClick={park}>{t('parkHost')}</Button>)}
           {groupAdmin && (asset.retiredAt
             ? <Button onClick={restore}>{t('restoreHost')}</Button>
             : <Button danger onClick={retire}>{t('retireHost')}</Button>)}
@@ -320,6 +367,8 @@ function AssetDetail() {
     >
       {asset.retiredAt && <Alert type="info" showIcon style={{ marginBottom: 16 }}
         message={t('hostRetiredBanner', { time: fmtTime(asset.retiredAt), who: asset.retiredBy ?? '-', reason: asset.retiredReason ?? '' })} />}
+      {!asset.retiredAt && asset.parkedAt && <Alert type="info" showIcon style={{ marginBottom: 16 }}
+        message={t('hostParkedBanner', { time: fmtTime(asset.parkedAt), who: asset.parkedBy ?? '-', reason: asset.parkedReason ?? '' })} />}
       {commandDetail && <CommandDetailDrawer id={commandDetail} onClose={() => setCommandDetail(null)} />}
       {verifying?.assetId === asset.id && <CommandVerificationDrawer key={`${verifying.id}:${asset.groupId}`} command={verifying} canEdit={canAct} onClose={() => setVerifying(null)} />}
       <Row gutter={[20, 20]}>

@@ -19,7 +19,8 @@ CREATE SCHEMA IF NOT EXISTS :"schema";
 CREATE OR REPLACE VIEW :"schema".assets WITH (security_barrier) AS
   SELECT id, hostname, os, ip_addrs, agent_id, first_seen, last_seen,
          agent_version, silent_since, role, criticality, summary, listening, cloud,
-         service_notes, egress_notes, zone_id, inventory_at
+         service_notes, egress_notes, zone_id, inventory_at,
+         retired_at, retired_reason, parked_at, parked_reason
   FROM public.assets WHERE group_id = :'group_id';
 
 CREATE OR REPLACE VIEW :"schema".findings WITH (security_barrier) AS

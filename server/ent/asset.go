@@ -57,6 +57,12 @@ type Asset struct {
 	RetiredBy *string `json:"retired_by,omitempty"`
 	// RetiredReason holds the value of the "retired_reason" field.
 	RetiredReason *string `json:"retired_reason,omitempty"`
+	// ParkedAt holds the value of the "parked_at" field.
+	ParkedAt *time.Time `json:"parked_at,omitempty"`
+	// ParkedBy holds the value of the "parked_by" field.
+	ParkedBy *string `json:"parked_by,omitempty"`
+	// ParkedReason holds the value of the "parked_reason" field.
+	ParkedReason *string `json:"parked_reason,omitempty"`
 	// HealthProblem holds the value of the "health_problem" field.
 	HealthProblem *string `json:"health_problem,omitempty"`
 	// HealthDropped holds the value of the "health_dropped" field.
@@ -160,9 +166,9 @@ func (*Asset) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case asset.FieldHealthDropped, asset.FieldCriticality:
 			values[i] = new(sql.NullInt64)
-		case asset.FieldHostname, asset.FieldOs, asset.FieldOsDisplay, asset.FieldSensorVersion, asset.FieldSensorProblem, asset.FieldAgentVersion, asset.FieldRetiredBy, asset.FieldRetiredReason, asset.FieldHealthProblem, asset.FieldResponseTier, asset.FieldResponseTierReason, asset.FieldRole, asset.FieldSummary, asset.FieldAnnotationReason, asset.FieldAnnotatedFacts:
+		case asset.FieldHostname, asset.FieldOs, asset.FieldOsDisplay, asset.FieldSensorVersion, asset.FieldSensorProblem, asset.FieldAgentVersion, asset.FieldRetiredBy, asset.FieldRetiredReason, asset.FieldParkedBy, asset.FieldParkedReason, asset.FieldHealthProblem, asset.FieldResponseTier, asset.FieldResponseTierReason, asset.FieldRole, asset.FieldSummary, asset.FieldAnnotationReason, asset.FieldAnnotatedFacts:
 			values[i] = new(sql.NullString)
-		case asset.FieldFirstSeen, asset.FieldLastSeen, asset.FieldSensorSeen, asset.FieldSilentSince, asset.FieldRetiredAt, asset.FieldHealthDroppedAt, asset.FieldInventoryAt, asset.FieldSoftwareAt, asset.FieldAnnotatedAt, asset.FieldAnnotateRequestedAt:
+		case asset.FieldFirstSeen, asset.FieldLastSeen, asset.FieldSensorSeen, asset.FieldSilentSince, asset.FieldRetiredAt, asset.FieldParkedAt, asset.FieldHealthDroppedAt, asset.FieldInventoryAt, asset.FieldSoftwareAt, asset.FieldAnnotatedAt, asset.FieldAnnotateRequestedAt:
 			values[i] = new(sql.NullTime)
 		case asset.FieldID:
 			values[i] = new(uuid.UUID)
@@ -320,6 +326,27 @@ func (_m *Asset) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.RetiredReason = new(string)
 				*_m.RetiredReason = value.String
+			}
+		case asset.FieldParkedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field parked_at", values[i])
+			} else if value.Valid {
+				_m.ParkedAt = new(time.Time)
+				*_m.ParkedAt = value.Time
+			}
+		case asset.FieldParkedBy:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field parked_by", values[i])
+			} else if value.Valid {
+				_m.ParkedBy = new(string)
+				*_m.ParkedBy = value.String
+			}
+		case asset.FieldParkedReason:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field parked_reason", values[i])
+			} else if value.Valid {
+				_m.ParkedReason = new(string)
+				*_m.ParkedReason = value.String
 			}
 		case asset.FieldHealthProblem:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -619,6 +646,21 @@ func (_m *Asset) String() string {
 	builder.WriteString(", ")
 	if v := _m.RetiredReason; v != nil {
 		builder.WriteString("retired_reason=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.ParkedAt; v != nil {
+		builder.WriteString("parked_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	if v := _m.ParkedBy; v != nil {
+		builder.WriteString("parked_by=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.ParkedReason; v != nil {
+		builder.WriteString("parked_reason=")
 		builder.WriteString(*v)
 	}
 	builder.WriteString(", ")

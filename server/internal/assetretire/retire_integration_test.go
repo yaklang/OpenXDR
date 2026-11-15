@@ -13,6 +13,7 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/schema"
+	"openxdr/server/internal/findings"
 	"openxdr/server/internal/review"
 	"openxdr/server/internal/testdb"
 )
@@ -134,5 +135,125 @@ func TestRetireAutoClosesIncidentsAndSweepCatchesStragglers(t *testing.T) {
 		if s := db.Incident.GetX(ctx, id).Status; s != "closed" {
 			t.Fatalf("资产恢复不应重开已结事件 %s：%s", id, s)
 		}
+	}
+}
+
+func TestRetireClosesFindingsAndQuestionsAndSweepCatchesStragglers(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("ops").SaveX(ctx)
+	gym := db.Asset.Create().SetHostname("gym").SetGroupID(g.ID).SaveX(ctx)
+	lizhen := db.Asset.Create().SetHostname("lizhen-dev").SetGroupID(g.ID).SaveX(ctx)
+	activeHost := db.Asset.Create().SetHostname("zachary-dev").SetGroupID(g.ID).SaveX(ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	fGym := db.Finding.Create().SetGroupID(g.ID).SetAssetID(gym.ID).SetKey("collect:silent").SetTitle("gym 失联").SetStatus("open").SaveX(ctx)
+	fActive := db.Finding.Create().SetGroupID(g.ID).SetAssetID(activeHost.ID).SetKey("collect:silent").SetTitle("zachary-dev 失联").SetStatus("open").SaveX(ctx)
+
+	qGymOwner := db.Question.Create().SetKind("owner").SetSubjectKind("asset").SetSubject(gym.ID.String()).
+		SetGroupIds([]uuid.UUID{g.ID}).SetFindingIds([]uuid.UUID{fGym.ID}).SetStatus("open").SetCreatedBy("system").SaveX(ctx)
+	qGymKey := db.Question.Create().SetKind("authorization").SetSubjectKind("key").
+		SetSubject("SHA256:mtwVQQEIr75wGTFfVAuMn6y/LsfD5ULsqChRXqfXqJY").
+		SetGroupIds([]uuid.UUID{g.ID}).SetFindingIds([]uuid.UUID{fGym.ID}).SetStatus("open").SetCreatedBy("system").SaveX(ctx)
+	qMixedKey := db.Question.Create().SetKind("authorization").SetSubjectKind("key").
+		SetSubject("SHA256:tEASU9iIr75wGTFfVAuMn6y/LsfD5ULsqChRXqfXqJY").
+		SetGroupIds([]uuid.UUID{g.ID}).SetFindingIds([]uuid.UUID{fGym.ID, fActive.ID}).SetStatus("open").SetCreatedBy("system").SaveX(ctx)
+
+	if _, err := Retire(ctx, db, gym, "admin", "实验机器销毁", now); err != nil {
+		t.Fatalf("Retire gym: %v", err)
+	}
+
+	gotFGym := db.Finding.GetX(ctx, fGym.ID)
+	if gotFGym.Status != "resolved" || gotFGym.Note == nil || !strings.HasPrefix(*gotFGym.Note, "资产已退役：") {
+		t.Fatalf("退役资产上的未结待办应按资产已退役关闭：%+v", gotFGym)
+	}
+	if !db.AuditLog.Query().Where(auditlog.ActionEQ("finding_status"), auditlog.TargetEQ(fGym.ID.String())).ExistX(ctx) {
+		t.Fatal("退役关闭待办应落 finding_status 审计")
+	}
+
+	for _, qid := range []uuid.UUID{qGymOwner.ID, qGymKey.ID} {
+		gotQ := db.Question.GetX(ctx, qid)
+		if gotQ.Status != "voided" || gotQ.Answer == nil || gotQ.Answer.Choice != "voided_retired" || !strings.Contains(gotQ.Answer.Content, "资产已退役，问题作废") {
+			t.Fatalf("只涉及已退役资产的待答问题应作废：%+v", gotQ)
+		}
+		if !db.AuditLog.Query().Where(auditlog.ActionEQ("question_voided"), auditlog.TargetEQ(qid.String())).ExistX(ctx) {
+			t.Fatalf("作废问题 %s 应落 question_voided 审计", qid)
+		}
+	}
+	if gotMixed := db.Question.GetX(ctx, qMixedKey.ID); gotMixed.Status != "open" {
+		t.Fatalf("仍涉及在线资产的问题不应被退役作废：%s", gotMixed.Status)
+	}
+	if gotActive := db.Finding.GetX(ctx, fActive.ID); gotActive.Status != "open" {
+		t.Fatalf("在线资产上的待办不应受影响：%s", gotActive.Status)
+	}
+
+	// 模拟生产存量：资产早已退役，但历史待办与问题仍处于 open，兜底循环 Sweep 应一次收口
+	db.Asset.UpdateOneID(lizhen.ID).SetRetiredAt(now.Add(-24 * time.Hour)).SetRetiredBy("admin").SetRetiredReason("旧开发机回收").ExecX(ctx)
+	fStraggler := db.Finding.Create().SetGroupID(g.ID).SetAssetID(lizhen.ID).SetKey("disk-full").SetTitle("磁盘告警").SetStatus("open").SaveX(ctx)
+	qStraggler := db.Question.Create().SetKind("policy").SetSubjectKind("asset").SetSubject(lizhen.ID.String()).
+		SetGroupIds([]uuid.UUID{g.ID}).SetStatus("open").SetCreatedBy("system").SaveX(ctx)
+
+	swept, err := (&Closer{DB: db}).Sweep(ctx, now.Add(time.Minute))
+	if err != nil || swept != 2 {
+		t.Fatalf("兜底 Sweep 应收敛存量退役待办与问题各 1 条：swept=%d err=%v", swept, err)
+	}
+	if db.Finding.GetX(ctx, fStraggler.ID).Status != "resolved" || db.Question.GetX(ctx, qStraggler.ID).Status != "voided" {
+		t.Fatal("存量退役待办与问题均应已收敛")
+	}
+}
+
+func TestParkAssetSuppressesSilenceAndPiFollowup(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("lab").SaveX(ctx)
+	agentID := uuid.New()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	testSrv := db.Asset.Create().
+		SetHostname("TESTSRV").
+		SetGroupID(g.ID).
+		SetAgentID(agentID).
+		SetLastSeen(now.Add(-2 * time.Hour)).
+		SetSilentSince(now.Add(-time.Hour)).
+		SaveX(ctx)
+
+	fSilent := db.Finding.Create().SetGroupID(g.ID).SetAssetID(testSrv.ID).SetKey("collect:silent").SetTitle("TESTSRV 整机静默").
+		SetStatus("open").SetWorkOwner("ai").SetWorkNextCheckAt(now).SaveX(ctx)
+	fOther := db.Finding.Create().SetGroupID(g.ID).SetAssetID(testSrv.ID).SetKey("weak-sshd").SetTitle("SSH 配置待加固").
+		SetStatus("open").SetWorkOwner("ai").SetWorkNextCheckAt(now).SaveX(ctx)
+	qPlan := db.Question.Create().SetKind("policy").SetSubjectKind("asset").SetSubject(testSrv.ID.String()).
+		SetGroupIds([]uuid.UUID{g.ID}).SetFindingIds([]uuid.UUID{fSilent.ID}).SetStatus("open").SetCreatedBy("system").SaveX(ctx)
+
+	parked, err := Park(ctx, db, testSrv, "admin", "测试 VM 按需开机，平时关机保留", now)
+	if err != nil {
+		t.Fatalf("Park TESTSRV: %v", err)
+	}
+	if parked.ParkedAt == nil || parked.SilentSince != nil {
+		t.Fatalf("Park 后应记录 parked_at 并清除 silent_since：%+v", parked)
+	}
+	if got := db.Finding.GetX(ctx, fSilent.ID); got.Status != "resolved" || got.Note == nil || !strings.Contains(*got.Note, "停机保留") {
+		t.Fatalf("静默类待办应在停机保留时自动解决：%+v", got)
+	}
+	if got := db.Finding.GetX(ctx, fOther.ID); got.Status != "open" || got.WorkNextCheckAt != nil {
+		t.Fatalf("非静默待办应保持 open 但停止轮询调度：%+v", got)
+	}
+	if gotQ := db.Question.GetX(ctx, qPlan.ID); gotQ.Status != "answered" || gotQ.Answer == nil || gotQ.Answer.Choice != "parked" {
+		t.Fatalf("计划停机问题应随停机保留自动应答：%+v", gotQ)
+	}
+
+	// 1. 停机保留期间：Pi 跟进任务不再领取该主机待办
+	sess := db.AgentSession.Create().SetGroupID(g.ID).SetKind("task").SetModel("test").SetInitiator("system").SaveX(ctx)
+	db.Finding.UpdateOneID(fOther.ID).SetWorkNextCheckAt(now).ExecX(ctx)
+	claimed, err := findings.Claim(ctx, db, sess, now.Add(time.Minute))
+	if err != nil || len(claimed) != 0 {
+		t.Fatalf("停机保留主机的待办不应被 Pi 领取：claimed=%d err=%v", len(claimed), err)
+	}
+
+	// 2. 取消停机保留后：非静默待办恢复可领取
+	unparked, err := Unpark(ctx, db, parked, now.Add(2*time.Minute))
+	if err != nil || unparked.ParkedAt != nil {
+		t.Fatalf("Unpark TESTSRV: %v %+v", err, unparked)
+	}
+	sess2 := db.AgentSession.Create().SetGroupID(g.ID).SetKind("task").SetModel("test").SetInitiator("system").SaveX(ctx)
+	claimedAfter, err := findings.Claim(ctx, db, sess2, now.Add(3*time.Minute))
+	if err != nil || len(claimedAfter) != 1 || claimedAfter[0].ID != fOther.ID {
+		t.Fatalf("取消停机保留后遗留待办应恢复领取：claimed=%d err=%v", len(claimedAfter), err)
 	}
 }

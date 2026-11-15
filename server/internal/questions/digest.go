@@ -4,17 +4,26 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
+	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
 	"openxdr/server/ent/fact"
+	"openxdr/server/ent/finding"
+	"openxdr/server/ent/incident"
 	"openxdr/server/ent/question"
+	"openxdr/server/ent/schema"
+	"openxdr/server/internal/audit"
 	"openxdr/server/internal/facts"
 )
+
+// StaleQuestionAge 关联待办与事件均已解决后，未答问题自动作废的静默等待时间
+const StaleQuestionAge = 24 * time.Hour
 
 // Digest 待答问题总数与按主题的一行摘要，给每日群消息用。
 // 群里不止管理员一人：只放类型、格式受限的对象与影响面，钥匙注释、命令行、提问原文这类攻击者可控的内容一概不放；
@@ -128,12 +137,238 @@ func RenewalSweep(ctx context.Context, db *ent.Client, now time.Time) (int, erro
 	return n, nil
 }
 
-// Run 单活循环：每小时检查一次将到期的授权
+// VoidSweep 把关联待办与事件全部已解决/已关闭、且悬置超过 StaleQuestionAge 的待答问题自动作废并留审计（不写事实）
+func VoidSweep(ctx context.Context, db *ent.Client, now time.Time) (int, error) {
+	cutoff := now.Add(-StaleQuestionAge)
+	rows, err := db.Question.Query().
+		Where(question.StatusEQ("open"), question.CreatedAtLTE(cutoff)).
+		Order(ent.Asc(question.FieldCreatedAt)).Limit(200).All(ctx)
+	if err != nil || len(rows) == 0 {
+		return 0, err
+	}
+	voided := 0
+	for _, q := range rows {
+		if len(q.FindingIds) == 0 && len(q.IncidentIds) == 0 {
+			continue
+		}
+		ok, err := voidIfAllResolved(ctx, db, q.ID, cutoff, now)
+		if err != nil {
+			return voided, err
+		}
+		if ok {
+			voided++
+		}
+	}
+	return voided, nil
+}
+
+func voidIfAllResolved(ctx context.Context, db *ent.Client, id uuid.UUID, cutoff, now time.Time) (bool, error) {
+	tx, err := db.Tx(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	q, err := tx.Question.Query().Where(question.IDEQ(id)).Where(func(s *sql.Selector) { s.ForUpdate() }).Only(ctx)
+	if ent.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil || q.Status != "open" || q.CreatedAt.After(cutoff) {
+		return false, err
+	}
+	if len(q.FindingIds) == 0 && len(q.IncidentIds) == 0 {
+		return false, nil
+	}
+
+	totalLinked := 0
+	if len(q.FindingIds) > 0 {
+		fTotal, err := tx.Finding.Query().Where(finding.IDIn(q.FindingIds...)).Count(ctx)
+		if err != nil {
+			return false, err
+		}
+		totalLinked += fTotal
+		hasOpen, err := tx.Finding.Query().Where(finding.IDIn(q.FindingIds...), finding.StatusEQ("open")).Exist(ctx)
+		if err != nil || hasOpen {
+			return false, err
+		}
+	}
+	if len(q.IncidentIds) > 0 {
+		iTotal, err := tx.Incident.Query().Where(incident.IDIn(q.IncidentIds...)).Count(ctx)
+		if err != nil {
+			return false, err
+		}
+		totalLinked += iTotal
+		hasOpen, err := tx.Incident.Query().Where(incident.IDIn(q.IncidentIds...), incident.StatusIn("open", "triaged")).Exist(ctx)
+		if err != nil || hasOpen {
+			return false, err
+		}
+	}
+	if totalLinked == 0 {
+		return false, nil
+	}
+
+	n, err := tx.Question.Update().Where(question.IDEQ(q.ID), question.StatusEQ("open")).
+		SetStatus("voided").
+		SetAnsweredBy("system").
+		SetAnsweredAt(now).
+		SetAnswer(&schema.QuestionAnswer{Choice: "voided_resolved", Content: "关联待办均已解决"}).
+		Save(ctx)
+	if err != nil || n == 0 {
+		return false, err
+	}
+	detail := fmt.Sprintf("%s %s %s %s 已作废：关联待办均已解决（关联事件=%d 关联待办=%d）",
+		Ref(q.ID), q.Kind, q.SubjectKind, q.Subject, len(q.IncidentIds), len(q.FindingIds))
+	if err := audit.Checked(ctx, tx.AuditLog.Create(), "system", "server", "question_voided", q.ID.String(), detail); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+// BackfillSweep 对存量待答问题执行两项收敛：
+//  1. 确定性查找已能直接作答的（如平台自身组件、新登记的同主题事实、已续期的事实），自动结为 answered 并唤醒阻塞待办（退役资产交由 assetretire 统一作废）；
+//  2. 尚未能作答但已有背景事实的（如授权问题对应的钥匙归属事实），补挂进问题证据，免去管理员再去翻事实表。
+func BackfillSweep(ctx context.Context, db *ent.Client, now time.Time) (answered int, enriched int, err error) {
+	rows, err := db.Question.Query().Where(question.StatusEQ("open")).Order(ent.Asc(question.FieldCreatedAt)).Limit(200).All(ctx)
+	if err != nil || len(rows) == 0 {
+		return 0, 0, err
+	}
+	for _, q := range rows {
+		req := Request{Kind: q.Kind, SubjectKind: q.SubjectKind, Subject: q.Subject, Groups: q.GroupIds}
+		res, err := Lookup(ctx, db, req, now)
+		if err != nil {
+			return answered, enriched, err
+		}
+		if res.Answered {
+			// 只靠退役资产命中的问题交由 assetretire 标为 voided_retired，保持退役口径一致
+			if len(res.Facts) == 0 && len(res.Records) > 0 && !slices.ContainsFunc(res.Records, func(r Record) bool { return r.Kind != "asset_retired" }) {
+				continue
+			}
+			ok, err := autoAnswerOpen(ctx, db, q.ID, res, now)
+			if err != nil {
+				return answered, enriched, err
+			}
+			if ok {
+				answered++
+			}
+			continue
+		}
+		pinned := contextEvidences(res.Context, now)
+		if len(pinned) == 0 {
+			continue
+		}
+		if _, changed := mergeEvidence(q.Evidence, pinned, nil); !changed {
+			continue
+		}
+		ok, err := attachPinnedEvidence(ctx, db, q.ID, pinned, now)
+		if err != nil {
+			return answered, enriched, err
+		}
+		if ok {
+			enriched++
+		}
+	}
+	return answered, enriched, nil
+}
+
+func autoAnswerOpen(ctx context.Context, db *ent.Client, id uuid.UUID, res *Result, now time.Time) (bool, error) {
+	tx, err := db.Tx(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	q, err := tx.Question.Query().Where(question.IDEQ(id)).Where(func(s *sql.Selector) { s.ForUpdate() }).Only(ctx)
+	if ent.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil || q.Status != "open" {
+		return false, err
+	}
+	var parts, refs []string
+	for _, f := range res.Facts {
+		r := facts.Ref("F", f.ID)
+		refs = append(refs, r)
+		parts = append(parts, r+" "+f.Content)
+	}
+	for _, rec := range res.Records {
+		refs = append(refs, rec.Ref)
+		parts = append(parts, rec.Detail)
+	}
+	summary := strings.Join(parts, "；")
+	if summary == "" {
+		summary = "已满足确定性条件"
+	}
+	u := tx.Question.Update().Where(question.IDEQ(q.ID), question.StatusEQ("open")).
+		SetStatus("answered").
+		SetAnsweredBy("system").
+		SetAnsweredAt(now).
+		SetAnswer(&schema.QuestionAnswer{Choice: "auto_lookup", Content: summary})
+	if len(res.Facts) > 0 {
+		u.SetFactID(res.Facts[0].ID)
+	}
+	n, err := u.Save(ctx)
+	if err != nil || n == 0 {
+		return false, err
+	}
+	requeued, err := requeue(ctx, tx, q, now)
+	if err != nil {
+		return false, err
+	}
+	detail := fmt.Sprintf("%s %s %s %s refs=%s 重新排队待办=%d",
+		Ref(q.ID), q.Kind, q.SubjectKind, q.Subject, strings.Join(refs, ","), requeued)
+	if err := audit.Checked(ctx, tx.AuditLog.Create(), "system", "server", "controller_answered", q.ID.String(), detail); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	if len(res.Facts) > 0 {
+		_ = facts.Cite(ctx, db, &facts.Brief{Facts: res.Facts}, now)
+	}
+	return true, nil
+}
+
+func attachPinnedEvidence(ctx context.Context, db *ent.Client, id uuid.UUID, pinned []schema.QuestionEvidence, now time.Time) (bool, error) {
+	tx, err := db.Tx(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	q, err := tx.Question.Query().Where(question.IDEQ(id)).Where(func(s *sql.Selector) { s.ForUpdate() }).Only(ctx)
+	if ent.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil || q.Status != "open" {
+		return false, err
+	}
+	merged, changed := mergeEvidence(q.Evidence, pinned, nil)
+	if !changed {
+		return false, nil
+	}
+	if err := tx.Question.UpdateOneID(q.ID).SetEvidence(merged).SetUpdatedAt(now).Exec(ctx); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+// Run 单活循环：定期执行过时问题自动作废、存量待答问题确定性收敛/背景补挂、将到期授权续期提醒
 func Run(ctx context.Context, db *ent.Client) {
-	t := time.NewTicker(time.Hour)
+	t := time.NewTicker(5 * time.Minute)
 	defer t.Stop()
 	for {
-		if n, err := RenewalSweep(ctx, db, time.Now()); err != nil && ctx.Err() == nil {
+		now := time.Now()
+		if n, err := VoidSweep(ctx, db, now); err != nil && ctx.Err() == nil {
+			slog.Error("过时问题自动作废失败", "err", err)
+		} else if n > 0 {
+			slog.Info("过时总控问题已自动作废", "count", n)
+		}
+		if ans, enr, err := BackfillSweep(ctx, db, now); err != nil && ctx.Err() == nil {
+			slog.Error("待答问题确定性收敛失败", "err", err)
+		} else if ans+enr > 0 {
+			slog.Info("待答问题确定性收敛完成", "answered", ans, "enriched", enr)
+		}
+		if n, err := RenewalSweep(ctx, db, now); err != nil && ctx.Err() == nil {
 			slog.Error("授权到期续期提问失败", "err", err)
 		} else if n > 0 {
 			slog.Info("已提出授权续期问题", "count", n)

@@ -11,8 +11,8 @@ model: ""
 targets: { group: "*" }
 approval_timeout: 10m
 prompt: |
-  检查本组每台主机的采集是否健康。用 query：
-  1. 失联：assets.silent_since 不为空或 last_seen 超过 10 分钟的主机。
+  检查本组每台主机的采集是否健康（排除已退役 retired_at IS NOT NULL 与停机保留 parked_at IS NOT NULL 的主机）。用 query：
+  1. 失联：assets.retired_at IS NULL AND assets.parked_at IS NULL 且（assets.silent_since 不为空或 last_seen 超过 10 分钟）的主机。
   2. 版本：assets.agent_version 与本组多数主机不一致的（自动升级可能失败）。
   3. 采集降级：近 24 小时 events 按主机、class_uid 计数，与此前 7 天的日均比较。重点看：
      - 4001（网络）为 0 而其他类有数据：网络采集缺失（Linux 非 eBPF 构建或内核不支持）；

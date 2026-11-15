@@ -131,6 +131,21 @@ func RetiredReason(v string) predicate.Asset {
 	return predicate.Asset(sql.FieldEQ(FieldRetiredReason, v))
 }
 
+// ParkedAt applies equality check predicate on the "parked_at" field. It's identical to ParkedAtEQ.
+func ParkedAt(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldParkedAt, v))
+}
+
+// ParkedBy applies equality check predicate on the "parked_by" field. It's identical to ParkedByEQ.
+func ParkedBy(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldParkedBy, v))
+}
+
+// ParkedReason applies equality check predicate on the "parked_reason" field. It's identical to ParkedReasonEQ.
+func ParkedReason(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldParkedReason, v))
+}
+
 // HealthProblem applies equality check predicate on the "health_problem" field. It's identical to HealthProblemEQ.
 func HealthProblem(v string) predicate.Asset {
 	return predicate.Asset(sql.FieldEQ(FieldHealthProblem, v))
@@ -1159,6 +1174,206 @@ func RetiredReasonEqualFold(v string) predicate.Asset {
 // RetiredReasonContainsFold applies the ContainsFold predicate on the "retired_reason" field.
 func RetiredReasonContainsFold(v string) predicate.Asset {
 	return predicate.Asset(sql.FieldContainsFold(FieldRetiredReason, v))
+}
+
+// ParkedAtEQ applies the EQ predicate on the "parked_at" field.
+func ParkedAtEQ(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldParkedAt, v))
+}
+
+// ParkedAtNEQ applies the NEQ predicate on the "parked_at" field.
+func ParkedAtNEQ(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldNEQ(FieldParkedAt, v))
+}
+
+// ParkedAtIn applies the In predicate on the "parked_at" field.
+func ParkedAtIn(vs ...time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldIn(FieldParkedAt, vs...))
+}
+
+// ParkedAtNotIn applies the NotIn predicate on the "parked_at" field.
+func ParkedAtNotIn(vs ...time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldNotIn(FieldParkedAt, vs...))
+}
+
+// ParkedAtGT applies the GT predicate on the "parked_at" field.
+func ParkedAtGT(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldGT(FieldParkedAt, v))
+}
+
+// ParkedAtGTE applies the GTE predicate on the "parked_at" field.
+func ParkedAtGTE(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldGTE(FieldParkedAt, v))
+}
+
+// ParkedAtLT applies the LT predicate on the "parked_at" field.
+func ParkedAtLT(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldLT(FieldParkedAt, v))
+}
+
+// ParkedAtLTE applies the LTE predicate on the "parked_at" field.
+func ParkedAtLTE(v time.Time) predicate.Asset {
+	return predicate.Asset(sql.FieldLTE(FieldParkedAt, v))
+}
+
+// ParkedAtIsNil applies the IsNil predicate on the "parked_at" field.
+func ParkedAtIsNil() predicate.Asset {
+	return predicate.Asset(sql.FieldIsNull(FieldParkedAt))
+}
+
+// ParkedAtNotNil applies the NotNil predicate on the "parked_at" field.
+func ParkedAtNotNil() predicate.Asset {
+	return predicate.Asset(sql.FieldNotNull(FieldParkedAt))
+}
+
+// ParkedByEQ applies the EQ predicate on the "parked_by" field.
+func ParkedByEQ(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldParkedBy, v))
+}
+
+// ParkedByNEQ applies the NEQ predicate on the "parked_by" field.
+func ParkedByNEQ(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldNEQ(FieldParkedBy, v))
+}
+
+// ParkedByIn applies the In predicate on the "parked_by" field.
+func ParkedByIn(vs ...string) predicate.Asset {
+	return predicate.Asset(sql.FieldIn(FieldParkedBy, vs...))
+}
+
+// ParkedByNotIn applies the NotIn predicate on the "parked_by" field.
+func ParkedByNotIn(vs ...string) predicate.Asset {
+	return predicate.Asset(sql.FieldNotIn(FieldParkedBy, vs...))
+}
+
+// ParkedByGT applies the GT predicate on the "parked_by" field.
+func ParkedByGT(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldGT(FieldParkedBy, v))
+}
+
+// ParkedByGTE applies the GTE predicate on the "parked_by" field.
+func ParkedByGTE(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldGTE(FieldParkedBy, v))
+}
+
+// ParkedByLT applies the LT predicate on the "parked_by" field.
+func ParkedByLT(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldLT(FieldParkedBy, v))
+}
+
+// ParkedByLTE applies the LTE predicate on the "parked_by" field.
+func ParkedByLTE(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldLTE(FieldParkedBy, v))
+}
+
+// ParkedByContains applies the Contains predicate on the "parked_by" field.
+func ParkedByContains(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldContains(FieldParkedBy, v))
+}
+
+// ParkedByHasPrefix applies the HasPrefix predicate on the "parked_by" field.
+func ParkedByHasPrefix(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldHasPrefix(FieldParkedBy, v))
+}
+
+// ParkedByHasSuffix applies the HasSuffix predicate on the "parked_by" field.
+func ParkedByHasSuffix(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldHasSuffix(FieldParkedBy, v))
+}
+
+// ParkedByIsNil applies the IsNil predicate on the "parked_by" field.
+func ParkedByIsNil() predicate.Asset {
+	return predicate.Asset(sql.FieldIsNull(FieldParkedBy))
+}
+
+// ParkedByNotNil applies the NotNil predicate on the "parked_by" field.
+func ParkedByNotNil() predicate.Asset {
+	return predicate.Asset(sql.FieldNotNull(FieldParkedBy))
+}
+
+// ParkedByEqualFold applies the EqualFold predicate on the "parked_by" field.
+func ParkedByEqualFold(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEqualFold(FieldParkedBy, v))
+}
+
+// ParkedByContainsFold applies the ContainsFold predicate on the "parked_by" field.
+func ParkedByContainsFold(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldContainsFold(FieldParkedBy, v))
+}
+
+// ParkedReasonEQ applies the EQ predicate on the "parked_reason" field.
+func ParkedReasonEQ(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEQ(FieldParkedReason, v))
+}
+
+// ParkedReasonNEQ applies the NEQ predicate on the "parked_reason" field.
+func ParkedReasonNEQ(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldNEQ(FieldParkedReason, v))
+}
+
+// ParkedReasonIn applies the In predicate on the "parked_reason" field.
+func ParkedReasonIn(vs ...string) predicate.Asset {
+	return predicate.Asset(sql.FieldIn(FieldParkedReason, vs...))
+}
+
+// ParkedReasonNotIn applies the NotIn predicate on the "parked_reason" field.
+func ParkedReasonNotIn(vs ...string) predicate.Asset {
+	return predicate.Asset(sql.FieldNotIn(FieldParkedReason, vs...))
+}
+
+// ParkedReasonGT applies the GT predicate on the "parked_reason" field.
+func ParkedReasonGT(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldGT(FieldParkedReason, v))
+}
+
+// ParkedReasonGTE applies the GTE predicate on the "parked_reason" field.
+func ParkedReasonGTE(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldGTE(FieldParkedReason, v))
+}
+
+// ParkedReasonLT applies the LT predicate on the "parked_reason" field.
+func ParkedReasonLT(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldLT(FieldParkedReason, v))
+}
+
+// ParkedReasonLTE applies the LTE predicate on the "parked_reason" field.
+func ParkedReasonLTE(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldLTE(FieldParkedReason, v))
+}
+
+// ParkedReasonContains applies the Contains predicate on the "parked_reason" field.
+func ParkedReasonContains(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldContains(FieldParkedReason, v))
+}
+
+// ParkedReasonHasPrefix applies the HasPrefix predicate on the "parked_reason" field.
+func ParkedReasonHasPrefix(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldHasPrefix(FieldParkedReason, v))
+}
+
+// ParkedReasonHasSuffix applies the HasSuffix predicate on the "parked_reason" field.
+func ParkedReasonHasSuffix(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldHasSuffix(FieldParkedReason, v))
+}
+
+// ParkedReasonIsNil applies the IsNil predicate on the "parked_reason" field.
+func ParkedReasonIsNil() predicate.Asset {
+	return predicate.Asset(sql.FieldIsNull(FieldParkedReason))
+}
+
+// ParkedReasonNotNil applies the NotNil predicate on the "parked_reason" field.
+func ParkedReasonNotNil() predicate.Asset {
+	return predicate.Asset(sql.FieldNotNull(FieldParkedReason))
+}
+
+// ParkedReasonEqualFold applies the EqualFold predicate on the "parked_reason" field.
+func ParkedReasonEqualFold(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldEqualFold(FieldParkedReason, v))
+}
+
+// ParkedReasonContainsFold applies the ContainsFold predicate on the "parked_reason" field.
+func ParkedReasonContainsFold(v string) predicate.Asset {
+	return predicate.Asset(sql.FieldContainsFold(FieldParkedReason, v))
 }
 
 // HealthProblemEQ applies the EQ predicate on the "health_problem" field.

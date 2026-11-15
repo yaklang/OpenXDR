@@ -16,6 +16,7 @@ import (
 	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/fact"
 	"openxdr/server/ent/question"
+	"openxdr/server/internal/assetretire"
 	"openxdr/server/internal/facts"
 	"openxdr/server/internal/findings"
 	"openxdr/server/internal/testdb"
@@ -327,5 +328,217 @@ func TestDomainScopeWriteBackAndSuffixLookup(t *testing.T) {
 	res, _ = Ask(ctx, db, Request{Kind: "authorization", SubjectKind: "ip", Subject: "203.0.113.5", Groups: []uuid.UUID{g.ID}}, now)
 	if _, err := answer(t, ctx, db, res.Question.ID, AnswerInput{Choice: "grant", Content: "x", Scope: "example.org"}); !errors.As(err, new(ErrInvalid)) {
 		t.Fatalf("非域名不能选范围：%v", err)
+	}
+}
+
+func TestKeyFactOwnerAndAuthorizationEvidenceAndDecisionReuse(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("ops").SaveX(ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	const foghavenKey = "SHA256:tEASU9iIr75wGTFfVAuMn6y/LsfD5ULsqChRXqfXqJY"
+
+	keyFact := db.Fact.Create().
+		SetKind("key").
+		SetSubject(foghavenKey).
+		SetHolder("user:kei-foghaven").
+		SetContent("树莓派常驻运维钥匙").
+		SetSource("human").
+		SetCreatedBy("admin").
+		SaveX(ctx)
+
+	// 1. 归属问题：直接用 key 事实作答
+	ownerRes, err := Ask(ctx, db, Request{Kind: "owner", SubjectKind: "key", Subject: foghavenKey, Groups: []uuid.UUID{g.ID}, Source: "ask_controller"}, now)
+	if err != nil || !ownerRes.Answered || len(ownerRes.Facts) != 1 || ownerRes.Facts[0].ID != keyFact.ID {
+		t.Fatalf("已有有效 key 事实时归属问题应直接答掉：err=%v res=%+v", err, ownerRes)
+	}
+
+	// 2. 模拟生产存量：旧版本遗留一条没有附着 key 事实证据的 open authorization 问题，BackfillSweep 应补挂 key 事实证据但保持 open
+	legacy := db.Question.Create().
+		SetKind("authorization").
+		SetSubjectKind("key").
+		SetSubject(foghavenKey).
+		SetGroupIds([]uuid.UUID{g.ID}).
+		SetStatus("open").
+		SetCreatedBy("system").
+		SetCreatedAt(now.Add(-2 * time.Hour)).
+		SetUpdatedAt(now.Add(-2 * time.Hour)).
+		SaveX(ctx)
+	ansN, enrN, err := BackfillSweep(ctx, db, now)
+	if err != nil || ansN != 0 || enrN != 1 {
+		t.Fatalf("存量授权问题不应仅凭 key 事实自动作答，但应补挂归属证据：ans=%d enr=%d err=%v", ansN, enrN, err)
+	}
+	gotLegacy := db.Question.GetX(ctx, legacy.ID)
+	if gotLegacy.Status != "open" || len(gotLegacy.Evidence) != 1 || gotLegacy.Evidence[0].Source != "fact" || gotLegacy.Evidence[0].Ref != facts.Ref("F", keyFact.ID) || !strings.Contains(gotLegacy.Evidence[0].Note, "user:kei-foghaven") {
+		t.Fatalf("存量问题证据应附上钥匙归属事实：%+v", gotLegacy.Evidence)
+	}
+
+	// 3. 新发起或合并的授权问题：保持未答，Context 与问题证据均带钥匙归属事实
+	authRes, err := Ask(ctx, db, Request{Kind: "authorization", SubjectKind: "key", Subject: foghavenKey, Groups: []uuid.UUID{g.ID}, Source: "ask_controller", Note: "登录 zachary-dev 执行巡检"}, now)
+	if err != nil || authRes.Answered || !authRes.Merged || len(authRes.Context) != 1 || authRes.Context[0].Kind != "key_owner" {
+		t.Fatalf("授权类问题不能只凭 key 事实答，但 Context 应带 key_owner：err=%v res=%+v", err, authRes)
+	}
+	if len(authRes.Question.Evidence) != 2 || authRes.Question.Evidence[0].Ref != facts.Ref("F", keyFact.ID) {
+		t.Fatalf("合并后钥匙事实证据不重复且保留在首位：%+v", authRes.Question.Evidence)
+	}
+
+	// 4. 管理员作答一次授权后，同一把钥匙再次被问授权直接按已答授权决定事实作答，且附带钥匙归属背景
+	out, err := answer(t, ctx, db, authRes.Question.ID, AnswerInput{Choice: "grant", Content: "允许 Foghaven 凯伊登录内网开发与运维节点", ExpiresInDays: 30})
+	if err != nil || out.Fact == nil {
+		t.Fatalf("作答钥匙授权失败：%v %+v", err, out)
+	}
+	reused, err := Ask(ctx, db, Request{Kind: "authorization", SubjectKind: "key", Subject: foghavenKey, Groups: []uuid.UUID{g.ID}, Source: "closure_review"}, now.Add(time.Minute))
+	if err != nil || !reused.Answered || len(reused.Facts) != 1 || reused.Facts[0].ID != out.Fact.ID || len(reused.Context) != 1 {
+		t.Fatalf("已有已答授权决定事实后同钥匙授权问题应直接按决定作答：err=%v res=%+v", err, reused)
+	}
+}
+
+func TestStaleResolvedQuestionAutoVoidWithoutFact(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("lab").SaveX(ctx)
+	host := db.Asset.Create().SetHostname("lab-vm-1").SetGroupID(g.ID).SaveX(ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	fResolved := db.Finding.Create().SetGroupID(g.ID).SetAssetID(host.ID).SetKey("collect:silent").SetTitle("遥测中断").
+		SetStatus("resolved").SetResolvedAt(now.Add(-20 * time.Hour)).SetResolvedBy("system").SaveX(ctx)
+	fOpen := db.Finding.Create().SetGroupID(g.ID).SetAssetID(host.ID).SetKey("disk-high").SetTitle("磁盘偏高").
+		SetStatus("open").SaveX(ctx)
+	incClosed := db.Incident.Create().SetStatus("closed").SetGraph(json.RawMessage(`{}`)).
+		SetResolvedAt(now.Add(-20 * time.Hour)).SetResolvedBy("system").SaveX(ctx)
+
+	// 满 25 小时且关联待办与事件全部已解决/关闭 → 应自动作废
+	qStale := db.Question.Create().SetKind("owner").SetSubjectKind("ip").SetSubject("198.51.100.10").
+		SetGroupIds([]uuid.UUID{g.ID}).SetFindingIds([]uuid.UUID{fResolved.ID}).SetIncidentIds([]uuid.UUID{incClosed.ID}).
+		SetStatus("open").SetCreatedBy("system").SetCreatedAt(now.Add(-25 * time.Hour)).SetUpdatedAt(now.Add(-25 * time.Hour)).SaveX(ctx)
+
+	// 未满 24 小时 → 不作废
+	qRecent := db.Question.Create().SetKind("owner").SetSubjectKind("ip").SetSubject("198.51.100.11").
+		SetGroupIds([]uuid.UUID{g.ID}).SetFindingIds([]uuid.UUID{fResolved.ID}).
+		SetStatus("open").SetCreatedBy("system").SetCreatedAt(now.Add(-12 * time.Hour)).SetUpdatedAt(now.Add(-12 * time.Hour)).SaveX(ctx)
+
+	// 满 25 小时但仍有未结待办 → 不作废
+	qStillActive := db.Question.Create().SetKind("owner").SetSubjectKind("ip").SetSubject("198.51.100.12").
+		SetGroupIds([]uuid.UUID{g.ID}).SetFindingIds([]uuid.UUID{fResolved.ID, fOpen.ID}).
+		SetStatus("open").SetCreatedBy("system").SetCreatedAt(now.Add(-25 * time.Hour)).SetUpdatedAt(now.Add(-25 * time.Hour)).SaveX(ctx)
+
+	voided, err := VoidSweep(ctx, db, now)
+	if err != nil || voided != 1 {
+		t.Fatalf("VoidSweep 应只作废 1 条过时已解决问题：voided=%d err=%v", voided, err)
+	}
+	got := db.Question.GetX(ctx, qStale.ID)
+	if got.Status != "voided" || got.Answer == nil || got.Answer.Choice != "voided_resolved" || got.Answer.Content != "关联待办均已解决" {
+		t.Fatalf("过时问题作废字段不符：%+v", got)
+	}
+	if db.Fact.Query().CountX(ctx) != 0 {
+		t.Fatal("问题过时作废绝不能写事实")
+	}
+	if !db.AuditLog.Query().Where(auditlog.ActionEQ("question_voided"), auditlog.TargetEQ(qStale.ID.String())).ExistX(ctx) {
+		t.Fatal("问题过时作废应写 question_voided 审计")
+	}
+	if db.Question.GetX(ctx, qRecent.ID).Status != "open" || db.Question.GetX(ctx, qStillActive.ID).Status != "open" {
+		t.Fatal("未满阈值或仍有关联未结项的问题不应作废")
+	}
+
+	// 作废后部分唯一索引释放，日后真再次复发时可重新开立同主题待答问题
+	reopened, err := Ask(ctx, db, Request{Kind: "owner", SubjectKind: "ip", Subject: "198.51.100.10", Groups: []uuid.UUID{g.ID}, Finding: &fOpen.ID, Source: "ask_controller"}, now.Add(time.Minute))
+	if err != nil || reopened.Answered || reopened.Question.ID == qStale.ID {
+		t.Fatalf("作废后同主题再次提问应开出新问题：err=%v res=%+v", err, reopened)
+	}
+}
+
+func TestPlatformSelfAwarenessAndRetiredParkedLookup(t *testing.T) {
+	ctx, db := testdb.New(t)
+	t.Setenv("ENROLL_GRPC_URL", "10.1.1.199:8081")
+	t.Setenv("ENROLL_PUBLIC_URL", "https://xdr.internal.yuzhian.com.cn")
+
+	g := db.Group.Create().SetName("exp").SaveX(ctx)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	// Server 节点（同时携带节点 IP 与漂移 VIP）、见证/沙箱节点
+	serverNode := db.Asset.Create().
+		SetHostname("openxdr-node1").
+		SetIPAddrs([]string{"10.1.1.198", "10.1.1.199"}).
+		SetListening(json.RawMessage(`[{"port":8080,"proto":"tcp","process":"openxdr-server"}]`)).
+		SaveX(ctx)
+	sandboxNode := db.Asset.Create().
+		SetHostname("openxdr-sandbox").
+		SetIPAddrs([]string{"10.1.1.201"}).
+		SetListening(json.RawMessage(`[{"port":8090,"proto":"tcp","process":"sandboxd"}]`)).
+		SetContainers(json.RawMessage(`[{"name":"openxdr-witness","addrs":["172.19.0.5"]}]`)).
+		SaveX(ctx)
+
+	// 1. 平台 VIP / Server 节点 / 控制台域名 / 见证与沙箱节点的归属问题直接作答「这是 OpenXDR 平台自身组件」
+	for _, tc := range []struct {
+		subjectKind string
+		subject     string
+	}{
+		{"ip", "10.1.1.199"},
+		{"ip", "10.1.1.198"},
+		{"ip", "10.1.1.201"},
+		{"ip", "172.19.0.5"},
+		{"domain", "xdr.internal.yuzhian.com.cn"},
+		{"asset", serverNode.ID.String()},
+		{"asset", sandboxNode.ID.String()},
+	} {
+		res, err := Ask(ctx, db, Request{Kind: "owner", SubjectKind: tc.subjectKind, Subject: tc.subject, Groups: []uuid.UUID{g.ID}, Source: "ask_controller"}, now)
+		if err != nil || !res.Answered || len(res.Records) == 0 || !strings.Contains(res.Records[0].Detail, "这是 OpenXDR 平台自身组件") {
+			t.Fatalf("平台组件 %s %s 应直接作答：err=%v res=%+v", tc.subjectKind, tc.subject, err, res)
+		}
+	}
+
+	// 授权类问题问到平台自身组件时不能自动放行，只进 Context
+	authVIP, err := Ask(ctx, db, Request{Kind: "authorization", SubjectKind: "ip", Subject: "10.1.1.199", Groups: []uuid.UUID{g.ID}, Source: "closure_review"}, now)
+	if err != nil || authVIP.Answered || len(authVIP.Context) == 0 || authVIP.Context[0].Kind != "platform_component" {
+		t.Fatalf("对平台组件的授权问题不应自动放行：err=%v res=%+v", err, authVIP)
+	}
+
+	// 存量未满 24h 的 owner ip 10.1.1.199 待答问题由 BackfillSweep 直接自动应答并唤醒阻塞待办
+	expHost := db.Asset.Create().SetHostname("exp-1").SetGroupID(g.ID).SaveX(ctx)
+	fBlocked := db.Finding.Create().SetGroupID(g.ID).SetAssetID(expHost.ID).SetKey("collect:grpc").SetTitle("连接 ingest 端点核查").
+		SetStatus("open").SetWorkOwner("human").SaveX(ctx)
+	qVIP := db.Question.Create().SetKind("owner").SetSubjectKind("ip").SetSubject("10.1.1.199").
+		SetGroupIds([]uuid.UUID{g.ID}).SetFindingIds([]uuid.UUID{fBlocked.ID}).SetStatus("open").SetCreatedBy("system").SaveX(ctx)
+	db.Finding.UpdateOneID(fBlocked.ID).SetWork(findings.EncodeWork(findings.Work{Stage: "blocked", Blocker: "manual_business_decision", Question: Ref(qVIP.ID)})).ExecX(ctx)
+
+	ansN, _, err := BackfillSweep(ctx, db, now.Add(time.Minute))
+	if err != nil || ansN != 1 {
+		t.Fatalf("存量平台 VIP 归属问题应被 BackfillSweep 自动作答：ans=%d err=%v", ansN, err)
+	}
+	if gotQ := db.Question.GetX(ctx, qVIP.ID); gotQ.Status != "answered" || gotQ.Answer == nil || !strings.Contains(gotQ.Answer.Content, "这是 OpenXDR 平台自身组件") {
+		t.Fatalf("存量 VIP 问题应标记为已答：%+v", gotQ)
+	}
+	if gotF := db.Finding.GetX(ctx, fBlocked.ID); gotF.WorkOwner != "ai" {
+		t.Fatalf("存量 VIP 问题自动作答后应唤醒关联待办交回 AI：%s", gotF.WorkOwner)
+	}
+
+	// 2. 已退役资产：确定性查找直接用退役记录作答
+	gym := db.Asset.Create().SetHostname("gym").SetGroupID(g.ID).SaveX(ctx)
+	if _, err := assetretire.Retire(ctx, db, gym, "admin", "靶机回收", now); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"owner", "policy"} {
+		res, err := Ask(ctx, db, Request{Kind: kind, SubjectKind: "asset", Subject: gym.ID.String(), Groups: []uuid.UUID{g.ID}, Source: "ask_controller"}, now)
+		if err != nil || !res.Answered || len(res.Records) != 1 || res.Records[0].Kind != "asset_retired" || !strings.Contains(res.Records[0].Detail, "靶机回收") {
+			t.Fatalf("已退役资产 %s 问题应直接用退役记录作答：err=%v res=%+v", kind, err, res)
+		}
+	}
+
+	// 3. 停机保留资产：确定性查找直接回答归属/策略（是否计划停机），取消后恢复
+	testWin := db.Asset.Create().SetHostname("TESTWIN").SetGroupID(g.ID).SaveX(ctx)
+	parkedWin, err := assetretire.Park(ctx, db, testWin, "admin", "Windows 测试 VM 平时关机保留", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"owner", "policy"} {
+		res, err := Ask(ctx, db, Request{Kind: kind, SubjectKind: "asset", Subject: parkedWin.ID.String(), Groups: []uuid.UUID{g.ID}, Source: "ask_controller"}, now)
+		if err != nil || !res.Answered || len(res.Records) != 1 || res.Records[0].Kind != "asset_parked" || !strings.Contains(res.Records[0].Detail, "平时关机保留") {
+			t.Fatalf("停机保留资产 %s 问题应直接作答：err=%v res=%+v", kind, err, res)
+		}
+	}
+	if _, err := assetretire.Unpark(ctx, db, parkedWin, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	afterUnpark, err := Lookup(ctx, db, Request{Kind: "policy", SubjectKind: "asset", Subject: parkedWin.ID.String(), Groups: []uuid.UUID{g.ID}}, now.Add(3*time.Minute))
+	if err != nil || afterUnpark.Answered {
+		t.Fatalf("取消停机保留后不应再按停机保留直接作答：err=%v res=%+v", err, afterUnpark)
 	}
 }

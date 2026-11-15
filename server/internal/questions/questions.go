@@ -26,6 +26,7 @@ import (
 	"openxdr/server/ent/question"
 	"openxdr/server/ent/schema"
 	"openxdr/server/ent/standingrule"
+	"openxdr/server/internal/assetretire"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/facts"
@@ -179,7 +180,7 @@ func Ask(ctx context.Context, db *ent.Client, req Request, now time.Time) (*Resu
 		return res, nil
 	}
 	for attempt := 0; ; attempt++ {
-		q, merged, err := upsert(ctx, db, req, now)
+		q, merged, err := upsert(ctx, db, req, res.Context, now)
 		if err != nil && ent.IsConstraintError(err) && attempt == 0 {
 			continue
 		}
@@ -191,13 +192,14 @@ func Ask(ctx context.Context, db *ent.Client, req Request, now time.Time) (*Resu
 	}
 }
 
-func upsert(ctx context.Context, db *ent.Client, req Request, now time.Time) (*ent.Question, bool, error) {
+func upsert(ctx context.Context, db *ent.Client, req Request, ctxRecords []Record, now time.Time) (*ent.Question, bool, error) {
 	tx, err := db.Tx(ctx)
 	if err != nil {
 		return nil, false, err
 	}
 	defer tx.Rollback()
 	ev := schema.QuestionEvidence{At: now, Source: req.Source, Incident: req.Incident, Finding: req.Finding, Session: req.Session, Ref: req.Ref, Note: req.Note}
+	pinned := contextEvidences(ctxRecords, now)
 	cur, err := tx.Question.Query().Where(question.StatusEQ("open"), question.KindEQ(req.Kind), question.SubjectKindEQ(req.SubjectKind), question.SubjectEQ(req.Subject)).
 		Where(func(s *sql.Selector) { s.ForUpdate() }).Only(ctx)
 	if err != nil && !ent.IsNotFound(err) {
@@ -205,9 +207,10 @@ func upsert(ctx context.Context, db *ent.Client, req Request, now time.Time) (*e
 	}
 	var q *ent.Question
 	if cur == nil {
+		evidence, _ := mergeEvidence(nil, pinned, &ev)
 		c := tx.Question.Create().SetKind(req.Kind).SetSubjectKind(req.SubjectKind).SetSubject(req.Subject).
 			SetGroupIds(addIDs(nil, req.Groups...)).SetIncidentIds(addIDs(nil, ptrs(req.Incident)...)).
-			SetFindingIds(addIDs(nil, ptrs(req.Finding)...)).SetEvidence([]schema.QuestionEvidence{ev}).SetCreatedBy(req.CreatedBy).
+			SetFindingIds(addIDs(nil, ptrs(req.Finding)...)).SetEvidence(evidence).SetCreatedBy(req.CreatedBy).
 			SetCreatedAt(now).SetUpdatedAt(now)
 		if q, err = c.Save(ctx); err != nil {
 			return nil, false, err
@@ -217,10 +220,7 @@ func upsert(ctx context.Context, db *ent.Client, req Request, now time.Time) (*e
 			return nil, false, err
 		}
 	} else {
-		evidence := append(cur.Evidence, ev)
-		if len(evidence) > maxEvidence {
-			evidence = evidence[len(evidence)-maxEvidence:]
-		}
+		evidence, _ := mergeEvidence(cur.Evidence, pinned, &ev)
 		if q, err = tx.Question.UpdateOne(cur).SetGroupIds(addIDs(cur.GroupIds, req.Groups...)).
 			SetIncidentIds(addIDs(cur.IncidentIds, ptrs(req.Incident)...)).SetFindingIds(addIDs(cur.FindingIds, ptrs(req.Finding)...)).
 			SetEvidence(evidence).AddAskedCount(1).SetUpdatedAt(now).Save(ctx); err != nil {
@@ -228,6 +228,65 @@ func upsert(ctx context.Context, db *ent.Client, req Request, now time.Time) (*e
 		}
 	}
 	return q, cur != nil, tx.Commit()
+}
+
+func isPinnedSource(source string) bool {
+	return source == "fact" || source == "platform" || source == "asset"
+}
+
+func contextEvidences(records []Record, now time.Time) []schema.QuestionEvidence {
+	var out []schema.QuestionEvidence
+	for _, r := range records {
+		var src string
+		switch r.Kind {
+		case "key_owner":
+			src = "fact"
+		case "platform_component":
+			src = "platform"
+		case "asset_parked":
+			src = "asset"
+		default:
+			continue
+		}
+		out = append(out, schema.QuestionEvidence{At: now, Source: src, Ref: r.Ref, Note: r.Detail})
+	}
+	return out
+}
+
+// mergeEvidence 合并并固定事实/平台背景证据（按 Source+Ref 去重且不被 20 条滑窗挤掉），返回合并结果及是否新增了固定证据
+func mergeEvidence(cur, pinned []schema.QuestionEvidence, tail *schema.QuestionEvidence) ([]schema.QuestionEvidence, bool) {
+	var fixed, regular []schema.QuestionEvidence
+	for _, e := range cur {
+		if isPinnedSource(e.Source) && e.Ref != "" {
+			fixed = append(fixed, e)
+		} else {
+			regular = append(regular, e)
+		}
+	}
+	addedPinned := false
+	for _, p := range pinned {
+		idx := slices.IndexFunc(fixed, func(x schema.QuestionEvidence) bool {
+			return x.Source == p.Source && x.Ref == p.Ref
+		})
+		if idx < 0 {
+			fixed = append(fixed, p)
+			addedPinned = true
+		} else if fixed[idx].Note != p.Note {
+			fixed[idx].Note = p.Note
+			addedPinned = true
+		}
+	}
+	if tail != nil {
+		regular = append(regular, *tail)
+	}
+	if len(fixed) > maxEvidence {
+		fixed = fixed[:maxEvidence]
+	}
+	budget := maxEvidence - len(fixed)
+	if len(regular) > budget {
+		regular = regular[len(regular)-budget:]
+	}
+	return append(fixed, regular...), addedPinned
 }
 
 func ptrs(ids ...*uuid.UUID) []uuid.UUID {
@@ -254,8 +313,17 @@ func addIDs(cur []uuid.UUID, add ...uuid.UUID) []uuid.UUID {
 	return out
 }
 
-// Lookup 确定性查找：事实库（按组裁剪，全局事实对所有组可见）、平台指令、运维意图。
-// 授权类只认事实与平台自己下发的指令；意图只解释行为，作为参考附上，不构成结论
+func formatKeyFact(f *ent.Fact) string {
+	content := strings.TrimSpace(f.Content)
+	holder := strings.TrimSpace(f.Holder)
+	if holder != "" && !strings.Contains(content, holder) {
+		return "已登记钥匙归属（持有人：" + holder + "）：" + content
+	}
+	return "已登记钥匙归属：" + content
+}
+
+// Lookup 确定性查找：事实库（按组裁剪，全局事实对所有组可见）、退役/停机保留资产状态、平台自身组件、平台指令与运维意图。
+// 授权类只认授权事实与平台自己下发的指令；钥匙归属事实在非归属类问题上只进 Context 并附进问题证据，不单独充当授权；意图只作参考
 func Lookup(ctx context.Context, db *ent.Client, req Request, now time.Time) (*Result, error) {
 	res := &Result{}
 	where := []predicate.Fact{facts.Live(now)}
@@ -266,9 +334,8 @@ func Lookup(ctx context.Context, db *ent.Client, req Request, now time.Time) (*R
 	var match []predicate.Fact
 	switch req.SubjectKind {
 	case "key":
-		if req.Kind == "owner" {
-			match = append(match, fact.And(fact.KindEQ("key"), fact.SubjectEQ(req.Subject)))
-		}
+		// 无论问归属还是问授权，都一并取出有效的 key 事实：归属问题直接作答，非归属问题附进 Context 与问题证据
+		match = append(match, fact.And(fact.KindEQ("key"), fact.SubjectEQ(req.Subject)))
 		match = append(match, fact.SubjectEQ(own))
 	case "ip":
 		if req.Kind == "owner" {
@@ -282,6 +349,31 @@ func Lookup(ctx context.Context, db *ent.Client, req Request, now time.Time) (*R
 		}
 	case "asset", "change":
 		id := uuid.MustParse(req.Subject)
+		host, err := db.Asset.Get(ctx, id)
+		if err != nil && !ent.IsNotFound(err) {
+			return nil, err
+		}
+		if host != nil && (len(req.Groups) == 0 || (host.GroupID != nil && slices.Contains(req.Groups, *host.GroupID))) {
+			switch {
+			case host.RetiredAt != nil:
+				res.Records = append(res.Records, Record{
+					Ref:    facts.Ref("A", host.ID),
+					Kind:   "asset_retired",
+					Detail: "资产已退役：" + assetretire.FormatResolution([]*ent.Asset{host}),
+				})
+			case host.ParkedAt != nil:
+				rec := Record{
+					Ref:    facts.Ref("A", host.ID),
+					Kind:   "asset_parked",
+					Detail: assetretire.FormatParked(host),
+				}
+				if req.SubjectKind == "asset" && (req.Kind == "owner" || req.Kind == "policy") {
+					res.Records = append(res.Records, rec)
+				} else {
+					res.Context = append(res.Context, rec)
+				}
+			}
+		}
 		switch req.Kind {
 		case "owner":
 			match = append(match, fact.And(fact.AssetIDEQ(id), fact.KindEQ("asset_role")))
@@ -318,7 +410,18 @@ func Lookup(ctx context.Context, db *ent.Client, req Request, now time.Time) (*R
 		if f.Kind == "channel" && !facts.Covers(f.Subject, req.Subject) {
 			continue
 		}
+		if req.SubjectKind == "key" && f.Kind == "key" && req.Kind != "owner" {
+			res.Context = append(res.Context, Record{
+				Ref:    facts.Ref("F", f.ID),
+				Kind:   "key_owner",
+				Detail: formatKeyFact(f),
+			})
+			continue
+		}
 		res.Facts = append(res.Facts, f)
+	}
+	if err := lookupPlatform(ctx, db, req, res); err != nil {
+		return nil, err
 	}
 	if req.SubjectKind == "change" {
 		if err := changeRecords(ctx, db, req, res); err != nil {

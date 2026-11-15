@@ -388,6 +388,66 @@ func (_u *AssetUpdate) ClearRetiredReason() *AssetUpdate {
 	return _u
 }
 
+// SetParkedAt sets the "parked_at" field.
+func (_u *AssetUpdate) SetParkedAt(v time.Time) *AssetUpdate {
+	_u.mutation.SetParkedAt(v)
+	return _u
+}
+
+// SetNillableParkedAt sets the "parked_at" field if the given value is not nil.
+func (_u *AssetUpdate) SetNillableParkedAt(v *time.Time) *AssetUpdate {
+	if v != nil {
+		_u.SetParkedAt(*v)
+	}
+	return _u
+}
+
+// ClearParkedAt clears the value of the "parked_at" field.
+func (_u *AssetUpdate) ClearParkedAt() *AssetUpdate {
+	_u.mutation.ClearParkedAt()
+	return _u
+}
+
+// SetParkedBy sets the "parked_by" field.
+func (_u *AssetUpdate) SetParkedBy(v string) *AssetUpdate {
+	_u.mutation.SetParkedBy(v)
+	return _u
+}
+
+// SetNillableParkedBy sets the "parked_by" field if the given value is not nil.
+func (_u *AssetUpdate) SetNillableParkedBy(v *string) *AssetUpdate {
+	if v != nil {
+		_u.SetParkedBy(*v)
+	}
+	return _u
+}
+
+// ClearParkedBy clears the value of the "parked_by" field.
+func (_u *AssetUpdate) ClearParkedBy() *AssetUpdate {
+	_u.mutation.ClearParkedBy()
+	return _u
+}
+
+// SetParkedReason sets the "parked_reason" field.
+func (_u *AssetUpdate) SetParkedReason(v string) *AssetUpdate {
+	_u.mutation.SetParkedReason(v)
+	return _u
+}
+
+// SetNillableParkedReason sets the "parked_reason" field if the given value is not nil.
+func (_u *AssetUpdate) SetNillableParkedReason(v *string) *AssetUpdate {
+	if v != nil {
+		_u.SetParkedReason(*v)
+	}
+	return _u
+}
+
+// ClearParkedReason clears the value of the "parked_reason" field.
+func (_u *AssetUpdate) ClearParkedReason() *AssetUpdate {
+	_u.mutation.ClearParkedReason()
+	return _u
+}
+
 // SetHealthProblem sets the "health_problem" field.
 func (_u *AssetUpdate) SetHealthProblem(v string) *AssetUpdate {
 	_u.mutation.SetHealthProblem(v)
@@ -1127,6 +1187,24 @@ func (_u *AssetUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.RetiredReasonCleared() {
 		_spec.ClearField(asset.FieldRetiredReason, field.TypeString)
 	}
+	if value, ok := _u.mutation.ParkedAt(); ok {
+		_spec.SetField(asset.FieldParkedAt, field.TypeTime, value)
+	}
+	if _u.mutation.ParkedAtCleared() {
+		_spec.ClearField(asset.FieldParkedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ParkedBy(); ok {
+		_spec.SetField(asset.FieldParkedBy, field.TypeString, value)
+	}
+	if _u.mutation.ParkedByCleared() {
+		_spec.ClearField(asset.FieldParkedBy, field.TypeString)
+	}
+	if value, ok := _u.mutation.ParkedReason(); ok {
+		_spec.SetField(asset.FieldParkedReason, field.TypeString, value)
+	}
+	if _u.mutation.ParkedReasonCleared() {
+		_spec.ClearField(asset.FieldParkedReason, field.TypeString)
+	}
 	if value, ok := _u.mutation.HealthProblem(); ok {
 		_spec.SetField(asset.FieldHealthProblem, field.TypeString, value)
 	}
@@ -1812,6 +1890,66 @@ func (_u *AssetUpdateOne) SetNillableRetiredReason(v *string) *AssetUpdateOne {
 // ClearRetiredReason clears the value of the "retired_reason" field.
 func (_u *AssetUpdateOne) ClearRetiredReason() *AssetUpdateOne {
 	_u.mutation.ClearRetiredReason()
+	return _u
+}
+
+// SetParkedAt sets the "parked_at" field.
+func (_u *AssetUpdateOne) SetParkedAt(v time.Time) *AssetUpdateOne {
+	_u.mutation.SetParkedAt(v)
+	return _u
+}
+
+// SetNillableParkedAt sets the "parked_at" field if the given value is not nil.
+func (_u *AssetUpdateOne) SetNillableParkedAt(v *time.Time) *AssetUpdateOne {
+	if v != nil {
+		_u.SetParkedAt(*v)
+	}
+	return _u
+}
+
+// ClearParkedAt clears the value of the "parked_at" field.
+func (_u *AssetUpdateOne) ClearParkedAt() *AssetUpdateOne {
+	_u.mutation.ClearParkedAt()
+	return _u
+}
+
+// SetParkedBy sets the "parked_by" field.
+func (_u *AssetUpdateOne) SetParkedBy(v string) *AssetUpdateOne {
+	_u.mutation.SetParkedBy(v)
+	return _u
+}
+
+// SetNillableParkedBy sets the "parked_by" field if the given value is not nil.
+func (_u *AssetUpdateOne) SetNillableParkedBy(v *string) *AssetUpdateOne {
+	if v != nil {
+		_u.SetParkedBy(*v)
+	}
+	return _u
+}
+
+// ClearParkedBy clears the value of the "parked_by" field.
+func (_u *AssetUpdateOne) ClearParkedBy() *AssetUpdateOne {
+	_u.mutation.ClearParkedBy()
+	return _u
+}
+
+// SetParkedReason sets the "parked_reason" field.
+func (_u *AssetUpdateOne) SetParkedReason(v string) *AssetUpdateOne {
+	_u.mutation.SetParkedReason(v)
+	return _u
+}
+
+// SetNillableParkedReason sets the "parked_reason" field if the given value is not nil.
+func (_u *AssetUpdateOne) SetNillableParkedReason(v *string) *AssetUpdateOne {
+	if v != nil {
+		_u.SetParkedReason(*v)
+	}
+	return _u
+}
+
+// ClearParkedReason clears the value of the "parked_reason" field.
+func (_u *AssetUpdateOne) ClearParkedReason() *AssetUpdateOne {
+	_u.mutation.ClearParkedReason()
 	return _u
 }
 
@@ -2583,6 +2721,24 @@ func (_u *AssetUpdateOne) sqlSave(ctx context.Context) (_node *Asset, err error)
 	}
 	if _u.mutation.RetiredReasonCleared() {
 		_spec.ClearField(asset.FieldRetiredReason, field.TypeString)
+	}
+	if value, ok := _u.mutation.ParkedAt(); ok {
+		_spec.SetField(asset.FieldParkedAt, field.TypeTime, value)
+	}
+	if _u.mutation.ParkedAtCleared() {
+		_spec.ClearField(asset.FieldParkedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.ParkedBy(); ok {
+		_spec.SetField(asset.FieldParkedBy, field.TypeString, value)
+	}
+	if _u.mutation.ParkedByCleared() {
+		_spec.ClearField(asset.FieldParkedBy, field.TypeString)
+	}
+	if value, ok := _u.mutation.ParkedReason(); ok {
+		_spec.SetField(asset.FieldParkedReason, field.TypeString, value)
+	}
+	if _u.mutation.ParkedReasonCleared() {
+		_spec.ClearField(asset.FieldParkedReason, field.TypeString)
 	}
 	if value, ok := _u.mutation.HealthProblem(); ok {
 		_spec.SetField(asset.FieldHealthProblem, field.TypeString, value)

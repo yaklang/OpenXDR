@@ -59,7 +59,7 @@ func (w *Watcher) Run(ctx context.Context) {
 func (w *Watcher) sweep(ctx context.Context, now time.Time) error {
 	deadline := now.Add(-w.SilentAfter)
 	silent, err := w.DB.Asset.Query().
-		Where(asset.AgentIDNotNil(), asset.SilentSinceIsNil(), asset.LastSeenLT(deadline)).
+		Where(asset.AgentIDNotNil(), asset.RetiredAtIsNil(), asset.ParkedAtIsNil(), asset.SilentSinceIsNil(), asset.LastSeenLT(deadline)).
 		Order(ent.Asc(asset.FieldHostname)).All(ctx)
 	if err != nil {
 		return err

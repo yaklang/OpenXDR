@@ -152,7 +152,7 @@ func dangerous(path string) bool {
 func (w *Watch) silentCores(ctx context.Context) error {
 	now := w.now()
 	assets, err := w.DB.Asset.Query().
-		Where(entasset.AgentIDNotNil(), entasset.LastSeenLT(now.Add(-silentAfter))).
+		Where(entasset.AgentIDNotNil(), entasset.RetiredAtIsNil(), entasset.ParkedAtIsNil(), entasset.LastSeenLT(now.Add(-silentAfter))).
 		All(ctx)
 	if err != nil {
 		return err

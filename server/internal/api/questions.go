@@ -117,6 +117,10 @@ func registerQuestionRoutes(mux *http.ServeMux, db *ent.Client) {
 		if status == "" {
 			status = "open"
 		}
+		if !slices.Contains([]string{"open", "answered", "voided"}, status) {
+			http.Error(w, "status 只能是 open / answered / voided", http.StatusBadRequest)
+			return
+		}
 		order := ent.Asc(question.FieldCreatedAt)
 		if status != "open" {
 			order = ent.Desc(question.FieldAnsweredAt)

@@ -114,7 +114,9 @@ func Claim(ctx context.Context, db *ent.Client, session *ent.AgentSession, now t
 	}
 	claimed := make([]*ent.Finding, 0, len(rows))
 	for _, f := range rows {
-		allowed, err := tx.Asset.Query().Where(asset.IDEQ(f.AssetID), asset.GroupIDEQ(session.GroupID)).Exist(ctx)
+		allowed, err := tx.Asset.Query().
+			Where(asset.IDEQ(f.AssetID), asset.GroupIDEQ(session.GroupID), asset.RetiredAtIsNil(), asset.ParkedAtIsNil()).
+			Exist(ctx)
 		if err != nil {
 			return nil, err
 		}

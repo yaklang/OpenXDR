@@ -53,6 +53,11 @@ func (Asset) Fields() []ent.Field {
 		field.Time("retired_at").Optional().Nillable(),
 		field.String("retired_by").Optional().Nillable(),
 		field.Text("retired_reason").Optional().Nillable(),
+		// 停机保留：管理员确认主机按计划关机保留（测试机按需开机等），静默/失联类检测与待办不再为它产生、
+		// Pi 不再跟进它，取消后恢复；与下线不同，agent 证书与 agent_id 保留，列表照常可见
+		field.Time("parked_at").Optional().Nillable(),
+		field.String("parked_by").Optional().Nillable(),
+		field.Text("parked_reason").Optional().Nillable(),
 		// 采集健康通知：已通知过的问题签名（降级的采集器、缓存写不进、丢事件），变了才再通知，恢复后清空
 		field.String("health_problem").Optional().Nillable(),
 		// 上一轮看到的丢弃累计数与最后一次超过阈值的时刻：丢事件是一阵一阵的，超阈值后持续一小时才算恢复

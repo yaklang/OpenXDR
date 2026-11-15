@@ -251,6 +251,48 @@ func (_c *AssetCreate) SetNillableRetiredReason(v *string) *AssetCreate {
 	return _c
 }
 
+// SetParkedAt sets the "parked_at" field.
+func (_c *AssetCreate) SetParkedAt(v time.Time) *AssetCreate {
+	_c.mutation.SetParkedAt(v)
+	return _c
+}
+
+// SetNillableParkedAt sets the "parked_at" field if the given value is not nil.
+func (_c *AssetCreate) SetNillableParkedAt(v *time.Time) *AssetCreate {
+	if v != nil {
+		_c.SetParkedAt(*v)
+	}
+	return _c
+}
+
+// SetParkedBy sets the "parked_by" field.
+func (_c *AssetCreate) SetParkedBy(v string) *AssetCreate {
+	_c.mutation.SetParkedBy(v)
+	return _c
+}
+
+// SetNillableParkedBy sets the "parked_by" field if the given value is not nil.
+func (_c *AssetCreate) SetNillableParkedBy(v *string) *AssetCreate {
+	if v != nil {
+		_c.SetParkedBy(*v)
+	}
+	return _c
+}
+
+// SetParkedReason sets the "parked_reason" field.
+func (_c *AssetCreate) SetParkedReason(v string) *AssetCreate {
+	_c.mutation.SetParkedReason(v)
+	return _c
+}
+
+// SetNillableParkedReason sets the "parked_reason" field if the given value is not nil.
+func (_c *AssetCreate) SetNillableParkedReason(v *string) *AssetCreate {
+	if v != nil {
+		_c.SetParkedReason(*v)
+	}
+	return _c
+}
+
 // SetHealthProblem sets the "health_problem" field.
 func (_c *AssetCreate) SetHealthProblem(v string) *AssetCreate {
 	_c.mutation.SetHealthProblem(v)
@@ -743,6 +785,18 @@ func (_c *AssetCreate) createSpec() (*Asset, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.RetiredReason(); ok {
 		_spec.SetField(asset.FieldRetiredReason, field.TypeString, value)
 		_node.RetiredReason = &value
+	}
+	if value, ok := _c.mutation.ParkedAt(); ok {
+		_spec.SetField(asset.FieldParkedAt, field.TypeTime, value)
+		_node.ParkedAt = &value
+	}
+	if value, ok := _c.mutation.ParkedBy(); ok {
+		_spec.SetField(asset.FieldParkedBy, field.TypeString, value)
+		_node.ParkedBy = &value
+	}
+	if value, ok := _c.mutation.ParkedReason(); ok {
+		_spec.SetField(asset.FieldParkedReason, field.TypeString, value)
+		_node.ParkedReason = &value
 	}
 	if value, ok := _c.mutation.HealthProblem(); ok {
 		_spec.SetField(asset.FieldHealthProblem, field.TypeString, value)

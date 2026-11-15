@@ -169,6 +169,8 @@ func Handler(db *ent.Client, conn *stdsql.DB, rules sigma.Catalog, hub *response
 	mux.HandleFunc("GET /api/assets", listAssets(db))
 	mux.HandleFunc("POST /api/assets/{id}/retire", retireAsset(db, true))
 	mux.HandleFunc("POST /api/assets/{id}/restore", retireAsset(db, false))
+	mux.HandleFunc("POST /api/assets/{id}/park", parkAsset(db, true))
+	mux.HandleFunc("POST /api/assets/{id}/unpark", parkAsset(db, false))
 	mux.HandleFunc("POST /api/assets/export", exportAssets(db))
 	return mux
 }
@@ -498,11 +500,15 @@ func listAssets(db *ent.Client) http.HandlerFunc {
 			RetiredAt     *time.Time `json:"retiredAt"`
 			RetiredBy     *string    `json:"retiredBy"`
 			RetiredReason *string    `json:"retiredReason"`
+			// 停机保留：管理员确认按计划关机保留，没设时为空
+			ParkedAt     *time.Time `json:"parkedAt"`
+			ParkedBy     *string    `json:"parkedBy"`
+			ParkedReason *string    `json:"parkedReason"`
 		}
 		out := make([]assetRow, len(assets))
 		for i, a := range assets {
 			out[i] = assetRow{a.ID, a.Hostname, a.Os, a.IPAddrs, a.AgentID, a.FirstSeen, a.LastSeen, a.GroupID, a.SilentSince, a.AgentVersion, a.CollectorHealth,
-				a.SensorVersion, a.SensorSeen, a.SensorHealth, a.RetiredAt, a.RetiredBy, a.RetiredReason}
+				a.SensorVersion, a.SensorSeen, a.SensorHealth, a.RetiredAt, a.RetiredBy, a.RetiredReason, a.ParkedAt, a.ParkedBy, a.ParkedReason}
 		}
 		writeJSON(w, out)
 	}

@@ -19,7 +19,7 @@ import { useI18n } from '../i18n'
 
 // 心跳超过 5 分钟视为失联——agent 掉线本身就是值得注意的信号
 const UNGROUPED = '__none__'
-const STATE_ORDER: Record<ReturnType<typeof hostState>, number> = { silent: 1, stale: 2, imported: 3, online: 4, retired: 5 }
+const STATE_ORDER: Record<ReturnType<typeof hostState>, number> = { silent: 1, stale: 2, imported: 3, online: 4, parked: 5, retired: 6 }
 
 function assetSource(a: Asset): 'agent' | 'sensor' | 'imported' | 'log' {
   if (a.agentId) return 'agent'
@@ -144,6 +144,7 @@ export function AssetsPage() {
                 { value: 'online', label: t('online') },
                 { value: 'stale', label: t('stale') },
                 { value: 'silent', label: t('silent') },
+                { value: 'parked', label: t('hostParked') },
                 { value: 'imported', label: t('hostNotEnrolled') },
                 { value: 'retired', label: t('hostRetired') },
               ]}

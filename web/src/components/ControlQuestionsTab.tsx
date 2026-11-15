@@ -26,19 +26,37 @@ function useSentence() {
 // 待答问题：按主题合并的卡片，证据（含攻击者可控原文）只在展开后显示；只有平台管理员能作答，没有批量同意
 export function ControlQuestionsTab() {
   const { t } = useI18n()
-  const [view, setView] = useState<'open' | 'answered'>('open')
+  const [view, setView] = useState<'open' | 'answered' | 'voided'>('open')
   const open = useQuery({ queryKey: ['questions', 'open'], queryFn: () => fetchQuestions('open') })
   const answered = useQuery({ queryKey: ['questions', 'answered'], queryFn: () => fetchQuestions('answered'), enabled: view === 'answered' })
-  const current = view === 'open' ? open : answered
+  const voided = useQuery({ queryKey: ['questions', 'voided'], queryFn: () => fetchQuestions('voided'), enabled: view === 'voided' })
+  const current = view === 'open' ? open : view === 'answered' ? answered : voided
   if (current.isError) return <LoadError error={current.error} onRetry={() => current.refetch()} />
   return (
     <Flex vertical gap={14}>
       <Typography.Text type="secondary">{t('questionsHint')}</Typography.Text>
-      <Segmented value={view} onChange={v => setView(v as 'open' | 'answered')} style={{ alignSelf: 'flex-start' }}
-        options={[{ value: 'open', label: `${t('questionsOpen')} ${open.data?.length ?? ''}` }, { value: 'answered', label: t('questionsAnswered') }]} />
+      <Segmented value={view} onChange={v => setView(v as 'open' | 'answered' | 'voided')} style={{ alignSelf: 'flex-start' }}
+        options={[
+          { value: 'open', label: `${t('questionsOpen')} ${open.data?.length ?? ''}` },
+          { value: 'answered', label: t('questionsAnswered') },
+          { value: 'voided', label: t('questionsVoided') },
+        ]} />
       {view === 'open'
         ? <OpenList rows={open.data ?? []} loading={open.isPending} />
-        : <AnsweredTable rows={answered.data ?? []} loading={answered.isPending} />}
+        : view === 'answered'
+          ? <AnsweredTable rows={answered.data ?? []} loading={answered.isPending} />
+          : <VoidedList rows={voided.data ?? []} loading={voided.isPending} />}
+    </Flex>
+  )
+}
+
+function VoidedList({ rows, loading }: { rows: Question[]; loading: boolean }) {
+  const { t } = useI18n()
+  if (loading) return <Card loading />
+  if (rows.length === 0) return <EmptyHint title={t('questionsVoidedEmpty')} />
+  return (
+    <Flex vertical gap={12}>
+      {rows.map(q => <QuestionCard key={q.id} q={q} />)}
     </Flex>
   )
 }
@@ -70,7 +88,13 @@ function OpenList({ rows, loading }: { rows: Question[]; loading: boolean }) {
   )
 }
 
-function QuestionCard({ q, onAnswer }: { q: Question; onAnswer: () => void }) {
+function voidedLabel(q: Question, t: (k: MsgKey) => string): string {
+  if (q.answer?.choice === 'voided_resolved') return t('questionVoided_resolved')
+  if (q.answer?.choice === 'voided_retired') return t('questionVoided_retired')
+  return t('questionsVoided')
+}
+
+function QuestionCard({ q, onAnswer }: { q: Question; onAnswer?: () => void }) {
   const { t } = useI18n()
   const { isAdmin } = useSession()
   const sentence = useSentence()
@@ -82,15 +106,19 @@ function QuestionCard({ q, onAnswer }: { q: Question; onAnswer: () => void }) {
           <Space size={6} wrap>
             <Tag className="mono">{q.ref}</Tag>
             <Tag color={KIND_COLORS[q.kind]}>{t(`questionKind_${q.kind}` as MsgKey)}</Tag>
+            {q.status === 'voided' && <Tag>{voidedLabel(q, t)}</Tag>}
             <Typography.Text strong>{sentence(q)}</Typography.Text>
           </Space>
+          {q.status === 'voided' && q.answer?.content && q.answer.choice !== 'voided_resolved' && (
+            <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>{q.answer.content}</Typography.Text>
+          )}
           <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>
-            {t('questionImpact', { incidents: q.incidentCount, findings: q.findingCount, asked: q.askedCount })} · <Ago iso={q.updatedAt} />
+            {t('questionImpact', { incidents: q.incidentCount, findings: q.findingCount, asked: q.askedCount })} · <Ago iso={q.answeredAt ?? q.updatedAt} />
           </Typography.Text>
         </Flex>
         <Space>
           <Button size="small" onClick={() => setExpanded(v => !v)}>{expanded ? t('questionCollapse') : t('questionEvidence')}</Button>
-          {isAdmin && <Button size="small" type="primary" onClick={onAnswer}>{t('questionAnswer')}</Button>}
+          {isAdmin && q.status === 'open' && onAnswer && <Button size="small" type="primary" onClick={onAnswer}>{t('questionAnswer')}</Button>}
         </Space>
       </Flex>
       {expanded && <QuestionEvidence id={q.id} />}
@@ -263,6 +291,11 @@ function AnsweredTable({ rows, loading }: { rows: Question[]; loading: boolean }
                 {q.subjectKind === 'domain' && <Tag>{q.answer?.scope ? t('questionScopeTree', { domain: q.answer.scope }) : t('questionScopeExact', { host: q.subject })}</Tag>}
                 {q.factRef && <RefTag value={q.factRef} />}
                 {q.ruleRef && <RefTag value={q.ruleRef} />}
+                {!q.factRef && !q.ruleRef && q.answer?.content && (
+                  <Typography.Text type="secondary" ellipsis={{ tooltip: q.answer.content }} style={{ fontSize: 12, maxWidth: 220 }}>
+                    {q.answer.content}
+                  </Typography.Text>
+                )}
                 {q.answer?.expiresAt && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t('questionUntil', { at: fmtTime(q.answer.expiresAt) })}</Typography.Text>}
               </Space>
             ),

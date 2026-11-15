@@ -107,7 +107,7 @@ func signature(ps []problem) string {
 
 func (w *Watcher) sweepHealth(ctx context.Context, now time.Time) error {
 	assets, err := w.DB.Asset.Query().
-		Where(asset.AgentIDNotNil(), asset.SilentSinceIsNil(), asset.CollectorHealthNotNil()).
+		Where(asset.AgentIDNotNil(), asset.RetiredAtIsNil(), asset.ParkedAtIsNil(), asset.SilentSinceIsNil(), asset.CollectorHealthNotNil()).
 		Order(ent.Asc(asset.FieldHostname)).All(ctx)
 	if err != nil {
 		return err
@@ -245,7 +245,7 @@ func sensorProblems(raw []byte, now time.Time) []problem {
 
 // sweepSensorHealth 探针状态与 agent 采集状态走同一条「主机采集异常」通知，签名分开记。
 func (w *Watcher) sweepSensorHealth(ctx context.Context, now time.Time) error {
-	assets, err := w.DB.Asset.Query().Where(asset.SensorHealthNotNil()).
+	assets, err := w.DB.Asset.Query().Where(asset.RetiredAtIsNil(), asset.ParkedAtIsNil(), asset.SensorHealthNotNil()).
 		Order(ent.Asc(asset.FieldHostname)).All(ctx)
 	if err != nil {
 		return err

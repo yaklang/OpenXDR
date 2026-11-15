@@ -144,7 +144,7 @@ func (r *Runner) Tick(ctx context.Context) error {
 				continue
 			}
 			a, err := r.DB.Asset.Get(ctx, f.AssetID)
-			if err != nil || a.RetiredAt != nil || a.GroupID == nil || *a.GroupID != f.GroupID || a.Os == nil || !strings.EqualFold(*a.Os, "linux") {
+			if err != nil || a.RetiredAt != nil || a.ParkedAt != nil || a.GroupID == nil || *a.GroupID != f.GroupID || a.Os == nil || !strings.EqualFold(*a.Os, "linux") {
 				continue
 			}
 			usedHost, err := r.dispatch(ctx, latest, f, a)

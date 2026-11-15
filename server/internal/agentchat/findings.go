@@ -89,12 +89,20 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 	case body.Resolution != "subsided" && len(body.RecurrenceRules) > 0:
 		return "", errors.New("recurrence_rules 只用于 resolution=subsided")
 	}
-	inGroup, err := s.DB.Asset.Query().Where(asset.IDEQ(body.Host), asset.GroupIDEQ(session.GroupID)).Exist(ctx)
+	host, err := s.DB.Asset.Query().Where(asset.IDEQ(body.Host), asset.GroupIDEQ(session.GroupID)).Only(ctx)
+	if ent.IsNotFound(err) {
+		return "", errors.New("主机不在本组")
+	}
 	if err != nil {
 		return "", err
 	}
-	if !inGroup {
-		return "", errors.New("主机不在本组")
+	if body.Status == "open" {
+		if host.RetiredAt != nil {
+			return marshal(map[string]any{"status": "skipped", "reason": "主机已退役，不登记或重开运维待办"})
+		}
+		if host.ParkedAt != nil {
+			return marshal(map[string]any{"status": "skipped", "reason": "主机已由管理员设为停机保留，不再产生或跟进待办"})
+		}
 	}
 	f, err := s.DB.Finding.Query().
 		Where(finding.GroupIDEQ(session.GroupID), finding.AssetIDEQ(body.Host), finding.KeyEQ(body.Key)).
@@ -244,6 +252,12 @@ const recentResolvedWindow = 30 * 24 * time.Hour
 // findingsFor 本组遗留待办、人工忽略的待办，以及近期人工结案并附说明的待办。
 func (s *Service) findingsFor(ctx context.Context, group uuid.UUID, hostnames map[uuid.UUID]string) (open, ignored, resolved []findingBrief, err error) {
 	open, ignored, resolved = []findingBrief{}, []findingBrief{}, []findingBrief{}
+	inactive, err := s.DB.Asset.Query().
+		Where(asset.GroupIDEQ(group), asset.Or(asset.RetiredAtNotNil(), asset.ParkedAtNotNil())).
+		IDs(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	for _, status := range []string{"open", "ignored"} {
 		rows, err := s.DB.Finding.Query().Where(finding.GroupIDEQ(group), finding.StatusEQ(status)).
 			Order(ent.Desc(finding.FieldLastSeen)).Limit(100).All(ctx)
@@ -251,6 +265,9 @@ func (s *Service) findingsFor(ctx context.Context, group uuid.UUID, hostnames ma
 			return nil, nil, nil, err
 		}
 		for _, f := range rows {
+			if status == "open" && slices.Contains(inactive, f.AssetID) {
+				continue
+			}
 			b := findingBrief{ID: f.ID, Host: f.AssetID, Hostname: hostnames[f.AssetID], Key: f.Key, Title: f.Title}
 			if status == "open" {
 				b.Severity, b.FirstSeen = f.Severity, f.FirstSeen.Format(time.DateOnly)

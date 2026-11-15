@@ -113,7 +113,9 @@ func RefreshWake(ctx context.Context, db *ent.Client, group uuid.UUID, now time.
 		return err
 	}
 	for _, f := range rows {
-		owned, err := db.Asset.Query().Where(asset.IDEQ(f.AssetID), asset.GroupIDEQ(group)).Exist(ctx)
+		owned, err := db.Asset.Query().
+			Where(asset.IDEQ(f.AssetID), asset.GroupIDEQ(group), asset.RetiredAtIsNil(), asset.ParkedAtIsNil()).
+			Exist(ctx)
 		if err != nil {
 			return err
 		}

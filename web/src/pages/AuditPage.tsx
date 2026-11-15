@@ -140,6 +140,14 @@ const ACTION: Record<string, { key: MsgKey; color?: string }> = {
   trusted_source_created: { key: 'actTrustedSourceCreated', color: 'cyan' },
   trusted_source_revoked: { key: 'actTrustedSourceRevoked', color: 'orange' },
   trusted_source_deleted: { key: 'actTrustedSourceDeleted' },
+  asset_retired: { key: 'actAssetRetired', color: 'orange' },
+  asset_restored: { key: 'actAssetRestored', color: 'cyan' },
+  asset_parked: { key: 'actAssetParked', color: 'blue' },
+  asset_unparked: { key: 'actAssetUnparked', color: 'cyan' },
+  question_created: { key: 'actQuestionCreated', color: 'gold' },
+  question_answered: { key: 'actQuestionAnswered', color: 'blue' },
+  question_voided: { key: 'actQuestionVoided' },
+  controller_answered: { key: 'actControllerAnswered', color: 'green' },
 }
 
 // 平台自身的操作者：审计里记的是身份代码，界面显示可读名称，悬停可看原值
@@ -149,6 +157,7 @@ const ACTOR: Record<string, MsgKey> = {
   'system:closure-review': 'actorClosureReview',
   'system:containment': 'actorContainment',
   'system:maintenance': 'actorMaintenance',
+  'system:asset_retire': 'actorAssetRetire',
 }
 
 export function AuditPage() {

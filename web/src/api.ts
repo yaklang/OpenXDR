@@ -503,12 +503,18 @@ export interface Asset {
   retiredAt?: string | null
   retiredBy?: string | null
   retiredReason?: string | null
+  // 停机保留：管理员确认按计划关机保留，没设时为空
+  parkedAt?: string | null
+  parkedBy?: string | null
+  parkedReason?: string | null
 }
 
 // 下线的主机默认不列出；retired 为 true 时连同它们一起
 export const fetchAssets = (retired = false) => get<Asset[]>(`/api/assets${retired ? '?retired=1' : ''}`)
 export const retireAsset = (id: string, reason: string) => send('POST', `/api/assets/${id}/retire`, { reason })
 export const restoreAsset = (id: string) => send('POST', `/api/assets/${id}/restore`)
+export const parkAsset = (id: string, reason: string) => send('POST', `/api/assets/${id}/park`, { reason })
+export const unparkAsset = (id: string) => send('POST', `/api/assets/${id}/unpark`)
 
 export interface TemporalGap {
   revision: string
@@ -1061,7 +1067,7 @@ export interface Question {
   subjectKind: QuestionSubjectKind
   subject: string
   subjectLabel: string
-  status: 'open' | 'answered'
+  status: 'open' | 'answered' | 'voided'
   incidentCount: number
   findingCount: number
   askedCount: number
@@ -1090,7 +1096,7 @@ export interface QuestionDetail extends Question {
   incidents: { id: string; title: string; status: string }[]
   findings: { id: string; title: string; hostname: string; status: string }[]
 }
-export const fetchQuestions = (status: 'open' | 'answered' = 'open') => get<Question[]>(`/api/questions?status=${status}`)
+export const fetchQuestions = (status: 'open' | 'answered' | 'voided' = 'open') => get<Question[]>(`/api/questions?status=${status}`)
 export const fetchQuestion = (id: string) => get<QuestionDetail>(`/api/questions/${encodeURIComponent(id)}`)
 export async function answerQuestion(id: string, body: {
   choice: string

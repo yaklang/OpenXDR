@@ -128,3 +128,100 @@ func TestQuestionsAPI(t *testing.T) {
 		t.Fatalf("选规矩与档位：%d", code)
 	}
 }
+
+func TestVoidedQuestionsAndAssetParkAPI(t *testing.T) {
+	ctx, client := testdb.New(t)
+	g := client.Group.Create().SetName("lab").SaveX(ctx)
+	host := client.Asset.Create().SetHostname("TESTSRV").SetGroupID(g.ID).SaveX(ctx)
+	admin := client.User.Create().SetUsername("root").SetPasswordHash("x").SetRole("admin").SaveX(ctx)
+	analyst := client.User.Create().SetUsername("analyst").SetPasswordHash("x").SetRole("analyst").SaveX(ctx)
+	client.GroupMember.Create().SetGroupID(g.ID).SetUserID(analyst.ID).SetRole("analyst").SaveX(ctx)
+
+	now := time.Now().UTC()
+	fResolved := client.Finding.Create().SetGroupID(g.ID).SetAssetID(host.ID).SetKey("collect:silent").SetTitle("静默").
+		SetStatus("resolved").SetResolvedAt(now.Add(-2 * time.Hour)).SetResolvedBy("system").SaveX(ctx)
+	staleQ := client.Question.Create().SetKind("owner").SetSubjectKind("ip").SetSubject("198.51.100.99").
+		SetGroupIds([]uuid.UUID{g.ID}).SetFindingIds([]uuid.UUID{fResolved.ID}).
+		SetStatus("open").SetCreatedBy("system").SetCreatedAt(now.Add(-26 * time.Hour)).SetUpdatedAt(now.Add(-26 * time.Hour)).SaveX(ctx)
+	if n, err := questions.VoidSweep(ctx, client, now); err != nil || n != 1 {
+		t.Fatalf("VoidSweep: n=%d err=%v", n, err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/api/questions", Control(client, nil))
+	mux.Handle("/api/questions/", Control(client, nil))
+	mux.Handle("/api/assets", Handler(client, nil, nil, nil, nil, nil, nil))
+	mux.Handle("/api/assets/", Handler(client, nil, nil, nil, nil, nil, nil))
+
+	asAdmin := httptest.NewServer(as(admin, mux))
+	t.Cleanup(asAdmin.Close)
+	asAnalyst := httptest.NewServer(as(analyst, mux))
+	t.Cleanup(asAnalyst.Close)
+
+	post := func(s *httptest.Server, path, body string) int {
+		t.Helper()
+		resp, err := http.Post(s.URL+path, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// 1. ?status=voided 返回已作废问题，非法 status 返回 400
+	resp, err := http.Get(asAdmin.URL + "/api/questions?status=voided")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var voidedRows []questionRow
+	_ = json.NewDecoder(resp.Body).Decode(&voidedRows)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || len(voidedRows) != 1 || voidedRows[0].ID != staleQ.ID || voidedRows[0].Answer == nil || voidedRows[0].Answer.Choice != "voided_resolved" {
+		t.Fatalf("GET /api/questions?status=voided 返回异常：code=%d rows=%+v", resp.StatusCode, voidedRows)
+	}
+	badResp, err := http.Get(asAdmin.URL + "/api/questions?status=invalid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("非法 status 应返回 400：%d", badResp.StatusCode)
+	}
+
+	// 2. 停机保留仅管理员可操作，原因必填，GET /api/assets 返回停机保留元数据，取消后恢复
+	if code := post(asAnalyst, "/api/assets/"+host.ID.String()+"/park", `{"reason":"测试关机"}`); code != http.StatusForbidden {
+		t.Fatalf("非管理员不应允许设置停机保留：%d", code)
+	}
+	if code := post(asAdmin, "/api/assets/"+host.ID.String()+"/park", `{"reason":"  "}`); code != http.StatusBadRequest {
+		t.Fatalf("空原因应返回 400：%d", code)
+	}
+	if code := post(asAdmin, "/api/assets/"+host.ID.String()+"/park", `{"reason":"测试机平时关机保留"}`); code != http.StatusOK {
+		t.Fatalf("管理员设置停机保留应成功：%d", code)
+	}
+	if code := post(asAdmin, "/api/assets/"+host.ID.String()+"/park", `{"reason":"重复"}`); code != http.StatusConflict {
+		t.Fatalf("重复设置停机保留应返回 409：%d", code)
+	}
+
+	aResp, err := http.Get(asAdmin.URL + "/api/assets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var assets []struct {
+		ID           uuid.UUID  `json:"id"`
+		ParkedAt     *time.Time `json:"parkedAt"`
+		ParkedBy     *string    `json:"parkedBy"`
+		ParkedReason *string    `json:"parkedReason"`
+	}
+	_ = json.NewDecoder(aResp.Body).Decode(&assets)
+	aResp.Body.Close()
+	if len(assets) != 1 || assets[0].ParkedAt == nil || assets[0].ParkedBy == nil || *assets[0].ParkedBy != "root" || assets[0].ParkedReason == nil || *assets[0].ParkedReason != "测试机平时关机保留" {
+		t.Fatalf("GET /api/assets 应返回停机保留字段：%+v", assets)
+	}
+
+	if code := post(asAnalyst, "/api/assets/"+host.ID.String()+"/unpark", `{}`); code != http.StatusForbidden {
+		t.Fatalf("非管理员不应允许取消停机保留：%d", code)
+	}
+	if code := post(asAdmin, "/api/assets/"+host.ID.String()+"/unpark", `{}`); code != http.StatusOK {
+		t.Fatalf("管理员取消停机保留应成功：%d", code)
+	}
+}
