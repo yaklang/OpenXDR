@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"maps"
 	"time"
 
@@ -16,6 +15,14 @@ import (
 
 // MaxLineageHops 沿 parent_process_guid 最多向上追几跳祖先进程
 const MaxLineageHops = 8
+
+// LineageLookback 进程血缘查询的 ts 下限窗口。
+// events 按天分区（生产常驻数十个日分区），缺 ts 下限无法做分区裁剪，每跳都会探测全部分区索引。
+// 良性链里的中间作业（apt.systemd.daily、PBS 备份、GitHub Actions 单次 Runner.Worker、构建脚本）
+// 生命周期均在分钟至数小时级（GitHub Actions 单 job 上限 6h），3 天足以覆盖全部中间跳且最多只扫 3～4 个日分区；
+// 常驻数周的顶层守护进程（Runner.Listener、pvedaemon、containerd-shim）早于该窗口时，不再往前扫旧分区，
+// 直接由最顶层已知事件内嵌的 parent_process 兜底一跳。
+const LineageLookback = 3 * 24 * time.Hour
 
 // RowQuerier 支持 *sql.DB 与 *sql.Tx 的最小查询接口
 type RowQuerier interface {
@@ -29,16 +36,14 @@ func ResolveLineage(ctx context.Context, q RowQuerier, assetID, parentGUID *uuid
 	if q == nil || assetID == nil || parentGUID == nil || *parentGUID == uuid.Nil {
 		return embedded
 	}
+	minTs := ts.Add(-LineageLookback)
 	return walkLineage(embedded, *parentGUID, func(guid uuid.UUID) (*uuid.UUID, []byte, bool) {
 		var next uuid.NullUUID
 		var rawBytes []byte
 		err := q.QueryRowContext(ctx, `SELECT parent_process_guid, raw FROM events
-WHERE asset_id = $1 AND process_guid = $2 AND class_uid = 1007 AND ts <= $3
-ORDER BY ts ASC LIMIT 1`, *assetID, guid, ts).Scan(&next, &rawBytes)
+WHERE asset_id = $1 AND process_guid = $2 AND class_uid = 1007 AND ts >= $4 AND ts <= $3
+ORDER BY ts ASC LIMIT 1`, *assetID, guid, ts, minTs).Scan(&next, &rawBytes)
 		if err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				return nil, nil, false
-			}
 			return nil, nil, false
 		}
 		var parent *uuid.UUID
@@ -56,12 +61,14 @@ func ResolveLineageEnt(ctx context.Context, db *ent.Client, assetID, parentGUID 
 	if db == nil || assetID == nil || parentGUID == nil || *parentGUID == uuid.Nil {
 		return embedded
 	}
+	minTs := ts.Add(-LineageLookback)
 	return walkLineage(embedded, *parentGUID, func(guid uuid.UUID) (*uuid.UUID, []byte, bool) {
 		ev, err := db.Event.Query().
 			Where(
 				event.AssetIDEQ(*assetID),
 				event.ProcessGUIDEQ(guid),
 				event.ClassUIDEQ(1007),
+				event.TsGTE(minTs),
 				event.TsLTE(ts),
 			).
 			Order(ent.Asc(event.FieldTs)).
