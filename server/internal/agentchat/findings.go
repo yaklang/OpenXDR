@@ -19,6 +19,7 @@ import (
 	"openxdr/server/ent/finding"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/auth"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
 )
@@ -114,7 +115,7 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 		return marshal(map[string]any{"id": f.ID, "status": "ignored", "note": f.Note})
 	case body.Status == "withdrawn":
 		// 只能撤回本轮新登记的；遗留待办要么复查修复，要么由人忽略
-		if f == nil || f.SessionID == nil || *f.SessionID != session.ID || f.FirstSeen.Before(session.CreatedAt) {
+		if f == nil || f.SessionID == nil || *f.SessionID != session.ID || f.FirstSeen.Before(session.CreatedAt.Add(-clockskew.Max)) {
 			return "", errors.New("只能撤回本轮新登记的待办")
 		}
 		if err := s.DB.Finding.DeleteOne(f).Exec(ctx); err != nil {
@@ -125,7 +126,7 @@ func (s *Service) track(ctx context.Context, session *ent.AgentSession, args jso
 		return "", errors.New("没有这条待办；已修复的问题不用登记")
 	case f == nil:
 		fresh, err := s.DB.Finding.Query().
-			Where(finding.SessionIDEQ(session.ID), finding.FirstSeenGTE(session.CreatedAt)).Count(ctx)
+			Where(finding.SessionIDEQ(session.ID), finding.FirstSeenGTE(session.CreatedAt.Add(-clockskew.Max))).Count(ctx)
 		if err != nil {
 			return "", err
 		}

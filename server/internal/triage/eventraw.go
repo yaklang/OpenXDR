@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"openxdr/server/ent"
 	entevent "openxdr/server/ent/event"
+	"openxdr/server/internal/clockskew"
 )
 
 const eventRawLimitBytes = 4096
@@ -29,8 +30,9 @@ func (e *Engine) toolEventRaw(ctx context.Context, args string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	until := time.Now().UTC()
-	since := until.Add(-eventRawWindow)
+	now := time.Now().UTC()
+	until := now.Add(clockskew.Max)
+	since := now.Add(-eventRawWindow)
 	ev, err := e.DB.Event.Query().Where(entevent.IDEQ(id), entevent.TsGTE(since), entevent.TsLTE(until), scope).WithAsset().Only(ctx)
 	if ent.IsNotFound(err) {
 		return nil, fmt.Errorf("事件不存在、不在本事件资产组内或已超出最近 168 小时热表范围；不代表未发生")

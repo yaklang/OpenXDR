@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,7 +23,31 @@ import (
 	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
+	"openxdr/server/internal/temporal"
 )
+
+var (
+	migratedMu        sync.Mutex
+	migratedDSN       string
+	loadRepoRulesOnce = sync.OnceValues(func() (*temporal.Store, error) {
+		root := filepath.Join("..", "..", "..")
+		store := &temporal.Store{}
+		if err := store.Reload(filepath.Join(root, "rules"), filepath.Join(root, "temporal-rules")); err != nil {
+			return nil, err
+		}
+		return store, nil
+	})
+)
+
+// repoTemporalStore 只读加载一次仓库全量规则快照，避免重放子用例重复编译上千条规则。
+func repoTemporalStore(t *testing.T) *temporal.Store {
+	t.Helper()
+	store, err := loadRepoRulesOnce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
 
 func testProcessor(t *testing.T) (*Processor, *ent.Client, *sql.DB) {
 	t.Helper()
@@ -36,16 +61,40 @@ func testProcessor(t *testing.T) (*Processor, *ent.Client, *sql.DB) {
 	}
 	client := ent.NewClient(ent.Driver(entsql.OpenDB(dialect.Postgres, db)))
 	ctx := context.Background()
-	if err := eventpart.Migrate(ctx, client, db); err != nil {
-		t.Fatal(err)
+	migratedMu.Lock()
+	needMigrate := migratedDSN != dsn
+	if needMigrate {
+		if err := eventpart.Migrate(ctx, client, db); err != nil {
+			migratedMu.Unlock()
+			t.Fatal(err)
+		}
+		if err := EnsureSchema(ctx, db); err != nil {
+			migratedMu.Unlock()
+			t.Fatal(err)
+		}
+		// 首次建库清表用 TRUNCATE CASCADE 清掉其他包遗留的外键记录；后续子用例改用 DELETE 避免每次重建上百个分区/索引文件。
+		if _, err := db.Exec(`TRUNCATE assetmap_queue, alert_dedup_state, alerts, events, assets, temporal_matches, lateral_evidence, temporal_candidates,
+			temporal_evaluation_gaps, temporal_detections, identity_observations, identity_local_snapshots, auth_events, auth_attempt_closures CASCADE`); err != nil {
+			migratedMu.Unlock()
+			t.Fatal(err)
+		}
+		migratedDSN = dsn
 	}
-	if err := EnsureSchema(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-	// 派生表不再有指向 events 的外键，TRUNCATE events CASCADE 带不走它们，要点名清
-	if _, err := db.Exec(`TRUNCATE assetmap_queue, alert_dedup_state, alerts, events, assets, temporal_matches, lateral_evidence, temporal_candidates,
- temporal_evaluation_gaps, temporal_detections, identity_observations, identity_local_snapshots, auth_events, auth_attempt_closures CASCADE`); err != nil {
-		t.Fatal(err)
+	migratedMu.Unlock()
+	if !needMigrate {
+		if _, err := eventpart.EnsureDays(ctx, db, eventpart.Parent, eventpart.Today(), eventpart.PremakeDays); err != nil {
+			t.Fatal(err)
+		}
+		for _, table := range []string{
+			"assetmap_queue", "alert_dedup_state", "temporal_matches", "lateral_evidence",
+			"temporal_candidates", "temporal_evaluation_gaps", "temporal_detections",
+			"identity_observations", "identity_local_snapshots", "auth_attempt_closures", "auth_events",
+			"alerts", "events", "commands", "suppressions", "process_baselines", "assets",
+		} {
+			if _, err := db.ExecContext(ctx, `DELETE FROM `+table); err != nil {
+				t.Fatalf("清空 %s: %v", table, err)
+			}
+		}
 	}
 	rules := sigma.LoadDir(t.TempDir())
 	return &Processor{DB: db, Rules: rules, Suppress: suppress.New(client, 0), Intel: intel.New(client, 0), DedupWindow: time.Hour}, client, db

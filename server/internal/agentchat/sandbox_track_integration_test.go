@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"openxdr/server/ent"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findingreview"
 	"openxdr/server/internal/findings"
@@ -32,10 +33,14 @@ import (
 
 func TestSandboxCLITrackEndToEndWithRealReviewerAndUnknownBlock(t *testing.T) {
 	ctx, db := testdb.New(t)
+	baseNow, err := clockskew.DBNow(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
 	g := db.Group.Create().SetName("g").SaveX(ctx)
 	agentID := uuid.New()
 	a := db.Asset.Create().SetHostname("pve1").SetGroupID(g.ID).SetAgentID(agentID).SetOs("linux").SaveX(ctx)
-	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("glm-5.3-flash").SetStatus("running").SaveX(ctx)
+	session := db.AgentSession.Create().SetCreatedAt(baseNow.Add(-30 * time.Second)).SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("glm-5.3-flash").SetStatus("running").SaveX(ctx)
 	f1 := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service").SetTitle("app.service failed").SetDetail("ActiveState=failed").SaveX(ctx)
 	f2 := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service2").SetTitle("perm check").SetDetail("need root").SaveX(ctx)
 
@@ -163,7 +168,12 @@ func TestSandboxCLITrackEndToEndWithRealReviewerAndUnknownBlock(t *testing.T) {
 	}
 
 	// 2. Negative E2E: unconfirmed write command (status=unknown) -> xdr command-status + block xdr track resolved
+	writeNow, err := clockskew.DBNow(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
 	unknownWrite := db.Command.Create().
+		SetCreatedAt(writeNow).
 		SetAssetID(a.ID).
 		SetKind("exec").
 		SetCmd("systemctl restart app.service").
@@ -187,21 +197,26 @@ func TestSandboxCLITrackEndToEndWithRealReviewerAndUnknownBlock(t *testing.T) {
 	}
 
 	// 3. Negative E2E: write command succeeded receipt alone cannot be used as resolved evidence
-	unknownWrite.Update().SetStatus("succeeded").SetExitCode(0).SetStdout("restarted").SetCompletedAt(time.Now()).ExecX(ctx)
+	unknownWrite.Update().SetStatus("succeeded").SetExitCode(0).SetStdout("restarted").SetCompletedAt(writeNow.Add(time.Millisecond)).ExecX(ctx)
 	_, writeEvidenceErr, err := runXdr("track", "pve1", "service2", "high", "resolved", "仅凭重启成功关单", "restarted", "--evidence", unknownWrite.ID.String())
 	if err == nil || !strings.Contains(writeEvidenceErr, "须引用独立只读复查") {
 		t.Fatalf("expected write command evidence to be rejected, got err=%v stderr=%s", err, writeEvidenceErr)
 	}
 
 	// 4. Positive E2E: xdr track open with --next-step, --blocker permission, --evidence <failed_cmd_id>
+	permNow, err := clockskew.DBNow(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
 	failedPerm := db.Command.Create().
+		SetCreatedAt(permNow.Add(-time.Second)).
 		SetAssetID(a.ID).
 		SetKind("exec").
 		SetCmd("cat /etc/sudoers.d/restricted").
 		SetStatus("failed").
 		SetExitCode(1).
 		SetStderr("cat: /etc/sudoers.d/restricted: Permission denied").
-		SetCompletedAt(time.Now()).
+		SetCompletedAt(permNow).
 		SaveX(ctx)
 
 	_, trackBlockErr, err := runXdr(
@@ -236,15 +251,19 @@ func TestRealSandboxContainerBridgeAndPiSDKEndToEnd(t *testing.T) {
 	}
 
 	ctx, db := testdb.New(t)
+	baseNow, err := clockskew.DBNow(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
 	g := db.Group.Create().SetName("g").SaveX(ctx)
 	agentID := uuid.New()
 	a := db.Asset.Create().SetHostname("pve1").SetGroupID(g.ID).SetAgentID(agentID).SetOs("linux").SaveX(ctx)
-	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("glm-5.3-flash").SetStatus("running").SaveX(ctx)
+	session := db.AgentSession.Create().SetCreatedAt(baseNow.Add(-30 * time.Second)).SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("glm-5.3-flash").SetStatus("running").SaveX(ctx)
 	f1 := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service").SetTitle("app.service failed").SetDetail("ActiveState=failed").SaveX(ctx)
 	b := db.Asset.Create().SetHostname("pve2").SetGroupID(g.ID).SetAgentID(uuid.New()).SetOs("linux").SaveX(ctx)
 	f2 := db.Finding.Create().SetGroupID(g.ID).SetAssetID(b.ID).SetKey("service-unknown").SetTitle("worker failed").SetDetail("ActiveState=failed").SaveX(ctx)
-	unknownWrite := db.Command.Create().SetAssetID(b.ID).SetKind("exec").SetCmd("systemctl restart worker.service").SetStatus("unknown").SaveX(ctx)
-	roB := db.Command.Create().SetAssetID(b.ID).SetKind("exec").SetCmd("systemctl is-active worker.service").SetStatus("succeeded").SetExitCode(0).SetStdout("active\n").SetCompletedAt(time.Now()).SaveX(ctx)
+	unknownWrite := db.Command.Create().SetCreatedAt(baseNow.Add(-10 * time.Second)).SetAssetID(b.ID).SetKind("exec").SetCmd("systemctl restart worker.service").SetStatus("unknown").SaveX(ctx)
+	roB := db.Command.Create().SetCreatedAt(baseNow.Add(-9 * time.Second)).SetAssetID(b.ID).SetKind("exec").SetCmd("systemctl is-active worker.service").SetStatus("succeeded").SetExitCode(0).SetStdout("active\n").SetCompletedAt(baseNow.Add(-8 * time.Second)).SaveX(ctx)
 
 	hub := response.NewHub(db, true)
 	inbox := hub.Attach(agentID)

@@ -22,6 +22,7 @@ import (
 	"openxdr/server/ent/commandpolicy"
 	"openxdr/server/ent/setting"
 	"openxdr/server/internal/auth"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
 	"openxdr/server/internal/response"
@@ -42,17 +43,22 @@ type fixture struct {
 
 func setup(t *testing.T) *fixture {
 	ctx, db := testdb.New(t)
+	now, err := clockskew.DBNow(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := now.Add(-30 * time.Second)
 	g := db.Group.Create().SetName("g").SaveX(ctx)
 	a := db.Asset.Create().SetHostname("a").SetOs("linux").SetGroupID(g.ID).SaveX(ctx)
 	admin := db.User.Create().SetUsername("admin").SetPasswordHash("h").SetRole("admin").SaveX(ctx)
-	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("real").SetStatus("running").SetRunOwner(uuid.New()).SetRunExpiresAt(time.Now().Add(3 * time.Minute)).SetRunDeadlineAt(time.Now().Add(30 * time.Minute)).SaveX(ctx)
-	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service-failed-worker").SetTitle("worker failed").SetWorkOwner("ai").SetWorkSessionID(session.ID).SetWorkLeaseUntil(time.Now().Add(30 * time.Minute)).SetWorkAttempts(1).SaveX(ctx)
+	session := db.AgentSession.Create().SetCreatedAt(base).SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("real").SetStatus("running").SetRunOwner(uuid.New()).SetRunExpiresAt(now.Add(3 * time.Minute)).SetRunDeadlineAt(now.Add(30 * time.Minute)).SaveX(ctx)
+	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service-failed-worker").SetTitle("worker failed").SetWorkOwner("ai").SetWorkSessionID(session.ID).SetWorkLeaseUntil(now.Add(30 * time.Minute)).SetWorkAttempts(1).SaveX(ctx)
 	session.Update().SetSubjects([]string{"finding:" + f.ID.String()}).ExecX(ctx)
 	db.Task.Create().SetID(findings.FollowupTask).SetName("follow").SetSchedule("*/30 * * * *").SetPrompt("p").SaveX(ctx)
-	db.TaskRun.Create().SetTaskID(findings.FollowupTask).SetSessionID(session.ID).SetGroupID(g.ID).SetScheduledAt(time.Now()).SetStatus("running").SaveX(ctx)
+	db.TaskRun.Create().SetTaskID(findings.FollowupTask).SetSessionID(session.ID).SetGroupID(g.ID).SetScheduledAt(base).SetStatus("running").SaveX(ctx)
 	unit := "worker-app.service"
-	probe := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd(ProbeCommand(unit)).SetStatus("succeeded").SetExitCode(0).SetStdout("Id=" + unit + "\nActiveState=failed\nUnitFileState=enabled\n").SetCompletedAt(time.Now()).SaveX(ctx)
-	return &fixture{ctx, db, &Store{DB: db}, admin, session, f, Grant{ID: uuid.New(), Action: RestartFailedService, GroupID: g.ID, AssetIDs: []uuid.UUID{a.ID}, Units: []string{unit}, ExpiresAt: time.Now().Add(time.Hour), CooldownMinutes: 60}, "systemctl restart -- " + unit, probe}
+	probe := db.Command.Create().SetCreatedAt(base.Add(time.Second)).SetAssetID(a.ID).SetKind("exec").SetCmd(ProbeCommand(unit)).SetStatus("succeeded").SetExitCode(0).SetStdout("Id=" + unit + "\nActiveState=failed\nUnitFileState=enabled\n").SetCompletedAt(base.Add(2 * time.Second)).SaveX(ctx)
+	return &fixture{ctx, db, &Store{DB: db}, admin, session, f, Grant{ID: uuid.New(), Action: RestartFailedService, GroupID: g.ID, AssetIDs: []uuid.UUID{a.ID}, Units: []string{unit}, ExpiresAt: now.Add(time.Hour), CooldownMinutes: 60}, "systemctl restart -- " + unit, probe}
 }
 func (x *fixture) save(t *testing.T) {
 	t.Helper()
@@ -209,11 +215,15 @@ func TestRepairPolicyAtomicReservationAndCooldown(t *testing.T) {
 	if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err == nil {
 		t.Fatal("same action replayed")
 	}
-	next := x.db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(x.session.GroupID).SetModel("real").SetStatus("running").SetRunOwner(uuid.New()).SetRunExpiresAt(time.Now().Add(3 * time.Minute)).SetRunDeadlineAt(time.Now().Add(30 * time.Minute)).SetSubjects([]string{"finding:" + x.f.ID.String()}).SaveX(x.ctx)
+	nextAt, err := clockskew.DBNow(x.ctx, x.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := x.db.AgentSession.Create().SetCreatedAt(nextAt.Add(-10 * time.Second)).SetKind("task").SetInitiator("system").SetGroupID(x.session.GroupID).SetModel("real").SetStatus("running").SetRunOwner(uuid.New()).SetRunExpiresAt(nextAt.Add(3 * time.Minute)).SetRunDeadlineAt(nextAt.Add(30 * time.Minute)).SetSubjects([]string{"finding:" + x.f.ID.String()}).SaveX(x.ctx)
 	x.db.TaskRun.Query().OnlyX(x.ctx).Update().SetSessionID(next.ID).ExecX(x.ctx)
 	x.f.Update().SetWorkSessionID(next.ID).ExecX(x.ctx)
 	x.session = next
-	x.probe = x.db.Command.Create().SetAssetID(x.f.AssetID).SetKind("exec").SetCmd(ProbeCommand(x.grant.Units[0])).SetStatus("succeeded").SetExitCode(0).SetStdout("Id=worker-app.service\nActiveState=failed\nUnitFileState=enabled\n").SetCompletedAt(time.Now()).SaveX(x.ctx)
+	x.probe = x.db.Command.Create().SetCreatedAt(nextAt.Add(-2 * time.Second)).SetAssetID(x.f.AssetID).SetKind("exec").SetCmd(ProbeCommand(x.grant.Units[0])).SetStatus("succeeded").SetExitCode(0).SetStdout("Id=worker-app.service\nActiveState=failed\nUnitFileState=enabled\n").SetCompletedAt(nextAt.Add(-time.Second)).SaveX(x.ctx)
 	x.bind(t)
 	x.grant.ID = uuid.New()
 	x.save(t)
@@ -259,7 +269,11 @@ func TestRepairRevalidatedAfterReviewerWaitBeforeHub(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			x := setup(t)
 			if mode == "expired" {
-				x.grant.ExpiresAt = time.Now().Add(500 * time.Millisecond)
+				now, err := clockskew.DBNow(x.ctx, x.db)
+				if err != nil {
+					t.Fatal(err)
+				}
+				x.grant.ExpiresAt = now.Add(400 * time.Millisecond)
 			}
 			x.save(t)
 			x.bind(t)
@@ -279,7 +293,16 @@ func TestRepairRevalidatedAfterReviewerWaitBeforeHub(t *testing.T) {
 						t.Fatal(err)
 					}
 				case "expired":
-					time.Sleep(600 * time.Millisecond)
+					for {
+						now, err := clockskew.DBNow(x.ctx, x.db)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if !now.Before(x.grant.ExpiresAt) {
+							break
+						}
+						time.Sleep(50 * time.Millisecond)
+					}
 				case "moved":
 					g := x.db.Group.Create().SetName("moved-during-review").SaveX(x.ctx)
 					x.db.Asset.UpdateOneID(x.f.AssetID).SetGroupID(g.ID).ExecX(x.ctx)
@@ -559,4 +582,81 @@ func TestRepairReservationAuditFailureRollsBackBudget(t *testing.T) {
 	if exists, err := x.db.Setting.Query().Where(setting.IDEQ(useKey(x.f.AssetID, x.grant.Units[0]))).Exist(x.ctx); err != nil || exists {
 		t.Fatal("rolled-back reservation survived", exists, err)
 	}
+}
+
+func TestRepairClockSkewBoundsAndStrictCausality(t *testing.T) {
+	t.Run("within-skew-allowed", func(t *testing.T) {
+		x := setup(t)
+		x.save(t)
+		now, err := clockskew.DBNow(x.ctx, x.db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		unit := x.grant.Units[0]
+		// 探针 CreatedAt 比 session.CreatedAt 早 2s（<= clockskew.Max），CompletedAt 比当前快 2s（<= clockskew.Max）应放行。
+		skewProbe := x.db.Command.Create().
+			SetCreatedAt(x.session.CreatedAt.Add(-2 * time.Second)).
+			SetCompletedAt(now.Add(2 * time.Second)).
+			SetAssetID(x.f.AssetID).SetKind("exec").SetCmd(ProbeCommand(unit)).
+			SetStatus("succeeded").SetExitCode(0).
+			SetStdout("Id=" + unit + "\nActiveState=failed\nUnitFileState=enabled\n").
+			SaveX(x.ctx)
+		if err := x.store.RecordProbe(x.ctx, x.session, skewProbe); err != nil {
+			t.Fatalf("RecordProbe 容差内偏斜被拒: %v", err)
+		}
+		caps, err := x.store.Capabilities(x.ctx, x.session.GroupID, x.session.ID, x.f, x.cmd, "")
+		if err != nil || caps.Status != "ready" {
+			t.Fatalf("Capabilities 容差内偏斜被拒: status=%s reason=%s err=%v", caps.Status, caps.Reason, err)
+		}
+		// Authorize 成功后若预留时间早于探针完成时间（因果倒挂），Revalidate 因果门禁仍须严格拒绝。
+		if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err != nil {
+			t.Fatalf("Authorize 容差内偏斜被拒: %v", err)
+		}
+		if err := x.store.Revalidate(x.ctx, x.session, x.f, x.cmd); err == nil {
+			t.Fatal("探针完成晚于预留时间时 Revalidate 因果门禁未拒绝")
+		}
+	})
+
+	t.Run("beyond-skew-rejected", func(t *testing.T) {
+		x := setup(t)
+		x.save(t)
+		now, err := clockskew.DBNow(x.ctx, x.db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		unit := x.grant.Units[0]
+		tooEarly := x.db.Command.Create().
+			SetCreatedAt(x.session.CreatedAt.Add(-clockskew.Max - 2*time.Second)).
+			SetCompletedAt(x.session.CreatedAt.Add(-time.Second)).
+			SetAssetID(x.f.AssetID).SetKind("exec").SetCmd(ProbeCommand(unit)).
+			SetStatus("succeeded").SetExitCode(0).
+			SetStdout("Id=" + unit + "\nActiveState=failed\nUnitFileState=enabled\n").
+			SaveX(x.ctx)
+		if err := x.store.RecordProbe(x.ctx, x.session, tooEarly); err == nil {
+			t.Fatal("超出容差下界的旧探针未被 RecordProbe 拒绝")
+		}
+		tooFuture := x.db.Command.Create().
+			SetCreatedAt(x.session.CreatedAt.Add(time.Second)).
+			SetCompletedAt(now.Add(clockskew.Max + 5*time.Second)).
+			SetAssetID(x.f.AssetID).SetKind("exec").SetCmd(ProbeCommand(unit)).
+			SetStatus("succeeded").SetExitCode(0).
+			SetStdout("Id=" + unit + "\nActiveState=failed\nUnitFileState=enabled\n").
+			SaveX(x.ctx)
+		if err := x.store.RecordProbe(x.ctx, x.session, tooFuture); err != nil {
+			t.Fatal(err)
+		}
+		caps, err := x.store.Capabilities(x.ctx, x.session.GroupID, x.session.ID, x.f, x.cmd, "")
+		if err != nil || caps.Status == "ready" {
+			t.Fatalf("超出容差上界的未来探针未被 Capabilities 拒绝: %+v %v", caps, err)
+		}
+		if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err == nil {
+			t.Fatal("超出容差上界的未来探针未被 Authorize 拒绝")
+		}
+		if _, err := x.store.ReserveStanding(x.ctx, StandingRequest{
+			RuleID: uuid.New(), RuleVersion: "v1", GroupID: x.session.GroupID, AssetID: x.f.AssetID,
+			FindingID: x.f.ID, Unit: unit, Command: x.cmd, BeforeProbeID: tooFuture.ID, CooldownMinutes: 60,
+		}); err == nil {
+			t.Fatal("超出容差上界的未来探针未被 ReserveStanding 拒绝")
+		}
+	})
 }

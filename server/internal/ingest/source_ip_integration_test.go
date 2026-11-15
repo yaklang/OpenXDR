@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"openxdr/server/internal/temporal"
-	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
@@ -18,15 +17,11 @@ const sourceRule = "id: by-source\nkind: event_count\ngroup_by: asset_source_ip\
 
 // 真实仓库 SSH 认证规则走处理器（syslog 原文回退解析来源），确认不是只有测试用 marker 规则可用。
 func TestNativeSSHSourceIPRule(t *testing.T) {
+	store := repoTemporalStore(t)
 	for _, split := range []bool{false, true} {
 		t.Run(fmt.Sprintf("split=%v", split), func(t *testing.T) {
 			f := sourceFixture(t)
 			a := f.asset(uuid.New())
-			store := &temporal.Store{}
-			root := filepath.Join("..", "..", "..")
-			if err := store.Reload(filepath.Join(root, "rules"), filepath.Join(root, "temporal-rules")); err != nil {
-				t.Fatal(err)
-			}
 			f.p.Temporal = store
 			f.p.Rules = store
 			for i := 0; i < 10; i++ {

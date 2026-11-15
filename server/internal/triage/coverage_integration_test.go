@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"openxdr/server/ent"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/testdb"
 )
 
@@ -20,7 +21,7 @@ func TestInvestigationCoverage(t *testing.T) {
 	ctx, db := testdb.New(t)
 	host := db.Asset.Create().SetHostname("coverage").SaveX(ctx)
 	e := scopedToolEngine(ctx, db, host.ID)
-	now := time.Now()
+	now := time.Now().Add(-30 * time.Second)
 	for i := 0; i < 16; i++ {
 		db.Event.Create().SetAssetID(host.ID).SetTs(now.Add(-time.Duration(i) * time.Second)).SetClassUID(4001).SetSource("agent").SetRaw(json.RawMessage(`{"message":"coverage-test"}`)).SaveX(ctx)
 	}
@@ -98,5 +99,60 @@ func TestDNSBriefAndToolFailureDetails(t *testing.T) {
 	encoded, _ := json.Marshal(timing.tools)
 	if strings.Contains(string(encoded), "keyword") {
 		t.Fatal("不应保存查询原文")
+	}
+}
+
+func TestTriageHotWindowClockSkewBounds(t *testing.T) {
+	ctx, db := testdb.New(t)
+	host := db.Asset.Create().SetHostname("skew-host").SaveX(ctx)
+	e := scopedToolEngine(ctx, db, host.ID)
+
+	now := time.Now().UTC()
+	withinEvent := db.Event.Create().SetAssetID(host.ID).SetTs(now.Add(2 * time.Second)).SetClassUID(4001).SetSource("agent").
+		SetRaw(json.RawMessage(`{"message":"skew-within-marker"}`)).SaveX(ctx)
+	beyondEvent := db.Event.Create().SetAssetID(host.ID).SetTs(now.Add(clockskew.Max + 5*time.Second)).SetClassUID(4001).SetSource("agent").
+		SetRaw(json.RawMessage(`{"message":"skew-beyond-marker"}`)).SaveX(ctx)
+	db.Alert.Create().SetAssetID(host.ID).SetTs(now.Add(2 * time.Second)).SetRuleID("skew-within-alert").SetSeverity(3).SaveX(ctx)
+	db.Alert.Create().SetAssetID(host.ID).SetTs(now.Add(clockskew.Max + 5*time.Second)).SetRuleID("skew-beyond-alert").SetSeverity(3).SaveX(ctx)
+
+	// 1. toolQueryEvents：容差内（+2s）命中，超出容差（+10s）排除。
+	out, err := e.toolQueryEvents(ctx, `{"keyword":"skew-within-marker","hours":1}`)
+	if err != nil || out.(map[string]any)["returned"] != 1 {
+		t.Fatalf("容差内事件未命中: out=%v err=%v", out, err)
+	}
+	out, err = e.toolQueryEvents(ctx, `{"keyword":"skew-beyond-marker","hours":1}`)
+	if err != nil || out.(map[string]any)["returned"] != 0 {
+		t.Fatalf("超出容差的未来事件未被排除: out=%v err=%v", out, err)
+	}
+
+	// 2. toolHostAlerts：容差内告警命中，超出容差告警排除。
+	out, err = e.toolHostAlerts(ctx, fmt.Sprintf(`{"asset_id":%q}`, host.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawAlerts, _ := json.Marshal(out)
+	if !strings.Contains(string(rawAlerts), "skew-within-alert") || strings.Contains(string(rawAlerts), "skew-beyond-alert") {
+		t.Fatalf("主机告警热窗时钟偏斜边界不符: %s", string(rawAlerts))
+	}
+
+	// 3. toolEventRaw：容差内放行，超出容差拒绝。
+	if _, err := e.toolEventRaw(ctx, fmt.Sprintf(`{"event_id":%q}`, withinEvent.ID)); err != nil {
+		t.Fatalf("toolEventRaw 容差内被拒: %v", err)
+	}
+	if _, err := e.toolEventRaw(ctx, fmt.Sprintf(`{"event_id":%q}`, beyondEvent.ID)); err == nil {
+		t.Fatal("toolEventRaw 超出容差未被拒绝")
+	}
+
+	// 4. toolEventContext：容差内锚点放行且上下文排除超出容差记录；超出容差锚点拒绝。
+	ctxOut, err := e.toolEventContext(ctx, fmt.Sprintf(`{"event_id":%q,"keyword":"skew-"}`, withinEvent.ID))
+	if err != nil {
+		t.Fatalf("toolEventContext 容差内锚点被拒: %v", err)
+	}
+	rawCtx, _ := json.Marshal(ctxOut)
+	if !strings.Contains(string(rawCtx), "skew-within-marker") || strings.Contains(string(rawCtx), "skew-beyond-marker") {
+		t.Fatalf("toolEventContext 上下文边界不符: %s", string(rawCtx))
+	}
+	if _, err := e.toolEventContext(ctx, fmt.Sprintf(`{"event_id":%q,"keyword":"skew-"}`, beyondEvent.ID)); err == nil {
+		t.Fatal("toolEventContext 超出容差锚点未被拒绝")
 	}
 }

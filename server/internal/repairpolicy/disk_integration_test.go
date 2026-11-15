@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"openxdr/server/ent"
 	"openxdr/server/internal/auth"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/findings"
 )
 
@@ -24,7 +25,7 @@ func setupDisk(t *testing.T, cmd string) *fixture {
 	x.grant.Action, x.grant.Units, x.grant.Paths = ReclaimDisk, nil, []string{"/srv/cache"}
 	x.cmd = cmd
 	x.f = x.f.Update().SetKey("disk-full").SetTitle("磁盘空间不足").SaveX(x.ctx)
-	x.probe = x.probe.Update().SetCompletedAt(time.Now()).SetCmd("df -P /").SetStdout(diskHeader + "/dev/root 1000 950 50 95% /\n").SaveX(x.ctx)
+	x.probe = x.probe.Update().SetCompletedAt(x.probe.CreatedAt.Add(time.Second)).SetCmd("df -P /").SetStdout(diskHeader + "/dev/root 1000 950 50 95% /\n").SaveX(x.ctx)
 	return x
 }
 
@@ -124,7 +125,11 @@ func issuedDisk(t *testing.T) (*fixture, *ent.Command) {
 	if err := x.store.Revalidate(x.ctx, x.session, x.f, x.cmd); err != nil {
 		t.Fatal(err)
 	}
-	action := x.db.Command.Create().SetAssetID(x.f.AssetID).SetKind("exec").SetCmd(x.cmd).SetStatus("succeeded").SetExitCode(0).SetCreatedAt(time.Now()).SetCompletedAt(time.Now()).SaveX(x.ctx)
+	actionAt, err := clockskew.DBNow(x.ctx, x.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := x.db.Command.Create().SetAssetID(x.f.AssetID).SetKind("exec").SetCmd(x.cmd).SetStatus("succeeded").SetExitCode(0).SetCreatedAt(actionAt).SetCompletedAt(actionAt.Add(time.Millisecond)).SaveX(x.ctx)
 	if err := x.store.RecordProbe(x.ctx, x.session, action); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +147,10 @@ func TestDiskVerificationRequiresIndependentImprovement(t *testing.T) {
 		{"worse", diskHeader + "/dev/root 1000 960 40 96% /\n", nil},
 		{"other-fs", diskHeader + "/dev/other 1000 900 100 90% /\n", nil},
 		{"failed-action", diskHeader + "/dev/root 1000 900 100 90% /\n", func(x *fixture, a *ent.Command) { a.Update().SetStatus("failed").SetExitCode(1).ExecX(x.ctx) }},
-		{"old-after", diskHeader + "/dev/root 1000 900 100 90% /\n", func(x *fixture, a *ent.Command) { a.Update().SetCompletedAt(time.Now().Add(time.Second)).ExecX(x.ctx) }},
+		{"old-after", diskHeader + "/dev/root 1000 900 100 90% /\n", func(x *fixture, a *ent.Command) {
+			now, _ := clockskew.DBNow(x.ctx, x.db)
+			a.Update().SetCompletedAt(now.Add(time.Second)).ExecX(x.ctx)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			x, action := issuedDisk(t)
@@ -152,11 +160,18 @@ func TestDiskVerificationRequiresIndependentImprovement(t *testing.T) {
 			if err := x.store.VerifyDisk(x.ctx, x.session, x.f, []uuid.UUID{x.probe.ID}); err == nil {
 				t.Fatal("前探针充当后探针")
 			}
-			after := x.db.Command.Create().SetAssetID(x.f.AssetID).SetKind("exec").SetCmd("df -P /").SetStatus("succeeded").SetExitCode(0).SetStdout(tc.out).SetCreatedAt(time.Now()).SetCompletedAt(time.Now()).SaveX(x.ctx)
+			afterAt, err := clockskew.DBNow(x.ctx, x.db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.name != "old-after" && !afterAt.After(*action.CompletedAt) {
+				afterAt = action.CompletedAt.Add(time.Millisecond)
+			}
+			after := x.db.Command.Create().SetAssetID(x.f.AssetID).SetKind("exec").SetCmd("df -P /").SetStatus("succeeded").SetExitCode(0).SetStdout(tc.out).SetCreatedAt(afterAt).SetCompletedAt(afterAt.Add(time.Millisecond)).SaveX(x.ctx)
 			if err := x.store.RecordProbe(x.ctx, x.session, after); err != nil {
 				t.Fatal(err)
 			}
-			err := x.store.VerifyDisk(x.ctx, x.session, x.f, []uuid.UUID{after.ID})
+			err = x.store.VerifyDisk(x.ctx, x.session, x.f, []uuid.UUID{after.ID})
 			if (err == nil) != (tc.name == "success") {
 				t.Fatalf("%v; action=%+v", err, x.db.Command.GetX(x.ctx, action.ID))
 			}
@@ -222,5 +237,85 @@ func TestDiskCooldownExplainsDeadlineBeforeStaleProbe(t *testing.T) {
 	}
 	if repairCount(t, x).RepairAttempts != 1 {
 		t.Fatal("冷却拒绝消耗修复预算")
+	}
+}
+
+func TestDiskClockSkewBoundsAndStrictCausality(t *testing.T) {
+	x := setupDisk(t, "apt-get clean")
+	x.save(t)
+
+	// 1. recordDiskProbe：容差内（session.CreatedAt - 2s）放行，超出容差（session.CreatedAt - 7s）拒绝。
+	tooOld := x.db.Command.Create().
+		SetCreatedAt(x.session.CreatedAt.Add(-clockskew.Max - 2*time.Second)).
+		SetCompletedAt(x.session.CreatedAt.Add(-time.Second)).
+		SetAssetID(x.f.AssetID).SetKind("exec").SetCmd("df -P /").
+		SetStatus("succeeded").SetExitCode(0).SetStdout(diskHeader + "/dev/root 1000 950 50 95% /\n").SaveX(x.ctx)
+	if err := x.store.RecordProbe(x.ctx, x.session, tooOld); err == nil {
+		t.Fatal("超出容差下界的磁盘探针未被拒绝")
+	}
+
+	withinSkew := x.db.Command.Create().
+		SetCreatedAt(x.session.CreatedAt.Add(-2 * time.Second)).
+		SetCompletedAt(x.session.CreatedAt.Add(-time.Second)).
+		SetAssetID(x.f.AssetID).SetKind("exec").SetCmd("df -P /").
+		SetStatus("succeeded").SetExitCode(0).SetStdout(diskHeader + "/dev/root 1000 950 50 95% /\n").SaveX(x.ctx)
+	if err := x.store.RecordProbe(x.ctx, x.session, withinSkew); err != nil {
+		t.Fatalf("容差内的磁盘探针被误拒: %v", err)
+	}
+	if err := x.store.Authorize(x.ctx, x.session, x.f, x.cmd); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.store.Revalidate(x.ctx, x.session, x.f, x.cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. recordDiskAction 因果门禁：早于 FinalizedAt 的写命令即使仅差 1ms 也必须拒绝。
+	var u use
+	if err := strict(x.db.Setting.GetX(x.ctx, useKey(x.f.AssetID, ReclaimDisk)).Value, &u); err != nil {
+		t.Fatal(err)
+	}
+	beforeFinalized := x.db.Command.Create().
+		SetCreatedAt(u.FinalizedAt.Add(-time.Millisecond)).
+		SetCompletedAt(u.FinalizedAt.Add(time.Millisecond)).
+		SetAssetID(x.f.AssetID).SetKind("exec").SetCmd(x.cmd).
+		SetStatus("succeeded").SetExitCode(0).SaveX(x.ctx)
+	if err := x.store.RecordProbe(x.ctx, x.session, beforeFinalized); err == nil {
+		t.Fatal("早于二次复核时间的回收动作未被因果门禁拒绝")
+	}
+
+	// 3. VerifyDisk：action.CompletedAt 在 now + 2s（容差内）且 after.CreatedAt 严格晚于 action.CompletedAt 时放行；超出容差拒绝。
+	now, err := clockskew.DBNow(x.ctx, x.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := x.db.Command.Create().
+		SetCreatedAt(*u.FinalizedAt).
+		SetCompletedAt(now.Add(2 * time.Second)).
+		SetAssetID(x.f.AssetID).SetKind("exec").SetCmd(x.cmd).
+		SetStatus("succeeded").SetExitCode(0).SaveX(x.ctx)
+	if err := x.store.RecordProbe(x.ctx, x.session, action); err != nil {
+		t.Fatal(err)
+	}
+	afterFutureTooFar := x.db.Command.Create().
+		SetCreatedAt(action.CompletedAt.Add(time.Millisecond)).
+		SetCompletedAt(now.Add(clockskew.Max + 5*time.Second)).
+		SetAssetID(x.f.AssetID).SetKind("exec").SetCmd("df -P /").
+		SetStatus("succeeded").SetExitCode(0).SetStdout(diskHeader + "/dev/root 1000 900 100 90% /\n").SaveX(x.ctx)
+	if err := x.store.RecordProbe(x.ctx, x.session, afterFutureTooFar); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.store.VerifyDisk(x.ctx, x.session, x.f, []uuid.UUID{afterFutureTooFar.ID}); err == nil {
+		t.Fatal("超出容差上界的后探针未被 VerifyDisk 拒绝")
+	}
+	afterWithinSkew := x.db.Command.Create().
+		SetCreatedAt(action.CompletedAt.Add(time.Millisecond)).
+		SetCompletedAt(now.Add(3 * time.Second)).
+		SetAssetID(x.f.AssetID).SetKind("exec").SetCmd("df -P /").
+		SetStatus("succeeded").SetExitCode(0).SetStdout(diskHeader + "/dev/root 1000 900 100 90% /\n").SaveX(x.ctx)
+	if err := x.store.RecordProbe(x.ctx, x.session, afterWithinSkew); err != nil {
+		t.Fatal(err)
+	}
+	if err := x.store.VerifyDisk(x.ctx, x.session, x.f, []uuid.UUID{afterWithinSkew.ID}); err != nil {
+		t.Fatalf("容差内且满足因果顺序的 VerifyDisk 被误拒: %v", err)
 	}
 }

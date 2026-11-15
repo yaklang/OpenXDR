@@ -56,8 +56,8 @@ func TestDelegatedContextAndHardDenialRemainSeparate(t *testing.T) {
 	if authority, err := findings.DecisionForSession(ctx, db, observer); err != nil || authority != nil {
 		t.Fatal("观察决定等于取得执行权限", authority, err)
 	}
-	probe := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCreatedAt(s.CreatedAt.Add(time.Microsecond)).SetCmd("systemctl show metis-dispatcher.service").SetStatus("succeeded").SetExitCode(0).SetCompletedAt(time.Now()).SetStdout("ActiveState=active").SaveX(ctx)
-	db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl disable --now old.service").SetCreatedAt(time.Now()).SetCompletedAt(time.Now()).SetStatus("succeeded").SetExitCode(0).SaveX(ctx)
+	probe := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCreatedAt(s.CreatedAt.Add(time.Millisecond)).SetCmd("systemctl show metis-dispatcher.service").SetStatus("succeeded").SetExitCode(0).SetCompletedAt(s.CreatedAt.Add(2 * time.Millisecond)).SetStdout("ActiveState=active").SaveX(ctx)
+	db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl disable --now old.service").SetCreatedAt(s.CreatedAt.Add(3 * time.Millisecond)).SetCompletedAt(s.CreatedAt.Add(4 * time.Millisecond)).SetStatus("succeeded").SetExitCode(0).SaveX(ctx)
 	if err = svc.saveFindingPlan(ctx, s, f, "按已记录决定执行，仍经审计", "none", []uuid.UUID{probe.ID}); err != nil {
 		t.Fatal("真实管理员决定没有承接旧人工阻塞", err)
 	}
@@ -72,7 +72,7 @@ func TestDelegatedContextAndHardDenialRemainSeparate(t *testing.T) {
 	if err = svc.findingEvidence(ctx, s, f, []uuid.UUID{probe.ID}, true, ""); err == nil || !strings.Contains(err.Error(), "不要混入修复前证据") {
 		t.Fatal("承接决定被当成修复效果", err)
 	}
-	post := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl show old.service").SetCreatedAt(time.Now()).SetCompletedAt(time.Now()).SetStatus("succeeded").SetExitCode(0).SetStdout("ActiveState=inactive\nUnitFileState=disabled").SaveX(ctx)
+	post := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl show old.service").SetCreatedAt(s.CreatedAt.Add(5 * time.Millisecond)).SetCompletedAt(s.CreatedAt.Add(6 * time.Millisecond)).SetStatus("succeeded").SetExitCode(0).SetStdout("ActiveState=inactive\nUnitFileState=disabled").SaveX(ctx)
 	if err = svc.findingEvidence(ctx, s, f, []uuid.UUID{post.ID}, true, ""); err != nil {
 		t.Fatal("独立变更后证据未被接受", err)
 	}

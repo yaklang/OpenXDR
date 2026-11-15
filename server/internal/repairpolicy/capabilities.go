@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/findings"
 	"openxdr/server/internal/repaircmd"
 )
@@ -221,7 +222,7 @@ func (s *Store) Capabilities(ctx context.Context, group, session uuid.UUID, f *e
 	if err != nil {
 		return out, err
 	}
-	if probe.AssetID != actual.AssetID || probe.Kind != "exec" || probe.Cmd == nil || *probe.Cmd != out.Probe || probe.Status != "succeeded" || probe.ExitCode == nil || *probe.ExitCode != 0 || probe.Truncated || probe.CompletedAt == nil || probe.CompletedAt.Before(now.Add(-10*time.Minute)) || probe.CompletedAt.After(now) || probe.CreatedAt.Before(active.CreatedAt) || probe.Stdout == nil {
+	if probe.AssetID != actual.AssetID || probe.Kind != "exec" || probe.Cmd == nil || *probe.Cmd != out.Probe || probe.Status != "succeeded" || probe.ExitCode == nil || *probe.ExitCode != 0 || probe.Truncated || probe.CompletedAt == nil || probe.CompletedAt.Before(now.Add(-10*time.Minute)) || probe.CompletedAt.After(now.Add(clockskew.Max)) || probe.CreatedAt.Before(active.CreatedAt.Add(-clockskew.Max)) || probe.Stdout == nil {
 		return reject("probe_invalid", "探针过期、不完整、失败或不属于本轮，请重新取完整回执")
 	}
 	if action == ReclaimDisk {

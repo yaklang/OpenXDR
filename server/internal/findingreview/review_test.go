@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"openxdr/server/ent"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/findings"
 )
 
@@ -78,11 +79,21 @@ func TestFindingReviewerRealModelAndIndependentContext(t *testing.T) {
 			t.Fatalf("%v %v", ok, err)
 		}
 	}
+	// 时钟偏斜容差内（session.CreatedAt - 2s）放行，超出容差（session.CreatedAt - 10s）在调用模型前拒绝。
+	c.CreatedAt = session.CreatedAt.Add(-2 * time.Second)
+	if ok, _, err := reviewer.Review(context.Background(), session, f, []*ent.Command{c}, findings.Resolution{}); err != nil || !ok || calls != 3 {
+		t.Fatalf("容差内复查指令被拒: ok=%v calls=%d err=%v", ok, calls, err)
+	}
+	c.CreatedAt = session.CreatedAt.Add(-clockskew.Max - 5*time.Second)
+	if ok, _, err := reviewer.Review(context.Background(), session, f, []*ent.Command{c}, findings.Resolution{}); err == nil || ok || calls != 3 {
+		t.Fatalf("超出容差下界的复查指令未被拒绝: ok=%v calls=%d err=%v", ok, calls, err)
+	}
+	c.CreatedAt = now
 	c.Status = "unknown"
 	if ok, _, err := reviewer.Review(context.Background(), session, f, []*ent.Command{c}, findings.Resolution{}); err == nil || ok {
 		t.Fatal("unknown proof accepted")
 	}
-	if calls != 2 {
+	if calls != 3 {
 		t.Fatalf("invalid proof reached model, calls %d", calls)
 	}
 	current = ""

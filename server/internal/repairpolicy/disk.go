@@ -17,6 +17,7 @@ import (
 	"openxdr/server/ent/setting"
 	"openxdr/server/ent/taskrun"
 	"openxdr/server/internal/audit"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/findings"
 	"openxdr/server/internal/repaircmd"
 )
@@ -101,7 +102,7 @@ func (s *Store) recordDiskProbe(ctx context.Context, session *ent.AgentSession, 
 	if err != nil {
 		return err
 	}
-	if actual.Kind != "exec" || actual.AssetID != c.AssetID || actual.Cmd == nil || *actual.Cmd != "df -P "+mount || actual.CreatedAt.Before(current.CreatedAt) {
+	if actual.Kind != "exec" || actual.AssetID != c.AssetID || actual.Cmd == nil || *actual.Cmd != "df -P "+mount || actual.CreatedAt.Before(current.CreatedAt.Add(-clockskew.Max)) {
 		return errors.New("实际磁盘探针与会话不匹配")
 	}
 	raw, _ := json.Marshal(probeRef{current.ID, actual.ID, actual.AssetID, mount})
@@ -165,7 +166,7 @@ func readDiskSample(c *ent.Command, mount string, fresh bool) (diskReading, erro
 	bad := errors.New("磁盘探针须完整成功且容量、挂载与 df -P 格式一致")
 	var sample diskReading
 	now := time.Now()
-	if !repaircmd.Mount(mount) || c == nil || c.Kind != "exec" || c.Cmd == nil || *c.Cmd != "df -P "+mount || c.Status != "succeeded" || c.ExitCode == nil || *c.ExitCode != 0 || c.Truncated || c.Stdout == nil || len(*c.Stdout) > 8192 || c.CompletedAt == nil || c.CompletedAt.Before(c.CreatedAt) || c.CompletedAt.After(now) || (fresh && c.CompletedAt.Before(now.Add(-10*time.Minute))) || c.Stderr != nil && strings.TrimSpace(*c.Stderr) != "" {
+	if !repaircmd.Mount(mount) || c == nil || c.Kind != "exec" || c.Cmd == nil || *c.Cmd != "df -P "+mount || c.Status != "succeeded" || c.ExitCode == nil || *c.ExitCode != 0 || c.Truncated || c.Stdout == nil || len(*c.Stdout) > 8192 || c.CompletedAt == nil || c.CompletedAt.Before(c.CreatedAt) || c.CompletedAt.After(now.Add(clockskew.Max)) || (fresh && c.CompletedAt.Before(now.Add(-10*time.Minute))) || c.Stderr != nil && strings.TrimSpace(*c.Stderr) != "" {
 		return sample, bad
 	}
 	lines := strings.Split(strings.TrimSpace(*c.Stdout), "\n")
@@ -237,7 +238,11 @@ func (s *Store) VerifyDisk(ctx context.Context, session *ent.AgentSession, f *en
 	if err != nil {
 		return err
 	}
-	if action.AssetID != f.AssetID || action.Kind != "exec" || action.Cmd == nil || *action.Cmd != u.Command || action.Status != "succeeded" || action.ExitCode == nil || *action.ExitCode != 0 || action.CompletedAt == nil || action.CompletedAt.After(time.Now()) || action.CompletedAt.Before(action.CreatedAt) || action.CreatedAt.Before(*u.FinalizedAt) {
+	now, err := clockskew.DBNow(ctx, tx.Client())
+	if err != nil {
+		return err
+	}
+	if action.AssetID != f.AssetID || action.Kind != "exec" || action.Cmd == nil || *action.Cmd != u.Command || action.Status != "succeeded" || action.ExitCode == nil || *action.ExitCode != 0 || action.CompletedAt == nil || action.CompletedAt.After(now.Add(clockskew.Max)) || action.CompletedAt.Before(action.CreatedAt) || action.CreatedAt.Before(*u.FinalizedAt) {
 		return errors.New("磁盘回收未成功完成，不能确认效果")
 	}
 	before, err := tx.Command.Get(ctx, u.ProbeID)
@@ -272,10 +277,9 @@ func (s *Store) VerifyDisk(ctx context.Context, session *ent.AgentSession, f *en
 	if err != nil {
 		return err
 	}
-	if after.AssetID != f.AssetID || after.CreatedAt.Before(session.CreatedAt) || !after.CreatedAt.After(*action.CompletedAt) || post.filesystem != pre.filesystem || post.total != pre.total || post.available <= pre.available {
+	if after.AssetID != f.AssetID || after.CreatedAt.Before(session.CreatedAt.Add(-clockskew.Max)) || !after.CreatedAt.After(*action.CompletedAt) || post.filesystem != pre.filesystem || post.total != pre.total || post.available <= pre.available {
 		return errors.New("独立 df 探针尚未证明同一文件系统可用空间增加")
 	}
-	now := time.Now()
 	u.VerifiedAt, u.AfterProbeID = &now, after.ID
 	raw, _ := json.Marshal(u)
 	if err := tx.Setting.UpdateOneID(row.ID).SetValue(raw).Exec(ctx); err != nil {

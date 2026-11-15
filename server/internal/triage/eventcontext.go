@@ -12,6 +12,7 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/event"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/eventsearch"
 )
 
@@ -36,7 +37,8 @@ func (e *Engine) toolEventContext(ctx context.Context, args string) (any, error)
 	}
 	now := time.Now().UTC()
 	hotFrom := now.Add(-eventRawWindow)
-	anchor, err := e.DB.Event.Query().Where(event.IDEQ(id), event.TsGTE(hotFrom), event.TsLTE(now), scope).WithAsset().Only(ctx)
+	hotUntil := now.Add(clockskew.Max)
+	anchor, err := e.DB.Event.Query().Where(event.IDEQ(id), event.TsGTE(hotFrom), event.TsLTE(hotUntil), scope).WithAsset().Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return nil, errors.New("锚点事件不存在、不在本事件资产组内或超出最近 168 小时热表；不代表未发生")
@@ -60,8 +62,8 @@ func (e *Engine) toolEventContext(ctx context.Context, args string) (any, error)
 	if since.Before(hotFrom) {
 		since = hotFrom
 	}
-	if until.After(now) {
-		until = now
+	if until.After(hotUntil) {
+		until = hotUntil
 	}
 	query := func() *ent.EventQuery {
 		return e.DB.Event.Query().Where(scope, event.AssetIDEQ(*anchor.AssetID), event.TsGTE(since), event.TsLTE(until)).WithAsset()

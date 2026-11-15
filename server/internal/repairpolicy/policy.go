@@ -28,6 +28,7 @@ import (
 	"openxdr/server/ent/user"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/auth"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
 	"openxdr/server/internal/repaircmd"
@@ -353,7 +354,7 @@ func (s *Store) RecordProbe(ctx context.Context, session *ent.AgentSession, c *e
 	if err != nil {
 		return err
 	}
-	if actual.Kind != "exec" || actual.AssetID != c.AssetID || actual.Cmd == nil || *actual.Cmd != ProbeCommand(unit) || actual.CreatedAt.Before(current.CreatedAt) {
+	if actual.Kind != "exec" || actual.AssetID != c.AssetID || actual.Cmd == nil || *actual.Cmd != ProbeCommand(unit) || actual.CreatedAt.Before(current.CreatedAt.Add(-clockskew.Max)) {
 		return errors.New("实际诊断指令与会话范围不一致")
 	}
 	raw, _ := json.Marshal(probeRef{current.ID, c.ID, c.AssetID, unit})
@@ -429,7 +430,6 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 			return &findings.RepairError{State: state}
 		}
 	}
-	now := time.Now()
 	tx, err := s.DB.Tx(ctx)
 	if err != nil {
 		return err
@@ -442,12 +442,15 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	if _, err := tx.Finding.Query().Where(finding.IDEQ(f.ID)).Where(func(q *sql.Selector) { q.ForUpdate() }).Only(ctx); err != nil {
 		return err
 	}
-	// 行锁可能等待；锁定后重取租约、归组与时间，不能使用等待前的旧授权快照。
+	// 行锁可能等待；锁定后重取租约、归组与统一数据库时间，不能使用等待前的旧授权快照或跨节点各自时钟。
 	current, actual, err = claimedWithClient(ctx, tx.Client(), session, f.ID)
 	if err != nil {
 		return err
 	}
-	now = time.Now()
+	now, err := clockskew.DBNow(ctx, tx.Client())
+	if err != nil {
+		return err
+	}
 	if action == ReclaimDisk && !diskFinding(actual) {
 		return errors.New("待办已不属于磁盘容量问题")
 	}
@@ -537,7 +540,7 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	if err != nil {
 		return err
 	}
-	if probe.AssetID != actual.AssetID || probe.Kind != "exec" || probe.Cmd == nil || *probe.Cmd != expectedProbe(action, unit, ref.Unit) || probe.Status != "succeeded" || probe.ExitCode == nil || *probe.ExitCode != 0 || probe.Truncated || probe.CompletedAt == nil || probe.CompletedAt.Before(now.Add(-10*time.Minute)) || probe.CompletedAt.After(now) || probe.CreatedAt.Before(current.CreatedAt) || probe.Stdout == nil {
+	if probe.AssetID != actual.AssetID || probe.Kind != "exec" || probe.Cmd == nil || *probe.Cmd != expectedProbe(action, unit, ref.Unit) || probe.Status != "succeeded" || probe.ExitCode == nil || *probe.ExitCode != 0 || probe.Truncated || probe.CompletedAt == nil || probe.CompletedAt.Before(now.Add(-10*time.Minute)) || probe.CompletedAt.After(now.Add(clockskew.Max)) || probe.CreatedAt.Before(current.CreatedAt.Add(-clockskew.Max)) || probe.Stdout == nil {
 		return errors.New("诊断未完整成功或已过期")
 	}
 	if action == ReclaimDisk {
@@ -574,7 +577,10 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 		if prior.ProbeID != probe.ID || prior.ReservationID != reservation || prior.ReservedAt.Before(*probe.CompletedAt) {
 			return errors.New("原维护预留的诊断或动作身份不匹配")
 		}
-		finalNow := time.Now()
+		finalNow, err := clockskew.DBNow(ctx, tx.Client())
+		if err != nil {
+			return err
+		}
 		if !grant.ExpiresAt.After(finalNow) || probe.CompletedAt.Before(finalNow.Add(-10*time.Minute)) || !current.RunExpiresAt.After(finalNow) || !current.RunDeadlineAt.After(finalNow) || actual.WorkLeaseUntil == nil || !actual.WorkLeaseUntil.After(finalNow) {
 			return errors.New("维护范围、诊断或执行租约已过期")
 		}

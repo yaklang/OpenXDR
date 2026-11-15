@@ -23,6 +23,7 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
 	entcommand "openxdr/server/ent/command"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/pb"
 )
 
@@ -173,8 +174,13 @@ func (h *Hub) issue(ctx context.Context, req Request) (*ent.Command, error) {
 		}
 	}
 
+	createdAt, err := clockskew.DBNow(ctx, h.DB)
+	if err != nil {
+		return nil, err
+	}
 	cmdID := req.CommandID
 	create := h.DB.Command.Create().
+		SetCreatedAt(createdAt).
 		SetKind(req.Kind).
 		SetAssetID(a.ID).
 		SetIssuedBy(req.IssuedBy).
@@ -365,7 +371,11 @@ func (h *Hub) mark(ctx context.Context, cmd *ent.Command, status string) (*ent.C
 func (h *Hub) finish(ctx context.Context, id uuid.UUID, status, detail string) (*ent.Command, error) {
 	update := h.DB.Command.Update().Where(entcommand.IDEQ(id), entcommand.StatusEQ("pending")).SetStatus(status).SetDetail(detail)
 	if status != "unknown" {
-		update.SetCompletedAt(time.Now())
+		completedAt, err := clockskew.DBNow(ctx, h.DB)
+		if err != nil {
+			return nil, err
+		}
+		update.SetCompletedAt(completedAt)
 	}
 	if _, err := update.Save(ctx); err != nil {
 		return nil, err
@@ -406,7 +416,12 @@ func (h *Hub) settle(ctx context.Context, id, status, detail string) {
 	}
 	upd := h.DB.Command.Update().Where(entcommand.IDEQ(uid), entcommand.StatusIn("pending", "sent")).SetStatus(status).SetDetail(detail)
 	if status != "unknown" {
-		upd.SetCompletedAt(time.Now())
+		completedAt, err := clockskew.DBNow(ctx, h.DB)
+		if err != nil {
+			slog.Warn("读取指令完成数据库时间失败", "command", uid, "err", err)
+			return
+		}
+		upd.SetCompletedAt(completedAt)
 	}
 	if err := upd.Exec(ctx); err != nil {
 		slog.Warn("回写未送达指令失败", "command", uid, "err", err)
@@ -459,7 +474,11 @@ func (h *Hub) Complete(ctx context.Context, agentID uuid.UUID, res *pb.CommandRe
 	// 并发/重复回执只能完成非终态；终态保持首次记录。
 	upd := h.DB.Command.Update().Where(entcommand.IDEQ(id), scope, entcommand.StatusIn("pending", "sent", "unknown")).SetStatus(status).SetDetail(storable(res.Detail))
 	if status != "unknown" {
-		upd.SetCompletedAt(time.Now())
+		completedAt, err := clockskew.DBNow(ctx, h.DB)
+		if err != nil {
+			return fmt.Errorf("读取指令回执数据库时间失败: %w", err)
+		}
+		upd.SetCompletedAt(completedAt)
 	}
 	if cmd.Kind == "exec" && status != "unknown" {
 		upd.SetExitCode(res.ExitCode).SetStdout(storable(res.Stdout)).SetStderr(storable(res.Stderr)).SetTruncated(res.Truncated)

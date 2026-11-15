@@ -16,6 +16,7 @@ import (
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/setting"
 	"openxdr/server/internal/audit"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/repaircmd"
 )
@@ -164,12 +165,15 @@ func (s *Store) ReserveStanding(ctx context.Context, req StandingRequest) (retID
 		}
 	}
 
-	now := time.Now()
 	tx, err := s.DB.Tx(ctx)
 	if err != nil {
 		return uuid.Nil, err
 	}
 	defer tx.Rollback()
+	now, err := clockskew.DBNow(ctx, tx.Client())
+	if err != nil {
+		return uuid.Nil, err
+	}
 
 	ok, err := tx.Asset.Query().Where(asset.IDEQ(req.AssetID), asset.GroupIDEQ(req.GroupID), asset.OsEQ("linux")).Exist(ctx)
 	if err != nil {
@@ -198,7 +202,7 @@ func (s *Store) ReserveStanding(ctx context.Context, req StandingRequest) (retID
 	if err != nil {
 		return uuid.Nil, errors.New("缺少执行前只读探针")
 	}
-	if probe.AssetID != req.AssetID || probe.Kind != "exec" || probe.Cmd == nil || probe.Status != "succeeded" || probe.ExitCode == nil || *probe.ExitCode != 0 || probe.Truncated || probe.CompletedAt == nil || probe.CompletedAt.Before(now.Add(-10*time.Minute)) || probe.CompletedAt.After(now) || probe.Stdout == nil {
+	if probe.AssetID != req.AssetID || probe.Kind != "exec" || probe.Cmd == nil || probe.Status != "succeeded" || probe.ExitCode == nil || *probe.ExitCode != 0 || probe.Truncated || probe.CompletedAt == nil || probe.CompletedAt.Before(now.Add(-10*time.Minute)) || probe.CompletedAt.After(now.Add(clockskew.Max)) || probe.Stdout == nil {
 		return uuid.Nil, errors.New("执行前探针未完整成功或已过期")
 	}
 	if isDisk {

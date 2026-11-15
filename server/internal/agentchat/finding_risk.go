@@ -13,6 +13,7 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
 	"openxdr/server/ent/command"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/findings"
 )
 
@@ -56,7 +57,10 @@ func (s *Service) findingRisk(ctx context.Context, session *ent.AgentSession, f 
 	if len(ids) > 5 {
 		return "", time.Time{}, errors.New("风险探针最多引用五条本轮指令")
 	}
-	now := time.Now()
+	now, err := clockskew.DBNow(ctx, s.DB)
+	if err != nil {
+		return "", time.Time{}, err
+	}
 	seen := make(map[uuid.UUID]bool, len(ids))
 	kind := ""
 	var observed time.Time
@@ -69,13 +73,13 @@ func (s *Service) findingRisk(ctx context.Context, session *ent.AgentSession, f 
 		if err != nil {
 			return "", time.Time{}, errors.New("风险探针不存在或不属该主机")
 		}
-		if c.CreatedAt.Before(session.CreatedAt) || c.CreatedAt.After(now) || session.CreatedAt.After(now) {
+		if c.CreatedAt.Before(session.CreatedAt.Add(-clockskew.Max)) || c.CreatedAt.After(now.Add(clockskew.Max)) || session.CreatedAt.After(now.Add(clockskew.Max)) {
 			return "", time.Time{}, errors.New("风险探针不属于本轮有效时间范围")
 		}
 		if c.Kind != "exec" || c.Cmd == nil || *c.Cmd != probe {
 			continue
 		}
-		if c.Status != "succeeded" || c.ExitCode == nil || *c.ExitCode != 0 || c.CompletedAt == nil || c.CompletedAt.Before(c.CreatedAt) || c.CompletedAt.After(now) || c.CompletedAt.Before(now.Add(-10*time.Minute)) || c.Truncated || c.Stdout == nil || strings.TrimSpace(*c.Stdout) == "" || len(*c.Stdout) > 8192 || c.Stderr != nil && strings.TrimSpace(*c.Stderr) != "" {
+		if c.Status != "succeeded" || c.ExitCode == nil || *c.ExitCode != 0 || c.CompletedAt == nil || c.CompletedAt.Before(c.CreatedAt) || c.CompletedAt.After(now.Add(clockskew.Max)) || c.CompletedAt.Before(now.Add(-10*time.Minute)) || c.Truncated || c.Stdout == nil || strings.TrimSpace(*c.Stdout) == "" || len(*c.Stdout) > 8192 || c.Stderr != nil && strings.TrimSpace(*c.Stderr) != "" {
 			return "", time.Time{}, errors.New("风险探针须为新鲜、完整、无错误的成功回执")
 		}
 		var measured string

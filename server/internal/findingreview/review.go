@@ -17,6 +17,7 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/memory"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
 	"openxdr/server/internal/triage"
@@ -139,7 +140,7 @@ func (r *Reviewer) Review(ctx context.Context, session *ent.AgentSession, f *ent
 	}
 	rows := make([]evidence, 0, len(commands))
 	for _, c := range commands {
-		if c.AssetID != f.AssetID || c.CreatedAt.Before(session.CreatedAt) || c.Kind != "exec" || c.Status != "succeeded" || c.ExitCode == nil || *c.ExitCode != 0 || c.CompletedAt == nil || c.Truncated || c.Cmd == nil || !commandgate.ReadOnly(*c.Cmd) || c.Stdout == nil || strings.TrimSpace(*c.Stdout) == "" || len(*c.Stdout) > 8192 {
+		if c.AssetID != f.AssetID || c.CreatedAt.Before(session.CreatedAt.Add(-clockskew.Max)) || c.Kind != "exec" || c.Status != "succeeded" || c.ExitCode == nil || *c.ExitCode != 0 || c.CompletedAt == nil || c.Truncated || c.Cmd == nil || !commandgate.ReadOnly(*c.Cmd) || c.Stdout == nil || strings.TrimSpace(*c.Stdout) == "" || len(*c.Stdout) > 8192 {
 			return false, "", errors.New("复查输出缺失或超出完整复核预算")
 		}
 		rows = append(rows, evidence{c.ID, *c.Cmd, *c.Stdout})

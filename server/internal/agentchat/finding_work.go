@@ -20,6 +20,7 @@ import (
 	entgroup "openxdr/server/ent/group"
 	"openxdr/server/ent/taskrun"
 	"openxdr/server/internal/audit"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
 	"openxdr/server/internal/questions"
@@ -170,13 +171,17 @@ func (s *Service) findingEvidence(ctx context.Context, session *ent.AgentSession
 			}
 		}
 	}
+	now, err := clockskew.DBNow(ctx, s.DB)
+	if err != nil {
+		return err
+	}
 	seen := map[uuid.UUID]bool{}
 	for _, id := range ids {
 		if seen[id] || id == uuid.Nil {
 			return errors.New("复查指令ID为空或重复")
 		}
 		seen[id] = true
-		c, err := s.DB.Command.Query().Where(command.IDEQ(id), command.AssetIDEQ(f.AssetID), command.CreatedAtGTE(session.CreatedAt)).Only(ctx)
+		c, err := s.DB.Command.Query().Where(command.IDEQ(id), command.AssetIDEQ(f.AssetID), command.CreatedAtGTE(session.CreatedAt.Add(-clockskew.Max))).Only(ctx)
 		if err != nil {
 			return errors.New("复查指令不存在、早于本轮或不属该主机")
 		}
@@ -184,7 +189,7 @@ func (s *Service) findingEvidence(ctx context.Context, session *ent.AgentSession
 			return errors.New("须引用独立只读复查，不能用修复动作成功代替效果验证")
 		}
 		if resolved {
-			if c.Status != "succeeded" || c.ExitCode == nil || *c.ExitCode != 0 || c.CompletedAt == nil || c.CompletedAt.Before(time.Now().Add(-10*time.Minute)) || c.CompletedAt.After(time.Now()) || c.CreatedAt.After(*c.CompletedAt) || c.Truncated || c.Stdout == nil || strings.TrimSpace(*c.Stdout) == "" {
+			if c.Status != "succeeded" || c.ExitCode == nil || *c.ExitCode != 0 || c.CompletedAt == nil || c.CompletedAt.Before(now.Add(-10*time.Minute)) || c.CompletedAt.After(now.Add(clockskew.Max)) || c.CreatedAt.After(*c.CompletedAt) || c.Truncated || c.Stdout == nil || strings.TrimSpace(*c.Stdout) == "" {
 				return errors.New("复查须成功返回非空且未截断的证据；空日志或未知回执不能证明已修复")
 			}
 			later, err := s.DB.Command.Query().Where(command.AssetIDEQ(f.AssetID), command.CreatedAtGTE(*c.CompletedAt)).All(ctx)
@@ -471,6 +476,10 @@ func (s *Service) saveFindingPlan(ctx context.Context, session *ent.AgentSession
 
 // 未结案计划可以保存失败或未知回执作为后续调查线索，不能把这些引用当作恢复证明。
 func (s *Service) findingReferences(ctx context.Context, session *ent.AgentSession, f *ent.Finding, ids []uuid.UUID) (bool, error) {
+	now, err := clockskew.DBNow(ctx, s.DB)
+	if err != nil {
+		return false, err
+	}
 	complete := len(ids) > 0
 	seen := map[uuid.UUID]bool{}
 	for _, id := range ids {
@@ -478,11 +487,11 @@ func (s *Service) findingReferences(ctx context.Context, session *ent.AgentSessi
 			return false, errors.New("线索指令ID为空或重复")
 		}
 		seen[id] = true
-		c, err := s.DB.Command.Query().Where(command.IDEQ(id), command.AssetIDEQ(f.AssetID), command.CreatedAtGTE(session.CreatedAt)).Only(ctx)
+		c, err := s.DB.Command.Query().Where(command.IDEQ(id), command.AssetIDEQ(f.AssetID), command.CreatedAtGTE(session.CreatedAt.Add(-clockskew.Max))).Only(ctx)
 		if err != nil {
 			return false, errors.New("线索指令不属本轮当前资产")
 		}
-		if c.CreatedAt.After(time.Now()) {
+		if c.CreatedAt.After(now.Add(clockskew.Max)) {
 			return false, errors.New("线索指令时间无效")
 		}
 		if c.Kind != "exec" || c.Cmd == nil || !commandgate.ReadOnly(*c.Cmd) || c.Status != "succeeded" || c.ExitCode == nil || *c.ExitCode != 0 || c.CompletedAt == nil || c.Truncated {

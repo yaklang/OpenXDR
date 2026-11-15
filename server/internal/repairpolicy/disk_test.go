@@ -50,6 +50,9 @@ func TestDiskProbeValidation(t *testing.T) {
 		{"extra-line", good + "/dev/extra 1000 950 50 95% /extra\n", nil, false},
 		{"truncated", good, func(c *ent.Command) { c.Truncated = true }, false},
 		{"stderr", good, func(c *ent.Command) { s := "df: error"; c.Stderr = &s }, false},
+		{"within-skew", good, func(c *ent.Command) { t := now.Add(2 * time.Second); c.CompletedAt = &t }, true},
+		{"beyond-skew", good, func(c *ent.Command) { t := now.Add(10 * time.Second); c.CompletedAt = &t }, false},
+		{"completed-before-created", good, func(c *ent.Command) { t := c.CreatedAt.Add(-time.Millisecond); c.CompletedAt = &t }, false},
 		{"future", good, func(c *ent.Command) { t := now.Add(time.Hour); c.CompletedAt = &t }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

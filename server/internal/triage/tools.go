@@ -12,6 +12,7 @@ import (
 	"openxdr/server/ent"
 	entalert "openxdr/server/ent/alert"
 	entevent "openxdr/server/ent/event"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/eventsearch"
 )
 
@@ -170,8 +171,9 @@ func (e *Engine) toolQueryEvents(ctx context.Context, args string) (any, error) 
 	if err != nil {
 		return nil, err
 	}
-	until := time.Now().UTC()
-	since := until.Add(-time.Duration(in.Hours) * time.Hour)
+	now := time.Now().UTC()
+	until := now.Add(clockskew.Max)
+	since := now.Add(-time.Duration(in.Hours) * time.Hour)
 	query := func() *ent.EventQuery {
 		return e.DB.Event.Query().Where(entevent.TsGTE(since), entevent.TsLTE(until), scope).WithAsset()
 	}
@@ -287,8 +289,9 @@ func (e *Engine) toolHostAlerts(ctx context.Context, args string) (any, error) {
 	if in.Days <= 0 || in.Days > 90 {
 		in.Days = 7
 	}
-	until := time.Now().UTC()
-	since := until.AddDate(0, 0, -in.Days)
+	now := time.Now().UTC()
+	until := now.Add(clockskew.Max)
+	since := now.AddDate(0, 0, -in.Days)
 	rows, err := e.DB.Alert.Query().
 		Where(
 			entalert.AssetIDEQ(assetID),

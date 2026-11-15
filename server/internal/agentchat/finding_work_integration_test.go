@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"openxdr/server/ent"
 	"openxdr/server/ent/commandpolicy"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
 	"openxdr/server/internal/response"
@@ -105,17 +106,24 @@ func TestFindingAutonomyClaimsBudgetAndScope(t *testing.T) {
 
 func TestFindingResolvedRequiresFreshIndependentEvidence(t *testing.T) {
 	ctx, db := testdb.New(t)
+	now, err := clockskew.DBNow(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := now.Add(-30 * time.Second)
 	g := db.Group.Create().SetName("g").SaveX(ctx)
 	a := db.Asset.Create().SetHostname("a").SetGroupID(g.ID).SaveX(ctx)
-	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
+	session := db.AgentSession.Create().SetCreatedAt(base).SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
 	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service").SetTitle("failed").SaveX(ctx)
 	svc := &Service{DB: db}
 	if err := svc.findingEvidence(ctx, session, f, nil, true, ""); err == nil {
 		t.Fatal("no evidence accepted")
 	}
+	seq := 0
 	mk := func(cmd, status, out string) *ent.Command {
-		created := time.Now()
-		return db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd(cmd).SetStatus(status).SetExitCode(0).SetStdout(out).SetCreatedAt(created).SetCompletedAt(time.Now()).SaveX(ctx)
+		seq++
+		created := base.Add(time.Duration(seq) * time.Second)
+		return db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd(cmd).SetStatus(status).SetExitCode(0).SetStdout(out).SetCreatedAt(created).SetCompletedAt(created.Add(100 * time.Millisecond)).SaveX(ctx)
 	}
 	for _, c := range []*ent.Command{mk("systemctl restart app", "succeeded", "done"), mk("systemctl is-active app", "unknown", "active"), mk("journalctl -n 40", "succeeded", "")} {
 		if err := svc.findingEvidence(ctx, session, f, []uuid.UUID{c.ID}, true, ""); err == nil {
@@ -157,11 +165,15 @@ func TestFindingResolvedRequiresFreshIndependentEvidence(t *testing.T) {
 
 func TestFindingIndependentReviewRequiredAndManualFence(t *testing.T) {
 	ctx, db := testdb.New(t)
+	now, err := clockskew.DBNow(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
 	g := db.Group.Create().SetName("g").SaveX(ctx)
 	a := db.Asset.Create().SetHostname("a").SetGroupID(g.ID).SaveX(ctx)
-	session := db.AgentSession.Create().SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
+	session := db.AgentSession.Create().SetCreatedAt(now.Add(-10 * time.Second)).SetKind("task").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
 	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("service").SetTitle("service failed").SaveX(ctx)
-	c := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl show app.service -p ActiveState").SetCreatedAt(session.CreatedAt).SetStatus("succeeded").SetExitCode(0).SetStdout("ActiveState=active").SetCompletedAt(time.Now()).SaveX(ctx)
+	c := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl show app.service -p ActiveState").SetCreatedAt(now.Add(-5 * time.Second)).SetStatus("succeeded").SetExitCode(0).SetStdout("ActiveState=active").SetCompletedAt(now.Add(-4 * time.Second)).SaveX(ctx)
 	args := []byte(`{"host":"` + a.ID.String() + `","key":"service","title":"recovered","detail":"verified active","severity":"low","status":"resolved","evidence_commands":["` + c.ID.String() + `"]}`)
 	svc := &Service{DB: db}
 	call := func() error {
@@ -283,7 +295,11 @@ func TestFindingReclaimTemplatesReachGrantAndRequireVerification(t *testing.T) {
 	if count != 4 {
 		t.Fatal("非模板命令不应走模板授权", count)
 	}
-	probe := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("df -P /").SetCreatedAt(time.Now()).SetStatus("succeeded").SetExitCode(0).SetStdout("fresh probe").SetCompletedAt(time.Now()).SaveX(ctx)
+	now, err := clockskew.DBNow(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("df -P /").SetCreatedAt(now.Add(-time.Second)).SetStatus("succeeded").SetExitCode(0).SetStdout("fresh probe").SetCompletedAt(now).SaveX(ctx)
 	if err := svc.findingEvidence(ctx, session, f, []uuid.UUID{probe.ID}, true, ""); err == nil || !strings.Contains(err.Error(), "空间尚未增加") {
 		t.Fatal("结案绕过独立回收验证", err)
 	}

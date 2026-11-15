@@ -14,6 +14,7 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/finding"
+	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
 	"openxdr/server/internal/testdb"
@@ -22,11 +23,15 @@ import (
 // 待办生命周期：登记 → 仍在 → 复查修复 → 复发重开 → 人工忽略后 AI 不再改动。
 func TestTrackFindings(t *testing.T) {
 	ctx, db := testdb.New(t)
+	now, err := clockskew.DBNow(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
 	group := db.Group.Create().SetName("g").SaveX(ctx)
 	other := db.Group.Create().SetName("o").SaveX(ctx)
 	host := db.Asset.Create().SetHostname("pve2").SetGroupID(group.ID).SaveX(ctx)
 	stranger := db.Asset.Create().SetHostname("x").SetGroupID(other.ID).SaveX(ctx)
-	session := db.AgentSession.Create().SetKind("task").SetGroupID(group.ID).SetInitiator(commandgate.SystemActor).
+	session := db.AgentSession.Create().SetCreatedAt(now.Add(-30 * time.Second)).SetKind("task").SetGroupID(group.ID).SetInitiator(commandgate.SystemActor).
 		SetModel("m").SetStatus("running").SetTitle("巡检").SaveX(ctx)
 	s := &Service{DB: db, ReviewFinding: func(context.Context, *ent.AgentSession, *ent.Finding, []*ent.Command, findings.Resolution) (bool, string, error) {
 		return true, "服务 active，与原故障直接对应", nil
@@ -46,7 +51,7 @@ func TestTrackFindings(t *testing.T) {
 	if out, err := track(host.ID.String(), "open"); err != nil || !strings.Contains(out, `"reopened":false`) || db.Finding.Query().CountX(ctx) != 1 {
 		t.Fatalf("同一问题应去重更新：%s %v", out, err)
 	}
-	check := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("systemctl is-active termix-backup-pull").SetStatus("succeeded").SetExitCode(0).SetStdout("active").SetCreatedAt(session.CreatedAt).SetCompletedAt(time.Now()).SaveX(ctx)
+	check := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("systemctl is-active termix-backup-pull").SetStatus("succeeded").SetExitCode(0).SetStdout("active").SetCreatedAt(now.Add(-10 * time.Second)).SetCompletedAt(now.Add(-9 * time.Second)).SaveX(ctx)
 	if _, err := s.tool(ctx, session, commandgate.Request{System: true}, "track", []byte(
 		`{"host":"`+host.ID.String()+`","key":"backup-failed","title":"备份服务已恢复","detail":"复查：termix-backup-pull active","severity":"medium","status":"resolved","evidence_commands":["`+check.ID.String()+`"]}`)); err != nil || get() != "resolved" {
 		t.Fatalf("复查修复应关闭：%v %s", err, get())
@@ -81,7 +86,11 @@ func TestTrackFindings(t *testing.T) {
 	}
 
 	// 本轮登记错的可以撤回，遗留的不行；每轮最多新登记 maxNewFindings 条
-	fresh := db.AgentSession.Create().SetKind("task").SetGroupID(group.ID).SetInitiator(commandgate.SystemActor).
+	freshNow, err := clockskew.DBNow(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := db.AgentSession.Create().SetCreatedAt(freshNow.Add(-5 * time.Second)).SetKind("task").SetGroupID(group.ID).SetInitiator(commandgate.SystemActor).
 		SetModel("m").SetStatus("running").SetTitle("巡检").SaveX(ctx)
 	add := func(key, status string) error {
 		_, err := s.tool(ctx, fresh, commandgate.Request{System: true}, "track", []byte(
@@ -215,5 +224,110 @@ func TestIgnoreFinding(t *testing.T) {
 	if _, err := s.tool(ctx, session, commandgate.Request{UserID: boss.ID}, "ignore",
 		[]byte(`{"host":"`+host.ID.String()+`","key":"raid-bbu-failed","reason":"  "}`)); err == nil {
 		t.Error("空理由应拒绝")
+	}
+}
+
+func TestFindingClockSkewBoundsAndStrictCausality(t *testing.T) {
+	ctx, db := testdb.New(t)
+	now, err := clockskew.DBNow(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := db.Group.Create().SetName("g").SaveX(ctx)
+	host := db.Asset.Create().SetHostname("pve1").SetGroupID(group.ID).SaveX(ctx)
+	session := db.AgentSession.Create().SetCreatedAt(now.Add(-20 * time.Second)).SetKind("task").SetGroupID(group.ID).
+		SetInitiator(commandgate.SystemActor).SetModel("m").SetStatus("running").SaveX(ctx)
+	f := db.Finding.Create().SetGroupID(group.ID).SetAssetID(host.ID).SetKey("svc").SetTitle("failed").
+		SetWork(findings.EncodeWork(findings.Work{RiskTarget: &findings.RiskTarget{Kind: "disk_root", AssetID: host.ID, Mount: "/"}})).SaveX(ctx)
+	s := &Service{DB: db}
+
+	// 1. findingEvidence：容差内（session.CreatedAt - 2s、now + 2s）放行，超出容差拒绝；严格因果不放宽。
+	okCmd := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("systemctl is-active app").
+		SetStatus("succeeded").SetExitCode(0).SetStdout("active").
+		SetCreatedAt(session.CreatedAt.Add(-2 * time.Second)).SetCompletedAt(now.Add(2 * time.Second)).SaveX(ctx)
+	if err := s.findingEvidence(ctx, session, f, []uuid.UUID{okCmd.ID}, true, ""); err != nil {
+		t.Fatalf("容差内复查指令被拒绝: %v", err)
+	}
+	tooEarlyCmd := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("systemctl is-active app").
+		SetStatus("succeeded").SetExitCode(0).SetStdout("active").
+		SetCreatedAt(session.CreatedAt.Add(-clockskew.Max - 5*time.Second)).SetCompletedAt(session.CreatedAt.Add(-time.Second)).SaveX(ctx)
+	if err := s.findingEvidence(ctx, session, f, []uuid.UUID{tooEarlyCmd.ID}, true, ""); err == nil {
+		t.Fatal("超出容差下界的旧复查指令未被拒绝")
+	}
+	tooFutureCmd := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("systemctl is-active app").
+		SetStatus("succeeded").SetExitCode(0).SetStdout("active").
+		SetCreatedAt(session.CreatedAt).SetCompletedAt(now.Add(clockskew.Max + 5*time.Second)).SaveX(ctx)
+	if err := s.findingEvidence(ctx, session, f, []uuid.UUID{tooFutureCmd.ID}, true, ""); err == nil {
+		t.Fatal("超出容差上界的未来完成指令未被拒绝")
+	}
+	invertedCmd := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("systemctl is-active app").
+		SetStatus("succeeded").SetExitCode(0).SetStdout("active").
+		SetCreatedAt(now).SetCompletedAt(now.Add(-time.Millisecond)).SaveX(ctx)
+	if err := s.findingEvidence(ctx, session, f, []uuid.UUID{invertedCmd.ID}, true, ""); err == nil {
+		t.Fatal("CreatedAt 晚于 CompletedAt 的因果倒挂未被严格拒绝")
+	}
+
+	// 2. findingReferences：容差内放行，超出容差上下界拒绝。
+	if complete, err := s.findingReferences(ctx, session, f, []uuid.UUID{okCmd.ID}); err != nil || !complete {
+		t.Fatalf("findingReferences 容差内被拒: complete=%v err=%v", complete, err)
+	}
+	if _, err := s.findingReferences(ctx, session, f, []uuid.UUID{tooEarlyCmd.ID}); err == nil {
+		t.Fatal("findingReferences 超出下界未被拒绝")
+	}
+	futureCreated := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("systemctl is-active app").
+		SetStatus("succeeded").SetExitCode(0).SetStdout("active").
+		SetCreatedAt(now.Add(clockskew.Max + 5*time.Second)).SetCompletedAt(now.Add(clockskew.Max + 6*time.Second)).SaveX(ctx)
+	if _, err := s.findingReferences(ctx, session, f, []uuid.UUID{futureCreated.ID}); err == nil {
+		t.Fatal("findingReferences 超出上界未被拒绝")
+	}
+
+	// 3. findingRisk：容差内放行，超出容差拒绝；更新探针因果门禁严格不放宽。
+	diskOut := "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 1000 500 500 50% /\n"
+	nowRisk, err := clockskew.DBNow(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	riskOK := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("df -P /").
+		SetStatus("succeeded").SetExitCode(0).SetStdout(diskOut).
+		SetCreatedAt(session.CreatedAt.Add(-2 * time.Second)).SetCompletedAt(nowRisk.Add(2 * time.Second)).SaveX(ctx)
+	if kind, _, err := s.findingRisk(ctx, session, f, []uuid.UUID{riskOK.ID}); err != nil || kind != "disk_ok" {
+		t.Fatalf("findingRisk 容差内被拒: kind=%s err=%v", kind, err)
+	}
+	riskEarly := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("df -P /").
+		SetStatus("succeeded").SetExitCode(0).SetStdout(diskOut).
+		SetCreatedAt(session.CreatedAt.Add(-clockskew.Max - 5*time.Second)).SetCompletedAt(session.CreatedAt.Add(-time.Second)).SaveX(ctx)
+	if _, _, err := s.findingRisk(ctx, session, f, []uuid.UUID{riskEarly.ID}); err == nil {
+		t.Fatal("findingRisk 超出下界未被拒绝")
+	}
+	riskFuture := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("df -P /").
+		SetStatus("succeeded").SetExitCode(0).SetStdout(diskOut).
+		SetCreatedAt(session.CreatedAt).SetCompletedAt(nowRisk.Add(clockskew.Max + 5*time.Second)).SaveX(ctx)
+	if _, _, err := s.findingRisk(ctx, session, f, []uuid.UUID{riskFuture.ID}); err == nil {
+		t.Fatal("findingRisk 超出上界未被拒绝")
+	}
+	// riskFuture 的 CompletedAt 晚于 riskOK.CompletedAt，此时再单引用 riskOK 必须因“存在未引用的更新探针”严格拒绝。
+	if _, _, err := s.findingRisk(ctx, session, f, []uuid.UUID{riskOK.ID}); err == nil || !strings.Contains(err.Error(), "更新风险探针") {
+		t.Fatalf("存在更新探针时 findingRisk 因果门禁未拒绝: %v", err)
+	}
+
+	// 4. findingEvidence 复查完成同刻/之后的写操作严格拒绝。
+	db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("systemctl restart app").
+		SetStatus("succeeded").SetExitCode(0).SetCreatedAt(*okCmd.CompletedAt).SetCompletedAt(*okCmd.CompletedAt).SaveX(ctx)
+	if err := s.findingEvidence(ctx, session, f, []uuid.UUID{okCmd.ID}, true, ""); err == nil || !strings.Contains(err.Error(), "不要混入修复前证据") {
+		t.Fatalf("复查同刻发生写操作未被严格拒绝: %v", err)
+	}
+
+	// 5. withdrawn：FirstSeen 在容差内（session.CreatedAt - 2s）放行，超出容差（session.CreatedAt - 10s）拒绝。
+	db.Finding.Create().SetGroupID(group.ID).SetAssetID(host.ID).SetKey("skew-ok").SetTitle("t").SetDetail("d").
+		SetSessionID(session.ID).SetFirstSeen(session.CreatedAt.Add(-2 * time.Second)).SaveX(ctx)
+	if _, err := s.tool(ctx, session, commandgate.Request{System: true}, "track",
+		[]byte(`{"host":"`+host.ID.String()+`","key":"skew-ok","title":"t","detail":"d","severity":"low","status":"withdrawn"}`)); err != nil {
+		t.Fatalf("容差内新登记待办撤回被拒: %v", err)
+	}
+	db.Finding.Create().SetGroupID(group.ID).SetAssetID(host.ID).SetKey("skew-old").SetTitle("t").SetDetail("d").
+		SetSessionID(session.ID).SetFirstSeen(session.CreatedAt.Add(-clockskew.Max - 5*time.Second)).SaveX(ctx)
+	if _, err := s.tool(ctx, session, commandgate.Request{System: true}, "track",
+		[]byte(`{"host":"`+host.ID.String()+`","key":"skew-old","title":"t","detail":"d","severity":"low","status":"withdrawn"}`)); err == nil {
+		t.Fatal("超出容差下界的旧待办撤回未被拒绝")
 	}
 }

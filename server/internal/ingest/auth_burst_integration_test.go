@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"openxdr/server/internal/temporal"
 )
 
 // 独立测试库中走真实入库处理器回放 validation/temporal/auth-burst-cases.json：验证证据、幂等和隔离。
@@ -43,16 +42,13 @@ func TestAuthBurstPersistentReplay(t *testing.T) {
 	if err = json.Unmarshal(data, &cases); err != nil {
 		t.Fatal(err)
 	}
+	store := repoTemporalStore(t)
 	for _, tc := range cases {
 		t.Run(tc.Name, func(t *testing.T) {
 			p, c, db := testProcessor(t)
 			defer c.Close()
 			defer db.Close()
 			ctx := context.Background()
-			store := &temporal.Store{}
-			if err := store.Reload(filepath.Join(root, "rules"), filepath.Join(root, "temporal-rules")); err != nil {
-				t.Fatal(err)
-			}
 			p = &Processor{DB: db, Temporal: store, Rules: store, Suppress: p.Suppress, Intel: p.Intel, DedupWindow: p.DedupWindow}
 			id := func(s string) uuid.UUID { return uuid.NewSHA1(uuid.NameSpaceOID, []byte(tc.Name+"/"+s)) }
 			assets := map[string]uuid.UUID{}
