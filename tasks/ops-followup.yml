@@ -30,6 +30,8 @@ prompt: |
   写清缺陷、复现证据与影响，用 ask_controller（type=policy）带 finding_id 提问请管理员登记缺陷，再登记 manual_business_decision；
   答复前不重复调查同一缺陷。
   同一主机领取多个待办时，exec 写操作必须指定当前 finding_id。被审计员拒绝时不改写、不拆分命令绕开，按理由调整方案或登记阻塞。
+  被拒之后出现了新的依据（管理员在总控的答复、管理员执行决定、补上了它指出缺的只读证据）时，原样重新提交一次不算绕开；
+  记忆里「上次被拒」的结论不是永久禁令，依据没变才不重放。
   服务重启与磁盘回收另有管理员授权模板（带冷却与效果核验，见下文与 repair_capabilities）；其他修复不需要模板授权。
   使用模板动作前查看 subjects 对应 open_findings 中的 repair_capabilities，或调用 xdr repair-capabilities <待办UUID> '<精确命令>' [挂载点]。
   返回的是服务端当前快照：supported_templates 为平台支持范围；grants 为管理员精确授权、所需固定探针及冷却/窗口；ready 仍不代替真实执行门禁。

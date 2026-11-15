@@ -224,6 +224,10 @@ func (r *Reviewer) Review(ctx context.Context, session *ent.AgentSession, f *ent
 	return approved, reason, err
 }
 
+// squash 把连续空白压成一个空格：引文仍须是真实 stdout 里的连续原文，但 ss、df 这类按列对齐的输出
+// 模型转述时空格数对不上，不该因此判成没有证据
+func squash(s string) string { return strings.Join(strings.Fields(s), " ") }
+
 func validate(reply string, commands []*ent.Command) (bool, string, error) {
 	dec := json.NewDecoder(bytes.NewBufferString(strings.TrimSpace(reply)))
 	dec.DisallowUnknownFields()
@@ -251,7 +255,7 @@ func validate(reply string, commands []*ent.Command) (bool, string, error) {
 	for _, p := range v.Proofs {
 		c, ok := refs[p.CommandID]
 		quote := strings.TrimSpace(p.Quote)
-		if !ok || seen[p.CommandID] || c.Stdout == nil || c.Cmd == nil || len(quote) < 5 || !strings.ContainsAny(quote, " =:%\n") || len(quote) > 512 || !strings.Contains(*c.Stdout, quote) {
+		if !ok || seen[p.CommandID] || c.Stdout == nil || c.Cmd == nil || len(quote) < 5 || !strings.ContainsAny(quote, " =:%\n") || len(quote) > 512 || !strings.Contains(squash(*c.Stdout), squash(quote)) {
 			return false, "", errors.New("复核引文未精确命中本轮真实stdout")
 		}
 		// 单纯主机信息即使被模型引用也不能成为正面效果证据。

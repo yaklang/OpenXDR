@@ -36,6 +36,16 @@ func TestFindingReviewGroundedProofs(t *testing.T) {
 			t.Errorf("accepted %s", bad)
 		}
 	}
+	// 按列对齐的输出：引文空格数与原文不同仍算命中，换了内容不算
+	ss, listen := "ss -tlnH", "LISTEN 0      4096               *:80               *:*    users:((\"caddy\",pid=1,fd=68))\n"
+	col := &ent.Command{ID: id, Cmd: &ss, Stdout: &listen}
+	spaced := fmt.Sprintf(`{"approve":true,"reason":"80 端口由 caddy 监听","proofs":[{"command_id":"%s","quote":"LISTEN 0 4096 *:80 *:*"}]}`, id)
+	if ok, _, err := validate(spaced, []*ent.Command{col}); err != nil || !ok {
+		t.Fatalf("空白数量不同的连续原文应命中：%v %v", ok, err)
+	}
+	if ok, _, err := validate(strings.Replace(spaced, "*:80", "*:8080", 1), []*ent.Command{col}); err == nil && ok {
+		t.Fatal("内容不同的引文不应命中")
+	}
 	date := "/usr/bin/date"
 	c.Cmd = &date
 	if ok, _, err := validate(good, []*ent.Command{c}); err == nil || ok {
