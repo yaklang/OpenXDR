@@ -166,7 +166,17 @@ func (e *Engine) batch(ctx context.Context) (int, error) {
 		}
 		var raw map[string]any
 		_ = json.Unmarshal(ev.Raw, &raw)
-		if e.Suppress.Suppressed(sigma.RuleNewProcess, &k.asset, raw, ev.Ts) {
+		if raw == nil {
+			raw = map[string]any{}
+		}
+		if ev.Username != nil {
+			sigma.WithActor(raw, *ev.Username)
+		}
+		var lineage []map[string]any
+		if e.Suppress != nil && e.Suppress.NeedsLineage() {
+			lineage = suppress.ResolveLineageEnt(ctx, e.DB, &k.asset, ev.ParentProcessGUID, ev.Ts, raw)
+		}
+		if e.Suppress.SuppressedWithLineage(sigma.RuleNewProcess, &k.asset, raw, lineage, ev.Ts) {
 			continue
 		}
 		// 可信自动化来源的会话、容器健康检查里跑出的新程序照常学进基线，告警挂到来源上、不进关联

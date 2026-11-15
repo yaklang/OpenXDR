@@ -32,6 +32,10 @@ const (
 	FieldLastMatchedAt = "last_matched_at"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
+	// FieldBuiltinKey holds the string denoting the builtin_key field in the database.
+	FieldBuiltinKey = "builtin_key"
+	// FieldBuiltinTitle holds the string denoting the builtin_title field in the database.
+	FieldBuiltinTitle = "builtin_title"
 	// FieldConditions holds the string denoting the conditions field in the database.
 	FieldConditions = "conditions"
 	// FieldSessionID holds the string denoting the session_id field in the database.
@@ -58,6 +62,8 @@ var Columns = []string{
 	FieldMatchedCount,
 	FieldLastMatchedAt,
 	FieldStatus,
+	FieldBuiltinKey,
+	FieldBuiltinTitle,
 	FieldConditions,
 	FieldSessionID,
 	FieldReviewedBy,
@@ -139,6 +145,16 @@ func ByLastMatchedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByStatus orders the results by the status field.
 func ByStatus(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldStatus, opts...).ToFunc()
+}
+
+// ByBuiltinKey orders the results by the builtin_key field.
+func ByBuiltinKey(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBuiltinKey, opts...).ToFunc()
+}
+
+// ByBuiltinTitle orders the results by the builtin_title field.
+func ByBuiltinTitle(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBuiltinTitle, opts...).ToFunc()
 }
 
 // BySessionID orders the results by the session_id field.

@@ -49425,6 +49425,8 @@ type SuppressionMutation struct {
 	addmatched_count *int
 	last_matched_at  *time.Time
 	status           *string
+	builtin_key      *string
+	builtin_title    *string
 	conditions       *[]schema.SuppressCondition
 	appendconditions []schema.SuppressCondition
 	session_id       *uuid.UUID
@@ -49937,6 +49939,104 @@ func (m *SuppressionMutation) ResetStatus() {
 	m.status = nil
 }
 
+// SetBuiltinKey sets the "builtin_key" field.
+func (m *SuppressionMutation) SetBuiltinKey(s string) {
+	m.builtin_key = &s
+}
+
+// BuiltinKey returns the value of the "builtin_key" field in the mutation.
+func (m *SuppressionMutation) BuiltinKey() (r string, exists bool) {
+	v := m.builtin_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBuiltinKey returns the old "builtin_key" field's value of the Suppression entity.
+// If the Suppression object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SuppressionMutation) OldBuiltinKey(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBuiltinKey is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBuiltinKey requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBuiltinKey: %w", err)
+	}
+	return oldValue.BuiltinKey, nil
+}
+
+// ClearBuiltinKey clears the value of the "builtin_key" field.
+func (m *SuppressionMutation) ClearBuiltinKey() {
+	m.builtin_key = nil
+	m.clearedFields[suppression.FieldBuiltinKey] = struct{}{}
+}
+
+// BuiltinKeyCleared returns if the "builtin_key" field was cleared in this mutation.
+func (m *SuppressionMutation) BuiltinKeyCleared() bool {
+	_, ok := m.clearedFields[suppression.FieldBuiltinKey]
+	return ok
+}
+
+// ResetBuiltinKey resets all changes to the "builtin_key" field.
+func (m *SuppressionMutation) ResetBuiltinKey() {
+	m.builtin_key = nil
+	delete(m.clearedFields, suppression.FieldBuiltinKey)
+}
+
+// SetBuiltinTitle sets the "builtin_title" field.
+func (m *SuppressionMutation) SetBuiltinTitle(s string) {
+	m.builtin_title = &s
+}
+
+// BuiltinTitle returns the value of the "builtin_title" field in the mutation.
+func (m *SuppressionMutation) BuiltinTitle() (r string, exists bool) {
+	v := m.builtin_title
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBuiltinTitle returns the old "builtin_title" field's value of the Suppression entity.
+// If the Suppression object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SuppressionMutation) OldBuiltinTitle(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBuiltinTitle is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBuiltinTitle requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBuiltinTitle: %w", err)
+	}
+	return oldValue.BuiltinTitle, nil
+}
+
+// ClearBuiltinTitle clears the value of the "builtin_title" field.
+func (m *SuppressionMutation) ClearBuiltinTitle() {
+	m.builtin_title = nil
+	m.clearedFields[suppression.FieldBuiltinTitle] = struct{}{}
+}
+
+// BuiltinTitleCleared returns if the "builtin_title" field was cleared in this mutation.
+func (m *SuppressionMutation) BuiltinTitleCleared() bool {
+	_, ok := m.clearedFields[suppression.FieldBuiltinTitle]
+	return ok
+}
+
+// ResetBuiltinTitle resets all changes to the "builtin_title" field.
+func (m *SuppressionMutation) ResetBuiltinTitle() {
+	m.builtin_title = nil
+	delete(m.clearedFields, suppression.FieldBuiltinTitle)
+}
+
 // SetConditions sets the "conditions" field.
 func (m *SuppressionMutation) SetConditions(sc []schema.SuppressCondition) {
 	m.conditions = &sc
@@ -50232,7 +50332,7 @@ func (m *SuppressionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SuppressionMutation) Fields() []string {
-	fields := make([]string, 0, 14)
+	fields := make([]string, 0, 16)
 	if m.created_at != nil {
 		fields = append(fields, suppression.FieldCreatedAt)
 	}
@@ -50259,6 +50359,12 @@ func (m *SuppressionMutation) Fields() []string {
 	}
 	if m.status != nil {
 		fields = append(fields, suppression.FieldStatus)
+	}
+	if m.builtin_key != nil {
+		fields = append(fields, suppression.FieldBuiltinKey)
+	}
+	if m.builtin_title != nil {
+		fields = append(fields, suppression.FieldBuiltinTitle)
 	}
 	if m.conditions != nil {
 		fields = append(fields, suppression.FieldConditions)
@@ -50301,6 +50407,10 @@ func (m *SuppressionMutation) Field(name string) (ent.Value, bool) {
 		return m.LastMatchedAt()
 	case suppression.FieldStatus:
 		return m.Status()
+	case suppression.FieldBuiltinKey:
+		return m.BuiltinKey()
+	case suppression.FieldBuiltinTitle:
+		return m.BuiltinTitle()
 	case suppression.FieldConditions:
 		return m.Conditions()
 	case suppression.FieldSessionID:
@@ -50338,6 +50448,10 @@ func (m *SuppressionMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldLastMatchedAt(ctx)
 	case suppression.FieldStatus:
 		return m.OldStatus(ctx)
+	case suppression.FieldBuiltinKey:
+		return m.OldBuiltinKey(ctx)
+	case suppression.FieldBuiltinTitle:
+		return m.OldBuiltinTitle(ctx)
 	case suppression.FieldConditions:
 		return m.OldConditions(ctx)
 	case suppression.FieldSessionID:
@@ -50419,6 +50533,20 @@ func (m *SuppressionMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetStatus(v)
+		return nil
+	case suppression.FieldBuiltinKey:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBuiltinKey(v)
+		return nil
+	case suppression.FieldBuiltinTitle:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBuiltinTitle(v)
 		return nil
 	case suppression.FieldConditions:
 		v, ok := value.([]schema.SuppressCondition)
@@ -50512,6 +50640,12 @@ func (m *SuppressionMutation) ClearedFields() []string {
 	if m.FieldCleared(suppression.FieldLastMatchedAt) {
 		fields = append(fields, suppression.FieldLastMatchedAt)
 	}
+	if m.FieldCleared(suppression.FieldBuiltinKey) {
+		fields = append(fields, suppression.FieldBuiltinKey)
+	}
+	if m.FieldCleared(suppression.FieldBuiltinTitle) {
+		fields = append(fields, suppression.FieldBuiltinTitle)
+	}
 	if m.FieldCleared(suppression.FieldConditions) {
 		fields = append(fields, suppression.FieldConditions)
 	}
@@ -50552,6 +50686,12 @@ func (m *SuppressionMutation) ClearField(name string) error {
 		return nil
 	case suppression.FieldLastMatchedAt:
 		m.ClearLastMatchedAt()
+		return nil
+	case suppression.FieldBuiltinKey:
+		m.ClearBuiltinKey()
+		return nil
+	case suppression.FieldBuiltinTitle:
+		m.ClearBuiltinTitle()
 		return nil
 	case suppression.FieldConditions:
 		m.ClearConditions()
@@ -50602,6 +50742,12 @@ func (m *SuppressionMutation) ResetField(name string) error {
 		return nil
 	case suppression.FieldStatus:
 		m.ResetStatus()
+		return nil
+	case suppression.FieldBuiltinKey:
+		m.ResetBuiltinKey()
+		return nil
+	case suppression.FieldBuiltinTitle:
+		m.ResetBuiltinTitle()
 		return nil
 	case suppression.FieldConditions:
 		m.ResetConditions()

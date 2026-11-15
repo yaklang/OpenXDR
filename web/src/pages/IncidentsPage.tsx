@@ -15,7 +15,7 @@ import { useFlash } from '../components/useFlash'
 import { LoadError } from '../components/LoadError'
 import { ResolveModal } from '../components/ResolveModal'
 import { agreesWithAI, proposalNote, verdictStatus } from '../components/verdict'
-import { INCIDENT_STATUSES, IncidentStatusTag, SeverityTag, errText, incidentStatusKey } from '../components/format'
+import { INCIDENT_STATUSES, IncidentStatusTag, ResolutionSourceTag, SeverityTag, errText, incidentStatusKey } from '../components/format'
 import { FilterCard, Page, STICKY_HEADER, WIDE_ONLY, useWideTable } from '../components/Page'
 import { useI18n } from '../i18n'
 
@@ -263,9 +263,9 @@ export function IncidentsPage() {
                 render: v => groups.find(g => g.id === v)?.name ?? '-',
               },
               {
-                title: t('thStatus'), dataIndex: 'status', width: 130,
+                title: t('thStatus'), dataIndex: 'status', width: 160,
                 sorter: (a, b) => a.status.localeCompare(b.status),
-                render: (v, r) => <Space size={4} wrap><IncidentStatusTag value={v} retriage={r.retriage} triageStartedAt={r.triageStartedAt} />{r.closureProposal && <Tag color="purple" variant="filled">{t('proposalTag')}</Tag>}</Space>,
+                render: (v, r) => <Space size={4} wrap><IncidentStatusTag value={v} retriage={r.retriage} triageStartedAt={r.triageStartedAt} /><ResolutionSourceTag source={r.resolutionSource} />{r.closureProposal && <Tag color="purple" variant="filled">{t('proposalTag')}</Tag>}</Space>,
               },
               {
                 responsive: WIDE_ONLY, title: t('thVerdict'), width: 150,

@@ -1,0 +1,409 @@
+technique: T1082
+name: Built-in Benign Chains Counterfactual Corpus
+cases:
+  # 1. apt 每日更新校验 docker 源签名：apt.systemd.daily → apt-get update → gpgv → apt-key verify → base64 -d
+  - name: 良性链：apt.systemd.daily 经 gpgv/apt-key 调 base64 -d 放行
+    technique: T1027
+    source: prod apt-gpgv-docker-verify
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: base64
+        file:
+          path: /usr/bin/base64
+        cmd_line: "/usr/bin/base64 -d"
+        parent_process:
+          name: sh
+          file:
+            path: /bin/dash
+          cmd_line: "/bin/sh /usr/bin/apt-key --quiet --readonly --keyring /etc/apt/keyrings/docker.gpg verify /tmp/apt.sig.9a12 /tmp/apt.data.9a12"
+    ancestors:
+      - name: gpgv
+        file:
+          path: /usr/lib/apt/methods/gpgv
+        cmd_line: /usr/lib/apt/methods/gpgv
+      - name: apt-get
+        file:
+          path: /usr/bin/apt-get
+        cmd_line: "apt-get -y -o APT::Status-Fd=2 update"
+      - name: apt.systemd.daily
+        file:
+          path: /bin/dash
+        cmd_line: "/bin/sh /usr/lib/apt/apt.systemd.daily update"
+    expect: undetected
+
+  - name: 仿冒链：缺少 gpgv/apt.systemd.daily 祖先的 apt-key 伪装 base64 -d 告警
+    technique: T1027
+    source: counterfactual apt-gpgv-docker-verify
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: base64
+        file:
+          path: /usr/bin/base64
+        cmd_line: "/usr/bin/base64 -d"
+        parent_process:
+          name: sh
+          file:
+            path: /bin/dash
+          cmd_line: "/bin/sh /usr/bin/apt-key verify /tmp/payload.sig /tmp/payload"
+    ancestors:
+      - name: bash
+        file:
+          path: /bin/bash
+        cmd_line: "-bash"
+    expect: detected
+
+  # 2. Kafka 工具脚本：/bin/bash /opt/kafka/bin/kafka-run-class.sh … → /bin/uname -a
+  - name: 良性链：Kafka ConsumerGroupCommand 脚本拉起 uname -a 放行
+    technique: T1082
+    source: prod kafka-tool-uname
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: uname
+        file:
+          path: /bin/uname
+        cmd_line: "/bin/uname -a"
+        parent_process:
+          name: bash
+          file:
+            path: /bin/bash
+          cmd_line: "/bin/bash /opt/kafka/bin/kafka-run-class.sh org.apache.kafka.tools.ConsumerGroupCommand --bootstrap-server 127.0.0.1:9092 --list"
+    expect: undetected
+
+  - name: 良性链：kafka-topics.sh 脚本拉起 uname -a 放行
+    technique: T1082
+    source: prod kafka-tool-uname
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: uname
+        file:
+          path: /usr/bin/uname
+        cmd_line: "uname -a"
+        parent_process:
+          name: bash
+          file:
+            path: /usr/bin/bash
+          cmd_line: "/bin/bash /opt/kafka_2.13-3.7.0/bin/kafka-topics.sh --bootstrap-server 10.1.1.10:9092 --describe"
+    expect: undetected
+
+  - name: 仿冒链：bash -c 带注释伪装 kafka-run-class.sh 执行 uname -a 告警
+    technique: T1082
+    source: counterfactual kafka-tool-uname
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: uname
+        file:
+          path: /bin/uname
+        cmd_line: "/bin/uname -a"
+        parent_process:
+          name: bash
+          file:
+            path: /bin/bash
+          cmd_line: "/bin/bash -c uname -a # /opt/kafka/bin/kafka-run-class.sh"
+    expect: detected
+
+  # 3. PVE 虚机启停：qm start <N> 或 pvedaemon worker 派生的 /bin/systemctl stop <N>.scope、reset-failed <N>.scope
+  - name: 良性链：qm start 清理残留 103.scope 放行
+    technique: T1489
+    source: prod pve-guest-scope-systemctl
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: systemctl
+        file:
+          path: /bin/systemctl
+        cmd_line: "/bin/systemctl stop 103.scope"
+        parent_process:
+          name: qm
+          file:
+            path: /usr/bin/perl
+          cmd_line: "/usr/bin/perl /usr/sbin/qm start 103"
+    expect: undetected
+
+  - name: 良性链：pvedaemon worker 清理 198.scope 放行
+    technique: UEBA-NEW-PROCESS
+    new_process: true
+    source: prod pve-guest-scope-systemctl
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: systemctl
+        file:
+          path: /usr/bin/systemctl
+        cmd_line: "/bin/systemctl reset-failed 198.scope"
+        parent_process:
+          name: pvedaemon
+          file:
+            path: /usr/bin/perl
+          cmd_line: "pvedaemon worker"
+    expect: undetected
+
+  - name: 仿冒链：交互式 bash 手动执行 systemctl stop 103.scope 告警
+    technique: T1489
+    source: counterfactual pve-guest-scope-systemctl
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: systemctl
+        file:
+          path: /bin/systemctl
+        cmd_line: "/bin/systemctl stop 103.scope"
+        parent_process:
+          name: bash
+          file:
+            path: /bin/bash
+          cmd_line: "/bin/bash"
+    expect: detected
+
+  - name: 仿冒链：假借 qm 父进程停止安全守护服务 auditd.service 告警
+    technique: T1489
+    source: counterfactual pve-guest-scope-systemctl
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: systemctl
+        file:
+          path: /bin/systemctl
+        cmd_line: "/bin/systemctl stop auditd.service"
+        parent_process:
+          name: qm
+          file:
+            path: /usr/bin/perl
+          cmd_line: "/usr/bin/perl /usr/sbin/qm start 103"
+    expect: detected
+
+  # 4. PVE 快照备份链：pvescheduler → proxmox-backup-client → lxc-usernsexec → newuidmap/newgidmap/umount
+  - name: 良性链：pvescheduler 经 proxmox-backup-client/lxc-usernsexec 调 newuidmap 放行
+    technique: UEBA-NEW-PROCESS
+    new_process: true
+    source: prod pve-pbs-backup-usernsexec
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: newuidmap
+        file:
+          path: /usr/bin/newuidmap
+        cmd_line: "/usr/bin/newuidmap 48210 0 100000 65536"
+        parent_process:
+          name: lxc-usernsexec
+          file:
+            path: /usr/bin/lxc-usernsexec
+          cmd_line: "/usr/bin/lxc-usernsexec -m u:0:100000:65536 -m g:0:100000:65536 -- tar cpf - /mnt/vzsnap0"
+    ancestors:
+      - name: proxmox-backup-client
+        file:
+          path: /usr/bin/proxmox-backup-client
+        cmd_line: "/usr/bin/proxmox-backup-client backup root.pxar:/mnt/vzsnap0 --repository pbs@pam@10.1.1.50:datastore1"
+      - name: pvescheduler
+        file:
+          path: /usr/bin/perl
+        cmd_line: "pvescheduler"
+    expect: undetected
+
+  - name: 仿冒链：普通会话调 lxc-usernsexec 拉起 newuidmap 缺备份祖先告警
+    technique: UEBA-NEW-PROCESS
+    new_process: true
+    source: counterfactual pve-pbs-backup-usernsexec
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: newuidmap
+        file:
+          path: /usr/bin/newuidmap
+        cmd_line: "/usr/bin/newuidmap 51200 0 100000 65536"
+        parent_process:
+          name: lxc-usernsexec
+          file:
+            path: /usr/bin/lxc-usernsexec
+          cmd_line: "/usr/bin/lxc-usernsexec -m u:0:100000:65536 -- /bin/sh"
+    ancestors:
+      - name: bash
+        file:
+          path: /bin/bash
+        cmd_line: "/bin/bash"
+    expect: detected
+
+  # 5. GitHub Actions runner：Runner.Listener → Runner.Worker spawnclient → bash -e …/_work/_temp/*.sh 下的子孙进程
+  - name: 良性链：GitHub Actions Runner 步骤下执行 cargo 与 docker run 测试容器放行
+    technique: UEBA-NEW-PROCESS
+    new_process: true
+    source: prod github-actions-runner-build
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: docker
+        file:
+          path: /usr/bin/docker
+        cmd_line: "/usr/bin/docker run --rm -d -p 55432:5432 -e POSTGRES_PASSWORD=test postgres:16-alpine"
+        parent_process:
+          name: bash
+          file:
+            path: /usr/bin/bash
+          cmd_line: "/usr/bin/bash --noprofile --norc -e -o pipefail /home/runner/actions-runner/_work/_temp/4f8a9c12-11ab.sh"
+    ancestors:
+      - name: Runner.Worker
+        file:
+          path: /home/runner/actions-runner/bin/Runner.Worker
+        cmd_line: "/home/runner/actions-runner/bin/Runner.Worker spawnclient 142 145"
+      - name: Runner.Listener
+        file:
+          path: /home/runner/actions-runner/bin/Runner.Listener
+        cmd_line: "/home/runner/actions-runner/bin/Runner.Listener run"
+    expect: undetected
+
+  - name: 仿冒链：伪造 _work/_temp 脚本名但无 Runner.Worker/Listener 祖先告警
+    technique: UEBA-NEW-PROCESS
+    new_process: true
+    source: counterfactual github-actions-runner-build
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: cargo
+        file:
+          path: /root/.cargo/bin/cargo
+        cmd_line: "/root/.cargo/bin/cargo test"
+        parent_process:
+          name: bash
+          file:
+            path: /usr/bin/bash
+          cmd_line: "/usr/bin/bash -e /tmp/_work/_temp/fake.sh"
+    ancestors:
+      - name: sshd
+        file:
+          path: /usr/sbin/sshd
+        cmd_line: "sshd: root@pts/0"
+    expect: detected
+
+  - name: 高危拦截：即使在真实 GitHub Actions Runner 下启动 --privileged 容器仍告警
+    technique: T1611
+    source: high-risk github-actions-runner-build
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: docker
+        file:
+          path: /usr/bin/docker
+        cmd_line: "/usr/bin/docker run --rm --privileged -v /:/host alpine chroot /host sh"
+        parent_process:
+          name: bash
+          file:
+            path: /usr/bin/bash
+          cmd_line: "/usr/bin/bash -e /home/runner/actions-runner/_work/_temp/99aa11bb.sh"
+    ancestors:
+      - name: Runner.Worker
+        file:
+          path: /home/runner/actions-runner/bin/Runner.Worker
+        cmd_line: "/home/runner/actions-runner/bin/Runner.Worker spawnclient 10 11"
+      - name: Runner.Listener
+        file:
+          path: /home/runner/actions-runner/bin/Runner.Listener
+        cmd_line: "/home/runner/actions-runner/bin/Runner.Listener run"
+    expect: detected
+
+  # 6. 容器内前端工具链：node 执行 pnpm/tsc/vite/esbuild/eslint/prettier 派生的 uname/dirname/sed
+  - name: 良性链：Docker 容器内 node 执行 pnpm 经 sh -c 派生 uname -a 放行
+    technique: T1082
+    source: prod container-node-frontend-tooling
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      container:
+        runtime: docker
+        uid: 978b4e7c6f53
+        name: web-builder
+      process:
+        name: uname
+        file:
+          path: /bin/uname
+        cmd_line: "/bin/uname -a"
+        parent_process:
+          name: sh
+          file:
+            path: /bin/sh
+          cmd_line: "/bin/sh -c uname -a"
+    ancestors:
+      - name: node
+        file:
+          path: /usr/local/bin/node
+        cmd_line: "/usr/local/bin/node /usr/local/lib/node_modules/corepack/dist/pnpm.js run build"
+    expect: undetected
+
+  - name: 仿冒链：Docker 容器内 Web 服务 node server.js 被 RCE 执行 uname -a 告警
+    technique: T1082
+    source: counterfactual container-node-frontend-tooling
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      container:
+        runtime: docker
+        uid: 978b4e7c6f53
+        name: api-service
+      process:
+        name: uname
+        file:
+          path: /bin/uname
+        cmd_line: "/bin/uname -a"
+        parent_process:
+          name: sh
+          file:
+            path: /bin/sh
+          cmd_line: "/bin/sh -c uname -a"
+    ancestors:
+      - name: node
+        file:
+          path: /usr/local/bin/node
+        cmd_line: "/usr/local/bin/node /app/server.js"
+    expect: detected
+
+  - name: 仿冒链：非容器宿主机上伪造 node vite 拉起 uname -a 告警
+    technique: T1082
+    source: counterfactual container-node-frontend-tooling
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: uname
+        file:
+          path: /bin/uname
+        cmd_line: "/bin/uname -a"
+        parent_process:
+          name: node
+          file:
+            path: /usr/local/bin/node
+          cmd_line: "/usr/local/bin/node /tmp/vite build"
+    expect: detected

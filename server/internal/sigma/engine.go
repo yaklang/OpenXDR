@@ -440,8 +440,14 @@ func loadState(dir string) (*engineState, Report) {
 	report := Report{ByClass: map[int]int{}, Skipped: map[string][]string{}}
 
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
 			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "benign-chains" {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if ext := filepath.Ext(path); ext != ".yml" && ext != ".yaml" {
 			return nil
@@ -533,7 +539,13 @@ func (e *Engine) Watch(ctx context.Context, dir string, interval time.Duration) 
 func dirFingerprint(dir string) string {
 	h := sha256.New()
 	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == "benign-chains" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if ext := filepath.Ext(path); ext != ".yml" && ext != ".yaml" {

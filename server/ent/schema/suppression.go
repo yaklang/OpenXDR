@@ -31,8 +31,11 @@ func (Suppression) Fields() []ent.Field {
 		field.Time("expires_at").Optional().Nillable(),
 		field.Int("matched_count").Default(0),
 		field.Time("last_matched_at").Optional().Nillable(),
-		// active 生效 / proposed AI 提议、待 AI 审计员或组管理员批准 / rejected 被拒绝。只有 active 进抑制索引
+		// active 生效 / disabled 已停用（内置抑制由管理员切停）/ proposed AI 提议、待 AI 审计员或组管理员批准 / rejected 被拒绝。只有 active 进抑制索引
 		field.String("status").Default("active"),
+		// 内置良性链标识与名称（rules/benign-chains/*.yml，created_by="builtin"）；启动同步时按 builtin_key 幂等更新条件，保留启停与命中计数
+		field.String("builtin_key").Optional().Nillable().Unique(),
+		field.String("builtin_title").Optional().Nillable(),
 		// 字段条件（AND）：只压掉事件体里这些字段对得上的命中，比如只压某个域名、某条命令行。
 		// 为空表示整条规则都压——范围大，AI 的提议不允许为空
 		field.JSON("conditions", []SuppressCondition{}).Optional(),
@@ -75,12 +78,16 @@ type EvidenceIncident struct {
 	Source string `json:"source,omitempty"`
 }
 
-// SuppressCondition 一条字段条件：事件体的 dot path 取值与 value 比较，不区分大小写
+// SuppressCondition 一条字段条件：事件体（或 ancestor.* 祖先进程）的 dot path 取值比较。
+// 除 regex 按原样正则匹配外，其余字符串比较均不区分大小写。
 type SuppressCondition struct {
-	Field string `json:"field"`
-	// equals / contains / endswith
-	Op    string `json:"op"`
-	Value string `json:"value"`
+	Field string `json:"field" yaml:"field"`
+	// equals / contains / startswith / endswith / in / not_contains / regex（人工与 AI 提议仅开放 equals/contains/endswith）
+	Op     string   `json:"op" yaml:"op"`
+	Value  string   `json:"value,omitempty" yaml:"value,omitempty"`
+	Values []string `json:"values,omitempty" yaml:"values,omitempty"`
+	// Group > 0 时，同组的多条 ancestor.* 条件必须同时命中血缘链中的同一个祖先进程
+	Group int `json:"group,omitempty" yaml:"group,omitempty"`
 }
 
 func (Suppression) Indexes() []ent.Index {

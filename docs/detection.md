@@ -255,6 +255,7 @@ go -C server test -tags integration -p 1 ./internal/intel ./internal/api -run 'T
     但**只出按实体收窄的草案**，不出整条规则的；人工一路同范围已出草案时不重复。依据标 `basis=ai_benign` 并单列研判良性的数量与事件。
     依据出自 AI，**AI 审计员不代批**（`suppressreview` 一律留给组管理员），否则就是 AI 研判 → AI 统计 → AI 批准的自提自批；
     人从逐个事件结案变成按模式批一次。
+- **内置已知良性链**（`rules/benign-chains/*.yml`，`suppress/builtin.go`）：启动时以 `created_by=builtin` 同步进 `suppressions` 表（累计命中与管理员停用状态跨重启保留，不可删除，AI 不能改动）。支持按同资产 `events` 进程父链在近 3 天窗口内向前回溯最多 8 跳（及早于窗口的长驻守护进程靠 `parent_process` 尾部回退）核对分组祖先条件 `ancestor.*`，配合 `startswith / re / not_contains` 锁定不可伪造的绝对路径与完整命令行组合；`BuiltinAllowedRule` 硬性限制 `severity ≤ 3` 并拒绝凭据窃取、清痕迹、削弱防御、破坏、持久化、容器逃逸与情报/诱饵命中。反事实语料见 `validation/benign_chains.yml`（由 `cmd/detectcheck --strict` 校验），`cmd/backtest` 同时输出良性链在真实数据上的压掉计数。
 - **抑制生效后回头结案**（`server/internal/suppressclose`，单活租约 `suppression-retro-close`，默认每 `SUPPRESSION_RETRO_CLOSE_MINUTES`（10）分钟一轮）：
   抑制只挡新命中，批准之前已经成了事件的同一模式仍挂在未结案里。每轮按生效抑制找带其规则命中的未结案事件，
   **全部告警**都能读到原始事件、且各自被某条生效抑制覆盖（与入库同一套匹配，只查不计命中数）、AI 研判为 `benign`、没有人工接管时，

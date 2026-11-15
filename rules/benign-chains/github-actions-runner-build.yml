@@ -1,0 +1,54 @@
+id: github-actions-runner-build
+title: GitHub Actions Runner 构建与测试容器（Runner.Listener → Runner.Worker → _work/_temp/*.sh）
+description: >-
+  自托管 GitHub Actions Runner 执行 CI 步骤时，Runner.Listener 拉起 Runner.Worker spawnclient，
+  经 bash -e .../_work/_temp/<id>.sh 运行 rustup、cargo、rustc 及 docker run 测试容器，常触发临时脚本与首次进程规则。
+  要求三层 Runner 祖先全部在链上，限制直接父进程与目标可执行路径，并排除 --privileged、docker.sock、--pid=host 等逃逸参数。
+sample: >-
+  /home/runner/actions-runner/bin/Runner.Listener run →
+  /home/runner/actions-runner/bin/Runner.Worker spawnclient 10 11 →
+  /usr/bin/bash -e /home/runner/actions-runner/_work/_temp/4f8a9c12.sh →
+  /root/.cargo/bin/cargo test --locked
+rules:
+  - "*"
+conditions:
+  - field: process.file.path
+    op: regex
+    value: '^((/(root|home/[^/\s]+|opt/[^/\s]+)/\.(cargo|rustup)/|/usr/(local/)?cargo/).*/?(rustup|cargo|rustc)|/usr/bin/docker|/usr/libexec/docker/cli-plugins/docker-[a-z0-9-]+)$'
+  - field: process.cmd_line
+    op: regex
+    value: '^(\S*/?(rustup|cargo|rustc)(\s|$)|(/usr/bin/)?docker\s+run\b)'
+  - field: process.cmd_line
+    op: not_contains
+    value: --privileged
+  - field: process.cmd_line
+    op: not_contains
+    value: docker.sock
+  - field: process.cmd_line
+    op: not_contains
+    value: --pid=host
+  - field: process.parent_process.file.path
+    op: regex
+    value: '^(/usr)?/bin/(ba|da)?sh$|^/(root|home/[^/\s]+|opt/[^/\s]+)/\.(cargo|rustup)/'
+  - field: ancestor.file.path
+    op: in
+    values:
+      - /bin/bash
+      - /usr/bin/bash
+    group: 1
+  - field: ancestor.cmd_line
+    op: regex
+    value: '(^|\s)-e\s+.*/_work/_temp/[A-Za-z0-9._-]+\.sh(\s|$)'
+    group: 1
+  - field: ancestor.file.path
+    op: endswith
+    value: /Runner.Worker
+    group: 2
+  - field: ancestor.cmd_line
+    op: regex
+    value: 'Runner\.Worker\s+spawnclient\b'
+    group: 2
+  - field: ancestor.file.path
+    op: endswith
+    value: /Runner.Listener
+    group: 3

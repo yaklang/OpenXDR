@@ -77,10 +77,11 @@ type incidentSummary struct {
 	Severity int16 `json:"severity"`
 	// 第一条有归属资产的告警所在资产的组，前端按组过滤/展示
 	GroupID *uuid.UUID `json:"groupId"`
-	// 结案信息：谁、何时、为什么
-	Resolution *string    `json:"resolution"`
-	ResolvedBy *string    `json:"resolvedBy"`
-	ResolvedAt *time.Time `json:"resolvedAt"`
+	// 结案信息：谁、何时、为什么、哪条机制
+	Resolution       *string    `json:"resolution"`
+	ResolvedBy       *string    `json:"resolvedBy"`
+	ResolvedAt       *time.Time `json:"resolvedAt"`
+	ResolutionSource *string    `json:"resolutionSource,omitempty"`
 	// ClosureProposal AI 的结案建议，人采纳或忽略
 	ClosureProposal *schema.ClosureProposal `json:"closureProposal"`
 	Work            *schema.IncidentWork    `json:"work,omitempty"`
@@ -512,7 +513,8 @@ func summarize(inc *ent.Incident, alertCount int, severity int16) incidentSummar
 		ID: inc.ID, CreatedAt: inc.CreatedAt, Status: inc.Status,
 		Title: inc.Title, AiVerdict: inc.AiVerdict, AlertCount: alertCount,
 		Severity: severity, Resolution: inc.Resolution, ResolvedBy: inc.ResolvedBy, ResolvedAt: inc.ResolvedAt,
-		ClosureProposal: inc.ClosureProposal, Work: inc.Work, WorkNextCheckAt: inc.WorkNextCheckAt,
+		ResolutionSource: inc.ResolutionSource,
+		ClosureProposal:  inc.ClosureProposal, Work: inc.Work, WorkNextCheckAt: inc.WorkNextCheckAt,
 		TriagedAt: inc.TriagedAt, TriageCount: inc.TriageCount, Retriage: retriageOf(inc),
 		TriageFailures: inc.TriageFailures, TriageRetryAt: inc.TriageRetryAt,
 		TriageStartedAt: triage.RunningStartedAt(inc, time.Now()),

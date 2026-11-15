@@ -1,0 +1,62 @@
+id: apt-gpgv-docker-verify
+title: apt 每日更新校验软件源签名（apt-key / gpgv）
+description: >-
+  Debian/Ubuntu 定时服务 apt.systemd.daily 执行 apt-get update 时，/usr/lib/apt/methods/gpgv
+  调用 /usr/bin/apt-key verify 校验第三方软件源（如 Docker 源）签名，脚本内部运行 base64 -d 解码公钥环，
+  常触发 Base64 解码与首次出现进程规则。要求当前可执行路径与参数、父进程 apt-key verify 以及 gpgv、
+  apt-get update、apt.systemd.daily 三层祖先全部吻合。
+sample: >-
+  /bin/sh /usr/lib/apt/apt.systemd.daily update → /usr/bin/apt-get -y update →
+  /usr/lib/apt/methods/gpgv → /bin/sh /usr/bin/apt-key --quiet --readonly verify /tmp/apt.sig /tmp/apt.data →
+  /usr/bin/base64 -d
+rules:
+  - "*"
+conditions:
+  - field: process.file.path
+    op: in
+    values:
+      - /usr/bin/base64
+      - /bin/base64
+  - field: process.cmd_line
+    op: regex
+    value: '^((/usr)?/bin/)?base64\s+(-d|--decode)$'
+  - field: process.parent_process.file.path
+    op: in
+    values:
+      - /bin/sh
+      - /usr/bin/sh
+      - /bin/dash
+      - /usr/bin/dash
+      - /bin/bash
+      - /usr/bin/bash
+  - field: process.parent_process.cmd_line
+    op: regex
+    value: '^(/usr)?/bin/(da|ba)?sh\s+/usr/bin/apt-key\b.*\bverify\b'
+  - field: ancestor.file.path
+    op: equals
+    value: /usr/lib/apt/methods/gpgv
+    group: 1
+  - field: ancestor.file.path
+    op: in
+    values:
+      - /usr/bin/apt-get
+      - /usr/bin/apt
+    group: 2
+  - field: ancestor.cmd_line
+    op: regex
+    value: '\bupdate\b'
+    group: 2
+  - field: ancestor.file.path
+    op: in
+    values:
+      - /bin/sh
+      - /usr/bin/sh
+      - /bin/dash
+      - /usr/bin/dash
+      - /bin/bash
+      - /usr/bin/bash
+    group: 3
+  - field: ancestor.cmd_line
+    op: contains
+    value: /usr/lib/apt/apt.systemd.daily
+    group: 3

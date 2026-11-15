@@ -1,0 +1,58 @@
+id: container-node-frontend-tooling
+title: 容器内前端工具链环境探测（node pnpm/tsc/vite/esbuild/eslint/prettier → uname/dirname/sed）
+description: >-
+  容器内 Node.js 执行前端包管理与构建工具（pnpm、tsc、vite、esbuild、eslint、prettier）时，
+  会直接或经单层 sh -c 调用 uname、dirname、sed 获取架构与路径，触发侦察与首次进程规则。
+  要求事件位于容器内（container.runtime），当前可执行文件为系统 uname/dirname/sed 且不含敏感文件路径，
+  直接父进程为 node 或标准 shell，且祖先中存在运行上述前端工具的 node 进程。
+sample: >-
+  [container:docker] /usr/local/bin/node /app/node_modules/.bin/vite build →
+  /bin/sh -c uname -m → /bin/uname -m
+rules:
+  - "*"
+conditions:
+  - field: container.runtime
+    op: in
+    values:
+      - docker
+      - podman
+      - containerd
+      - cri-o
+      - lxc
+      - nspawn
+  - field: process.file.path
+    op: in
+    values:
+      - /bin/uname
+      - /usr/bin/uname
+      - /bin/dirname
+      - /usr/bin/dirname
+      - /bin/sed
+      - /usr/bin/sed
+      - /bin/busybox
+  - field: process.cmd_line
+    op: regex
+    value: '^((/usr)?/bin/)?(uname(\s+-[a-zA-Z]+)*|dirname\s+\S+|sed\s+.+)$'
+  - field: process.cmd_line
+    op: not_contains
+    value: /etc/passwd
+  - field: process.cmd_line
+    op: not_contains
+    value: /etc/shadow
+  - field: process.cmd_line
+    op: not_contains
+    value: /etc/sudoers
+  - field: process.cmd_line
+    op: not_contains
+    value: authorized_keys
+  - field: process.parent_process.file.path
+    op: regex
+    value: '^((/usr(/local)?/bin/|/opt/\S+/bin/|/root/\S+/bin/|/home/[^/\s]+/\S+/bin/)node|(/usr)?/bin/(ba|da|a)?sh|/bin/busybox)$'
+  - field: ancestor.file.path
+    op: regex
+    value: '^(/usr(/local)?/bin/|/opt/\S+/bin/|/root/\S+/bin/|/home/[^/\s]+/\S+/bin/)node$'
+    group: 1
+  - field: ancestor.cmd_line
+    op: regex
+    value: '^(\S*/)?node\s+.*(\b(pnpm|tsc|vite|esbuild|eslint|prettier)\b|/(pnpm|typescript/bin/tsc|vite|esbuild|eslint|prettier)([./\s]|$))'
+    group: 1

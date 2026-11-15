@@ -4,7 +4,7 @@ import { Link } from 'react-router'
 import type { AlertRow, IncidentDetail } from '../api'
 import { useI18n, type T } from '../i18n'
 import { Ago, ago } from './Ago'
-import { IncidentStatusTag, SeverityTag, fmtTime } from './format'
+import { IncidentStatusTag, ResolutionSourceTag, SeverityTag, fmtTime } from './format'
 
 // 最近一条告警在这个时间内就算「仍在发生」
 const ONGOING_MS = 15 * 60_000
@@ -98,6 +98,7 @@ export function IncidentFacts({ inc }: { inc: IncidentDetail }) {
         foot={done ? inc.resolvedAt && <>{inc.resolvedBy} · <Ago iso={inc.resolvedAt} /></> : inc.workNextCheckAt && t('factNextCheck', { at: fmtTime(inc.workNextCheckAt) })}>
         <Space size={8} wrap>
           <IncidentStatusTag value={inc.status} retriage={inc.retriage} triageStartedAt={inc.triageStartedAt} />
+          {done && <ResolutionSourceTag source={inc.resolutionSource} />}
           {!done && owner && <Tag color={owner === 'ai' ? 'purple' : 'orange'}>{t(owner === 'ai' ? 'factOwnerAI' : 'factOwnerHuman')}</Tag>}
         </Space>
       </Fact>

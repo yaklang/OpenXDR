@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -31,6 +32,7 @@ import (
 	"openxdr/server/internal/aijob"
 	"openxdr/server/internal/api"
 	"openxdr/server/internal/assetmap"
+	"openxdr/server/internal/assetretire"
 	"openxdr/server/internal/auditchain"
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/authentik"
@@ -103,7 +105,6 @@ func main() {
 	startDirectorySync(ctx, db)
 
 	suppressions := suppress.New(client, time.Duration(getenvInt("SUPPRESSION_RELOAD_SECONDS", 30))*time.Second)
-	go suppressions.Run(ctx)
 	credentialVault := loadCredentialVault()
 	aiConf := newAIConf(client, credentialVault)
 	conf := func() aiconf.Config { return aiConf.Get(ctx) }
@@ -117,6 +118,18 @@ func main() {
 		os.Exit(1)
 	}
 	rules, customRules := startCustomRules(ctx, client, baseRules, rulesReload)
+	suppressions.SetRules(rules)
+	if err := cluster.WithLock(ctx, db, "builtin-suppressions", func() error {
+		n, syncErr := suppress.SyncBuiltins(ctx, client, rules, filepath.Join(rulesPath, "benign-chains"))
+		if syncErr == nil && n > 0 {
+			slog.Info("内置良性链已同步", "chains", n)
+		}
+		return syncErr
+	}); err != nil {
+		slog.Error("内置良性链同步失败", "err", err)
+		os.Exit(1)
+	}
+	go suppressions.Run(ctx)
 	if temporalRules != nil {
 		// 过期候选清理与 RETENTION_DAYS 无关：它决定候选表规模，不删原始事件或证据
 		go cluster.RunLeader(ctx, db, "temporal-candidates", func(ctx context.Context) {
@@ -407,6 +420,8 @@ func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules s
 		closer := &suppressclose.Closer{DB: client, Store: suppressions, Interval: time.Duration(minutes) * time.Minute}
 		go cluster.RunLeader(ctx, db, "suppression-retro-close", closer.Run)
 	}
+	// 退役资产未结事件兜底结案：补收历史遗留或退役与关联竞态窗口内产生的纯退役资产事件
+	go cluster.RunLeader(ctx, db, "asset-retire-close", (&assetretire.Closer{DB: client, Interval: time.Minute}).Run)
 }
 
 // startSuppressionReview 抑制草案由 AI 审计员评审：草案生成时当场评审，单活循环兜底积压与重启。

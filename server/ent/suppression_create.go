@@ -140,6 +140,34 @@ func (_c *SuppressionCreate) SetNillableStatus(v *string) *SuppressionCreate {
 	return _c
 }
 
+// SetBuiltinKey sets the "builtin_key" field.
+func (_c *SuppressionCreate) SetBuiltinKey(v string) *SuppressionCreate {
+	_c.mutation.SetBuiltinKey(v)
+	return _c
+}
+
+// SetNillableBuiltinKey sets the "builtin_key" field if the given value is not nil.
+func (_c *SuppressionCreate) SetNillableBuiltinKey(v *string) *SuppressionCreate {
+	if v != nil {
+		_c.SetBuiltinKey(*v)
+	}
+	return _c
+}
+
+// SetBuiltinTitle sets the "builtin_title" field.
+func (_c *SuppressionCreate) SetBuiltinTitle(v string) *SuppressionCreate {
+	_c.mutation.SetBuiltinTitle(v)
+	return _c
+}
+
+// SetNillableBuiltinTitle sets the "builtin_title" field if the given value is not nil.
+func (_c *SuppressionCreate) SetNillableBuiltinTitle(v *string) *SuppressionCreate {
+	if v != nil {
+		_c.SetBuiltinTitle(*v)
+	}
+	return _c
+}
+
 // SetConditions sets the "conditions" field.
 func (_c *SuppressionCreate) SetConditions(v []schema.SuppressCondition) *SuppressionCreate {
 	_c.mutation.SetConditions(v)
@@ -352,6 +380,14 @@ func (_c *SuppressionCreate) createSpec() (*Suppression, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(suppression.FieldStatus, field.TypeString, value)
 		_node.Status = value
+	}
+	if value, ok := _c.mutation.BuiltinKey(); ok {
+		_spec.SetField(suppression.FieldBuiltinKey, field.TypeString, value)
+		_node.BuiltinKey = &value
+	}
+	if value, ok := _c.mutation.BuiltinTitle(); ok {
+		_spec.SetField(suppression.FieldBuiltinTitle, field.TypeString, value)
+		_node.BuiltinTitle = &value
 	}
 	if value, ok := _c.mutation.Conditions(); ok {
 		_spec.SetField(suppression.FieldConditions, field.TypeJSON, value)
