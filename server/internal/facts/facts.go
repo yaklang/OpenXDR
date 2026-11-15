@@ -77,6 +77,14 @@ func ValidateFact(kind, subject string, assetID *uuid.UUID, content string) erro
 	return nil
 }
 
+// ValidateShared 只有钥匙事实允许标记为多人或多机共享
+func ValidateShared(kind string, shared bool) error {
+	if shared && kind != "key" {
+		return errors.New("只有 key 事实可标记为共享钥匙")
+	}
+	return nil
+}
+
 // Prefix 地址或 CIDR 统一成网段
 func Prefix(s string) (netip.Prefix, error) {
 	s = strings.TrimSpace(s)
@@ -290,7 +298,11 @@ func Render(b *Brief, hostnames map[uuid.UUID]string) string {
 			if f.Holder != "" {
 				holder = "，持有人 " + f.Holder
 			}
-			fmt.Fprintf(&sb, "- [%s] %s %s%s：%s\n", Ref("F", f.ID), kindNames[f.Kind], subject, holder, f.Content)
+			shared := ""
+			if f.Kind == "key" && f.Shared {
+				shared = "（共享钥匙）"
+			}
+			fmt.Fprintf(&sb, "- [%s] %s %s%s%s：%s\n", Ref("F", f.ID), kindNames[f.Kind], subject, shared, holder, f.Content)
 		}
 	}
 	if len(b.Intents) > 0 {
@@ -358,7 +370,7 @@ func Register(ctx context.Context, db *ent.Client, holder, remote string, req In
 		return nil, err
 	}
 	defer tx.Rollback()
-	in, err := tx.Intent.Create().SetCreatedBy(holder).SetKeyFingerprint(req.KeyFingerprint).SetSourceAddr(req.SourceAddr).
+	in, err := tx.Intent.Create().SetCreatedAt(now).SetCreatedBy(holder).SetKeyFingerprint(req.KeyFingerprint).SetSourceAddr(req.SourceAddr).
 		SetAssetIds(req.Assets).SetCategory(req.Category).SetNote(req.Note).SetStartsAt(req.StartsAt).
 		SetExpiresAt(req.StartsAt.Add(req.Duration)).SetLate(late).Save(ctx)
 	if err != nil {

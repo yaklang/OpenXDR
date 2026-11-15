@@ -23,6 +23,7 @@ import (
 	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/event"
+	"openxdr/server/ent/fact"
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/schema"
 	"openxdr/server/internal/audit"
@@ -31,6 +32,7 @@ import (
 	"openxdr/server/internal/decoy"
 	"openxdr/server/internal/incidentstate"
 	"openxdr/server/internal/incidentwork"
+	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/triage"
 )
@@ -64,12 +66,20 @@ type MissingFact struct {
 type Judge func(context.Context, string, string) (Decision, error)
 type Reviewer struct {
 	DB       *ent.Client
+	Rules    func() []*sigma.Rule
 	Model    func() string
 	Judge    Judge
 	Interval time.Duration
 	mu       sync.Mutex
 	sweepMu  sync.Mutex
 	cursor   uuid.UUID
+}
+
+func (r *Reviewer) rules() []*sigma.Rule {
+	if r == nil || r.Rules == nil {
+		return nil
+	}
+	return r.Rules()
 }
 
 func New(db *ent.Client, endpoint func() (string, string), model func() string, usage func(string, int, int)) *Reviewer {
@@ -203,6 +213,7 @@ type positiveBasis struct {
 }
 type material struct {
 	Contained   *containedEvidence      `json:"contained,omitempty"`
+	OpsSession  *opsEvidence            `json:"ops_session,omitempty"`
 	Benign      *benignEvidence         `json:"benign,omitempty"`
 	EvidenceKey string                  `json:"evidence_key,omitempty"`
 	VerdictHash string                  `json:"verdict_hash,omitempty"`
@@ -221,6 +232,19 @@ type material struct {
 	CorroboratingChanges string            `json:"corroborating_changes,omitempty"`
 	Commands             []commandEvidence `json:"commands"`
 	Basis                []positiveBasis   `json:"positive_basis"`
+}
+
+func (m *material) hosts() []benignHost {
+	if m == nil {
+		return nil
+	}
+	if m.OpsSession != nil {
+		return m.OpsSession.Hosts
+	}
+	if m.Benign != nil {
+		return m.Benign.Hosts
+	}
+	return nil
 }
 
 func eligible(inc *ent.Incident) bool {
@@ -252,16 +276,30 @@ func eligible(inc *ent.Incident) bool {
 	return true
 }
 func load(ctx context.Context, db *ent.Client, id uuid.UUID) (*material, error) {
+	return loadWithRules(ctx, db, nil, id)
+}
+
+func loadWithRules(ctx context.Context, db *ent.Client, rules []*sigma.Rule, id uuid.UUID) (*material, error) {
 	inc, err := db.Incident.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	if containedEligible(inc) {
-		return loadContained(ctx, db, inc)
+		m, err := loadContained(ctx, db, inc)
+		if !errors.Is(err, ErrIneligible) {
+			return m, err
+		}
 	}
-	// 带平台只读来源链的提案优先；不满足时回落到无提案的良性复核
+	// 带平台只读来源链的提案优先；其次走已核验每机钥匙与事前意图的运维会话（按 closed 结案，避免授权运维标误报）；
+	// 任一条件不满足照旧回落普通良性复核。
 	if eligible(inc) {
 		m, err := loadProposal(ctx, db, inc)
+		if !errors.Is(err, ErrIneligible) {
+			return m, err
+		}
+	}
+	if opsEligible(inc) {
+		m, err := loadOpsSession(ctx, db, rules, inc)
 		if !errors.Is(err, ErrIneligible) {
 			return m, err
 		}
@@ -396,10 +434,24 @@ func fingerprint(m *material) string {
 	return digest(append(append(b, 0), closurePrompt(string(b))...))
 }
 func validate(d Decision, m *material) bool {
-	// 已遏制与良性分支由服务端核验范围，提案分支要求每个事件都有平台只读来源链
-	serverScoped := m.Contained != nil || m.Benign != nil
+	// 已遏制、运维会话与良性分支由服务端核验范围，提案分支要求每个事件都有平台只读来源链
+	serverScoped := m.Contained != nil || m.OpsSession != nil || m.Benign != nil
 	if len(m.Events) == 0 || !serverScoped && (len(m.Basis) != len(m.Events) || len(m.Basis) == 0) || !d.Approve || strings.TrimSpace(d.Reason) == "" || len(strings.TrimSpace(d.PositiveEvidence)) < 20 {
 		return false
+	}
+	// 运维会话放行：批准理由必须引用覆盖本事件每个会话的权威钥匙事实编号与事前运维意图编号（服务端逐项校验）
+	if m.OpsSession != nil {
+		if len(m.OpsSession.Sessions) == 0 {
+			return false
+		}
+		for _, s := range m.OpsSession.Sessions {
+			if len(s.KeyFacts) == 0 || !slices.ContainsFunc(s.KeyFacts, func(ref string) bool { return strings.Contains(d.Reason, ref) }) {
+				return false
+			}
+			if len(s.Intents) == 0 || !slices.ContainsFunc(s.Intents, func(ref string) bool { return strings.Contains(d.Reason, ref) }) {
+				return false
+			}
+		}
 	}
 	// 高危告警凭主机事实放行：理由里要引用覆盖该主机的事实编号
 	if m.Benign != nil {
@@ -468,7 +520,8 @@ func claimValue(ev *ent.Event, field string) (string, bool) {
 func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	m, err := load(ctx, r.DB, id)
+	rules := r.rules()
+	m, err := loadWithRules(ctx, r.DB, rules, id)
 	if errors.Is(err, ErrIneligible) {
 		return false, nil
 	}
@@ -505,7 +558,7 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 		return false, err
 	}
 	defer tx.Rollback()
-	fresh, err := load(ctx, tx.Client(), id)
+	fresh, err := loadWithRules(ctx, tx.Client(), rules, id)
 	if err != nil || fingerprint(fresh) != hash {
 		if errors.Is(err, ErrIneligible) {
 			return false, nil
@@ -518,24 +571,36 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 		return false, err
 	}
 	if approved {
+		now := time.Now()
 		status := "false_positive"
+		source := "ai_review"
 		resolution := "独立结案审计：" + d.Reason + "；正面证据：" + d.PositiveEvidence
-		if m.Contained != nil {
+		switch {
+		case m.Contained != nil:
 			status = "closed"
 			resolution += "；已遏制处置：" + containmentSummary(m.Contained)
+		case m.OpsSession != nil:
+			status = "closed"
+			source = OpsSessionSource
+			resolution = "独立结案审计（运维会话）：" + d.Reason + "；运维依据：" + opsBasisSummary(m.OpsSession) + "；正面证据：" + d.PositiveEvidence
 		}
-		n, err = tx.Incident.Update().Where(incident.IDEQ(id), incident.StatusEQ("triaged"), incident.TriagedAtEQ(m.TriagedAt)).SetStatus(status).SetResolvedBy("system").SetResolutionSource("ai_review").SetResolvedAt(time.Now()).SetResolution(resolution).ClearClosureProposal().Save(ctx)
+		n, err = tx.Incident.Update().Where(incident.IDEQ(id), incident.StatusEQ("triaged"), incident.TriagedAtEQ(m.TriagedAt)).SetStatus(status).SetResolvedBy("system").SetResolutionSource(source).SetResolvedAt(now).SetResolution(resolution).ClearClosureProposal().Save(ctx)
 		if err != nil || n != 1 {
 			return false, err
+		}
+		if fresh.OpsSession != nil && len(fresh.OpsSession.factIDs) > 0 {
+			if err = tx.Fact.Update().Where(fact.IDIn(fresh.OpsSession.factIDs...)).AddCitedCount(1).SetLastCitedAt(now).Exec(ctx); err != nil {
+				return false, err
+			}
 		}
 		completed, err := tx.Incident.Get(ctx, id)
 		if err != nil {
 			return false, err
 		}
-		if err = incidentwork.Refresh(ctx, tx.Client(), completed, time.Now()); err != nil {
+		if err = incidentwork.Refresh(ctx, tx.Client(), completed, now); err != nil {
 			return false, err
 		}
-		if err = incidentstate.Record(ctx, tx, id, incidentstate.StatusChanged, incidentstate.Origin{Kind: "ai_review", ID: Actor}, "triaged"); err != nil {
+		if err = incidentstate.Record(ctx, tx, id, incidentstate.StatusChanged, incidentstate.Origin{Kind: source, ID: Actor}, "triaged"); err != nil {
 			return false, err
 		}
 	}
@@ -545,14 +610,18 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 		auditDecision.Claims[i].Value = "sha256:" + digest([]byte(auditDecision.Claims[i].Value))
 	}
 	decision, _ := json.Marshal(auditDecision)
-	detail := prefix + fmt.Sprintf("approved=%t model=%s decision=%s", approved, model, decision)
+	mechanism := "ai_review"
+	if m.OpsSession != nil {
+		mechanism = OpsSessionSource
+	}
+	detail := prefix + fmt.Sprintf("approved=%t mechanism=%s model=%s decision=%s", approved, mechanism, model, decision)
 	if err = audit.Checked(ctx, tx.AuditLog.Create(), Actor, "server", "incident_closure_ai_reviewed", id.String(), detail); err != nil {
 		return false, err
 	}
 	if err = tx.Commit(); err != nil {
 		return false, err
 	}
-	if !approved && m.Benign != nil {
+	if !approved && (m.Benign != nil || m.OpsSession != nil) {
 		r.askMissing(ctx, m, d, hash)
 	}
 	return approved, nil

@@ -34,6 +34,7 @@ type factRow struct {
 	Hostname    string     `json:"hostname,omitempty"`
 	Holder      string     `json:"holder"`
 	HolderName  string     `json:"holderName"`
+	Shared      bool       `json:"shared,omitempty"`
 	Content     string     `json:"content"`
 	Source      string     `json:"source"`
 	CreatedBy   string     `json:"createdBy"`
@@ -177,6 +178,7 @@ func Control(db *ent.Client, notify func(ctx context.Context, title, body, path 
 			GroupID       *uuid.UUID `json:"groupId"`
 			AssetID       *uuid.UUID `json:"assetId"`
 			Holder        string     `json:"holder"`
+			Shared        bool       `json:"shared"`
 			Content       string     `json:"content"`
 			ExpiresInDays int        `json:"expiresInDays"`
 		}
@@ -186,6 +188,10 @@ func Control(db *ent.Client, notify func(ctx context.Context, title, body, path 
 		}
 		body.Subject, body.Holder, body.Content = strings.TrimSpace(body.Subject), strings.TrimSpace(body.Holder), strings.TrimSpace(body.Content)
 		if err := facts.ValidateFact(body.Kind, body.Subject, body.AssetID, body.Content); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := facts.ValidateShared(body.Kind, body.Shared); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -209,7 +215,7 @@ func Control(db *ent.Client, notify func(ctx context.Context, title, body, path 
 		var row *ent.Fact
 		err := withTx(r, db, func(tx *ent.Tx) error {
 			c := tx.Fact.Create().SetKind(body.Kind).SetSubject(body.Subject).SetNillableGroupID(body.GroupID).
-				SetNillableAssetID(body.AssetID).SetHolder(body.Holder).SetContent(body.Content).SetSource("human").SetCreatedBy(actor)
+				SetNillableAssetID(body.AssetID).SetHolder(body.Holder).SetShared(body.Shared).SetContent(body.Content).SetSource("human").SetCreatedBy(actor)
 			if body.ExpiresInDays > 0 {
 				c.SetExpiresAt(time.Now().AddDate(0, 0, body.ExpiresInDays))
 			}
@@ -217,8 +223,12 @@ func Control(db *ent.Client, notify func(ctx context.Context, title, body, path 
 			if row, err = c.Save(r.Context()); err != nil {
 				return err
 			}
+			sharedNote := ""
+			if body.Shared {
+				sharedNote = " shared=true"
+			}
 			return audit.Checked(r.Context(), tx.AuditLog.Create(), actor, audit.RemoteAddr(r), "fact_created", row.ID.String(),
-				fmt.Sprintf("%s %s 持有人=%s：%s", body.Kind, body.Subject, body.Holder, body.Content))
+				fmt.Sprintf("%s %s 持有人=%s%s：%s", body.Kind, body.Subject, body.Holder, sharedNote, body.Content))
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -238,6 +248,7 @@ func Control(db *ent.Client, notify func(ctx context.Context, title, body, path 
 		}
 		var body struct {
 			Holder        *string `json:"holder"`
+			Shared        *bool   `json:"shared"`
 			Content       *string `json:"content"`
 			ExpiresInDays *int    `json:"expiresInDays"`
 		}
@@ -253,11 +264,20 @@ func Control(db *ent.Client, notify func(ctx context.Context, title, body, path 
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if body.Shared != nil {
+			if err := facts.ValidateShared(row.Kind, *body.Shared); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		actor := auth.From(r.Context()).Username
 		err := withTx(r, db, func(tx *ent.Tx) error {
 			u := tx.Fact.UpdateOneID(row.ID).SetContent(content)
 			if body.Holder != nil {
 				u.SetHolder(strings.TrimSpace(*body.Holder))
+			}
+			if body.Shared != nil {
+				u.SetShared(*body.Shared)
 			}
 			if body.ExpiresInDays != nil {
 				switch d := *body.ExpiresInDays; {
@@ -273,8 +293,12 @@ func Control(db *ent.Client, notify func(ctx context.Context, title, body, path 
 			if row, err = u.Save(r.Context()); err != nil {
 				return err
 			}
+			sharedNote := ""
+			if row.Kind == "key" && (body.Shared != nil || row.Shared) {
+				sharedNote = fmt.Sprintf(" shared=%t", row.Shared)
+			}
 			return audit.Checked(r.Context(), tx.AuditLog.Create(), actor, audit.RemoteAddr(r), "fact_updated", row.ID.String(),
-				fmt.Sprintf("持有人=%s：%s", row.Holder, row.Content))
+				fmt.Sprintf("持有人=%s%s：%s", row.Holder, sharedNote, row.Content))
 		})
 		if errors.Is(err, errBadExpiry) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -420,7 +444,7 @@ func assetIDs(f *ent.Fact) []uuid.UUID {
 
 func toFactRow(f *ent.Fact, names map[uuid.UUID]string) factRow {
 	row := factRow{ID: f.ID, Ref: facts.Ref("F", f.ID), CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt, Kind: f.Kind, Subject: f.Subject,
-		GroupID: f.GroupID, AssetID: f.AssetID, Holder: f.Holder, Content: f.Content, Source: f.Source, CreatedBy: f.CreatedBy,
+		GroupID: f.GroupID, AssetID: f.AssetID, Holder: f.Holder, Shared: f.Shared, Content: f.Content, Source: f.Source, CreatedBy: f.CreatedBy,
 		HolderName: f.Holder, ExpiresAt: f.ExpiresAt, RetiredAt: f.RetiredAt, RetiredBy: f.RetiredBy, CitedCount: f.CitedCount, LastCitedAt: f.LastCitedAt}
 	if f.AssetID != nil {
 		row.Hostname = names[*f.AssetID]

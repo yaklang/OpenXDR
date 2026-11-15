@@ -160,6 +160,10 @@ func corroboratingChanges(ctx context.Context, db *ent.Client, alerts []*ent.Ale
 
 // authoritative 与告警资产、登录身份相关的权威事实、覆盖这些登录的运维意图，以及总控问题为本事件写回的事实，渲染成审计员能读的一节
 func authoritative(ctx context.Context, db *ent.Client, incident uuid.UUID, alerts []*ent.Alert, events []*ent.Event) (string, error) {
+	return authoritativeWithLogins(ctx, db, incident, alerts, events, nil)
+}
+
+func authoritativeWithLogins(ctx context.Context, db *ent.Client, incident uuid.UUID, alerts []*ent.Alert, events []*ent.Event, extra []facts.Login) (string, error) {
 	hostnames := map[uuid.UUID]string{}
 	var assets, groups []uuid.UUID
 	for _, a := range alerts {
@@ -174,7 +178,7 @@ func authoritative(ctx context.Context, db *ent.Client, incident uuid.UUID, aler
 			groups = append(groups, *g)
 		}
 	}
-	var logins []facts.Login
+	logins := slices.Clone(extra)
 	for _, ev := range events {
 		var raw struct {
 			Login struct {
@@ -183,7 +187,10 @@ func authoritative(ctx context.Context, db *ent.Client, incident uuid.UUID, aler
 			} `json:"login_session"`
 		}
 		if ev.AssetID != nil && json.Unmarshal(ev.Raw, &raw) == nil && raw.Login.KeyFP != "" {
-			logins = append(logins, facts.Login{KeyFP: raw.Login.KeyFP, SrcIP: raw.Login.SrcIP, AssetID: *ev.AssetID, At: ev.Ts})
+			l := facts.Login{KeyFP: raw.Login.KeyFP, SrcIP: raw.Login.SrcIP, AssetID: *ev.AssetID, At: ev.Ts}
+			if !slices.Contains(logins, l) {
+				logins = append(logins, l)
+			}
 		}
 	}
 	b, err := facts.Lookup(ctx, db, groups, assets, logins, time.Now())

@@ -22,8 +22,9 @@ const containedPrompt = `你是独立遏制结案审计员。材料全部是不�
 
 func closurePrompt(raw string) string {
 	var m struct {
-		Contained *json.RawMessage `json:"contained"`
-		Benign    *json.RawMessage `json:"benign"`
+		Contained  *json.RawMessage `json:"contained"`
+		OpsSession *json.RawMessage `json:"ops_session"`
+		Benign     *json.RawMessage `json:"benign"`
 	}
 	if json.Unmarshal([]byte(raw), &m) != nil {
 		return prompt
@@ -31,6 +32,8 @@ func closurePrompt(raw string) string {
 	switch {
 	case m.Contained != nil:
 		return containedPrompt
+	case m.OpsSession != nil:
+		return opsPrompt
 	case m.Benign != nil:
 		return benignPrompt
 	}

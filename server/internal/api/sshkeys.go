@@ -65,6 +65,7 @@ func SSHKeys(db *ent.Client, svc *sshkeys.Service) http.Handler {
 			Holder        string     `json:"holder"`
 			Machine       string     `json:"machine"`
 			Purpose       string     `json:"purpose"`
+			Shared        bool       `json:"shared"`
 			GroupID       *uuid.UUID `json:"groupId"`
 			AssetID       *uuid.UUID `json:"assetId"`
 			ExpiresInDays int        `json:"expiresInDays"`
@@ -142,6 +143,7 @@ func SSHKeys(db *ent.Client, svc *sshkeys.Service) http.Handler {
 				SetNillableGroupID(body.GroupID).
 				SetNillableAssetID(body.AssetID).
 				SetHolder(holder).
+				SetShared(body.Shared).
 				SetContent(content).
 				SetSource("human").
 				SetCreatedBy(actor)
@@ -151,8 +153,12 @@ func SSHKeys(db *ent.Client, svc *sshkeys.Service) http.Handler {
 			if row, err = c.Save(r.Context()); err != nil {
 				return err
 			}
+			sharedNote := ""
+			if body.Shared {
+				sharedNote = " shared=true"
+			}
 			return audit.Checked(r.Context(), tx.AuditLog.Create(), actor, audit.RemoteAddr(r), "fact_created", row.ID.String(),
-				fmt.Sprintf("key %s 持有人=%s：%s", fp, holder, content))
+				fmt.Sprintf("key %s 持有人=%s%s：%s", fp, holder, sharedNote, content))
 		})
 		if errors.Is(err, errConflict) {
 			http.Error(w, err.Error(), http.StatusConflict)

@@ -548,12 +548,16 @@ func init() {
 	factDescHolder := factFields[7].Descriptor()
 	// fact.DefaultHolder holds the default value on creation for the holder field.
 	fact.DefaultHolder = factDescHolder.Default.(string)
+	// factDescShared is the schema descriptor for shared field.
+	factDescShared := factFields[8].Descriptor()
+	// fact.DefaultShared holds the default value on creation for the shared field.
+	fact.DefaultShared = factDescShared.Default.(bool)
 	// factDescSource is the schema descriptor for source field.
-	factDescSource := factFields[9].Descriptor()
+	factDescSource := factFields[10].Descriptor()
 	// fact.DefaultSource holds the default value on creation for the source field.
 	fact.DefaultSource = factDescSource.Default.(string)
 	// factDescCitedCount is the schema descriptor for cited_count field.
-	factDescCitedCount := factFields[14].Descriptor()
+	factDescCitedCount := factFields[15].Descriptor()
 	// fact.DefaultCitedCount holds the default value on creation for the cited_count field.
 	fact.DefaultCitedCount = factDescCitedCount.Default.(int)
 	// factDescID is the schema descriptor for id field.

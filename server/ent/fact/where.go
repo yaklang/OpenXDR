@@ -90,6 +90,11 @@ func Holder(v string) predicate.Fact {
 	return predicate.Fact(sql.FieldEQ(FieldHolder, v))
 }
 
+// Shared applies equality check predicate on the "shared" field. It's identical to SharedEQ.
+func Shared(v bool) predicate.Fact {
+	return predicate.Fact(sql.FieldEQ(FieldShared, v))
+}
+
 // Content applies equality check predicate on the "content" field. It's identical to ContentEQ.
 func Content(v string) predicate.Fact {
 	return predicate.Fact(sql.FieldEQ(FieldContent, v))
@@ -503,6 +508,16 @@ func HolderEqualFold(v string) predicate.Fact {
 // HolderContainsFold applies the ContainsFold predicate on the "holder" field.
 func HolderContainsFold(v string) predicate.Fact {
 	return predicate.Fact(sql.FieldContainsFold(FieldHolder, v))
+}
+
+// SharedEQ applies the EQ predicate on the "shared" field.
+func SharedEQ(v bool) predicate.Fact {
+	return predicate.Fact(sql.FieldEQ(FieldShared, v))
+}
+
+// SharedNEQ applies the NEQ predicate on the "shared" field.
+func SharedNEQ(v bool) predicate.Fact {
+	return predicate.Fact(sql.FieldNEQ(FieldShared, v))
 }
 
 // ContentEQ applies the EQ predicate on the "content" field.

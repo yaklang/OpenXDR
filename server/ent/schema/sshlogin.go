@@ -35,6 +35,7 @@ func (SSHLogin) Fields() []ent.Field {
 func (SSHLogin) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("group_id", "ts"),
+		index.Fields("asset_id", "ts"),
 		index.Fields("ts"),
 	}
 }

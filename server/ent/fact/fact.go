@@ -28,6 +28,8 @@ const (
 	FieldAssetID = "asset_id"
 	// FieldHolder holds the string denoting the holder field in the database.
 	FieldHolder = "holder"
+	// FieldShared holds the string denoting the shared field in the database.
+	FieldShared = "shared"
 	// FieldContent holds the string denoting the content field in the database.
 	FieldContent = "content"
 	// FieldSource holds the string denoting the source field in the database.
@@ -58,6 +60,7 @@ var Columns = []string{
 	FieldGroupID,
 	FieldAssetID,
 	FieldHolder,
+	FieldShared,
 	FieldContent,
 	FieldSource,
 	FieldCreatedBy,
@@ -89,6 +92,8 @@ var (
 	DefaultSubject string
 	// DefaultHolder holds the default value on creation for the "holder" field.
 	DefaultHolder string
+	// DefaultShared holds the default value on creation for the "shared" field.
+	DefaultShared bool
 	// DefaultSource holds the default value on creation for the "source" field.
 	DefaultSource string
 	// DefaultCitedCount holds the default value on creation for the "cited_count" field.
@@ -138,6 +143,11 @@ func ByAssetID(opts ...sql.OrderTermOption) OrderOption {
 // ByHolder orders the results by the holder field.
 func ByHolder(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldHolder, opts...).ToFunc()
+}
+
+// ByShared orders the results by the shared field.
+func ByShared(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldShared, opts...).ToFunc()
 }
 
 // ByContent orders the results by the content field.

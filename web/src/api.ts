@@ -816,6 +816,7 @@ export interface Fact {
   holder: string
   // 持有人的可读名字：集成显示集成名称，用户显示用户名
   holderName: string
+  shared?: boolean
   content: string
   source: string
   createdBy: string
@@ -856,12 +857,13 @@ export async function createFact(body: {
   assetId?: string
   groupId?: string
   holder: string
+  shared?: boolean
   content: string
   expiresInDays: number
 }): Promise<Fact> {
   return (await send('POST', '/api/facts', body)).json()
 }
-export const updateFact = (id: string, body: { holder?: string; content?: string; expiresInDays?: number }) =>
+export const updateFact = (id: string, body: { holder?: string; shared?: boolean; content?: string; expiresInDays?: number }) =>
   send('PATCH', `/api/facts/${encodeURIComponent(id)}`, body)
 export const retireFact = (id: string) => send('POST', `/api/facts/${encodeURIComponent(id)}/retire`)
 
@@ -897,6 +899,7 @@ export interface SSHKeyObservation {
   lastLoginIp?: string
   usageStatus: 'active' | 'idle'
   claimStatus: 'claimed' | 'unclaimed'
+  shared?: boolean
   factRef?: string
   holder?: string
   holderName?: string
@@ -927,6 +930,7 @@ export const fetchSSHKeys = (assetId?: string) =>
 export async function claimSSHKey(body: {
   fingerprint: string
   holder: string
+  shared?: boolean
   machine: string
   purpose: string
   groupId?: string

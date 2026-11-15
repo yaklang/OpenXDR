@@ -131,6 +131,20 @@ func (_u *FactUpdate) SetNillableHolder(v *string) *FactUpdate {
 	return _u
 }
 
+// SetShared sets the "shared" field.
+func (_u *FactUpdate) SetShared(v bool) *FactUpdate {
+	_u.mutation.SetShared(v)
+	return _u
+}
+
+// SetNillableShared sets the "shared" field if the given value is not nil.
+func (_u *FactUpdate) SetNillableShared(v *bool) *FactUpdate {
+	if v != nil {
+		_u.SetShared(*v)
+	}
+	return _u
+}
+
 // SetContent sets the "content" field.
 func (_u *FactUpdate) SetContent(v string) *FactUpdate {
 	_u.mutation.SetContent(v)
@@ -351,6 +365,9 @@ func (_u *FactUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.Holder(); ok {
 		_spec.SetField(fact.FieldHolder, field.TypeString, value)
 	}
+	if value, ok := _u.mutation.Shared(); ok {
+		_spec.SetField(fact.FieldShared, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.Content(); ok {
 		_spec.SetField(fact.FieldContent, field.TypeString, value)
 	}
@@ -508,6 +525,20 @@ func (_u *FactUpdateOne) SetHolder(v string) *FactUpdateOne {
 func (_u *FactUpdateOne) SetNillableHolder(v *string) *FactUpdateOne {
 	if v != nil {
 		_u.SetHolder(*v)
+	}
+	return _u
+}
+
+// SetShared sets the "shared" field.
+func (_u *FactUpdateOne) SetShared(v bool) *FactUpdateOne {
+	_u.mutation.SetShared(v)
+	return _u
+}
+
+// SetNillableShared sets the "shared" field if the given value is not nil.
+func (_u *FactUpdateOne) SetNillableShared(v *bool) *FactUpdateOne {
+	if v != nil {
+		_u.SetShared(*v)
 	}
 	return _u
 }
@@ -761,6 +792,9 @@ func (_u *FactUpdateOne) sqlSave(ctx context.Context) (_node *Fact, err error) {
 	}
 	if value, ok := _u.mutation.Holder(); ok {
 		_spec.SetField(fact.FieldHolder, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.Shared(); ok {
+		_spec.SetField(fact.FieldShared, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Content(); ok {
 		_spec.SetField(fact.FieldContent, field.TypeString, value)

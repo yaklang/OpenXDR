@@ -111,6 +111,20 @@ func (_c *FactCreate) SetNillableHolder(v *string) *FactCreate {
 	return _c
 }
 
+// SetShared sets the "shared" field.
+func (_c *FactCreate) SetShared(v bool) *FactCreate {
+	_c.mutation.SetShared(v)
+	return _c
+}
+
+// SetNillableShared sets the "shared" field if the given value is not nil.
+func (_c *FactCreate) SetNillableShared(v *bool) *FactCreate {
+	if v != nil {
+		_c.SetShared(*v)
+	}
+	return _c
+}
+
 // SetContent sets the "content" field.
 func (_c *FactCreate) SetContent(v string) *FactCreate {
 	_c.mutation.SetContent(v)
@@ -272,6 +286,10 @@ func (_c *FactCreate) defaults() {
 		v := fact.DefaultHolder
 		_c.mutation.SetHolder(v)
 	}
+	if _, ok := _c.mutation.Shared(); !ok {
+		v := fact.DefaultShared
+		_c.mutation.SetShared(v)
+	}
 	if _, ok := _c.mutation.Source(); !ok {
 		v := fact.DefaultSource
 		_c.mutation.SetSource(v)
@@ -302,6 +320,9 @@ func (_c *FactCreate) check() error {
 	}
 	if _, ok := _c.mutation.Holder(); !ok {
 		return &ValidationError{Name: "holder", err: errors.New(`ent: missing required field "Fact.holder"`)}
+	}
+	if _, ok := _c.mutation.Shared(); !ok {
+		return &ValidationError{Name: "shared", err: errors.New(`ent: missing required field "Fact.shared"`)}
 	}
 	if _, ok := _c.mutation.Content(); !ok {
 		return &ValidationError{Name: "content", err: errors.New(`ent: missing required field "Fact.content"`)}
@@ -377,6 +398,10 @@ func (_c *FactCreate) createSpec() (*Fact, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Holder(); ok {
 		_spec.SetField(fact.FieldHolder, field.TypeString, value)
 		_node.Holder = value
+	}
+	if value, ok := _c.mutation.Shared(); ok {
+		_spec.SetField(fact.FieldShared, field.TypeBool, value)
+		_node.Shared = value
 	}
 	if value, ok := _c.mutation.Content(); ok {
 		_spec.SetField(fact.FieldContent, field.TypeString, value)

@@ -57,6 +57,7 @@ export const incidentStatusKey = (s: string) => INCIDENT_STATUS[s]?.key
 
 const RESOLUTION_SOURCE: Record<string, { key: MsgKey; hint?: MsgKey; color: string; system: boolean }> = {
   attempt_verified: { key: 'resSourceAttemptVerified', hint: 'resSourceAttemptVerifiedHint', color: 'cyan', system: true },
+  ops_session: { key: 'resSourceOpsSession', hint: 'resSourceOpsSessionHint', color: 'purple', system: true },
   asset_retired: { key: 'resSourceAssetRetired', color: 'default', system: true },
   ai_review: { key: 'resSourceAiReview', color: 'purple', system: true },
   suppression: { key: 'resSourceSuppression', color: 'geekblue', system: true },
