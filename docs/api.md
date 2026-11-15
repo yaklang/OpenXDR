@@ -176,6 +176,7 @@ Base: `http://<server>:8080`。除 `POST /api/login` 外全部需要会话 cooki
 | GET | `/api/assets/{id}/profile` | 资产画像：区域、暴露级别、云环境、监听端口、依赖与 AI 标注。改标注、指派区域与资产图谱、攻击面、区域定义等接口见 [资产图谱与攻击面](asset-map.md#接口) |
 | GET | `/api/vulns/summary` | viewer；组内有软件清单的资产漏洞汇总（可修复、高危、暴露、暂无修复），最多 500 台，见 [软件漏洞](vulns.md) |
 | GET | `/api/assets/{id}/vulns` | viewer；单台资产的完整漏洞报告，见 [软件漏洞](vulns.md) |
+| GET | `/api/assets/{id}/change-records?limit=` | viewer；按 `(asset_id, committed_at)` 索引返回单台资产最近关联的外部仓库变更记录（默认 20 条、最大 100 条；含仓库、短/长 sha、提交时间、作者、标题与正文、改动文件数与路径、命中线索；仅作时间线佐证，不是权威事实） |
 | GET | `/api/asset-map?groupId=` | viewer；资产图谱节点与有向边，见 [资产图谱与攻击面](asset-map.md#接口) |
 | GET | `/api/attack-surface?groupId=` | viewer；攻击面汇总、暴露面与盲区 |
 | GET / POST | `/api/zones` | viewer / 组 admin；区域定义，同名 409。`responseTier` 为自主响应处置等级 `lab` / `production` / `core`，不传为不指定（区域内资产按 AI 定级） |
@@ -392,6 +393,20 @@ URL 更改默认保留旧积压目标；movePending=true 显式改投尚未发�
 `X-OpenXDR-Signature`。使用 base64 解码后的秘密，对 UTF-8
 `timestamp + "." + eventId + "." + rawBody` 计算 HMAC-SHA256，签名为小写十六进制。
 接收方须校验时间窗口（建议 5 分钟）、签名并持久去重。事件可能重复及乱序，使用 revision 防止旧状态覆盖新状态。
+
+### 外部变更记录源（GitHub 提交同步）
+
+把外部代码与基础设施配置仓库的提交记录增量同步入库，确定性抽取资产线索（主机名、`rs-<主机名>` 别名、内网 FQDN、唯一归属 IP、PVE VMID 如 `VM 145` / `pve1 VM 116`、LXC 容器名）关联纳管资产，在研判、Pi 调查与结案审计中作为非权威时间线佐证注入。只读访问令牌使用 `HOST_CREDENTIAL_KEY` 绑定记录 ID 加密存储；只存提交元数据、说明与改动文件路径，不存文件内容与 diff。
+
+浏览器管理入口（全局 admin，cookie）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/system-integrations/change-sources` | 返回 `{vaultConfigured, items}`，只暴露令牌是否已配置及尾号提示 `tokenHint`，永不返回密文或明文 |
+| POST | `/api/system-integrations/change-sources` | 创建来源 `{provider?:"github", repo:"owner/repo", name?, branch?, token?, enabled}`；携带 `token` 但未配 `HOST_CREDENTIAL_KEY` 返回 503，同仓库重复返回 409 |
+| PUT | `/api/system-integrations/change-sources/{id}` | 更新来源；`token` 留空保留原令牌，`clearToken:true` 清除已保存令牌；变更 `repo` 或 `branch` 时重置增量游标 |
+| DELETE | `/api/system-integrations/change-sources/{id}` | 删除该变更记录源及其已入库的提交记录与资产关联 |
+| POST | `/api/system-integrations/change-sources/{id}/sync` | 立即触发单源增量同步（与后台单活周期循环按源级锁互斥），返回 `{added, source}` |
 
 
 ## 独立欺骗引擎

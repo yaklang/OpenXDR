@@ -12,6 +12,9 @@ import (
 	"openxdr/server/ent/assetlink"
 	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/beaconbaseline"
+	"openxdr/server/ent/changerecord"
+	"openxdr/server/ent/changerecordasset"
+	"openxdr/server/ent/changesource"
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/commandpolicy"
 	"openxdr/server/ent/containment"
@@ -193,6 +196,94 @@ func init() {
 	beaconbaselineDescID := beaconbaselineFields[0].Descriptor()
 	// beaconbaseline.DefaultID holds the default value on creation for the id field.
 	beaconbaseline.DefaultID = beaconbaselineDescID.Default.(func() uuid.UUID)
+	changerecordFields := schema.ChangeRecord{}.Fields()
+	_ = changerecordFields
+	// changerecordDescRepo is the schema descriptor for repo field.
+	changerecordDescRepo := changerecordFields[2].Descriptor()
+	// changerecord.RepoValidator is a validator for the "repo" field. It is called by the builders before save.
+	changerecord.RepoValidator = changerecordDescRepo.Validators[0].(func(string) error)
+	// changerecordDescSha is the schema descriptor for sha field.
+	changerecordDescSha := changerecordFields[3].Descriptor()
+	// changerecord.ShaValidator is a validator for the "sha" field. It is called by the builders before save.
+	changerecord.ShaValidator = changerecordDescSha.Validators[0].(func(string) error)
+	// changerecordDescAuthor is the schema descriptor for author field.
+	changerecordDescAuthor := changerecordFields[5].Descriptor()
+	// changerecord.DefaultAuthor holds the default value on creation for the author field.
+	changerecord.DefaultAuthor = changerecordDescAuthor.Default.(string)
+	// changerecordDescTitle is the schema descriptor for title field.
+	changerecordDescTitle := changerecordFields[6].Descriptor()
+	// changerecord.DefaultTitle holds the default value on creation for the title field.
+	changerecord.DefaultTitle = changerecordDescTitle.Default.(string)
+	// changerecordDescBody is the schema descriptor for body field.
+	changerecordDescBody := changerecordFields[7].Descriptor()
+	// changerecord.DefaultBody holds the default value on creation for the body field.
+	changerecord.DefaultBody = changerecordDescBody.Default.(string)
+	// changerecordDescFileCount is the schema descriptor for file_count field.
+	changerecordDescFileCount := changerecordFields[9].Descriptor()
+	// changerecord.DefaultFileCount holds the default value on creation for the file_count field.
+	changerecord.DefaultFileCount = changerecordDescFileCount.Default.(int)
+	// changerecordDescCreatedAt is the schema descriptor for created_at field.
+	changerecordDescCreatedAt := changerecordFields[10].Descriptor()
+	// changerecord.DefaultCreatedAt holds the default value on creation for the created_at field.
+	changerecord.DefaultCreatedAt = changerecordDescCreatedAt.Default.(func() time.Time)
+	// changerecordDescID is the schema descriptor for id field.
+	changerecordDescID := changerecordFields[0].Descriptor()
+	// changerecord.DefaultID holds the default value on creation for the id field.
+	changerecord.DefaultID = changerecordDescID.Default.(func() uuid.UUID)
+	changerecordassetFields := schema.ChangeRecordAsset{}.Fields()
+	_ = changerecordassetFields
+	// changerecordassetDescID is the schema descriptor for id field.
+	changerecordassetDescID := changerecordassetFields[0].Descriptor()
+	// changerecordasset.DefaultID holds the default value on creation for the id field.
+	changerecordasset.DefaultID = changerecordassetDescID.Default.(func() uuid.UUID)
+	changesourceFields := schema.ChangeSource{}.Fields()
+	_ = changesourceFields
+	// changesourceDescCreatedAt is the schema descriptor for created_at field.
+	changesourceDescCreatedAt := changesourceFields[1].Descriptor()
+	// changesource.DefaultCreatedAt holds the default value on creation for the created_at field.
+	changesource.DefaultCreatedAt = changesourceDescCreatedAt.Default.(func() time.Time)
+	// changesourceDescUpdatedAt is the schema descriptor for updated_at field.
+	changesourceDescUpdatedAt := changesourceFields[2].Descriptor()
+	// changesource.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	changesource.DefaultUpdatedAt = changesourceDescUpdatedAt.Default.(func() time.Time)
+	// changesource.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	changesource.UpdateDefaultUpdatedAt = changesourceDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// changesourceDescProvider is the schema descriptor for provider field.
+	changesourceDescProvider := changesourceFields[3].Descriptor()
+	// changesource.DefaultProvider holds the default value on creation for the provider field.
+	changesource.DefaultProvider = changesourceDescProvider.Default.(string)
+	// changesourceDescName is the schema descriptor for name field.
+	changesourceDescName := changesourceFields[4].Descriptor()
+	// changesource.DefaultName holds the default value on creation for the name field.
+	changesource.DefaultName = changesourceDescName.Default.(string)
+	// changesourceDescRepo is the schema descriptor for repo field.
+	changesourceDescRepo := changesourceFields[5].Descriptor()
+	// changesource.RepoValidator is a validator for the "repo" field. It is called by the builders before save.
+	changesource.RepoValidator = changesourceDescRepo.Validators[0].(func(string) error)
+	// changesourceDescBranch is the schema descriptor for branch field.
+	changesourceDescBranch := changesourceFields[6].Descriptor()
+	// changesource.DefaultBranch holds the default value on creation for the branch field.
+	changesource.DefaultBranch = changesourceDescBranch.Default.(string)
+	// changesourceDescTokenHint is the schema descriptor for token_hint field.
+	changesourceDescTokenHint := changesourceFields[8].Descriptor()
+	// changesource.DefaultTokenHint holds the default value on creation for the token_hint field.
+	changesource.DefaultTokenHint = changesourceDescTokenHint.Default.(string)
+	// changesourceDescEnabled is the schema descriptor for enabled field.
+	changesourceDescEnabled := changesourceFields[9].Descriptor()
+	// changesource.DefaultEnabled holds the default value on creation for the enabled field.
+	changesource.DefaultEnabled = changesourceDescEnabled.Default.(bool)
+	// changesourceDescLastError is the schema descriptor for last_error field.
+	changesourceDescLastError := changesourceFields[13].Descriptor()
+	// changesource.DefaultLastError holds the default value on creation for the last_error field.
+	changesource.DefaultLastError = changesourceDescLastError.Default.(string)
+	// changesourceDescCreatedBy is the schema descriptor for created_by field.
+	changesourceDescCreatedBy := changesourceFields[14].Descriptor()
+	// changesource.DefaultCreatedBy holds the default value on creation for the created_by field.
+	changesource.DefaultCreatedBy = changesourceDescCreatedBy.Default.(string)
+	// changesourceDescID is the schema descriptor for id field.
+	changesourceDescID := changesourceFields[0].Descriptor()
+	// changesource.DefaultID holds the default value on creation for the id field.
+	changesource.DefaultID = changesourceDescID.Default.(func() uuid.UUID)
 	commandFields := schema.Command{}.Fields()
 	_ = commandFields
 	// commandDescCreatedAt is the schema descriptor for created_at field.

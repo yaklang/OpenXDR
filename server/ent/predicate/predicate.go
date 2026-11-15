@@ -33,6 +33,15 @@ type AuditLog func(*sql.Selector)
 // BeaconBaseline is the predicate function for beaconbaseline builders.
 type BeaconBaseline func(*sql.Selector)
 
+// ChangeRecord is the predicate function for changerecord builders.
+type ChangeRecord func(*sql.Selector)
+
+// ChangeRecordAsset is the predicate function for changerecordasset builders.
+type ChangeRecordAsset func(*sql.Selector)
+
+// ChangeSource is the predicate function for changesource builders.
+type ChangeSource func(*sql.Selector)
+
 // Command is the predicate function for command builders.
 type Command func(*sql.Selector)
 

@@ -1,6 +1,7 @@
 import { Clamp } from '../components/Clamp'
 import { ArrowLeftOutlined, LayoutOutlined, RobotOutlined, SearchOutlined } from '@ant-design/icons'
 import { AssetVulns } from '../components/AssetVulns'
+import { AssetChangeRecords } from '../components/AssetChangeRecords'
 import { AssetControlCard } from '../components/AssetControlCard'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -527,6 +528,7 @@ function AssetDetail() {
                   ),
                 },
                 { key: 'vulns', label: t('tabVulns'), children: tab === 'vulns' ? <AssetVulns key={asset.id} assetId={asset.id} /> : null },
+                { key: 'changes', label: t('tabChangeRecords'), children: tab === 'changes' ? <AssetChangeRecords key={asset.id} assetId={asset.id} /> : null },
                 { key: 'localAccounts', label: t('collectorLocalAccounts'), children: tab === 'localAccounts' ? <LocalAccounts key={asset.id} asset={asset} /> : null },
                 { key: 'identity', label: t('identityTitle'), children: tab === 'identity' ? <IdentityObservations key={asset.id} asset={asset} /> : null },
                 { key: 'detectionGaps', label: t('temporalGapsTitle'), children: tab === 'detectionGaps' ? <TemporalGaps key={asset.id} asset={asset} /> : null },

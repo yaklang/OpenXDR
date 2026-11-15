@@ -347,6 +347,100 @@ var (
 			},
 		},
 	}
+	// ChangeRecordsColumns holds the columns for the "change_records" table.
+	ChangeRecordsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "source_id", Type: field.TypeUUID},
+		{Name: "repo", Type: field.TypeString},
+		{Name: "sha", Type: field.TypeString},
+		{Name: "committed_at", Type: field.TypeTime},
+		{Name: "author", Type: field.TypeString, Default: ""},
+		{Name: "title", Type: field.TypeString, Default: ""},
+		{Name: "body", Type: field.TypeString, Size: 2147483647, Default: ""},
+		{Name: "files", Type: field.TypeJSON, Nullable: true},
+		{Name: "file_count", Type: field.TypeInt, Default: 0},
+		{Name: "created_at", Type: field.TypeTime},
+	}
+	// ChangeRecordsTable holds the schema information for the "change_records" table.
+	ChangeRecordsTable = &schema.Table{
+		Name:       "change_records",
+		Columns:    ChangeRecordsColumns,
+		PrimaryKey: []*schema.Column{ChangeRecordsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "changerecord_source_id_sha",
+				Unique:  true,
+				Columns: []*schema.Column{ChangeRecordsColumns[1], ChangeRecordsColumns[3]},
+			},
+			{
+				Name:    "changerecord_committed_at",
+				Unique:  false,
+				Columns: []*schema.Column{ChangeRecordsColumns[4]},
+			},
+		},
+	}
+	// ChangeRecordAssetsColumns holds the columns for the "change_record_assets" table.
+	ChangeRecordAssetsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "change_record_id", Type: field.TypeUUID},
+		{Name: "asset_id", Type: field.TypeUUID},
+		{Name: "committed_at", Type: field.TypeTime},
+		{Name: "clues", Type: field.TypeJSON, Nullable: true},
+	}
+	// ChangeRecordAssetsTable holds the schema information for the "change_record_assets" table.
+	ChangeRecordAssetsTable = &schema.Table{
+		Name:       "change_record_assets",
+		Columns:    ChangeRecordAssetsColumns,
+		PrimaryKey: []*schema.Column{ChangeRecordAssetsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "changerecordasset_change_record_id_asset_id",
+				Unique:  true,
+				Columns: []*schema.Column{ChangeRecordAssetsColumns[1], ChangeRecordAssetsColumns[2]},
+			},
+			{
+				Name:    "changerecordasset_asset_id_committed_at",
+				Unique:  false,
+				Columns: []*schema.Column{ChangeRecordAssetsColumns[2], ChangeRecordAssetsColumns[3]},
+			},
+		},
+	}
+	// ChangeSourcesColumns holds the columns for the "change_sources" table.
+	ChangeSourcesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "provider", Type: field.TypeString, Default: "github"},
+		{Name: "name", Type: field.TypeString, Default: ""},
+		{Name: "repo", Type: field.TypeString},
+		{Name: "branch", Type: field.TypeString, Default: ""},
+		{Name: "secret", Type: field.TypeBytes, Nullable: true},
+		{Name: "token_hint", Type: field.TypeString, Default: ""},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
+		{Name: "since_cursor", Type: field.TypeTime, Nullable: true},
+		{Name: "last_synced_at", Type: field.TypeTime, Nullable: true},
+		{Name: "last_attempted_at", Type: field.TypeTime, Nullable: true},
+		{Name: "last_error", Type: field.TypeString, Default: ""},
+		{Name: "created_by", Type: field.TypeString, Default: ""},
+	}
+	// ChangeSourcesTable holds the schema information for the "change_sources" table.
+	ChangeSourcesTable = &schema.Table{
+		Name:       "change_sources",
+		Columns:    ChangeSourcesColumns,
+		PrimaryKey: []*schema.Column{ChangeSourcesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "changesource_provider_repo",
+				Unique:  true,
+				Columns: []*schema.Column{ChangeSourcesColumns[3], ChangeSourcesColumns[5]},
+			},
+			{
+				Name:    "changesource_enabled",
+				Unique:  false,
+				Columns: []*schema.Column{ChangeSourcesColumns[9]},
+			},
+		},
+	}
 	// CommandsColumns holds the columns for the "commands" table.
 	CommandsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -1898,6 +1992,9 @@ var (
 		AssetLinksTable,
 		AuditLogsTable,
 		BeaconBaselinesTable,
+		ChangeRecordsTable,
+		ChangeRecordAssetsTable,
+		ChangeSourcesTable,
 		CommandsTable,
 		CommandPoliciesTable,
 		ContainmentsTable,

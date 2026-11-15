@@ -2200,3 +2200,60 @@ export interface ThreatBookResult {
 }
 export const lookupThreatBook = async (ip: string): Promise<ThreatBookResult> =>
   (await send('POST', '/api/intel/threatbook/lookup', { ip })).json()
+
+export interface ChangeSourceRow {
+  id: string
+  provider: string
+  name: string
+  repo: string
+  branch: string
+  hasToken: boolean
+  tokenHint: string
+  enabled: boolean
+  sinceCursor: string | null
+  lastSyncedAt: string | null
+  lastAttemptedAt: string | null
+  lastError: string
+  recordCount: number
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ChangeSourceInput {
+  provider?: string
+  name: string
+  repo: string
+  branch: string
+  token?: string
+  clearToken?: boolean
+  enabled: boolean
+}
+
+export interface ChangeSourcesResponse {
+  vaultConfigured: boolean
+  items: ChangeSourceRow[]
+}
+
+export interface AssetChangeRecordRow {
+  id: string
+  repo: string
+  sha: string
+  shortSha: string
+  committedAt: string
+  author: string
+  title: string
+  body: string
+  fileCount: number
+  files: string[]
+  clues: string[]
+}
+
+export const fetchChangeSources = () => get<ChangeSourcesResponse>('/api/system-integrations/change-sources')
+export const saveChangeSource = async (body: ChangeSourceInput, id?: string): Promise<ChangeSourceRow> =>
+  (await send(id ? 'PUT' : 'POST', id ? `/api/system-integrations/change-sources/${id}` : '/api/system-integrations/change-sources', body)).json()
+export const deleteChangeSource = (id: string) => send('DELETE', `/api/system-integrations/change-sources/${id}`)
+export const syncChangeSource = async (id: string): Promise<{ added: number; source: ChangeSourceRow }> =>
+  (await send('POST', `/api/system-integrations/change-sources/${id}/sync`)).json()
+export const fetchAssetChangeRecords = (assetId: string, limit = 20) =>
+  get<AssetChangeRecordRow[]>(`/api/assets/${assetId}/change-records?limit=${limit}`)
