@@ -1,3 +1,4 @@
+import { ChangeSourcesCard } from '../components/ChangeSourcesCard'
 import { SyslogIngestionCard } from '../components/SyslogIngestionCard'
 import { TableActions } from '../components/TableActions'
 import { PlusOutlined } from '@ant-design/icons'
@@ -48,6 +49,7 @@ export function IntegrationsPage() {
   const openTokens = (row: IntegrationRow) => { setTokensFor(row); setTokenScopes(row.scopes); setPlain(null); setDays(90) }
   return <Page title={t('navIntegrations')} subtitle={t('integrationHint')} extra={<Space><Button onClick={() => { setAllowText(undefined); setAllowOpen(true) }}>{t('integrationOutboundAllow')}</Button><Button type="primary" icon={<PlusOutlined />} onClick={() => edit()}>{t('create')}</Button></Space>}>
     <SyslogIngestionCard />
+    <ChangeSourcesCard />
     <Alert type="info" showIcon title={t('integrationFlowsWrite')} description={t('integrationFlowsHint')} style={{ marginBottom: 16 }} />
     <TableCard>
       {query.isError ? <LoadError error={query.error} onRetry={() => query.refetch()} /> : <Table<IntegrationRow> rowKey="id" dataSource={query.data} loading={query.isPending} scroll={{ x: 800 }} pagination={false} columns={[

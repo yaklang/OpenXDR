@@ -116,6 +116,42 @@ func (f BeaconBaselineFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Val
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.BeaconBaselineMutation", m)
 }
 
+// The ChangeRecordFunc type is an adapter to allow the use of ordinary
+// function as ChangeRecord mutator.
+type ChangeRecordFunc func(context.Context, *ent.ChangeRecordMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ChangeRecordFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ChangeRecordMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ChangeRecordMutation", m)
+}
+
+// The ChangeRecordAssetFunc type is an adapter to allow the use of ordinary
+// function as ChangeRecordAsset mutator.
+type ChangeRecordAssetFunc func(context.Context, *ent.ChangeRecordAssetMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ChangeRecordAssetFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ChangeRecordAssetMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ChangeRecordAssetMutation", m)
+}
+
+// The ChangeSourceFunc type is an adapter to allow the use of ordinary
+// function as ChangeSource mutator.
+type ChangeSourceFunc func(context.Context, *ent.ChangeSourceMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ChangeSourceFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ChangeSourceMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ChangeSourceMutation", m)
+}
+
 // The CommandFunc type is an adapter to allow the use of ordinary
 // function as Command mutator.
 type CommandFunc func(context.Context, *ent.CommandMutation) (ent.Value, error)

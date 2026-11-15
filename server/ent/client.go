@@ -20,6 +20,9 @@ import (
 	"openxdr/server/ent/assetlink"
 	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/beaconbaseline"
+	"openxdr/server/ent/changerecord"
+	"openxdr/server/ent/changerecordasset"
+	"openxdr/server/ent/changesource"
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/commandpolicy"
 	"openxdr/server/ent/containment"
@@ -100,6 +103,12 @@ type Client struct {
 	AuditLog *AuditLogClient
 	// BeaconBaseline is the client for interacting with the BeaconBaseline builders.
 	BeaconBaseline *BeaconBaselineClient
+	// ChangeRecord is the client for interacting with the ChangeRecord builders.
+	ChangeRecord *ChangeRecordClient
+	// ChangeRecordAsset is the client for interacting with the ChangeRecordAsset builders.
+	ChangeRecordAsset *ChangeRecordAssetClient
+	// ChangeSource is the client for interacting with the ChangeSource builders.
+	ChangeSource *ChangeSourceClient
 	// Command is the client for interacting with the Command builders.
 	Command *CommandClient
 	// CommandPolicy is the client for interacting with the CommandPolicy builders.
@@ -218,6 +227,9 @@ func (c *Client) init() {
 	c.AssetLink = NewAssetLinkClient(c.config)
 	c.AuditLog = NewAuditLogClient(c.config)
 	c.BeaconBaseline = NewBeaconBaselineClient(c.config)
+	c.ChangeRecord = NewChangeRecordClient(c.config)
+	c.ChangeRecordAsset = NewChangeRecordAssetClient(c.config)
+	c.ChangeSource = NewChangeSourceClient(c.config)
 	c.Command = NewCommandClient(c.config)
 	c.CommandPolicy = NewCommandPolicyClient(c.config)
 	c.Containment = NewContainmentClient(c.config)
@@ -368,6 +380,9 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		AssetLink:               NewAssetLinkClient(cfg),
 		AuditLog:                NewAuditLogClient(cfg),
 		BeaconBaseline:          NewBeaconBaselineClient(cfg),
+		ChangeRecord:            NewChangeRecordClient(cfg),
+		ChangeRecordAsset:       NewChangeRecordAssetClient(cfg),
+		ChangeSource:            NewChangeSourceClient(cfg),
 		Command:                 NewCommandClient(cfg),
 		CommandPolicy:           NewCommandPolicyClient(cfg),
 		Containment:             NewContainmentClient(cfg),
@@ -445,6 +460,9 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		AssetLink:               NewAssetLinkClient(cfg),
 		AuditLog:                NewAuditLogClient(cfg),
 		BeaconBaseline:          NewBeaconBaselineClient(cfg),
+		ChangeRecord:            NewChangeRecordClient(cfg),
+		ChangeRecordAsset:       NewChangeRecordAssetClient(cfg),
+		ChangeSource:            NewChangeSourceClient(cfg),
 		Command:                 NewCommandClient(cfg),
 		CommandPolicy:           NewCommandPolicyClient(cfg),
 		Containment:             NewContainmentClient(cfg),
@@ -524,10 +542,11 @@ func (c *Client) Close() error {
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.AIJob, c.AIUsage, c.AgentSession, c.Alert, c.Approval, c.Asset, c.AssetLink,
-		c.AuditLog, c.BeaconBaseline, c.Command, c.CommandPolicy, c.Containment,
-		c.CustomRule, c.DecoyDeployment, c.DecoyEngineRelease, c.DecoyObservation,
-		c.DecoyRevision, c.EnrollToken, c.Event, c.ExternalTicket, c.Fact, c.Finding,
-		c.Group, c.GroupMember, c.HostCredential, c.IPInfo, c.Incident, c.Integration,
+		c.AuditLog, c.BeaconBaseline, c.ChangeRecord, c.ChangeRecordAsset,
+		c.ChangeSource, c.Command, c.CommandPolicy, c.Containment, c.CustomRule,
+		c.DecoyDeployment, c.DecoyEngineRelease, c.DecoyObservation, c.DecoyRevision,
+		c.EnrollToken, c.Event, c.ExternalTicket, c.Fact, c.Finding, c.Group,
+		c.GroupMember, c.HostCredential, c.IPInfo, c.Incident, c.Integration,
 		c.IntegrationAttempt, c.IntegrationDelivery, c.IntegrationEvent,
 		c.IntegrationGroup, c.IntegrationIdempotency, c.IntegrationSubscription,
 		c.IntegrationToken, c.Intel, c.Intent, c.Memory, c.ProcessBaseline, c.Question,
@@ -545,10 +564,11 @@ func (c *Client) Use(hooks ...Hook) {
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.AIJob, c.AIUsage, c.AgentSession, c.Alert, c.Approval, c.Asset, c.AssetLink,
-		c.AuditLog, c.BeaconBaseline, c.Command, c.CommandPolicy, c.Containment,
-		c.CustomRule, c.DecoyDeployment, c.DecoyEngineRelease, c.DecoyObservation,
-		c.DecoyRevision, c.EnrollToken, c.Event, c.ExternalTicket, c.Fact, c.Finding,
-		c.Group, c.GroupMember, c.HostCredential, c.IPInfo, c.Incident, c.Integration,
+		c.AuditLog, c.BeaconBaseline, c.ChangeRecord, c.ChangeRecordAsset,
+		c.ChangeSource, c.Command, c.CommandPolicy, c.Containment, c.CustomRule,
+		c.DecoyDeployment, c.DecoyEngineRelease, c.DecoyObservation, c.DecoyRevision,
+		c.EnrollToken, c.Event, c.ExternalTicket, c.Fact, c.Finding, c.Group,
+		c.GroupMember, c.HostCredential, c.IPInfo, c.Incident, c.Integration,
 		c.IntegrationAttempt, c.IntegrationDelivery, c.IntegrationEvent,
 		c.IntegrationGroup, c.IntegrationIdempotency, c.IntegrationSubscription,
 		c.IntegrationToken, c.Intel, c.Intent, c.Memory, c.ProcessBaseline, c.Question,
@@ -582,6 +602,12 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.AuditLog.mutate(ctx, m)
 	case *BeaconBaselineMutation:
 		return c.BeaconBaseline.mutate(ctx, m)
+	case *ChangeRecordMutation:
+		return c.ChangeRecord.mutate(ctx, m)
+	case *ChangeRecordAssetMutation:
+		return c.ChangeRecordAsset.mutate(ctx, m)
+	case *ChangeSourceMutation:
+		return c.ChangeSource.mutate(ctx, m)
 	case *CommandMutation:
 		return c.Command.mutate(ctx, m)
 	case *CommandPolicyMutation:
@@ -1975,6 +2001,405 @@ func (c *BeaconBaselineClient) mutate(ctx context.Context, m *BeaconBaselineMuta
 		return (&BeaconBaselineDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown BeaconBaseline mutation op: %q", m.Op())
+	}
+}
+
+// ChangeRecordClient is a client for the ChangeRecord schema.
+type ChangeRecordClient struct {
+	config
+}
+
+// NewChangeRecordClient returns a client for the ChangeRecord from the given config.
+func NewChangeRecordClient(c config) *ChangeRecordClient {
+	return &ChangeRecordClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `changerecord.Hooks(f(g(h())))`.
+func (c *ChangeRecordClient) Use(hooks ...Hook) {
+	c.hooks.ChangeRecord = append(c.hooks.ChangeRecord, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `changerecord.Intercept(f(g(h())))`.
+func (c *ChangeRecordClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ChangeRecord = append(c.inters.ChangeRecord, interceptors...)
+}
+
+// Create returns a builder for creating a ChangeRecord entity.
+func (c *ChangeRecordClient) Create() *ChangeRecordCreate {
+	mutation := newChangeRecordMutation(c.config, OpCreate)
+	return &ChangeRecordCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ChangeRecord entities.
+func (c *ChangeRecordClient) CreateBulk(builders ...*ChangeRecordCreate) *ChangeRecordCreateBulk {
+	return &ChangeRecordCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ChangeRecordClient) MapCreateBulk(slice any, setFunc func(*ChangeRecordCreate, int)) *ChangeRecordCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ChangeRecordCreateBulk{err: fmt.Errorf("calling to ChangeRecordClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ChangeRecordCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ChangeRecordCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ChangeRecord.
+func (c *ChangeRecordClient) Update() *ChangeRecordUpdate {
+	mutation := newChangeRecordMutation(c.config, OpUpdate)
+	return &ChangeRecordUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ChangeRecordClient) UpdateOne(_m *ChangeRecord) *ChangeRecordUpdateOne {
+	mutation := newChangeRecordMutation(c.config, OpUpdateOne, withChangeRecord(_m))
+	return &ChangeRecordUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ChangeRecordClient) UpdateOneID(id uuid.UUID) *ChangeRecordUpdateOne {
+	mutation := newChangeRecordMutation(c.config, OpUpdateOne, withChangeRecordID(id))
+	return &ChangeRecordUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ChangeRecord.
+func (c *ChangeRecordClient) Delete() *ChangeRecordDelete {
+	mutation := newChangeRecordMutation(c.config, OpDelete)
+	return &ChangeRecordDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ChangeRecordClient) DeleteOne(_m *ChangeRecord) *ChangeRecordDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ChangeRecordClient) DeleteOneID(id uuid.UUID) *ChangeRecordDeleteOne {
+	builder := c.Delete().Where(changerecord.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ChangeRecordDeleteOne{builder}
+}
+
+// Query returns a query builder for ChangeRecord.
+func (c *ChangeRecordClient) Query() *ChangeRecordQuery {
+	return &ChangeRecordQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeChangeRecord},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ChangeRecord entity by its id.
+func (c *ChangeRecordClient) Get(ctx context.Context, id uuid.UUID) (*ChangeRecord, error) {
+	return c.Query().Where(changerecord.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ChangeRecordClient) GetX(ctx context.Context, id uuid.UUID) *ChangeRecord {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ChangeRecordClient) Hooks() []Hook {
+	return c.hooks.ChangeRecord
+}
+
+// Interceptors returns the client interceptors.
+func (c *ChangeRecordClient) Interceptors() []Interceptor {
+	return c.inters.ChangeRecord
+}
+
+func (c *ChangeRecordClient) mutate(ctx context.Context, m *ChangeRecordMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ChangeRecordCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ChangeRecordUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ChangeRecordUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ChangeRecordDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ChangeRecord mutation op: %q", m.Op())
+	}
+}
+
+// ChangeRecordAssetClient is a client for the ChangeRecordAsset schema.
+type ChangeRecordAssetClient struct {
+	config
+}
+
+// NewChangeRecordAssetClient returns a client for the ChangeRecordAsset from the given config.
+func NewChangeRecordAssetClient(c config) *ChangeRecordAssetClient {
+	return &ChangeRecordAssetClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `changerecordasset.Hooks(f(g(h())))`.
+func (c *ChangeRecordAssetClient) Use(hooks ...Hook) {
+	c.hooks.ChangeRecordAsset = append(c.hooks.ChangeRecordAsset, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `changerecordasset.Intercept(f(g(h())))`.
+func (c *ChangeRecordAssetClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ChangeRecordAsset = append(c.inters.ChangeRecordAsset, interceptors...)
+}
+
+// Create returns a builder for creating a ChangeRecordAsset entity.
+func (c *ChangeRecordAssetClient) Create() *ChangeRecordAssetCreate {
+	mutation := newChangeRecordAssetMutation(c.config, OpCreate)
+	return &ChangeRecordAssetCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ChangeRecordAsset entities.
+func (c *ChangeRecordAssetClient) CreateBulk(builders ...*ChangeRecordAssetCreate) *ChangeRecordAssetCreateBulk {
+	return &ChangeRecordAssetCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ChangeRecordAssetClient) MapCreateBulk(slice any, setFunc func(*ChangeRecordAssetCreate, int)) *ChangeRecordAssetCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ChangeRecordAssetCreateBulk{err: fmt.Errorf("calling to ChangeRecordAssetClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ChangeRecordAssetCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ChangeRecordAssetCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ChangeRecordAsset.
+func (c *ChangeRecordAssetClient) Update() *ChangeRecordAssetUpdate {
+	mutation := newChangeRecordAssetMutation(c.config, OpUpdate)
+	return &ChangeRecordAssetUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ChangeRecordAssetClient) UpdateOne(_m *ChangeRecordAsset) *ChangeRecordAssetUpdateOne {
+	mutation := newChangeRecordAssetMutation(c.config, OpUpdateOne, withChangeRecordAsset(_m))
+	return &ChangeRecordAssetUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ChangeRecordAssetClient) UpdateOneID(id uuid.UUID) *ChangeRecordAssetUpdateOne {
+	mutation := newChangeRecordAssetMutation(c.config, OpUpdateOne, withChangeRecordAssetID(id))
+	return &ChangeRecordAssetUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ChangeRecordAsset.
+func (c *ChangeRecordAssetClient) Delete() *ChangeRecordAssetDelete {
+	mutation := newChangeRecordAssetMutation(c.config, OpDelete)
+	return &ChangeRecordAssetDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ChangeRecordAssetClient) DeleteOne(_m *ChangeRecordAsset) *ChangeRecordAssetDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ChangeRecordAssetClient) DeleteOneID(id uuid.UUID) *ChangeRecordAssetDeleteOne {
+	builder := c.Delete().Where(changerecordasset.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ChangeRecordAssetDeleteOne{builder}
+}
+
+// Query returns a query builder for ChangeRecordAsset.
+func (c *ChangeRecordAssetClient) Query() *ChangeRecordAssetQuery {
+	return &ChangeRecordAssetQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeChangeRecordAsset},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ChangeRecordAsset entity by its id.
+func (c *ChangeRecordAssetClient) Get(ctx context.Context, id uuid.UUID) (*ChangeRecordAsset, error) {
+	return c.Query().Where(changerecordasset.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ChangeRecordAssetClient) GetX(ctx context.Context, id uuid.UUID) *ChangeRecordAsset {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ChangeRecordAssetClient) Hooks() []Hook {
+	return c.hooks.ChangeRecordAsset
+}
+
+// Interceptors returns the client interceptors.
+func (c *ChangeRecordAssetClient) Interceptors() []Interceptor {
+	return c.inters.ChangeRecordAsset
+}
+
+func (c *ChangeRecordAssetClient) mutate(ctx context.Context, m *ChangeRecordAssetMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ChangeRecordAssetCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ChangeRecordAssetUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ChangeRecordAssetUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ChangeRecordAssetDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ChangeRecordAsset mutation op: %q", m.Op())
+	}
+}
+
+// ChangeSourceClient is a client for the ChangeSource schema.
+type ChangeSourceClient struct {
+	config
+}
+
+// NewChangeSourceClient returns a client for the ChangeSource from the given config.
+func NewChangeSourceClient(c config) *ChangeSourceClient {
+	return &ChangeSourceClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `changesource.Hooks(f(g(h())))`.
+func (c *ChangeSourceClient) Use(hooks ...Hook) {
+	c.hooks.ChangeSource = append(c.hooks.ChangeSource, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `changesource.Intercept(f(g(h())))`.
+func (c *ChangeSourceClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ChangeSource = append(c.inters.ChangeSource, interceptors...)
+}
+
+// Create returns a builder for creating a ChangeSource entity.
+func (c *ChangeSourceClient) Create() *ChangeSourceCreate {
+	mutation := newChangeSourceMutation(c.config, OpCreate)
+	return &ChangeSourceCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ChangeSource entities.
+func (c *ChangeSourceClient) CreateBulk(builders ...*ChangeSourceCreate) *ChangeSourceCreateBulk {
+	return &ChangeSourceCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ChangeSourceClient) MapCreateBulk(slice any, setFunc func(*ChangeSourceCreate, int)) *ChangeSourceCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ChangeSourceCreateBulk{err: fmt.Errorf("calling to ChangeSourceClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ChangeSourceCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ChangeSourceCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ChangeSource.
+func (c *ChangeSourceClient) Update() *ChangeSourceUpdate {
+	mutation := newChangeSourceMutation(c.config, OpUpdate)
+	return &ChangeSourceUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ChangeSourceClient) UpdateOne(_m *ChangeSource) *ChangeSourceUpdateOne {
+	mutation := newChangeSourceMutation(c.config, OpUpdateOne, withChangeSource(_m))
+	return &ChangeSourceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ChangeSourceClient) UpdateOneID(id uuid.UUID) *ChangeSourceUpdateOne {
+	mutation := newChangeSourceMutation(c.config, OpUpdateOne, withChangeSourceID(id))
+	return &ChangeSourceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ChangeSource.
+func (c *ChangeSourceClient) Delete() *ChangeSourceDelete {
+	mutation := newChangeSourceMutation(c.config, OpDelete)
+	return &ChangeSourceDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ChangeSourceClient) DeleteOne(_m *ChangeSource) *ChangeSourceDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ChangeSourceClient) DeleteOneID(id uuid.UUID) *ChangeSourceDeleteOne {
+	builder := c.Delete().Where(changesource.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ChangeSourceDeleteOne{builder}
+}
+
+// Query returns a query builder for ChangeSource.
+func (c *ChangeSourceClient) Query() *ChangeSourceQuery {
+	return &ChangeSourceQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeChangeSource},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ChangeSource entity by its id.
+func (c *ChangeSourceClient) Get(ctx context.Context, id uuid.UUID) (*ChangeSource, error) {
+	return c.Query().Where(changesource.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ChangeSourceClient) GetX(ctx context.Context, id uuid.UUID) *ChangeSource {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ChangeSourceClient) Hooks() []Hook {
+	return c.hooks.ChangeSource
+}
+
+// Interceptors returns the client interceptors.
+func (c *ChangeSourceClient) Interceptors() []Interceptor {
+	return c.inters.ChangeSource
+}
+
+func (c *ChangeSourceClient) mutate(ctx context.Context, m *ChangeSourceMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ChangeSourceCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ChangeSourceUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ChangeSourceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ChangeSourceDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ChangeSource mutation op: %q", m.Op())
 	}
 }
 
@@ -8563,11 +8988,11 @@ func (c *ZoneClient) mutate(ctx context.Context, m *ZoneMutation) (Value, error)
 type (
 	hooks struct {
 		AIJob, AIUsage, AgentSession, Alert, Approval, Asset, AssetLink, AuditLog,
-		BeaconBaseline, Command, CommandPolicy, Containment, CustomRule,
-		DecoyDeployment, DecoyEngineRelease, DecoyObservation, DecoyRevision,
-		EnrollToken, Event, ExternalTicket, Fact, Finding, Group, GroupMember,
-		HostCredential, IPInfo, Incident, Integration, IntegrationAttempt,
-		IntegrationDelivery, IntegrationEvent, IntegrationGroup,
+		BeaconBaseline, ChangeRecord, ChangeRecordAsset, ChangeSource, Command,
+		CommandPolicy, Containment, CustomRule, DecoyDeployment, DecoyEngineRelease,
+		DecoyObservation, DecoyRevision, EnrollToken, Event, ExternalTicket, Fact,
+		Finding, Group, GroupMember, HostCredential, IPInfo, Incident, Integration,
+		IntegrationAttempt, IntegrationDelivery, IntegrationEvent, IntegrationGroup,
 		IntegrationIdempotency, IntegrationSubscription, IntegrationToken, Intel,
 		Intent, Memory, ProcessBaseline, Question, Report, ReportRead, SSHKeyBaseline,
 		SSHKeyObservation, SSHLogin, Session, SessionMessage, Setting, StandingRule,
@@ -8576,11 +9001,11 @@ type (
 	}
 	inters struct {
 		AIJob, AIUsage, AgentSession, Alert, Approval, Asset, AssetLink, AuditLog,
-		BeaconBaseline, Command, CommandPolicy, Containment, CustomRule,
-		DecoyDeployment, DecoyEngineRelease, DecoyObservation, DecoyRevision,
-		EnrollToken, Event, ExternalTicket, Fact, Finding, Group, GroupMember,
-		HostCredential, IPInfo, Incident, Integration, IntegrationAttempt,
-		IntegrationDelivery, IntegrationEvent, IntegrationGroup,
+		BeaconBaseline, ChangeRecord, ChangeRecordAsset, ChangeSource, Command,
+		CommandPolicy, Containment, CustomRule, DecoyDeployment, DecoyEngineRelease,
+		DecoyObservation, DecoyRevision, EnrollToken, Event, ExternalTicket, Fact,
+		Finding, Group, GroupMember, HostCredential, IPInfo, Incident, Integration,
+		IntegrationAttempt, IntegrationDelivery, IntegrationEvent, IntegrationGroup,
 		IntegrationIdempotency, IntegrationSubscription, IntegrationToken, Intel,
 		Intent, Memory, ProcessBaseline, Question, Report, ReportRead, SSHKeyBaseline,
 		SSHKeyObservation, SSHLogin, Session, SessionMessage, Setting, StandingRule,

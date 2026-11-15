@@ -30,6 +30,12 @@ type Tx struct {
 	AuditLog *AuditLogClient
 	// BeaconBaseline is the client for interacting with the BeaconBaseline builders.
 	BeaconBaseline *BeaconBaselineClient
+	// ChangeRecord is the client for interacting with the ChangeRecord builders.
+	ChangeRecord *ChangeRecordClient
+	// ChangeRecordAsset is the client for interacting with the ChangeRecordAsset builders.
+	ChangeRecordAsset *ChangeRecordAssetClient
+	// ChangeSource is the client for interacting with the ChangeSource builders.
+	ChangeSource *ChangeSourceClient
 	// Command is the client for interacting with the Command builders.
 	Command *CommandClient
 	// CommandPolicy is the client for interacting with the CommandPolicy builders.
@@ -268,6 +274,9 @@ func (tx *Tx) init() {
 	tx.AssetLink = NewAssetLinkClient(tx.config)
 	tx.AuditLog = NewAuditLogClient(tx.config)
 	tx.BeaconBaseline = NewBeaconBaselineClient(tx.config)
+	tx.ChangeRecord = NewChangeRecordClient(tx.config)
+	tx.ChangeRecordAsset = NewChangeRecordAssetClient(tx.config)
+	tx.ChangeSource = NewChangeSourceClient(tx.config)
 	tx.Command = NewCommandClient(tx.config)
 	tx.CommandPolicy = NewCommandPolicyClient(tx.config)
 	tx.Containment = NewContainmentClient(tx.config)

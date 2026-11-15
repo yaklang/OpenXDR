@@ -40,6 +40,7 @@ import (
 	"openxdr/server/internal/authevents"
 	"openxdr/server/internal/automation"
 	"openxdr/server/internal/beacon"
+	"openxdr/server/internal/changerecords"
 	"openxdr/server/internal/closurereview"
 	"openxdr/server/internal/cluster"
 	"openxdr/server/internal/commandgate"
@@ -253,6 +254,17 @@ func main() {
 	routes.Handle("/api/system-integrations", integrations)
 	routes.Handle("/api/system-integrations/", integrations)
 	startIntegrationDelivery(ctx, client, credentialVault, outboundAllow)
+	changeSyncer := &changerecords.Syncer{
+		DB:       client,
+		SQL:      db,
+		Cipher:   api.ChangeTokenCipher(credentialVault),
+		Interval: time.Duration(max(30, getenvInt("CHANGE_SYNC_INTERVAL_SECONDS", 300))) * time.Second,
+	}
+	go cluster.RunLeader(ctx, db, "change-records", changeSyncer.Run)
+	changeRecordsAPI := api.ChangeRecords(client, credentialVault, changeSyncer)
+	routes.Handle("/api/system-integrations/change-sources", changeRecordsAPI)
+	routes.Handle("/api/system-integrations/change-sources/", changeRecordsAPI)
+	routes.Handle("GET /api/assets/{id}/change-records", changeRecordsAPI)
 	control := api.Control(client, webhook.Send)
 	for _, path := range []string{"/api/facts", "/api/facts/", "/api/intents", "/api/intents/", "/api/standing-rules", "/api/standing-rules/", "/api/questions", "/api/questions/"} {
 		routes.Handle(path, control)

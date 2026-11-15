@@ -15,6 +15,9 @@ import (
 	"openxdr/server/ent/assetlink"
 	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/beaconbaseline"
+	"openxdr/server/ent/changerecord"
+	"openxdr/server/ent/changerecordasset"
+	"openxdr/server/ent/changesource"
 	"openxdr/server/ent/command"
 	"openxdr/server/ent/commandpolicy"
 	"openxdr/server/ent/containment"
@@ -139,6 +142,9 @@ func checkColumn(t, c string) error {
 			assetlink.Table:               assetlink.ValidColumn,
 			auditlog.Table:                auditlog.ValidColumn,
 			beaconbaseline.Table:          beaconbaseline.ValidColumn,
+			changerecord.Table:            changerecord.ValidColumn,
+			changerecordasset.Table:       changerecordasset.ValidColumn,
+			changesource.Table:            changesource.ValidColumn,
 			command.Table:                 command.ValidColumn,
 			commandpolicy.Table:           commandpolicy.ValidColumn,
 			containment.Table:             containment.ValidColumn,
