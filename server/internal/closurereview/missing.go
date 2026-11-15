@@ -22,7 +22,7 @@ func (r *Reviewer) askMissing(ctx context.Context, m *material, d Decision, hash
 		return
 	}
 	raw, _ := json.Marshal(m)
-	text := strings.ToLower(string(raw))
+	rawText := string(raw)
 	var hosts []uuid.UUID
 	for _, h := range m.Benign.Hosts {
 		hosts = append(hosts, h.ID)
@@ -43,7 +43,7 @@ func (r *Reviewer) askMissing(ctx context.Context, m *material, d Decision, hash
 		note = string([]rune(note)[:400])
 	}
 	for _, mf := range d.MissingFacts {
-		subject, ok := missingSubject(mf, m, text)
+		subject, ok := missingSubject(mf, m, rawText)
 		if !ok {
 			continue
 		}
@@ -55,8 +55,9 @@ func (r *Reviewer) askMissing(ctx context.Context, m *material, d Decision, hash
 	}
 }
 
-// missingSubject 核对缺口：类型在范围内，主机名换成本事件的资产 ID，其余对象须在材料原文里出现
-func missingSubject(mf MissingFact, m *material, text string) (string, bool) {
+// missingSubject 核对缺口：类型在范围内，主机名换成本事件的资产 ID，其余对象须在材料原文里出现；
+// 缩写钥匙指纹按去省略号后的前缀匹配材料中唯一出现的完整公钥指纹。
+func missingSubject(mf MissingFact, m *material, rawText string) (string, bool) {
 	subject := strings.TrimSpace(mf.Subject)
 	if !slices.Contains([]string{"authorization", "owner", "policy"}, mf.Kind) {
 		return "", false
@@ -68,8 +69,96 @@ func missingSubject(mf MissingFact, m *material, text string) (string, bool) {
 			return "", false
 		}
 		return m.Benign.Hosts[i].ID.String(), true
-	case "domain", "ip", "key":
-		return subject, len(subject) >= 3 && strings.Contains(text, strings.ToLower(subject))
+	case "domain", "ip":
+		return subject, len(subject) >= 3 && strings.Contains(strings.ToLower(rawText), strings.ToLower(subject))
+	case "key":
+		return resolveKeySubject(subject, rawText)
 	}
 	return "", false
+}
+
+// resolveKeySubject 核对或补全 SHA256 公钥指纹：完整指纹须在材料原文中精确出现；
+// 缩写指纹去掉尾部省略号后按前缀匹配材料中的完整指纹，唯一命中才替换，零个或多个命中一律丢弃。
+func resolveKeySubject(subject, rawText string) (string, bool) {
+	candidates := fullKeyFingerprints(rawText)
+	if isFullKeyFP(subject) {
+		if !slices.Contains(candidates, subject) {
+			return "", false
+		}
+		return subject, true
+	}
+	prefix := strings.TrimSpace(strings.TrimRight(subject, ".…"))
+	b64, ok := strings.CutPrefix(prefix, "SHA256:")
+	if !ok || b64 == "" || len(b64) > 43 {
+		return "", false
+	}
+	for i := 0; i < len(b64); i++ {
+		if !isBase64Char(b64[i]) {
+			return "", false
+		}
+	}
+	var matched string
+	for _, fp := range candidates {
+		if strings.HasPrefix(fp, prefix) {
+			if matched != "" {
+				return "", false
+			}
+			matched = fp
+		}
+	}
+	return matched, matched != ""
+}
+
+func isFullKeyFP(s string) bool {
+	b64, ok := strings.CutPrefix(s, "SHA256:")
+	if !ok {
+		return false
+	}
+	b64 = strings.TrimSuffix(b64, "=")
+	if len(b64) != 43 {
+		return false
+	}
+	for i := 0; i < len(b64); i++ {
+		if !isBase64Char(b64[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func fullKeyFingerprints(text string) []string {
+	const tag = "SHA256:"
+	var out []string
+	for rest := text; ; {
+		idx := strings.Index(rest, tag)
+		if idx < 0 {
+			return out
+		}
+		after := rest[idx+len(tag):]
+		n := 0
+		for n < len(after) && isBase64Char(after[n]) {
+			n++
+		}
+		end := n
+		if n == 43 {
+			if end < len(after) && after[end] == '=' {
+				end++
+			}
+			if end == len(after) || (!isBase64Char(after[end]) && after[end] != '=') {
+				fp := rest[idx : idx+len(tag)+end]
+				if !slices.Contains(out, fp) {
+					out = append(out, fp)
+				}
+			}
+		}
+		if n == 0 {
+			rest = after
+		} else {
+			rest = after[n:]
+		}
+	}
+}
+
+func isBase64Char(b byte) bool {
+	return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '+' || b == '/'
 }

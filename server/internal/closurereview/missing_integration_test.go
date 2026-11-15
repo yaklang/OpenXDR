@@ -80,3 +80,34 @@ func TestMissingFactAsksControllerAndReReviews(t *testing.T) {
 		t.Fatal("新事实要进审计材料", material)
 	}
 }
+
+func TestMissingFactAbbreviatedKeyFingerprint(t *testing.T) {
+	const (
+		fpRoyal = "SHA256:mtwVQQEIr75wGTFfVAuMn6y/LsfD5ULsqChRXqfXqJY"
+		fpAmb1  = "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU"
+		fpAmb2  = "SHA256:47DEQpBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+	)
+	f := setupBenign(t)
+	raw, _ := json.Marshal(map[string]any{
+		"activity_id":   1,
+		"process":       map[string]any{"cmd_line": "/usr/bin/id", "pid": 99},
+		"login_session": map[string]any{"user": "root", "src_ip": "10.1.1.35", "key_fp": fpRoyal},
+		"other_keys":    []string{fpAmb1, fpAmb2},
+	})
+	f.db.Event.UpdateOneID(f.ev.ID).SetRaw(raw).ExecX(f.ctx)
+	f.r.Judge = func(_ context.Context, _ string, _ string) (Decision, error) {
+		f.calls++
+		return Decision{Reason: "SSH 公钥归属尚未登记，暂不自动结案", MissingFacts: []MissingFact{
+			{Kind: "owner", SubjectKind: "key", Subject: "SHA256:mtwVQQ…"},
+			{Kind: "owner", SubjectKind: "key", Subject: "SHA256:47DEQp..."},
+			{Kind: "owner", SubjectKind: "key", Subject: "SHA256:NcQW5H…"},
+		}}, nil
+	}
+	if ok, err := f.r.Review(f.ctx, f.inc.ID); ok || err != nil || f.calls != 1 {
+		t.Fatal(ok, err, f.calls)
+	}
+	qs := f.db.Question.Query().AllX(f.ctx)
+	if len(qs) != 1 || qs[0].SubjectKind != "key" || qs[0].Subject != fpRoyal {
+		t.Fatalf("唯一命中的缩写钥匙指纹应补全为完整指纹建问题，零命中与多命中应丢弃: %+v", qs)
+	}
+}
