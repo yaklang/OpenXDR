@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"openxdr/server/internal/authevents"
 	"openxdr/server/internal/automation"
 	"openxdr/server/internal/cmdorigin"
 	"openxdr/server/internal/eventarchive"
@@ -75,6 +76,9 @@ ALTER TABLE lateral_evidence ADD COLUMN IF NOT EXISTS src_ip text;`)
 		return err
 	}
 	if err := identity.EnsureSchema(ctx, db); err != nil {
+		return err
+	}
+	if err := authevents.EnsureSchema(ctx, db); err != nil {
 		return err
 	}
 	return graphqueue.EnsureSchema(ctx, db)
@@ -216,6 +220,11 @@ ON CONFLICT DO NOTHING`, e.ID, e.Timestamp, e.ClassUID, e.Source,
 		return false, 0, nil, err
 	}
 
+	if (e.ClassUID == 3002 || e.ClassUID == 100001) && e.AssetID != nil && *e.AssetID != uuid.Nil {
+		if err := authevents.Record(ctx, tx, e.ID, *e.AssetID, e.Timestamp, e.ClassUID, e.Source, e.AssetOS, e.Username, e.Raw); err != nil {
+			return false, 0, nil, err
+		}
+	}
 	if e.Source == "agent" && e.ClassUID == 3002 && e.AssetID != nil {
 		if err := identity.ObserveWindows(ctx, tx, e.ID); err != nil {
 			return false, 0, nil, err

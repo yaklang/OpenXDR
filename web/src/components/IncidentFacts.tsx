@@ -98,7 +98,7 @@ export function IncidentFacts({ inc }: { inc: IncidentDetail }) {
         foot={done ? inc.resolvedAt && <>{inc.resolvedBy} · <Ago iso={inc.resolvedAt} /></> : inc.workNextCheckAt && t('factNextCheck', { at: fmtTime(inc.workNextCheckAt) })}>
         <Space size={8} wrap>
           <IncidentStatusTag value={inc.status} retriage={inc.retriage} triageStartedAt={inc.triageStartedAt} />
-          {done && <ResolutionSourceTag source={inc.resolutionSource} />}
+          {done && <ResolutionSourceTag value={inc.resolutionSource} />}
           {!done && owner && <Tag color={owner === 'ai' ? 'purple' : 'orange'}>{t(owner === 'ai' ? 'factOwnerAI' : 'factOwnerHuman')}</Tag>}
         </Space>
       </Fact>

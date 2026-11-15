@@ -33,9 +33,11 @@ import (
 	"openxdr/server/internal/api"
 	"openxdr/server/internal/assetmap"
 	"openxdr/server/internal/assetretire"
+	"openxdr/server/internal/attemptoutcome"
 	"openxdr/server/internal/auditchain"
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/authentik"
+	"openxdr/server/internal/authevents"
 	"openxdr/server/internal/automation"
 	"openxdr/server/internal/beacon"
 	"openxdr/server/internal/closurereview"
@@ -311,7 +313,10 @@ func migrateSchema(ctx context.Context, db *sql.DB, client *ent.Client) error {
 	if err := response.EnsureVerificationSchema(ctx, db); err != nil {
 		return err
 	}
-	return ingest.EnsureSchema(ctx, db)
+	if err := ingest.EnsureSchema(ctx, db); err != nil {
+		return err
+	}
+	return authevents.EnsureRecordedSince(ctx, db, time.Now().UTC())
 }
 
 // startDirectorySync 目录来源登记、单活同步、运行记录清理与身份图增量更新。
@@ -357,6 +362,7 @@ func startIntel(ctx context.Context, db *sql.DB, client *ent.Client, authKey fun
 func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules sigma.Catalog, suppressions *suppress.Store, reviewer *suppressreview.Reviewer, closureReview func(context.Context, uuid.UUID) (bool, error)) {
 	correlator := &correlate.Engine{
 		DB:            client,
+		SQL:           db,
 		Rules:         rules,
 		Window:        time.Duration(getenvInt("CORRELATE_WINDOW_MINUTES", 30)) * time.Minute,
 		Interval:      time.Duration(getenvInt("CORRELATE_INTERVAL_SECONDS", 10)) * time.Second,
@@ -422,6 +428,16 @@ func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules s
 	}
 	// 退役资产未结事件兜底结案：补收历史遗留或退役与关联竞态窗口内产生的纯退役资产事件
 	go cluster.RunLeader(ctx, db, "asset-retire-close", (&assetretire.Closer{DB: client, Interval: time.Minute}).Run)
+	// 认证失败族事件确定性未得手核验：静默满 ATTEMPT_QUIET_HOURS（默认 6 小时，0 关闭）无同源成功且全属公网来源则按 closed 结案，并归并公网入口加固待办
+	if quietHours := getenvInt("ATTEMPT_QUIET_HOURS", attemptoutcome.DefaultQuietHours); quietHours > 0 {
+		attemptCloser := &attemptoutcome.Closer{
+			DB:          client,
+			SQL:         db,
+			QuietWindow: time.Duration(quietHours) * time.Hour,
+			Interval:    time.Duration(max(getenvInt("ATTEMPT_CHECK_SECONDS", 120), 10)) * time.Second,
+		}
+		go cluster.RunLeader(ctx, db, "attempt-outcome", attemptCloser.Run)
+	}
 }
 
 // startSuppressionReview 抑制草案由 AI 审计员评审：草案生成时当场评审，单活循环兜底积压与重启。
@@ -501,6 +517,7 @@ func startAssetMap(ctx context.Context, db *sql.DB, client *ent.Client, llmFor f
 func startTriage(ctx context.Context, db *sql.DB, client *ent.Client, rules sigma.Catalog, llmFor func(string) *triage.LLM) *triage.Engine {
 	return &triage.Engine{
 		DB:       client,
+		SQL:      db,
 		Rules:    rules,
 		LLM:      llmFor("triage"),
 		Interval: time.Duration(getenvInt("AI_INTERVAL_SECONDS", 30)) * time.Second,

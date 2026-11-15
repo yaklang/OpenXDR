@@ -263,9 +263,9 @@ export function IncidentsPage() {
                 render: v => groups.find(g => g.id === v)?.name ?? '-',
               },
               {
-                title: t('thStatus'), dataIndex: 'status', width: 160,
+                title: t('thStatus'), dataIndex: 'status', width: 145,
                 sorter: (a, b) => a.status.localeCompare(b.status),
-                render: (v, r) => <Space size={4} wrap><IncidentStatusTag value={v} retriage={r.retriage} triageStartedAt={r.triageStartedAt} /><ResolutionSourceTag source={r.resolutionSource} />{r.closureProposal && <Tag color="purple" variant="filled">{t('proposalTag')}</Tag>}</Space>,
+                render: (v, r) => <Space size={4} wrap><IncidentStatusTag value={v} retriage={r.retriage} triageStartedAt={r.triageStartedAt} />{done(r) && <ResolutionSourceTag value={r.resolutionSource} systemOnly />}{r.closureProposal && <Tag color="purple" variant="filled">{t('proposalTag')}</Tag>}</Space>,
               },
               {
                 responsive: WIDE_ONLY, title: t('thVerdict'), width: 150,

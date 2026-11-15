@@ -20,6 +20,7 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/internal/aijob"
+	"openxdr/server/internal/authevents"
 	"openxdr/server/internal/eventpart"
 	"openxdr/server/internal/graphqueue"
 	"openxdr/server/internal/temporal"
@@ -52,6 +53,9 @@ func New(t *testing.T) (context.Context, *ent.Client) {
 	if err := graphqueue.EnsureSchema(ctx, db); err != nil {
 		t.Fatal(err)
 	}
+	if err := authevents.EnsureSchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
 	truncateRaw(ctx, t, db)
 	truncate(ctx, t, client)
 	return ctx, client
@@ -61,7 +65,7 @@ func New(t *testing.T) (context.Context, *ent.Client) {
 // 游标表也要清，否则上一个测试的增量游标会让新数据被跳过。
 func truncateRaw(ctx context.Context, t *testing.T, db *sql.DB) {
 	t.Helper()
-	for _, table := range []string{"assetmap_queue", "identity_login_matches", "identity_candidate_rejections", "identity_links", "identities", "identity_accounts", "identity_graph_cursors"} {
+	for _, table := range []string{"auth_attempt_closures", "auth_events", "assetmap_queue", "identity_login_matches", "identity_candidate_rejections", "identity_links", "identities", "identity_accounts", "identity_graph_cursors"} {
 		if _, err := db.ExecContext(ctx, `DO $$ BEGIN IF to_regclass('`+table+`') IS NOT NULL THEN DELETE FROM `+table+`; END IF; END $$`); err != nil {
 			t.Fatalf("清空表 %s 失败: %v", table, err)
 		}

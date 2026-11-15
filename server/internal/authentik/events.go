@@ -100,19 +100,23 @@ var actions = map[string]int{"login": 1, "login_failed": 2}
 // 每轮每种事件最多翻这么多页（每页 100 条），积压再多也分几轮补
 const maxPages = 20
 
-const cursorKey = "authentik.events.cursor"
+const (
+	cursorKey   = "authentik.events.cursor"
+	PolledAtKey = "authentik.events.polled_at"
+)
 
 // 首次启动只回看这么久：更早的登录失败早已过了爆破判定窗口，补进来只会造出过期的告警
 const firstLookback = time.Hour
 
 // Poller 定时拉 Authentik 的登录事件，挂到运行 Authentik 的资产上发进事件总线
 type Poller struct {
-	API      *Client
-	DB       *ent.Client
-	SQL      *sql.DB
-	Events   eventbus.Bus
-	Host     string // 运行 Authentik 的资产主机名
-	Interval time.Duration
+	API             *Client
+	DB              *ent.Client
+	SQL             *sql.DB
+	Events          eventbus.Bus
+	Host            string // 运行 Authentik 的资产主机名
+	Interval        time.Duration
+	lastPolledSaved time.Time
 }
 
 func (p *Poller) Run(ctx context.Context) {
@@ -168,6 +172,11 @@ func (p *Poller) Poll(ctx context.Context) (int, error) {
 	if len(batch) > 0 {
 		if err := p.save(ctx, batch[len(batch)-1].Created); err != nil {
 			return 0, err
+		}
+	}
+	if now := time.Now().UTC(); p.lastPolledSaved.IsZero() || now.Sub(p.lastPolledSaved) >= 2*time.Minute {
+		if err := p.savePolledAt(ctx, now); err == nil {
+			p.lastPolledSaved = now
 		}
 	}
 	return len(batch), nil
@@ -255,5 +264,15 @@ func (p *Poller) save(ctx context.Context, t time.Time) error {
 	b, _ := json.Marshal(t)
 	_, err := p.SQL.ExecContext(ctx, `INSERT INTO settings (id, value, updated_at) VALUES ($1, $2::jsonb, now())
 ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, cursorKey, string(b))
+	return err
+}
+
+func (p *Poller) savePolledAt(ctx context.Context, t time.Time) error {
+	if p.SQL == nil {
+		return nil
+	}
+	b, _ := json.Marshal(t)
+	_, err := p.SQL.ExecContext(ctx, `INSERT INTO settings (id, value, updated_at) VALUES ($1, $2::jsonb, now())
+ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, PolledAtKey, string(b))
 	return err
 }

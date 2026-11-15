@@ -5,12 +5,14 @@ package triage
 import (
 	"cmp"
 	"context"
+	stdsql "database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"openxdr/server/ent/asset"
 	"openxdr/server/ent/event"
+	"openxdr/server/internal/attemptoutcome"
 	"openxdr/server/internal/facts"
 	"openxdr/server/internal/memories"
 	"slices"
@@ -84,6 +86,7 @@ type Engine struct {
 	investigationInvalid    bool
 	investigationID         uuid.UUID // 每次研判的内部绑定，模型不能提供或覆盖。
 	DB                      *ent.Client
+	SQL                     *stdsql.DB
 	LLM                     *LLM
 	Interval                time.Duration
 	// Cooldown 已研判的 incident 又并入普通新证据时，距上次研判至少隔这么久才重研判；升级类证据不等
@@ -572,7 +575,38 @@ func (e *Engine) buildContext(ctx context.Context, inc *ent.Incident) (string, e
 	e.appendMemories(ctx, &sb, alerts)
 	e.appendFacts(ctx, &sb, alerts)
 	e.appendAssetWork(ctx, &sb, alerts)
+	e.appendAttemptOutcome(ctx, &sb, inc, alerts)
 	return sb.String(), nil
+}
+
+func (e *Engine) appendAttemptOutcome(ctx context.Context, sb *strings.Builder, inc *ent.Incident, sampled []*ent.Alert) {
+	hasAuth := attemptoutcome.IncidentHasAuthFailures(sampled)
+	if !hasAuth {
+		exists, err := e.DB.Alert.Query().
+			Where(
+				alert.IncidentIDEQ(inc.ID),
+				alert.RuleIDIn(
+					attemptoutcome.RuleLinuxLoginFailure,
+					attemptoutcome.RuleSSHAuthFailure,
+					attemptoutcome.RuleWinLoginFailure,
+					attemptoutcome.RuleTemporalLinuxAuthBurst,
+					attemptoutcome.RuleTemporalLinuxAccountAuthBurst,
+					attemptoutcome.RuleTemporalSSHDFailBurst,
+					attemptoutcome.RuleTemporalWindowsFailBurst,
+				),
+			).
+			Exist(ctx)
+		if err != nil || !exists {
+			return
+		}
+	}
+	v, err := attemptoutcome.Verify(ctx, e.DB, e.SQL, inc.ID, attemptoutcome.Options{Now: time.Now()})
+	if err != nil || v == nil {
+		return
+	}
+	if section := v.RenderTriageEvidence(); section != "" {
+		sb.WriteString(section)
+	}
 }
 
 // sampleAlerts 在 n 条预算内挑告警明细：先取覆盖代表（cover，按级别高低截断），再补级别最高的；

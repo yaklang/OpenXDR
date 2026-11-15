@@ -22,6 +22,7 @@ import (
 	"openxdr/server/ent/decoyobservation"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/session"
+	"openxdr/server/internal/authevents"
 	"openxdr/server/internal/eventpart"
 	"openxdr/server/internal/temporal"
 )
@@ -73,6 +74,11 @@ func (j *Janitor) Run(ctx context.Context) {
 					slog.Error("清理无引用时序归档失败", "err", err)
 				} else if n > 0 {
 					slog.Info("清理无引用时序归档", "deleted", n)
+				}
+				if n, err := authevents.Prune(ctx, j.SQL, time.Now().Add(-j.Retention)); err != nil {
+					slog.Error("清理过期认证物化事件失败", "err", err)
+				} else if n > 0 {
+					slog.Info("清理过期认证物化事件", "deleted", n)
 				}
 			}
 			// 时序诊断缺口按自身的诊断保留期清理（R6），与 RETENTION_DAYS 无关：

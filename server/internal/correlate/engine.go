@@ -6,6 +6,7 @@ package correlate
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"openxdr/server/ent/asset"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/incident"
+	"openxdr/server/internal/attemptoutcome"
 	"openxdr/server/internal/automation"
 	"openxdr/server/internal/closurereview"
 	"openxdr/server/internal/incidentstate"
@@ -37,6 +39,7 @@ var (
 
 type Engine struct {
 	DB            *ent.Client
+	SQL           *sql.DB
 	Rules         sigma.Catalog
 	Window        time.Duration
 	Interval      time.Duration
@@ -90,6 +93,9 @@ func (e *Engine) batchTx(ctx context.Context, tx *ent.Tx) error {
 		WithAsset().
 		All(ctx)
 	if err != nil || len(pending) == 0 {
+		return err
+	}
+	if err := attemptoutcome.ReopenForPendingAlerts(ctx, tx, e.SQL, pending, time.Now()); err != nil {
 		return err
 	}
 

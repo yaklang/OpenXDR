@@ -44,7 +44,7 @@ func testProcessor(t *testing.T) (*Processor, *ent.Client, *sql.DB) {
 	}
 	// 派生表不再有指向 events 的外键，TRUNCATE events CASCADE 带不走它们，要点名清
 	if _, err := db.Exec(`TRUNCATE assetmap_queue, alert_dedup_state, alerts, events, assets, temporal_matches, lateral_evidence, temporal_candidates,
- temporal_evaluation_gaps, temporal_detections, identity_observations, identity_local_snapshots CASCADE`); err != nil {
+ temporal_evaluation_gaps, temporal_detections, identity_observations, identity_local_snapshots, auth_events, auth_attempt_closures CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	rules := sigma.LoadDir(t.TempDir())

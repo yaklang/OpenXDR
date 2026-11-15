@@ -65,9 +65,9 @@ export interface IncidentSummary {
   groupId: string | null
   // 结案：谁、何时、为什么、哪条机制
   resolution: string | null
+  resolutionSource?: string | null
   resolvedBy: string | null
   resolvedAt: string | null
-  resolutionSource?: string | null
   // AI 的结案建议：人一键采纳（结案仍记在人名下）或忽略
   closureProposal: ClosureProposal | null
   // 研判节奏：上次研判时刻与累计次数；retriage 为 pending（研判后又有新证据，冷却到期重研判）或 urgent（升级类，立即重研判）
