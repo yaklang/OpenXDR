@@ -195,7 +195,9 @@ func TestLineageLookbackPrunesOldPartitionsAndFallsBack(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	now := time.Now().UTC().Truncate(time.Second)
+	// 固定在一个别的测试不会碰的远期月份：测试库是各包共用的，eventarchive 的测试会留下当月的整月归档分区，
+	// 按当前时间预建日分区会与之重叠
+	now := time.Date(2031, 3, 20, 12, 0, 0, 0, time.UTC)
 	if _, err := eventpart.EnsureDays(ctx, sqlDB, "events", now.Add(-6*24*time.Hour), 7); err != nil {
 		t.Fatalf("预建日分区失败: %v", err)
 	}
