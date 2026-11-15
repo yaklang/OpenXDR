@@ -117,7 +117,7 @@ func TestSSHKeysInventoryAndClaimAPI(t *testing.T) {
 	t.Cleanup(asAna.Close)
 
 	// 分析员不能认领钥匙
-	claimBody := `{"fingerprint":"` + fp1 + `","holder":"user:ana","machine":"Foghaven","purpose":"日常运维"}`
+	claimBody := `{"fingerprint":"` + fp1 + `","holder":"user:ana","shared":true,"machine":"Foghaven","purpose":"过渡期共用管理钥匙"}`
 	resp, err := http.Post(asAna.URL+"/api/ssh-keys/claim", "application/json", strings.NewReader(claimBody))
 	if err != nil {
 		t.Fatal(err)
@@ -132,15 +132,17 @@ func TestSSHKeysInventoryAndClaimAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var claimedFact factRow
+	_ = json.NewDecoder(resp.Body).Decode(&claimedFact)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("admin 认领应返回 201, got=%d", resp.StatusCode)
+	if resp.StatusCode != http.StatusCreated || !claimedFact.Shared {
+		t.Fatalf("admin 认领共享钥匙应返回 201 且 shared=true, got=%d row=%+v", resp.StatusCode, claimedFact)
 	}
 	if n := client.AuditLog.Query().Where(auditlog.ActionEQ("fact_created")).CountX(ctx); n != 1 {
 		t.Fatalf("认领应写入 fact_created 审计, got=%d", n)
 	}
 
-	// 查询列表：在用的 fp1 排在闲置的 fp2 前面，且 fp1 为 claimed、fp2 为 unclaimed
+	// 查询列表：在用的 fp1 排在闲置的 fp2 前面，且 fp1 为 claimed（shared=true）、fp2 为 unclaimed
 	resp, err = http.Get(asAna.URL + "/api/ssh-keys")
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +155,7 @@ func TestSSHKeysInventoryAndClaimAPI(t *testing.T) {
 	if len(list.Keys) != 2 {
 		t.Fatalf("应返回 2 把钥匙, got=%d", len(list.Keys))
 	}
-	if list.Keys[0].Fingerprint != fp1 || list.Keys[0].UsageStatus != "active" || list.Keys[0].ClaimStatus != "claimed" {
+	if list.Keys[0].Fingerprint != fp1 || list.Keys[0].UsageStatus != "active" || list.Keys[0].ClaimStatus != "claimed" || !list.Keys[0].Shared {
 		t.Fatalf("第 1 把钥匙状态不符: %+v", list.Keys[0])
 	}
 	if list.Keys[1].Fingerprint != fp2 || list.Keys[1].UsageStatus != "idle" || list.Keys[1].ClaimStatus != "unclaimed" {

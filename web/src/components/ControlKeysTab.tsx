@@ -1,5 +1,5 @@
 import { useQueryClient, type UseQueryResult } from '@tanstack/react-query'
-import { Alert, App, Button, Flex, Form, Input, InputNumber, Modal, Segmented, Select, Table, Tag, Tooltip, Typography } from 'antd'
+import { Alert, App, Button, Checkbox, Flex, Form, Input, InputNumber, Modal, Segmented, Select, Table, Tag, Tooltip, Typography } from 'antd'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { claimSSHKey, proposeSSHKeyRemoval, type SSHKeyObservation, type SSHKeysResponse } from '../api'
@@ -17,6 +17,7 @@ import { errText, fmtTime } from './format'
 
 interface ClaimDraft {
   holder: string
+  shared?: boolean
   machine: string
   purpose: string
   groupId?: string
@@ -58,6 +59,7 @@ export function ControlKeysTab({ sshKeys }: { sshKeys: UseQueryResult<SSHKeysRes
       const created = await claimSSHKey({
         fingerprint: claiming.fingerprint,
         holder: draft.holder.trim(),
+        ...(draft.shared ? { shared: true } : {}),
         machine: draft.machine.trim(),
         purpose: draft.purpose.trim(),
         ...(draft.groupId ? { groupId: draft.groupId } : {}),
@@ -248,6 +250,11 @@ export function ControlKeysTab({ sshKeys }: { sshKeys: UseQueryResult<SSHKeysRes
                   ) : (
                     <Tag color="orange">{t('keyUnclaimed')}</Tag>
                   )}
+                  {r.shared && (
+                    <Tooltip title={t('keySharedHint')}>
+                      <Tag color="orange">{t('keyShared')}</Tag>
+                    </Tooltip>
+                  )}
                   {r.factRef && <RefTag value={r.factRef} />}
                   {r.removalStatus === 'pending' && (
                     <Link to="/approvals">
@@ -325,6 +332,9 @@ export function ControlKeysTab({ sshKeys }: { sshKeys: UseQueryResult<SSHKeysRes
             </Form.Item>
             <Form.Item name="holder" label={t('factHolder')} extra={t('factHolderHint')} rules={[{ required: true, whitespace: true, max: 256 }]}>
               <Input placeholder="user:alice" />
+            </Form.Item>
+            <Form.Item name="shared" valuePropName="checked" extra={t('keySharedHint')}>
+              <Checkbox>{t('keyShared')}</Checkbox>
             </Form.Item>
             <Form.Item name="machine" label={t('keyMachine')} extra={t('keyMachineHint')} rules={[{ required: true, whitespace: true, max: 256 }]}>
               <Input />

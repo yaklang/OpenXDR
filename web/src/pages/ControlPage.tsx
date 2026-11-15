@@ -1,6 +1,6 @@
 import { PlusOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
-import { App, Button, Card, Flex, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Table, Tabs, Tag, Tooltip, Typography, theme } from 'antd'
+import { App, Button, Card, Checkbox, Flex, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Table, Tabs, Tag, Tooltip, Typography, theme } from 'antd'
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { createFact, endIntent, fetchAssets, fetchFacts, fetchIntents, fetchQuestions, fetchSSHKeys, fetchStandingRules, retireFact, updateFact, type Fact, type FactKind, type Intent, type Question, type SSHKeysResponse, type StandingRule } from '../api'
@@ -143,8 +143,14 @@ function Overview({ facts, intents, sshKeys, rules, questions }: { facts: UseQue
 }
 
 function FactSubject({ f }: { f: Fact }) {
+  const { t } = useI18n()
   if (f.kind === 'key') {
-    return <Tooltip title={f.subject}><Typography.Text className="mono" copyable={{ text: f.subject }} style={{ fontSize: 12 }}>{shortFp(f.subject)}</Typography.Text></Tooltip>
+    return (
+      <Flex wrap gap={4} align="center">
+        <Tooltip title={f.subject}><Typography.Text className="mono" copyable={{ text: f.subject }} style={{ fontSize: 12 }}>{shortFp(f.subject)}</Typography.Text></Tooltip>
+        {f.shared && <Tooltip title={t('keySharedHint')}><Tag color="orange">{t('keyShared')}</Tag></Tooltip>}
+      </Flex>
+    )
   }
   if (f.kind === 'channel') return <span className="mono" style={{ fontSize: 12.5 }}>{bareAddr(f.subject)}</span>
   if (f.kind === 'decision') return <>{f.subject}{f.assetId && <> · <HostLink id={f.assetId} fallback={f.hostname} /></>}</>
@@ -157,12 +163,14 @@ interface FactDraft {
   assetId?: string
   groupId?: string
   holder?: string
+  shared?: boolean
   content: string
   expiresInDays: number
 }
 
 interface FactEditDraft {
   holder?: string
+  shared?: boolean
   content: string
   expiresInDays?: number | null
 }
@@ -259,14 +267,24 @@ function FactsTab({ facts, refId, adding, onAdded }: { facts: UseQueryResult<Fac
       </TableCard>
 
       <Modal open={adding} title={t('factAdd')} onCancel={() => { if (!busy) onAdded() }} onOk={() => addForm.submit()} confirmLoading={busy} width={620} destroyOnHidden>
-        <Form<FactDraft> form={addForm} layout="vertical" disabled={busy} initialValues={{ kind, expiresInDays: 0 }}
-          onFinish={v => run(() => createFact({ ...v, subject: (v.subject ?? '').trim(), holder: (v.holder ?? '').trim() }), onAdded)}>
+        <Form<FactDraft> form={addForm} layout="vertical" disabled={busy} initialValues={{ kind, expiresInDays: 0, shared: false }}
+          onFinish={v => run(() => createFact({
+            ...v,
+            subject: (v.subject ?? '').trim(),
+            holder: (v.holder ?? '').trim(),
+            shared: v.kind === 'key' ? !!v.shared : undefined,
+          }), onAdded)}>
           <Form.Item name="kind" label={t('factKind')} rules={[{ required: true }]}>
             <Select options={FACT_KINDS.map(k => ({ value: k, label: t(`factKind_${k}` as MsgKey) }))} />
           </Form.Item>
           {addKind === 'key' && (
             <Form.Item name="subject" label={t('factKeySubject')} rules={[{ required: true, whitespace: true }]}>
               <Input className="mono" placeholder="SHA256:…" />
+            </Form.Item>
+          )}
+          {addKind === 'key' && (
+            <Form.Item name="shared" valuePropName="checked" extra={t('keySharedHint')}>
+              <Checkbox>{t('keyShared')}</Checkbox>
             </Form.Item>
           )}
           {addKind === 'channel' && (
@@ -304,15 +322,21 @@ function FactsTab({ facts, refId, adding, onAdded }: { facts: UseQueryResult<Fac
 
       <Modal open={editing !== null} title={t('factEdit')} onCancel={() => { if (!busy) setEditing(null) }} onOk={() => editForm.submit()} confirmLoading={busy} width={560} destroyOnHidden>
         {editing && (
-          <Form<FactEditDraft> form={editForm} layout="vertical" disabled={busy} initialValues={{ holder: editing.holder, content: editing.content }}
+          <Form<FactEditDraft> form={editForm} layout="vertical" disabled={busy} initialValues={{ holder: editing.holder, shared: !!editing.shared, content: editing.content }}
             onFinish={v => run(() => updateFact(editing.id, {
               holder: (v.holder ?? '').trim(),
+              ...(editing.kind === 'key' ? { shared: !!v.shared } : {}),
               content: v.content,
               ...(v.expiresInDays != null ? { expiresInDays: v.expiresInDays } : {}),
             }), () => setEditing(null))}>
             <Form.Item name="holder" label={t('factHolder')} extra={t('factHolderHint')}>
               <Input />
             </Form.Item>
+            {editing.kind === 'key' && (
+              <Form.Item name="shared" valuePropName="checked" extra={t('keySharedHint')}>
+                <Checkbox>{t('keyShared')}</Checkbox>
+              </Form.Item>
+            )}
             <Form.Item name="content" label={t('factContent')} rules={[{ required: true, whitespace: true, max: 1000 }]}>
               <Input.TextArea rows={3} />
             </Form.Item>

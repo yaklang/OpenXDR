@@ -877,6 +877,7 @@ var (
 		{Name: "group_id", Type: field.TypeUUID, Nullable: true},
 		{Name: "asset_id", Type: field.TypeUUID, Nullable: true},
 		{Name: "holder", Type: field.TypeString, Default: ""},
+		{Name: "shared", Type: field.TypeBool, Default: false},
 		{Name: "content", Type: field.TypeString, Size: 2147483647},
 		{Name: "source", Type: field.TypeString, Default: "human"},
 		{Name: "created_by", Type: field.TypeString},
@@ -1581,6 +1582,11 @@ var (
 				Name:    "sshlogin_group_id_ts",
 				Unique:  false,
 				Columns: []*schema.Column{SSHLoginsColumns[2], SSHLoginsColumns[1]},
+			},
+			{
+				Name:    "sshlogin_asset_id_ts",
+				Unique:  false,
+				Columns: []*schema.Column{SSHLoginsColumns[3], SSHLoginsColumns[1]},
 			},
 			{
 				Name:    "sshlogin_ts",

@@ -755,6 +755,7 @@ type KeyRow struct {
 	FactRef           string     `json:"factRef,omitempty"`
 	Holder            string     `json:"holder,omitempty"`
 	HolderName        string     `json:"holderName,omitempty"`
+	Shared            bool       `json:"shared,omitempty"`
 	FactContent       string     `json:"factContent,omitempty"`
 	AddedByUser       string     `json:"addedByUser,omitempty"`
 	AddedByIP         string     `json:"addedByIp,omitempty"`
@@ -877,11 +878,13 @@ func List(ctx context.Context, db *ent.Client, visibleAssets []*ent.Asset, now t
 		}
 		claim := "unclaimed"
 		var fRef, holder, holderName, fContent string
+		var shared bool
 		if matched := matchKeyFact(liveFacts, o.Fingerprint, o.AssetID, a.GroupID); matched != nil {
 			claim = "claimed"
 			fRef = facts.Ref("F", matched.ID)
 			holder = matched.Holder
 			holderName = holderNames[matched.Holder]
+			shared = matched.Shared || anyVisibleKeyFactShared(liveFacts, o.Fingerprint, o.AssetID, a.GroupID)
 			fContent = matched.Content
 		}
 		opts := o.Options
@@ -912,6 +915,7 @@ func List(ctx context.Context, db *ent.Client, visibleAssets []*ent.Asset, now t
 			FactRef:           fRef,
 			Holder:            holder,
 			HolderName:        holderName,
+			Shared:            shared,
 			FactContent:       fContent,
 			AddedByUser:       o.AddedByUser,
 			AddedByIP:         o.AddedByIP,
@@ -980,6 +984,29 @@ func matchKeyFact(candidates []*ent.Fact, fp string, assetID uuid.UUID, groupID 
 		return groupMatch
 	}
 	return globalMatch
+}
+
+// anyVisibleKeyFactShared 可见域内只要任意一条同指纹生效 key 事实标为共享，就按共享钥匙对待。
+func anyVisibleKeyFactShared(candidates []*ent.Fact, fp string, assetID uuid.UUID, groupID *uuid.UUID) bool {
+	for _, f := range candidates {
+		if f.Subject != fp || !f.Shared {
+			continue
+		}
+		if f.AssetID != nil {
+			if *f.AssetID == assetID {
+				return true
+			}
+			continue
+		}
+		if f.GroupID != nil {
+			if groupID != nil && *f.GroupID == *groupID {
+				return true
+			}
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func resolveHolderNames(ctx context.Context, db *ent.Client, rows []*ent.Fact) map[string]string {

@@ -32,6 +32,8 @@ func (Fact) Fields() []ent.Field {
 		field.UUID("asset_id", uuid.UUID{}).Optional().Nillable(),
 		// 归属：key 与 channel 的持有人（user:<用户名> 或 integration:<集成 ID>），意图登记按它核对
 		field.String("holder").Default(""),
+		// 多人或多机共用的钥匙（仅 kind=key 有效）：无法唯一定位具体操作主体，不作为运维会话自动结案依据
+		field.Bool("shared").Default(false),
 		field.Text("content"),
 		field.String("source").Default("human"),
 		field.String("created_by"),

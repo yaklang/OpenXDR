@@ -24,7 +24,7 @@ func (r *Reviewer) askMissing(ctx context.Context, m *material, d Decision, hash
 	raw, _ := json.Marshal(m)
 	rawText := string(raw)
 	var hosts []uuid.UUID
-	for _, h := range m.Benign.Hosts {
+	for _, h := range m.hosts() {
 		hosts = append(hosts, h.ID)
 	}
 	rows, err := r.DB.Asset.Query().Where(asset.IDIn(hosts...)).All(ctx)
@@ -64,11 +64,12 @@ func missingSubject(mf MissingFact, m *material, rawText string) (string, bool) 
 	}
 	switch mf.SubjectKind {
 	case "asset":
-		i := slices.IndexFunc(m.Benign.Hosts, func(h benignHost) bool { return h.Hostname == subject || h.ID.String() == subject })
+		hs := m.hosts()
+		i := slices.IndexFunc(hs, func(h benignHost) bool { return h.Hostname == subject || h.ID.String() == subject })
 		if i < 0 {
 			return "", false
 		}
-		return m.Benign.Hosts[i].ID.String(), true
+		return hs[i].ID.String(), true
 	case "domain", "ip":
 		return subject, len(subject) >= 3 && strings.Contains(strings.ToLower(rawText), strings.ToLower(subject))
 	case "key":

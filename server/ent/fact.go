@@ -32,6 +32,8 @@ type Fact struct {
 	AssetID *uuid.UUID `json:"asset_id,omitempty"`
 	// Holder holds the value of the "holder" field.
 	Holder string `json:"holder,omitempty"`
+	// Shared holds the value of the "shared" field.
+	Shared bool `json:"shared,omitempty"`
 	// Content holds the value of the "content" field.
 	Content string `json:"content,omitempty"`
 	// Source holds the value of the "source" field.
@@ -58,6 +60,8 @@ func (*Fact) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case fact.FieldGroupID, fact.FieldAssetID:
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
+		case fact.FieldShared:
+			values[i] = new(sql.NullBool)
 		case fact.FieldCitedCount:
 			values[i] = new(sql.NullInt64)
 		case fact.FieldKind, fact.FieldSubject, fact.FieldHolder, fact.FieldContent, fact.FieldSource, fact.FieldCreatedBy, fact.FieldRetiredBy:
@@ -130,6 +134,12 @@ func (_m *Fact) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field holder", values[i])
 			} else if value.Valid {
 				_m.Holder = value.String
+			}
+		case fact.FieldShared:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field shared", values[i])
+			} else if value.Valid {
+				_m.Shared = value.Bool
 			}
 		case fact.FieldContent:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -243,6 +253,9 @@ func (_m *Fact) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("holder=")
 	builder.WriteString(_m.Holder)
+	builder.WriteString(", ")
+	builder.WriteString("shared=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Shared))
 	builder.WriteString(", ")
 	builder.WriteString("content=")
 	builder.WriteString(_m.Content)

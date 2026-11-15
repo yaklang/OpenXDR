@@ -52,8 +52,40 @@ func TestControlAPI(t *testing.T) {
 	if code := post(asAdmin, "/api/facts", `{"kind":"key","subject":"md5","content":"x"}`); code != http.StatusBadRequest {
 		t.Fatalf("指纹格式不对应拒绝：%d", code)
 	}
+	if code := post(asAdmin, "/api/facts", `{"kind":"channel","subject":"10.1.1.161","shared":true,"content":"x"}`); code != http.StatusBadRequest {
+		t.Fatalf("非 key 事实设 shared=true 应拒绝：%d", code)
+	}
 	if code := post(asAdmin, "/api/facts", key); code != http.StatusCreated {
 		t.Fatalf("管理员录入钥匙：%d", code)
+	}
+	const sharedFP = "SHA256:2jmj7l5rSw0yVb/vlWAYkK/YBwk2jmj7l5rSw0yVb/s"
+	respFact, err := http.Post(asAdmin.URL+"/api/facts", "application/json", strings.NewReader(`{"kind":"key","subject":"`+sharedFP+`","holder":"user:ana","shared":true,"content":"共用管理钥匙"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var createdShared factRow
+	_ = json.NewDecoder(respFact.Body).Decode(&createdShared)
+	respFact.Body.Close()
+	if respFact.StatusCode != http.StatusCreated || !createdShared.Shared {
+		t.Fatalf("录入共享钥匙事实失败：code=%d row=%+v", respFact.StatusCode, createdShared)
+	}
+	patchReq, err := http.NewRequest(http.MethodPatch, asAdmin.URL+"/api/facts/"+createdShared.ID.String(), strings.NewReader(`{"shared":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	patchReq.Header.Set("Content-Type", "application/json")
+	patchResp, err := http.DefaultClient.Do(patchReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var updatedShared factRow
+	_ = json.NewDecoder(patchResp.Body).Decode(&updatedShared)
+	patchResp.Body.Close()
+	if patchResp.StatusCode != http.StatusOK || updatedShared.Shared {
+		t.Fatalf("PATCH 更新 shared 失败：%d row=%+v", patchResp.StatusCode, updatedShared)
+	}
+	if gotFact := client.Fact.GetX(ctx, createdShared.ID); gotFact.Shared {
+		t.Fatal("PATCH shared=false 未生效")
 	}
 	if code := post(asAdmin, "/api/facts", `{"kind":"channel","subject":"10.1.1.161","holder":"user:ana","content":"ana 的办公机"}`); code != http.StatusCreated {
 		t.Fatalf("管理员录入通道：%d", code)

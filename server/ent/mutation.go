@@ -25225,6 +25225,7 @@ type FactMutation struct {
 	group_id       *uuid.UUID
 	asset_id       *uuid.UUID
 	holder         *string
+	shared         *bool
 	content        *string
 	source         *string
 	created_by     *string
@@ -25622,6 +25623,42 @@ func (m *FactMutation) ResetHolder() {
 	m.holder = nil
 }
 
+// SetShared sets the "shared" field.
+func (m *FactMutation) SetShared(b bool) {
+	m.shared = &b
+}
+
+// Shared returns the value of the "shared" field in the mutation.
+func (m *FactMutation) Shared() (r bool, exists bool) {
+	v := m.shared
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldShared returns the old "shared" field's value of the Fact entity.
+// If the Fact object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FactMutation) OldShared(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldShared is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldShared requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldShared: %w", err)
+	}
+	return oldValue.Shared, nil
+}
+
+// ResetShared resets all changes to the "shared" field.
+func (m *FactMutation) ResetShared() {
+	m.shared = nil
+}
+
 // SetContent sets the "content" field.
 func (m *FactMutation) SetContent(s string) {
 	m.content = &s
@@ -26016,7 +26053,7 @@ func (m *FactMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *FactMutation) Fields() []string {
-	fields := make([]string, 0, 15)
+	fields := make([]string, 0, 16)
 	if m.created_at != nil {
 		fields = append(fields, fact.FieldCreatedAt)
 	}
@@ -26037,6 +26074,9 @@ func (m *FactMutation) Fields() []string {
 	}
 	if m.holder != nil {
 		fields = append(fields, fact.FieldHolder)
+	}
+	if m.shared != nil {
+		fields = append(fields, fact.FieldShared)
 	}
 	if m.content != nil {
 		fields = append(fields, fact.FieldContent)
@@ -26084,6 +26124,8 @@ func (m *FactMutation) Field(name string) (ent.Value, bool) {
 		return m.AssetID()
 	case fact.FieldHolder:
 		return m.Holder()
+	case fact.FieldShared:
+		return m.Shared()
 	case fact.FieldContent:
 		return m.Content()
 	case fact.FieldSource:
@@ -26123,6 +26165,8 @@ func (m *FactMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldAssetID(ctx)
 	case fact.FieldHolder:
 		return m.OldHolder(ctx)
+	case fact.FieldShared:
+		return m.OldShared(ctx)
 	case fact.FieldContent:
 		return m.OldContent(ctx)
 	case fact.FieldSource:
@@ -26196,6 +26240,13 @@ func (m *FactMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetHolder(v)
+		return nil
+	case fact.FieldShared:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetShared(v)
 		return nil
 	case fact.FieldContent:
 		v, ok := value.(string)
@@ -26376,6 +26427,9 @@ func (m *FactMutation) ResetField(name string) error {
 		return nil
 	case fact.FieldHolder:
 		m.ResetHolder()
+		return nil
+	case fact.FieldShared:
+		m.ResetShared()
 		return nil
 	case fact.FieldContent:
 		m.ResetContent()
