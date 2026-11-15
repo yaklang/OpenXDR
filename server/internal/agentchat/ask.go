@@ -24,14 +24,16 @@ const askDescription = "向自治总控提问归属、授权、策略或权限�
 	"总控先在权威事实、平台指令与运维意图里确定性查找：答得出返回 answered 与依据编号（F-/C-），按依据继续，不要再找人；" +
 	"答不了返回 queued 与问题编号（Q-），同一主题的问题会合并，管理员在控制台作答一次后关联待办自动解除阻塞重新排队、关联事件按新事实重审。" +
 	"待办要标 blocker=manual_business_decision 前必须先用本工具带 finding_id 提问，queued 之后才允许标。" +
-	"subject.kind：key 公钥指纹（SHA256:…）/ ip 地址或网段 / asset 主机 UUID / domain 域名 / change 主机 UUID 上的变更（附 at 发生时刻可核对平台指令）。" +
+	"subject.kind：key 公钥指纹（SHA256:…）/ ip 地址或网段 / asset 主机 UUID / domain 域名 / change 主机 UUID 上的一项具体变更（须带 change_key，附 at 发生时刻可核对平台指令）。" +
+	"change_key 是这项变更的稳定标识（小写字母、数字与 . _ -），如 retire-cyberedge-agent、gateway-systemd-dropin；同一项变更每次用同一个，" +
+	"不同变更用不同的：管理员批准的只是这一项，同一主机上的其他变更照常要问。带 finding_id 且没给 change_key 时按待办的 key 生成。" +
 	"question 用一句话说明要确认什么、证据在哪，只给管理员看；每轮最多新提 10 个问题。"
 
 var askParameters = json.RawMessage(`{"type":"object","properties":{` +
 	`"type":{"type":"string","enum":["owner","authorization","policy","permission"]},` +
 	`"subject":{"type":"object","properties":{"kind":{"type":"string","enum":["key","ip","asset","domain","change"]},"value":{"type":"string","minLength":1,"maxLength":300}},"required":["kind","value"],"additionalProperties":false},` +
 	`"question":{"type":"string","minLength":1,"maxLength":500},` +
-	`"finding_id":{"type":"string","format":"uuid"},"incident_id":{"type":"string","format":"uuid"},"at":{"type":"string","format":"date-time"}},` +
+	`"change_key":{"type":"string","pattern":"^[a-z0-9][a-z0-9._-]{0,63}$"},"finding_id":{"type":"string","format":"uuid"},"incident_id":{"type":"string","format":"uuid"},"at":{"type":"string","format":"date-time"}},` +
 	`"required":["type","subject","question"],"additionalProperties":false}`)
 
 // maxNewQuestions 一轮会话最多新提的问题数（合并进已有问题的不算）
@@ -47,6 +49,7 @@ func (s *Service) ask(ctx context.Context, session *ent.AgentSession, args json.
 			Value string `json:"value"`
 		} `json:"subject"`
 		Question   string     `json:"question"`
+		ChangeKey  string     `json:"change_key"`
 		FindingID  *uuid.UUID `json:"finding_id"`
 		IncidentID *uuid.UUID `json:"incident_id"`
 		At         *time.Time `json:"at"`
@@ -75,6 +78,9 @@ func (s *Service) ask(ctx context.Context, session *ent.AgentSession, args json.
 		}
 		req.Assets = append(req.Assets, id)
 	}
+	if body.ChangeKey != "" && body.Subject.Kind != "change" {
+		return "", errors.New("change_key 只用于 subject.kind=change")
+	}
 	if body.FindingID != nil {
 		f, err := s.DB.Finding.Query().Where(finding.IDEQ(*body.FindingID), finding.GroupIDEQ(session.GroupID), finding.StatusEQ("open")).Only(ctx)
 		if err != nil {
@@ -89,6 +95,15 @@ func (s *Service) ask(ctx context.Context, session *ent.AgentSession, args json.
 		}
 		req.Finding = &f.ID
 		req.Assets = append(req.Assets, f.AssetID)
+		if body.Subject.Kind == "change" && body.ChangeKey == "" {
+			body.ChangeKey = "finding-" + f.Key
+		}
+	}
+	if body.Subject.Kind == "change" {
+		if body.ChangeKey == "" {
+			return "", errors.New("change 须带 change_key：管理员批准的是一项具体变更，不是这台主机上的所有变更")
+		}
+		req.Subject = questions.ChangeSubject(req.Assets[0], body.ChangeKey)
 	}
 	if body.IncidentID != nil {
 		ids, err := s.DB.Alert.Query().Where(alert.IncidentIDEQ(*body.IncidentID), alert.HasAssetWith(asset.GroupIDEQ(session.GroupID))).

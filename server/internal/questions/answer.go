@@ -127,6 +127,10 @@ func subjectFor(q *ent.Question, in AnswerInput, record *schema.QuestionAnswer) 
 		if in.Scope != "" {
 			return "", "", ErrInvalid{errors.New("只有域名问题能选范围")}
 		}
+		if q.SubjectKind == "change" {
+			// 只批准这一项变更：主题带变更标识，内容写明
+			return changeFactSubject(q), "仅这一项变更（" + changeLabel(q) + "）：", nil
+		}
 		return FactSubject(q.Kind, q.SubjectKind, q.Subject), "", nil
 	}
 	if in.Scope == "" || in.Scope == q.Subject {
@@ -162,8 +166,7 @@ func expiry(days int, now time.Time) (time.Time, error) {
 func createFact(ctx context.Context, tx *ent.Tx, q *ent.Question, kind, subject, holder, content, actor string, expires *time.Time) (*ent.Fact, error) {
 	var assetID *uuid.UUID
 	group := scopeGroup(q)
-	if q.SubjectKind == "asset" || q.SubjectKind == "change" {
-		id := uuid.MustParse(q.Subject)
+	if id, ok := SubjectAsset(q.SubjectKind, q.Subject); ok {
 		a, err := tx.Asset.Get(ctx, id)
 		if err != nil {
 			return nil, ErrInvalid{errors.New("主机不存在")}

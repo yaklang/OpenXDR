@@ -62,9 +62,9 @@ usage() {
                                          jsonb 列保持原样，适合交给 jq；- 表示从 stdin 读 SQL
   xdr track <主机名> <key> <low|medium|high> <open|resolved|withdrawn> <标题> <详情|-> [--next-step <下一步>] [--blocker <阻塞原因>] [--evidence <指令id,...>] [--resolution repaired|authorized|subsided] [--rules <规则ID,...>]  登记或复查待办；resolved 时 --resolution 说明结案理由：repaired 修好了（默认）、authorized 人工环境记忆或管理员决定已确认属授权/良性、subsided 现象不再出现（须 --rules 列出代表该现象的规则 ID，平台按其过去出现间隔自适应判断安静期）；--evidence 传 1–5 个本轮独立只读复查指令 UUID（严禁单凭修复命令 exit=0 关单）；--blocker 支持 policy_required / maintenance_window_required / manual_business_decision / legacy_decommission_confirm / external_dependency / permission / unsupported
   xdr ignore <主机名> <key> <理由>        用户在对话里明确要求时忽略待办（同待办页人工忽略；仅组管理员发起的对话可用）
-  xdr ask <owner|authorization|policy|permission> <key|ip|asset|domain|change> <对象> <问题> [--finding <待办id>] [--incident <事件id>] [--at <RFC3339 时刻>]
+  xdr ask <owner|authorization|policy|permission> <key|ip|asset|domain|change> <对象> <问题> [--change <变更标识>] [--finding <待办id>] [--incident <事件id>] [--at <RFC3339 时刻>]
                                          向自治总控提问归属/授权/策略/权限：答得出返回依据编号（F-/C-）照依据继续；答不了排进待答问题（Q-），
-                                         管理员作答后关联待办自动重新排队。asset/change 的对象写主机名；标 manual_business_decision 前必须先带 --finding 提问
+                                         管理员作答后关联待办自动重新排队。asset/change 的对象写主机名；change 用 --change 给这项变更一个稳定标识（不同变更用不同标识，批准一项不代表批准同主机其他变更）；标 manual_business_decision 前必须先带 --finding 提问
   xdr identify <主机名> <tcp/端口|udp/端口> <high|medium|low> <服务名> <依据与结论>
   xdr egress <主机名> <公网地址> <high|medium|low> <用途> <依据与结论>
   xdr memories                           本组长期记忆（实时，含本轮刚记下的；id、来源、主机、内容、待复核说明）
@@ -321,6 +321,7 @@ case "$cmd" in
         --finding) v=$(require_uuid finding "${2:-}"); extra=$(jq -c --arg v "$v" '. + {finding_id:$v}' <<<"$extra"); shift 2 ;;
         --incident) v=$(require_uuid incident "${2:-}"); extra=$(jq -c --arg v "$v" '. + {incident_id:$v}' <<<"$extra"); shift 2 ;;
         --at) extra=$(jq -c --arg v "${2:-}" '. + {at:$v}' <<<"$extra"); shift 2 ;;
+        --change) extra=$(jq -c --arg v "${2:-}" '. + {change_key:$v}' <<<"$extra"); shift 2 ;;
         *) echo "不认识的参数：$1" >&2; exit 2 ;;
       esac
     done

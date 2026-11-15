@@ -490,7 +490,9 @@ func retiredAssetsForQuestion(ctx context.Context, tx *ent.Tx, q *ent.Question) 
 		}
 	}
 	if q.SubjectKind == "asset" || q.SubjectKind == "change" {
-		aid, err := uuid.Parse(q.Subject)
+		// 变更主题是「资产 UUID/变更标识」，取资产部分
+		raw, _, _ := strings.Cut(q.Subject, "/")
+		aid, err := uuid.Parse(raw)
 		if err != nil {
 			return nil, false, nil
 		}

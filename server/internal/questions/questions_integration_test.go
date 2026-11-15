@@ -194,7 +194,7 @@ func TestChangeAnsweredByPlatformCommandOnly(t *testing.T) {
 	at := time.Now().Add(-time.Hour)
 	done := at.Add(time.Minute)
 	db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetCmd("cat /etc/patroni.yml").SetStatus("succeeded").SetCreatedAt(at.Add(-time.Second)).SetCompletedAt(done).ExecX(ctx)
-	req := Request{Kind: "authorization", SubjectKind: "change", Subject: host.ID.String(), At: &at, Groups: []uuid.UUID{g.ID}}
+	req := Request{Kind: "authorization", SubjectKind: "change", Subject: ChangeSubject(host.ID, "patroni-config"), At: &at, Groups: []uuid.UUID{g.ID}}
 	if res, _ := Lookup(ctx, db, req, time.Now()); res.Answered {
 		t.Fatal("只读指令不能解释变更")
 	}

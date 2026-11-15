@@ -83,3 +83,38 @@ func TestManualDecisionGoesThroughController(t *testing.T) {
 		t.Fatal("总控答得出就不能再标需人工")
 	}
 }
+
+// 变更问题要有自己的身份：不带 change_key 拒绝，带待办时按待办 key 生成；不同变更各自成问题
+func TestAskChangeNeedsIdentity(t *testing.T) {
+	ctx, db := testdb.New(t)
+	g := db.Group.Create().SetName("g").SaveX(ctx)
+	a := db.Asset.Create().SetHostname("pve1").SetGroupID(g.ID).SaveX(ctx)
+	session := db.AgentSession.Create().SetKind("chat").SetInitiator("system").SetGroupID(g.ID).SetModel("m").SetStatus("running").SaveX(ctx)
+	f := db.Finding.Create().SetGroupID(g.ID).SetAssetID(a.ID).SetKey("cyberedge-retire").SetTitle("退役 cyberedge-agent").SaveX(ctx)
+	svc := &Service{DB: db}
+	call := func(v map[string]any) error {
+		b, _ := json.Marshal(v)
+		_, err := svc.ask(ctx, session, b)
+		return err
+	}
+	change := map[string]any{"kind": "change", "value": a.ID.String()}
+	if err := call(map[string]any{"type": "authorization", "subject": change, "question": "能改吗"}); err == nil {
+		t.Fatal("变更问题必须带 change_key")
+	}
+	if err := call(map[string]any{"type": "authorization", "subject": map[string]any{"kind": "domain", "value": "x.example.com"}, "question": "?", "change_key": "x"}); err == nil {
+		t.Fatal("change_key 只用于变更")
+	}
+	if err := call(map[string]any{"type": "authorization", "subject": change, "question": "退役？", "finding_id": f.ID.String()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := call(map[string]any{"type": "authorization", "subject": change, "question": "加 drop-in？", "change_key": "gateway-systemd-dropin"}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, q := range db.Question.Query().AllX(ctx) {
+		got[q.Subject] = true
+	}
+	if len(got) != 2 || !got[questions.ChangeSubject(a.ID, "finding-cyberedge-retire")] || !got[questions.ChangeSubject(a.ID, "gateway-systemd-dropin")] {
+		t.Fatalf("两项变更各自成问题：%v", got)
+	}
+}

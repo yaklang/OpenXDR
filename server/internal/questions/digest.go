@@ -35,8 +35,8 @@ func Digest(ctx context.Context, db *ent.Client, limit int) (int, []string, erro
 	}
 	var assets []uuid.UUID
 	for _, q := range rows {
-		if q.SubjectKind == "asset" || q.SubjectKind == "change" {
-			assets = append(assets, uuid.MustParse(q.Subject))
+		if id, ok := SubjectAsset(q.SubjectKind, q.Subject); ok {
+			assets = append(assets, id)
 		}
 	}
 	names := map[uuid.UUID]string{}
@@ -72,14 +72,19 @@ func Label(kind, subject string, hostnames map[uuid.UUID]string) string {
 	case "domain":
 		return defang(subject)
 	case "asset", "change":
-		id, err := uuid.Parse(subject)
-		if err != nil {
+		id, ok := SubjectAsset(kind, subject)
+		if !ok {
 			return "?"
 		}
+		label := facts.Ref("A", id)
 		if h := safeHost(hostnames[id]); h != "" {
-			return defang(h)
+			label = defang(h)
 		}
-		return facts.Ref("A", id)
+		// 变更标识字符集受限，仍去掉点号免得被渲染成链接
+		if key := changeKey(subject); kind == "change" && key != "" {
+			label += " · " + defang(key)
+		}
+		return label
 	case "rule":
 		return facts.Ref("R", uuid.MustParse(subject))
 	case "fact":
@@ -356,6 +361,12 @@ func attachPinnedEvidence(ctx context.Context, db *ent.Client, id uuid.UUID, pin
 func Run(ctx context.Context, db *ent.Client) {
 	t := time.NewTicker(5 * time.Minute)
 	defer t.Stop()
+	// 变更授权曾被按资产跨问题复用：上线这一版时把错误自动作答的置回待答
+	if n, err := ReopenCrossChangeAnswers(ctx, db, time.Now()); err != nil && ctx.Err() == nil {
+		slog.Error("变更问题跨问题自动作答回滚失败", "err", err)
+	} else if n > 0 {
+		slog.Warn("变更问题跨问题自动作答已置回待答", "count", n)
+	}
 	for {
 		now := time.Now()
 		if n, err := VoidSweep(ctx, db, now); err != nil && ctx.Err() == nil {

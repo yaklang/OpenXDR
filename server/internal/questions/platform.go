@@ -316,8 +316,8 @@ func lookupPlatform(ctx context.Context, db *ent.Client, req Request, res *Resul
 			ref = facts.Ref("A", aid)
 		}
 	case "asset", "change":
-		aid, err := uuid.Parse(req.Subject)
-		if err != nil {
+		aid, ok := SubjectAsset(req.SubjectKind, req.Subject)
+		if !ok {
 			return nil
 		}
 		host, err := db.Asset.Get(ctx, aid)

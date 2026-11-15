@@ -136,7 +136,9 @@ func Normalize(kind, subjectKind, subject string) (string, error) {
 		}
 		// 用完整主机名，不归到注册域：同一云厂商域下是互不相干的租户，归并会把授权悄悄扩大
 		return d, nil
-	default: // asset change rule fact
+	case "change":
+		return normalizeChange(subject)
+	default: // asset rule fact
 		id, err := uuid.Parse(subject)
 		if err != nil {
 			return "", errors.New(SubjectNames[subjectKind] + "须为 UUID")
@@ -348,7 +350,7 @@ func Lookup(ctx context.Context, db *ent.Client, req Request, now time.Time) (*R
 			match = append(match, fact.SubjectIn(tree...))
 		}
 	case "asset", "change":
-		id := uuid.MustParse(req.Subject)
+		id, _ := SubjectAsset(req.SubjectKind, req.Subject)
 		host, err := db.Asset.Get(ctx, id)
 		if err != nil && !ent.IsNotFound(err) {
 			return nil, err
@@ -374,14 +376,31 @@ func Lookup(ctx context.Context, db *ent.Client, req Request, now time.Time) (*R
 				}
 			}
 		}
+		if req.SubjectKind == "change" {
+			// 变更授权只认同一变更标识写回的事实：批准一项变更不等于批准这台资产上的所有变更。
+			// 存量裸 UUID 主题没有标识，任何事实都不代答；资产角色只作上下文
+			if changeKey(req.Subject) != "" {
+				match = append(match, fact.SubjectEQ(own))
+			}
+			roles, err := db.Fact.Query().Where(append(where, fact.AssetIDEQ(id), fact.KindEQ("asset_role"))...).Limit(10).All(ctx)
+			if err != nil {
+				return nil, err
+			}
+			for _, f := range roles {
+				res.Context = append(res.Context, Record{Ref: facts.Ref("F", f.ID), Kind: "asset_role", Detail: "资产角色（只作背景，不代表批准这项变更）：" + f.Content})
+			}
+			break
+		}
 		switch req.Kind {
 		case "owner":
 			match = append(match, fact.And(fact.AssetIDEQ(id), fact.KindEQ("asset_role")))
 		case "authorization":
-			// 管理员直接录入的已授权变更也算
-			match = append(match, fact.And(fact.AssetIDEQ(id), fact.KindEQ("change"), fact.Not(fact.SubjectHasPrefix("permission:")), fact.Not(fact.SubjectHasPrefix("policy:")), fact.Not(fact.SubjectHasPrefix("owner:"))))
+			// 管理员在事实页直接录入的「已授权变更」也算主机级授权；问题作答写回的（带 类型: 前缀，含具体变更的授权）不算
+			match = append(match, fact.And(fact.AssetIDEQ(id), fact.KindEQ("change"), fact.Not(fact.SubjectHasPrefix("authorization:")),
+				fact.Not(fact.SubjectHasPrefix("permission:")), fact.Not(fact.SubjectHasPrefix("policy:")), fact.Not(fact.SubjectHasPrefix("owner:"))))
 		}
-		match = append(match, fact.And(fact.AssetIDEQ(id), fact.SubjectHasPrefix(req.Kind+":")))
+		// 只认同类型、同主机的主机级作答，不再按前缀把这台主机上具体变更的作答也算进来
+		match = append(match, fact.And(fact.AssetIDEQ(id), fact.SubjectEQ(own)))
 	case "rule":
 		match = append(match, fact.SubjectEQ(own))
 		rule, err := db.StandingRule.Get(ctx, uuid.MustParse(req.Subject))
@@ -402,9 +421,12 @@ func Lookup(ctx context.Context, db *ent.Client, req Request, now time.Time) (*R
 		}
 		return res, nil
 	}
-	rows, err := db.Fact.Query().Where(append(where, fact.Or(match...))...).Order(ent.Asc(fact.FieldCreatedAt)).Limit(50).All(ctx)
-	if err != nil {
-		return nil, err
+	var rows []*ent.Fact
+	if len(match) > 0 {
+		var err error
+		if rows, err = db.Fact.Query().Where(append(where, fact.Or(match...))...).Order(ent.Asc(fact.FieldCreatedAt)).Limit(50).All(ctx); err != nil {
+			return nil, err
+		}
 	}
 	for _, f := range rows {
 		if f.Kind == "channel" && !facts.Covers(f.Subject, req.Subject) {
@@ -434,7 +456,7 @@ func Lookup(ctx context.Context, db *ent.Client, req Request, now time.Time) (*R
 
 // changeRecords 变更类：发生时刻落在平台自己下发、成功执行的写指令窗口内，就是平台的变更；覆盖这台主机的运维意图只作参考
 func changeRecords(ctx context.Context, db *ent.Client, req Request, res *Result) error {
-	asset := uuid.MustParse(req.Subject)
+	asset, _ := SubjectAsset(req.SubjectKind, req.Subject)
 	if req.At != nil {
 		at := *req.At
 		cmds, err := db.Command.Query().Where(command.AssetIDEQ(asset), command.KindEQ("exec"), command.StatusEQ("succeeded"),

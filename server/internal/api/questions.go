@@ -69,8 +69,8 @@ func toQuestionRow(q *ent.Question, names map[uuid.UUID]string) questionRow {
 	row := questionRow{ID: q.ID, Ref: questions.Ref(q.ID), CreatedAt: q.CreatedAt, UpdatedAt: q.UpdatedAt, Kind: q.Kind, SubjectKind: q.SubjectKind,
 		Subject: q.Subject, SubjectLabel: questions.Label(q.SubjectKind, q.Subject, names), Status: q.Status, IncidentCount: len(q.IncidentIds),
 		FindingCount: len(q.FindingIds), AskedCount: q.AskedCount, Answer: q.Answer, AnsweredBy: q.AnsweredBy, AnsweredAt: q.AnsweredAt, RuleID: q.RuleID}
-	if q.SubjectKind == "asset" || q.SubjectKind == "change" {
-		if h := names[uuid.MustParse(q.Subject)]; h != "" {
+	if id, ok := questions.SubjectAsset(q.SubjectKind, q.Subject); ok && q.SubjectKind == "asset" {
+		if h := names[id]; h != "" {
 			row.SubjectLabel = h
 		}
 	}
@@ -93,8 +93,8 @@ func toQuestionRow(q *ent.Question, names map[uuid.UUID]string) questionRow {
 func questionAssets(rows ...*ent.Question) []uuid.UUID {
 	var ids []uuid.UUID
 	for _, q := range rows {
-		if q.SubjectKind == "asset" || q.SubjectKind == "change" {
-			ids = append(ids, uuid.MustParse(q.Subject))
+		if id, ok := questions.SubjectAsset(q.SubjectKind, q.Subject); ok {
+			ids = append(ids, id)
 		}
 	}
 	return ids
