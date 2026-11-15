@@ -1084,6 +1084,8 @@ export interface Question {
   // 域名问题：注册域只用于分组展示；scopes 是可选父域，共享托管、外带、隧道类域为空
   domainGroup?: string
   scopes?: string[]
+  // 同一次结案审计拒绝里一并提出的同类待答问题，作答时可一并答掉
+  siblings?: { id: string; ref: string; subjectLabel: string }[]
 }
 export interface QuestionEvidence {
   at: string
@@ -1110,7 +1112,8 @@ export async function answerQuestion(id: string, body: {
   ruleId?: string
   tier?: StandingRuleTier
   expiresInDays?: number
-}): Promise<{ factRef?: string; ruleRef?: string; requeuedFindings: number }> {
+  siblings?: boolean
+}): Promise<{ factRef?: string; ruleRef?: string; requeuedFindings: number; siblingsAnswered?: number }> {
   return (await send('POST', `/api/questions/${encodeURIComponent(id)}/answer`, body)).json()
 }
 export const fetchStandingRuleRuns = (id: string) => get<StandingRuleRun[]>(`/api/standing-rules/${encodeURIComponent(id)}/runs`)

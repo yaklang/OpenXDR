@@ -45,6 +45,8 @@ type AnswerInput struct {
 	RuleID        *uuid.UUID `json:"ruleId"`
 	Tier          string     `json:"tier"`
 	ExpiresInDays int        `json:"expiresInDays"`
+	// Siblings 同一答复一并用到同批问题上（见 BatchKeys）
+	Siblings bool `json:"siblings"`
 }
 
 // ErrAnswered 问题已经答过（并发作答或重复提交）

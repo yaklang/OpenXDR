@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, App, Button, Card, Flex, Form, Input, InputNumber, Modal, Radio, Segmented, Select, Space, Table, Tag, Typography } from 'antd'
+import { Alert, App, Button, Card, Checkbox, Flex, Form, Input, InputNumber, Modal, Radio, Segmented, Select, Space, Table, Tag, Typography } from 'antd'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { answerQuestion, fetchQuestion, fetchQuestions, fetchStandingRules, type Question, type QuestionKind } from '../api'
@@ -175,6 +175,7 @@ interface AnswerValues {
   ruleId?: string
   tier?: 'auto' | 'propose' | 'human'
   expiresInDays?: number
+  siblings?: boolean
 }
 
 // 作答表单按问题类型给结构化选项；默认写入为事实。授权类必须有到期（默认 30 天）
@@ -192,6 +193,8 @@ function AnswerModal({ q, onClose }: { q: Question; onClose: () => void }) {
     ? ['grant', 'deny']
     : q.kind === 'owner' ? ['claim', 'unknown'] : q.kind === 'policy' ? ['decision', 'rule'] : ['grant', 'deny']
   const choice = Form.useWatch('choice', form)
+  const scope = Form.useWatch('scope', form)
+  const batch = (q.siblings?.length ?? 0) > 0
   const ruleId = Form.useWatch('ruleId', form)
   const rule = rules.data?.find(r => r.id === ruleId)
   const choiceLabel = (c: string) => {
@@ -203,8 +206,8 @@ function AnswerModal({ q, onClose }: { q: Question; onClose: () => void }) {
     const v = await form.validateFields()
     setSaving(true)
     try {
-      const res = await answerQuestion(q.id, { ...v, scope: v.scope || undefined, expiresInDays: grantLike ? v.expiresInDays : undefined })
-      message.success(t('questionAnswered', { ref: res.factRef ?? res.ruleRef ?? q.ref, n: res.requeuedFindings }))
+      const res = await answerQuestion(q.id, { ...v, scope: v.scope || undefined, expiresInDays: grantLike ? v.expiresInDays : undefined, siblings: batch && !v.scope && v.siblings })
+      message.success(t('questionAnswered', { ref: res.factRef ?? res.ruleRef ?? q.ref, n: res.requeuedFindings }) + (res.siblingsAnswered ? t('questionSiblingsAnswered', { n: res.siblingsAnswered }) : ''))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['questions'] }),
         queryClient.invalidateQueries({ queryKey: ['facts'] }),
@@ -219,7 +222,7 @@ function AnswerModal({ q, onClose }: { q: Question; onClose: () => void }) {
   }
   return (
     <Modal open title={`${q.ref} ${sentence(q)}`} onCancel={onClose} onOk={submit} confirmLoading={saving} okText={t('questionSubmit')} destroyOnHidden width={560}>
-      <Form form={form} layout="vertical" initialValues={{ choice: choices[0], scope: '', expiresInDays: 30, ruleId: q.subjectKind === 'rule' ? q.subject : undefined }}>
+      <Form form={form} layout="vertical" initialValues={{ choice: choices[0], scope: '', expiresInDays: 30, siblings: true, ruleId: q.subjectKind === 'rule' ? q.subject : undefined }}>
         <Form.Item name="choice" label={t('questionChoice')}>
           <Radio.Group optionType="button" options={choices.map(c => ({ value: c, label: choiceLabel(c) }))} />
         </Form.Item>
@@ -254,6 +257,11 @@ function AnswerModal({ q, onClose }: { q: Question; onClose: () => void }) {
               </Form.Item>
             )}
           </>
+        )}
+        {batch && !scope && (
+          <Form.Item name="siblings" valuePropName="checked" extra={q.siblings!.map(s => `${s.ref} ${s.subjectLabel}`).join('、')}>
+            <Checkbox>{t('questionSiblings', { n: q.siblings!.length })}</Checkbox>
+          </Form.Item>
         )}
         {q.kind === 'policy' && choice === 'rule' && (
           <>

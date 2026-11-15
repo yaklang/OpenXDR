@@ -43,6 +43,14 @@ type questionRow struct {
 	// 域名问题：注册域只用于界面分组；Scopes 是作答可选的父域（共享托管、外带、隧道类域为空，只能按完整主机名）
 	DomainGroup string   `json:"domainGroup,omitempty"`
 	Scopes      []string `json:"scopes,omitempty"`
+	// 同一次结案审计拒绝里一并提出的同类待答问题：作答时可一并答掉
+	Siblings []questionSibling `json:"siblings,omitempty"`
+}
+
+type questionSibling struct {
+	ID           uuid.UUID `json:"id"`
+	Ref          string    `json:"ref"`
+	SubjectLabel string    `json:"subjectLabel"`
 }
 
 type questionDetail struct {
@@ -138,8 +146,23 @@ func registerQuestionRoutes(mux *http.ServeMux, db *ent.Client) {
 		}
 		names := hostnamesOf(r.Context(), db, questionAssets(visible...))
 		out := make([]questionRow, len(visible))
+		batches := map[string][]int{}
 		for i, q := range visible {
 			out[i] = toQuestionRow(q, names)
+			if status == "open" {
+				for _, k := range questions.BatchKeys(q) {
+					batches[k] = append(batches[k], i)
+				}
+			}
+		}
+		for _, members := range batches {
+			for _, i := range members {
+				for _, j := range members {
+					if i != j && !slices.ContainsFunc(out[i].Siblings, func(s questionSibling) bool { return s.ID == out[j].ID }) {
+						out[i].Siblings = append(out[i].Siblings, questionSibling{out[j].ID, out[j].Ref, out[j].SubjectLabel})
+					}
+				}
+			}
 		}
 		writeJSON(w, out)
 	})
@@ -227,9 +250,10 @@ func registerQuestionRoutes(mux *http.ServeMux, db *ent.Client) {
 			}
 		}
 		var out *questions.Outcome
+		siblings := 0
 		err = withTx(r, db, func(tx *ent.Tx) error {
 			var err error
-			out, err = questions.Answer(r.Context(), tx, q.ID, body, cur.Username, audit.RemoteAddr(r), time.Now())
+			out, siblings, err = questions.AnswerBatch(r.Context(), tx, q, body, cur.Username, audit.RemoteAddr(r), time.Now())
 			return err
 		})
 		var invalid questions.ErrInvalid
@@ -244,7 +268,7 @@ func registerQuestionRoutes(mux *http.ServeMux, db *ent.Client) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		res := map[string]any{"requeuedFindings": out.Findings}
+		res := map[string]any{"requeuedFindings": out.Findings, "siblingsAnswered": siblings}
 		if out.Fact != nil {
 			res["factRef"] = facts.Ref("F", out.Fact.ID)
 		}

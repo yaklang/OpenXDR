@@ -217,6 +217,42 @@ func TestBenignMaterialCarriesLineage(t *testing.T) {
 	}
 }
 
+// 容器里的告警进程：材料带上按容器名查到的启动命令（端口映射在这里），名字相近的别的容器不算
+func TestBenignMaterialCarriesContainerLaunch(t *testing.T) {
+	f := setupBenign(t)
+	f.db.Alert.UpdateOneID(f.al.ID).SetRuleID(sigma.RuleNewProcess).SetSeverity(2).ExecX(f.ctx)
+	ev := f.db.Event.GetX(f.ctx, f.ev.ID)
+	var raw map[string]any
+	if err := json.Unmarshal(ev.Raw, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["container"] = map[string]any{"name": "scutum-test-pg-1", "runtime": "docker"}
+	merged, _ := json.Marshal(raw)
+	f.db.Event.UpdateOneID(ev.ID).SetRaw(merged).ExecX(f.ctx)
+	launch := func(name string, age time.Duration) {
+		r, _ := json.Marshal(map[string]any{"activity_id": 1, "process": map[string]any{"cmd_line": "docker run -d --rm --name " + name + " -p 127.0.0.1:55432:5432 pg:17", "pid": 7}})
+		f.db.Event.Create().SetTs(ev.Ts.Add(-age)).SetAssetID(f.asset.ID).SetSource("agent").SetClassUID(1007).SetProcessGUID(uuid.New()).SetRaw(r).ExecX(f.ctx)
+	}
+	launch("scutum-test-pg-1", time.Minute)
+	launch("scutum-test-pg-12", time.Second)
+	launch("scutumXtest-pg-1", time.Second)
+	var got material
+	judge := f.r.Judge
+	f.r.Judge = func(ctx context.Context, model, m string) (Decision, error) {
+		if err := json.Unmarshal([]byte(m), &got); err != nil {
+			t.Fatal(err)
+		}
+		return judge(ctx, model, m)
+	}
+	if _, err := f.r.Review(f.ctx, f.inc.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got.Lineage == nil || len(got.Lineage.Containers) != 1 || got.Lineage.Containers[0].Name != "scutum-test-pg-1" ||
+		!strings.Contains(string(got.Lineage.Containers[0].Record), "--name scutum-test-pg-1 -p 127.0.0.1:55432:5432") {
+		t.Fatalf("材料应带上该容器自己的启动命令：%+v", got.Lineage)
+	}
+}
+
 // 高危告警凭主机事实交审计：材料列出覆盖它的事实编号，批准理由不引用就不算数
 func TestBenignSevereNeedsHostFact(t *testing.T) {
 	f := setupBenign(t)
