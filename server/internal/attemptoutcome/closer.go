@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	entsql "entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 
 	"openxdr/server/ent"
@@ -18,7 +19,9 @@ import (
 	"openxdr/server/ent/alert"
 	"openxdr/server/ent/containment"
 	"openxdr/server/ent/incident"
+	"openxdr/server/ent/predicate"
 	"openxdr/server/internal/audit"
+	"openxdr/server/internal/authevents"
 	"openxdr/server/internal/incidentstate"
 	"openxdr/server/internal/incidentwork"
 	"openxdr/server/internal/review"
@@ -34,13 +37,6 @@ var authFailureRuleList = []string{
 	RuleTemporalWindowsFailBurst,
 }
 
-type closedMeta struct {
-	assetIDs     []uuid.UUID
-	groupIDs     []uuid.UUID
-	srcIPs       []string
-	firstFailure time.Time
-}
-
 // SweepStats 单轮扫描的统计结果。
 type SweepStats struct {
 	Closed   int
@@ -48,7 +44,7 @@ type SweepStats struct {
 	Findings int
 }
 
-// Closer 认证未得手自动结案、静默后成功登录重开与公网入口加固建议归并器（经 cluster.RunLeader 单活运行）。
+// Closer 认证未得手自动结案、静默后成功登录批量重开与公网入口加固建议归并器（经 cluster.RunLeader 单活运行）。
 type Closer struct {
 	DB                   *ent.Client
 	SQL                  *sql.DB
@@ -61,7 +57,6 @@ type Closer struct {
 
 	mu                 sync.Mutex
 	reopenCheckedUntil map[uuid.UUID]time.Time
-	closedMetaCache    map[uuid.UUID]closedMeta
 }
 
 // Run 单活后台定时扫描循环。
@@ -112,7 +107,7 @@ func (c *Closer) reopenLookback() time.Duration {
 	return c.ReopenLookback
 }
 
-// Sweep 执行一轮完整核验：先检查已按 attempt_verified 结案的事件是否出现同源成功登录或新告警（重开），
+// Sweep 执行一轮完整核验：先按近 7 天已结案集合批量检查是否出现同源成功登录（重开），
 // 再核验未结案认证失败族事件并更新反复猜解服务的加固建议待办。
 func (c *Closer) Sweep(ctx context.Context, now time.Time) (SweepStats, error) {
 	if now.IsZero() {
@@ -292,10 +287,95 @@ func (c *Closer) evaluateOne(ctx context.Context, inc *ent.Incident, now time.Ti
 	if err := audit.Checked(ctx, tx.AuditLog.Create(), Actor, "server", AuditActionVerified, inc.ID.String(), "closed "+resolution); err != nil {
 		return v, false, err
 	}
+
+	// 先登记已结案来源索引再提交结案事务：确保事件进入 closed 瞬间重开索引已就位；若提交失败则回滚清理
+	if err := RecordClosure(ctx, c.SQL, inc.ID, v.Targets, v.SourceIPs, v.FirstFailure, now); err != nil {
+		return v, false, err
+	}
 	if err := tx.Commit(); err != nil {
+		_ = DeleteClosures(context.WithoutCancel(ctx), c.SQL, inc.ID)
 		return v, false, err
 	}
 	return v, true, nil
+}
+
+// RecordClosure 将按 attempt_verified 自动结案的（事件、来源 IP、目标资产/组）写入 auth_attempt_closures 索引表。
+func RecordClosure(
+	ctx context.Context,
+	sqlDB *sql.DB,
+	incidentID uuid.UUID,
+	targets []ServiceTarget,
+	srcIPs []string,
+	firstFailure, resolvedAt time.Time,
+) error {
+	if sqlDB == nil || incidentID == uuid.Nil || len(targets) == 0 || len(srcIPs) == 0 {
+		return nil
+	}
+	type assetGroup struct {
+		assetID uuid.UUID
+		groupID uuid.NullUUID
+	}
+	seenAssets := map[uuid.UUID]assetGroup{}
+	for _, t := range targets {
+		if t.AssetID == uuid.Nil {
+			continue
+		}
+		var gid uuid.NullUUID
+		if t.GroupID != uuid.Nil {
+			gid = uuid.NullUUID{UUID: t.GroupID, Valid: true}
+		}
+		seenAssets[t.AssetID] = assetGroup{assetID: t.AssetID, groupID: gid}
+	}
+	if len(seenAssets) == 0 {
+		return nil
+	}
+
+	total := len(seenAssets) * len(srcIPs)
+	incIDs := make([]uuid.UUID, 0, total)
+	ips := make([]string, 0, total)
+	assetIDs := make([]uuid.UUID, 0, total)
+	groupIDs := make([]uuid.NullUUID, 0, total)
+	firsts := make([]time.Time, 0, total)
+	resolveds := make([]time.Time, 0, total)
+
+	if firstFailure.IsZero() {
+		firstFailure = resolvedAt
+	}
+	for _, ag := range seenAssets {
+		for _, ip := range srcIPs {
+			if ip == "" {
+				continue
+			}
+			incIDs = append(incIDs, incidentID)
+			ips = append(ips, ip)
+			assetIDs = append(assetIDs, ag.assetID)
+			groupIDs = append(groupIDs, ag.groupID)
+			firsts = append(firsts, firstFailure)
+			resolveds = append(resolveds, resolvedAt)
+		}
+	}
+	if len(incIDs) == 0 {
+		return nil
+	}
+	_, err := sqlDB.ExecContext(ctx, `
+INSERT INTO auth_attempt_closures (incident_id, src_ip, asset_id, group_id, first_failure, resolved_at)
+SELECT * FROM unnest($1::uuid[], $2::text[], $3::uuid[], $4::uuid[], $5::timestamptz[], $6::timestamptz[])
+ON CONFLICT (incident_id, src_ip, asset_id) DO UPDATE
+SET group_id = COALESCE(EXCLUDED.group_id, auth_attempt_closures.group_id),
+    first_failure = LEAST(auth_attempt_closures.first_failure, EXCLUDED.first_failure),
+    resolved_at = EXCLUDED.resolved_at`,
+		incIDs, ips, assetIDs, groupIDs, firsts, resolveds,
+	)
+	return err
+}
+
+// DeleteClosures 按事件 ID 批量清理已重开或结案回滚的 auth_attempt_closures 索引行。
+func DeleteClosures(ctx context.Context, sqlDB *sql.DB, incidentIDs ...uuid.UUID) error {
+	if sqlDB == nil || len(incidentIDs) == 0 {
+		return nil
+	}
+	_, err := sqlDB.ExecContext(ctx, `DELETE FROM auth_attempt_closures WHERE incident_id = ANY($1)`, incidentIDs)
+	return err
 }
 
 func (c *Closer) incidentHasContainment(ctx context.Context, incID uuid.UUID) (bool, error) {
@@ -349,18 +429,87 @@ func (c *Closer) incidentAlertWatermark(ctx context.Context, db *ent.Client, inc
 	return len(alerts), maxEnd, nil
 }
 
-// reopenVerified 增量检查近期按 attempt_verified 结案的事件：若同来源后来出现成功登录（即使未触发新告警）或新告警，立即自动重开。
+type closureEntry struct {
+	incidentID   uuid.UUID
+	srcIP        string
+	assetID      uuid.UUID
+	groupID      uuid.UUID
+	firstFailure time.Time
+	resolvedAt   time.Time
+}
+
+type batchSuccessHit struct {
+	eventID  uuid.UUID
+	assetID  uuid.UUID
+	hostname string
+	groupID  uuid.UUID
+	ts       time.Time
+	srcIP    string
+	service  string
+	account  string
+}
+
+// reopenVerified 批量检查近 7 天按 attempt_verified 结案的「来源 IP + 资产」集合：
+// 每轮只用一条查询在 auth_events 上按 (src_ip, ts) 索引查 success=true，命中同来源成功登录即自动重开。
+// 新告警触发的重开由关联引擎热路径 ReopenForPendingAlerts 当场处理。
 func (c *Closer) reopenVerified(ctx context.Context, now time.Time) (int, error) {
+	if c.SQL == nil {
+		return 0, nil
+	}
 	cutoff := now.Add(-c.reopenLookback())
-	closedIncs, err := c.DB.Incident.Query().
-		Where(
-			incident.StatusEQ("closed"),
-			incident.ResolutionSourceEQ(ResolutionSource),
-			incident.ResolvedAtGTE(cutoff),
-		).
-		Order(ent.Asc(incident.FieldID)).
-		All(ctx)
+
+	// 1. 清理超出 7 天观察期或事件已不再处于 closed+attempt_verified 状态的索引行
+	if _, err := c.SQL.ExecContext(ctx, `
+DELETE FROM auth_attempt_closures c
+WHERE c.resolved_at < $1
+   OR NOT EXISTS (
+     SELECT 1 FROM incidents i
+     WHERE i.id = c.incident_id
+       AND i.status = 'closed'
+       AND i.resolution_source = $2
+   )`, cutoff, ResolutionSource); err != nil {
+		return 0, err
+	}
+
+	// 2. 一次取出近 7 天所有活跃 attempt_verified 结案的（事件、来源 IP、目标资产/组）集合
+	rows, err := c.SQL.QueryContext(ctx, `
+SELECT c.incident_id, c.src_ip, c.asset_id, c.group_id, c.first_failure, i.resolved_at
+FROM auth_attempt_closures c
+JOIN incidents i ON i.id = c.incident_id
+WHERE c.resolved_at >= $1
+  AND i.status = 'closed'
+  AND i.resolution_source = $2`, cutoff, ResolutionSource)
 	if err != nil {
+		return 0, err
+	}
+	var entries []closureEntry
+	activeIncidents := map[uuid.UUID]time.Time{}
+	closuresByIP := map[string][]closureEntry{}
+	for rows.Next() {
+		var (
+			e          closureEntry
+			gid        uuid.NullUUID
+			resolvedAt sql.NullTime
+		)
+		if err := rows.Scan(&e.incidentID, &e.srcIP, &e.assetID, &gid, &e.firstFailure, &resolvedAt); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if !resolvedAt.Valid || e.srcIP == "" {
+			continue
+		}
+		e.resolvedAt = resolvedAt.Time
+		if gid.Valid {
+			e.groupID = gid.UUID
+		}
+		entries = append(entries, e)
+		activeIncidents[e.incidentID] = e.resolvedAt
+		closuresByIP[e.srcIP] = append(closuresByIP[e.srcIP], e)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
 		return 0, err
 	}
 
@@ -368,311 +517,211 @@ func (c *Closer) reopenVerified(ctx context.Context, now time.Time) (int, error)
 	if c.reopenCheckedUntil == nil {
 		c.reopenCheckedUntil = map[uuid.UUID]time.Time{}
 	}
-	if c.closedMetaCache == nil {
-		c.closedMetaCache = map[uuid.UUID]closedMeta{}
-	}
-	activeIDs := make(map[uuid.UUID]bool, len(closedIncs))
-	for _, inc := range closedIncs {
-		activeIDs[inc.ID] = true
-	}
 	for id := range c.reopenCheckedUntil {
-		if !activeIDs[id] {
+		if _, ok := activeIncidents[id]; !ok {
 			delete(c.reopenCheckedUntil, id)
-			delete(c.closedMetaCache, id)
 		}
 	}
-	c.mu.Unlock()
-
-	if len(closedIncs) == 0 {
+	if len(entries) == 0 {
+		c.mu.Unlock()
 		return 0, nil
 	}
 
-	reopened := 0
-	for _, inc := range closedIncs {
-		if inc.ResolvedAt == nil {
-			continue
-		}
-		ok, err := c.checkAndReopenOne(ctx, inc, now)
-		if err != nil {
-			if ctx.Err() == nil && isTimeoutError(err) {
-				continue
+	var batchSince time.Time
+	for _, e := range entries {
+		incSince := e.resolvedAt.Add(-time.Hour)
+		if !e.firstFailure.IsZero() {
+			earliest := maxTime(e.firstFailure.Add(-time.Hour), e.resolvedAt.Add(-48*time.Hour))
+			if earliest.Before(incSince) {
+				incSince = earliest
 			}
-			return reopened, err
 		}
-		if ok {
-			reopened++
+		if prev, seen := c.reopenCheckedUntil[e.incidentID]; seen && !now.Before(prev) {
+			if delta := prev.Add(-15 * time.Minute); delta.After(incSince) {
+				incSince = delta
+			}
+		}
+		if batchSince.IsZero() || incSince.Before(batchSince) {
+			batchSince = incSince
 		}
 	}
+	c.mu.Unlock()
+
+	allSrcIPs := make([]string, 0, len(closuresByIP))
+	for ip := range closuresByIP {
+		allSrcIPs = append(allSrcIPs, ip)
+	}
+	slices.Sort(allSrcIPs)
+	queryTo := maxTime(now.Add(5*time.Minute), batchSince.Add(time.Minute))
+
+	// 3. 在带 statement_timeout 的只读事务内，用一条查询对 auth_events 做 src_ip = ANY(...) 且 success = true 的匹配
+	hits, truncated, err := c.queryBatchSuccessAuthEvents(ctx, allSrcIPs, batchSince, queryTo, maxSuccessScanRows)
+	if err != nil {
+		if ctx.Err() == nil && isTimeoutError(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	type reopenPlan struct {
+		resolvedAt time.Time
+		reason     string
+	}
+	plans := map[uuid.UUID]reopenPlan{}
+	for _, h := range hits {
+		for _, ce := range closuresByIP[h.srcIP] {
+			if _, exists := plans[ce.incidentID]; exists {
+				continue
+			}
+			sameScope := h.assetID == ce.assetID || (ce.groupID != uuid.Nil && h.groupID == ce.groupID)
+			if !sameScope {
+				continue
+			}
+			minAllowed := ce.resolvedAt.Add(-48 * time.Hour)
+			if !ce.firstFailure.IsZero() && ce.firstFailure.Add(-time.Hour).After(minAllowed) {
+				minAllowed = ce.firstFailure.Add(-time.Hour)
+			}
+			if h.ts.Before(minAllowed) {
+				continue
+			}
+			hostLabel := cmp.Or(h.hostname, h.assetID.String())
+			plans[ce.incidentID] = reopenPlan{
+				resolvedAt: ce.resolvedAt,
+				reason: fmt.Sprintf("未得手结案后检测到同来源 %s 在主机 %s 成功认证账号 %s（%s，时间 %s），自动重开调查",
+					h.srcIP, hostLabel, cmp.Or(h.account, "-"), authevents.ServiceLabel(h.service), h.ts.UTC().Format(time.RFC3339)),
+			}
+		}
+	}
+
+	planIDs := make([]uuid.UUID, 0, len(plans))
+	for id := range plans {
+		planIDs = append(planIDs, id)
+	}
+	slices.SortFunc(planIDs, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+
+	reopened := 0
+	var reopenedIDs []uuid.UUID
+	for _, incID := range planIDs {
+		p := plans[incID]
+		resolvedAt := p.resolvedAt
+		tx, err := c.DB.Tx(ctx)
+		if err != nil {
+			return reopened, err
+		}
+		ok, err := reopenIncidentInTx(ctx, tx, &ent.Incident{ID: incID, ResolvedAt: &resolvedAt}, now, p.reason)
+		if err != nil {
+			_ = tx.Rollback()
+			return reopened, err
+		}
+		if !ok {
+			_ = tx.Rollback()
+			continue
+		}
+		if err := tx.Commit(); err != nil {
+			return reopened, err
+		}
+		reopened++
+		reopenedIDs = append(reopenedIDs, incID)
+	}
+	if len(reopenedIDs) > 0 {
+		_ = DeleteClosures(ctx, c.SQL, reopenedIDs...)
+	}
+
+	c.mu.Lock()
+	reopenedSet := make(map[uuid.UUID]bool, len(reopenedIDs))
+	for _, id := range reopenedIDs {
+		reopenedSet[id] = true
+		delete(c.reopenCheckedUntil, id)
+	}
+	if !truncated {
+		for id := range activeIncidents {
+			if !reopenedSet[id] {
+				c.reopenCheckedUntil[id] = now
+			}
+		}
+	}
+	c.mu.Unlock()
 	return reopened, nil
 }
 
-func (c *Closer) checkAndReopenOne(ctx context.Context, inc *ent.Incident, now time.Time) (bool, error) {
-	meta, err := c.getClosedMeta(ctx, inc)
-	if err != nil || len(meta.srcIPs) == 0 || len(meta.assetIDs) == 0 {
-		return false, err
+func (c *Closer) queryBatchSuccessAuthEvents(
+	ctx context.Context,
+	srcIPs []string,
+	from, to time.Time,
+	limit int,
+) ([]batchSuccessHit, bool, error) {
+	if c.SQL == nil || len(srcIPs) == 0 {
+		return nil, false, nil
 	}
-
-	c.mu.Lock()
-	prevChecked, seen := c.reopenCheckedUntil[inc.ID]
-	c.mu.Unlock()
-
-	// 首次检查回溯到首次失败前 1 小时（最多往回 48 小时），捕获迟到补发的成功认证；后续每轮只增量查最近 15 分钟
-	since := inc.ResolvedAt.Add(-time.Hour)
-	if !meta.firstFailure.IsZero() {
-		earliest := maxTime(meta.firstFailure.Add(-time.Hour), inc.ResolvedAt.Add(-48*time.Hour))
-		if earliest.Before(since) {
-			since = earliest
-		}
-	}
-	if seen && !now.Before(prevChecked) {
-		incSince := prevChecked.Add(-15 * time.Minute)
-		if incSince.After(since) {
-			since = incSince
-		}
-	}
-	queryTo := maxTime(now.Add(5*time.Minute), since.Add(time.Minute))
-
 	qctx, cancel := context.WithTimeout(ctx, c.statementTimeout())
 	defer cancel()
 
-	var roTx *sql.Tx
-	if c.SQL != nil {
-		ms, err := statementTimeoutMillis(qctx, c.statementTimeout())
-		if err != nil {
-			return false, err
-		}
-		roTx, err = c.SQL.BeginTx(qctx, &sql.TxOptions{ReadOnly: true})
-		if err != nil {
-			return false, err
-		}
-		defer roTx.Rollback()
-		if _, err := roTx.ExecContext(qctx, fmt.Sprintf("SET LOCAL statement_timeout = '%dms'", ms)); err != nil {
-			return false, err
-		}
-	}
-
-	srcIPSet := make(map[string]bool, len(meta.srcIPs))
-	for _, ip := range meta.srcIPs {
-		srcIPSet[ip] = true
-	}
-
-	reason := ""
-
-	// 1. 检查同来源成功认证（events + ssh_logins）
-	succRows, _, err := queryAssetAuthEvents(qctx, c.DB, roTx, meta.assetIDs, since, queryTo, true, 500)
+	ms, err := statementTimeoutMillis(qctx, c.statementTimeout())
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
-	for _, r := range succRows {
-		parsed, ok := ParseAuthEvent(r.classUID, r.source, "", r.username, r.raw)
-		if ok && parsed.Success && srcIPSet[parsed.SrcIP] {
-			reason = fmt.Sprintf("未得手结案后检测到同来源 %s 成功认证账号 %s（%s，时间 %s），自动重开调查",
-				parsed.SrcIP, cmp.Or(parsed.Account, "-"), parsed.ServiceLabel, r.ts.UTC().Format(time.RFC3339))
-			break
-		}
-	}
-	if reason == "" {
-		sshHits, err := queryGroupSSHLogins(qctx, c.DB, roTx, meta.groupIDs, meta.assetIDs, meta.srcIPs, since, queryTo)
-		if err != nil {
-			return false, err
-		}
-		if len(sshHits) > 0 {
-			h := sshHits[0]
-			reason = fmt.Sprintf("未得手结案后检测到同来源 %s 在主机 %s 成功 SSH 登录账号 %s（时间 %s），自动重开调查",
-				h.srcIP, cmp.Or(h.hostname, h.assetID.String()), cmp.Or(h.account, "-"), h.ts.UTC().Format(time.RFC3339))
-		}
-	}
-
-	// 2. 检查结案时刻之后同来源的新增告警
-	if reason == "" {
-		alertSince := *inc.ResolvedAt
-		if seen && !now.Before(prevChecked) && prevChecked.Add(-15*time.Minute).After(alertSince) {
-			alertSince = prevChecked.Add(-15 * time.Minute)
-		}
-		otherHits, latestFailTs, _, err := querySameSourceAlerts(qctx, c.DB, roTx, inc.ID, meta.groupIDs, meta.assetIDs, srcIPSet, alertSince, queryTo)
-		if err != nil {
-			return false, err
-		}
-		for _, oa := range otherHits {
-			if oa.Ts.After(*inc.ResolvedAt) {
-				reason = fmt.Sprintf("未得手结案后检测到同来源 %s 新增关联告警 %s（时间 %s），自动重开调查",
-					oa.SrcIP, oa.RuleID, oa.Ts.UTC().Format(time.RFC3339))
-				break
-			}
-		}
-		if reason == "" && latestFailTs.After(*inc.ResolvedAt) {
-			reason = fmt.Sprintf("未得手结案后同来源再次发起认证攻击（最新命中 %s），自动重开归并",
-				latestFailTs.UTC().Format(time.RFC3339))
-		}
-	}
-
-	if reason == "" {
-		c.mu.Lock()
-		c.reopenCheckedUntil[inc.ID] = now
-		c.mu.Unlock()
-		return false, nil
-	}
-
-	tx, err := c.DB.Tx(ctx)
+	roTx, err := c.SQL.BeginTx(qctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
-	defer tx.Rollback()
-
-	reopened, err := reopenIncidentInTx(ctx, tx, inc, now, reason)
-	if err != nil || !reopened {
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return false, err
+	defer roTx.Rollback()
+	if _, err := roTx.ExecContext(qctx, fmt.Sprintf("SET LOCAL statement_timeout = '%dms'", ms)); err != nil {
+		return nil, false, err
 	}
 
-	c.mu.Lock()
-	delete(c.reopenCheckedUntil, inc.ID)
-	delete(c.closedMetaCache, inc.ID)
-	c.mu.Unlock()
-	return true, nil
+	rows, err := roTx.QueryContext(qctx, `
+SELECT ae.event_id, ae.asset_id, COALESCE(a.hostname, ''), a.group_id, ae.ts, ae.src_ip, ae.service, ae.account
+FROM auth_events ae
+LEFT JOIN assets a ON a.id = ae.asset_id
+WHERE ae.src_ip = ANY($1)
+  AND ae.ts >= $2 AND ae.ts <= $3
+  AND ae.success = true
+LIMIT $4`, srcIPs, from, to, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+
+	var out []batchSuccessHit
+	for rows.Next() {
+		var (
+			h   batchSuccessHit
+			gid uuid.NullUUID
+		)
+		if err := rows.Scan(&h.eventID, &h.assetID, &h.hostname, &gid, &h.ts, &h.srcIP, &h.service, &h.account); err != nil {
+			return nil, false, err
+		}
+		if gid.Valid {
+			h.groupID = gid.UUID
+		}
+		out = append(out, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	slices.SortFunc(out, func(a, b batchSuccessHit) int {
+		return cmp.Or(a.ts.Compare(b.ts), strings.Compare(a.eventID.String(), b.eventID.String()))
+	})
+	if len(out) > limit {
+		return out[:limit], true, nil
+	}
+	return out, false, nil
 }
 
-func (c *Closer) getClosedMeta(ctx context.Context, inc *ent.Incident) (closedMeta, error) {
-	c.mu.Lock()
-	cached, ok := c.closedMetaCache[inc.ID]
-	c.mu.Unlock()
-	if ok {
-		return cached, nil
-	}
-
-	meta, err := extractClosedIncidentMeta(ctx, c.DB, c.SQL, inc, c.statementTimeout())
-	if err != nil {
-		return closedMeta{}, err
-	}
-	if len(meta.srcIPs) > 0 && len(meta.assetIDs) > 0 {
-		c.mu.Lock()
-		c.closedMetaCache[inc.ID] = meta
-		c.mu.Unlock()
-	}
-	return meta, nil
-}
-
-func extractClosedIncidentMeta(ctx context.Context, db *ent.Client, sqlDB *sql.DB, inc *ent.Incident, timeout time.Duration) (closedMeta, error) {
-	var meta closedMeta
-	alerts, err := db.Alert.Query().Where(alert.IncidentIDEQ(inc.ID)).WithAsset().WithEvent().All(ctx)
-	if err != nil || len(alerts) == 0 {
-		return meta, err
-	}
-	assetSet := map[uuid.UUID]bool{}
-	groupSet := map[uuid.UUID]bool{}
-	ipSet := map[string]bool{}
-	var minTs, maxTs time.Time
-	var alertIDs []uuid.UUID
-	var foldFrom, foldTo time.Time
-	needFoldScan := false
-
-	for _, a := range alerts {
-		alertIDs = append(alertIDs, a.ID)
-		if a.AssetID != nil {
-			assetSet[*a.AssetID] = true
-		}
-		if a.Edges.Asset != nil && a.Edges.Asset.GroupID != nil {
-			groupSet[*a.Edges.Asset.GroupID] = true
-		}
-		if minTs.IsZero() || a.Ts.Before(minTs) {
-			minTs = a.Ts
-		}
-		end := a.Ts
-		if a.LastTs != nil && a.LastTs.After(end) {
-			end = *a.LastTs
-		}
-		if maxTs.IsZero() || end.After(maxTs) {
-			maxTs = end
-		}
-		if a.LastTs != nil && a.LastTs.After(a.Ts) {
-			f, t := a.Ts.Add(-time.Second), end.Add(time.Second)
-			if !needFoldScan || f.Before(foldFrom) {
-				foldFrom = f
-			}
-			if !needFoldScan || t.After(foldTo) {
-				foldTo = t
-			}
-			needFoldScan = true
-		}
-		var raw []byte
-		cuid := 0
-		if a.Edges.Event != nil {
-			cuid = a.Edges.Event.ClassUID
-			raw = a.Edges.Event.Raw
-		}
-		for _, ip := range ExtractAlertIPs(a.RuleID, a.Detail, cuid, raw) {
-			ipSet[ip] = true
-		}
-	}
-	for id := range assetSet {
-		meta.assetIDs = append(meta.assetIDs, id)
-	}
-	for id := range groupSet {
-		meta.groupIDs = append(meta.groupIDs, id)
-	}
-	meta.firstFailure = minTs
-
-	// 补充时序证据事件与去重折叠区间内的其他来源 IP
-	if len(alertIDs) > 0 && !minTs.IsZero() {
-		qctx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		var roTx *sql.Tx
-		if sqlDB != nil {
-			if ms, err := statementTimeoutMillis(qctx, timeout); err == nil {
-				if t, err := sqlDB.BeginTx(qctx, &sql.TxOptions{ReadOnly: true}); err == nil {
-					roTx = t
-					defer roTx.Rollback()
-					_, _ = roTx.ExecContext(qctx, fmt.Sprintf("SET LOCAL statement_timeout = '%dms'", ms))
-				}
-			}
-		}
-		if tempRows, err := loadTemporalEvidenceEvents(qctx, roTx, alertIDs, minTs.Add(-2*time.Hour), maxTs.Add(time.Hour)); err == nil {
-			for _, r := range tempRows {
-				if r.assetID != uuid.Nil && !assetSet[r.assetID] {
-					assetSet[r.assetID] = true
-					meta.assetIDs = append(meta.assetIDs, r.assetID)
-				}
-				if parsed, ok := ParseAuthEvent(r.classUID, r.source, "", r.username, r.raw); ok && parsed.Failure && parsed.SrcIP != "" {
-					ipSet[parsed.SrcIP] = true
-					if r.ts.Before(meta.firstFailure) {
-						meta.firstFailure = r.ts
-					}
-				}
-			}
-		}
-		if needFoldScan && len(meta.assetIDs) > 0 {
-			if rows, _, err := queryAssetAuthEvents(qctx, db, roTx, meta.assetIDs, foldFrom, foldTo, false, 5000); err == nil {
-				for _, r := range rows {
-					if parsed, ok := ParseAuthEvent(r.classUID, r.source, "", r.username, r.raw); ok && parsed.Failure && parsed.SrcIP != "" {
-						ipSet[parsed.SrcIP] = true
-						if r.ts.Before(meta.firstFailure) {
-							meta.firstFailure = r.ts
-						}
-					}
-				}
-			}
-		}
-	}
-	for ip := range ipSet {
-		meta.srcIPs = append(meta.srcIPs, ip)
-	}
-	slices.Sort(meta.srcIPs)
-	return meta, nil
-}
-
-// ReopenForPendingAlerts 供关联引擎在待归并告警入队时调用：若新到的告警与近期按 attempt_verified 结案的事件同源，
-// 当场在同一事务内重开原事件，以便关联引擎直接把新证据并回。
-func ReopenForPendingAlerts(ctx context.Context, tx *ent.Tx, pending []*ent.Alert, now time.Time) error {
+// ReopenForPendingAlerts 供关联引擎在待归并告警入队时调用：
+// 只对 auth_attempt_closures (src_ip, resolved_at) 索引做单次点查；批内无来源 IP 时零查询返回，无命中时零额外开销返回。
+func ReopenForPendingAlerts(ctx context.Context, tx *ent.Tx, sqlDB *sql.DB, pending []*ent.Alert, now time.Time) error {
 	if len(pending) == 0 {
 		return nil
 	}
 	if now.IsZero() {
 		now = time.Now()
 	}
+
 	pendingIPByGroup := map[uuid.UUID]map[string]string{}
 	pendingIPByAsset := map[uuid.UUID]map[string]string{}
+	ipDedup := map[string]bool{}
+
 	for _, al := range pending {
 		if al == nil || al.AssetID == nil {
 			continue
@@ -691,6 +740,7 @@ func ReopenForPendingAlerts(ctx context.Context, tx *ent.Tx, pending []*ent.Aler
 			pendingIPByAsset[*al.AssetID] = map[string]string{}
 		}
 		for _, ip := range ips {
+			ipDedup[ip] = true
 			pendingIPByAsset[*al.AssetID][ip] = al.RuleID
 		}
 		if al.Edges.Asset != nil && al.Edges.Asset.GroupID != nil {
@@ -703,43 +753,156 @@ func ReopenForPendingAlerts(ctx context.Context, tx *ent.Tx, pending []*ent.Aler
 			}
 		}
 	}
-	if len(pendingIPByAsset) == 0 && len(pendingIPByGroup) == 0 {
+	if len(ipDedup) == 0 {
 		return nil
 	}
 
+	allIPs := make([]string, 0, len(ipDedup))
+	for ip := range ipDedup {
+		allIPs = append(allIPs, ip)
+	}
+	slices.Sort(allIPs)
+	cutoff := now.Add(-7 * 24 * time.Hour)
+
+	if sqlDB == nil {
+		return reopenPendingViaEntFallback(ctx, tx, allIPs, cutoff, pendingIPByAsset, pendingIPByGroup, now)
+	}
+
+	rows, err := sqlDB.QueryContext(ctx, `
+SELECT incident_id, src_ip, asset_id, group_id
+FROM auth_attempt_closures
+WHERE src_ip = ANY($1)
+  AND resolved_at >= $2`, allIPs, cutoff)
+	if err != nil {
+		return err
+	}
+	type matchedClosure struct {
+		ip     string
+		ruleID string
+	}
+	matched := map[uuid.UUID]matchedClosure{}
+	for rows.Next() {
+		var (
+			incID   uuid.UUID
+			srcIP   string
+			assetID uuid.UUID
+			gid     uuid.NullUUID
+		)
+		if err := rows.Scan(&incID, &srcIP, &assetID, &gid); err != nil {
+			rows.Close()
+			return err
+		}
+		if _, done := matched[incID]; done {
+			continue
+		}
+		ruleID := ""
+		if gid.Valid {
+			ruleID = pendingIPByGroup[gid.UUID][srcIP]
+		}
+		if ruleID == "" {
+			ruleID = pendingIPByAsset[assetID][srcIP]
+		}
+		if ruleID == "" {
+			continue
+		}
+		matched[incID] = matchedClosure{ip: srcIP, ruleID: ruleID}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(matched) == 0 {
+		return nil
+	}
+
+	var staleOrReopenedIDs []uuid.UUID
+	for incID, m := range matched {
+		inc, err := tx.Incident.Get(ctx, incID)
+		if err != nil {
+			if ent.IsNotFound(err) {
+				staleOrReopenedIDs = append(staleOrReopenedIDs, incID)
+				continue
+			}
+			return err
+		}
+		if inc.Status != "closed" || inc.ResolutionSource == nil || *inc.ResolutionSource != ResolutionSource || inc.ResolvedAt == nil {
+			staleOrReopenedIDs = append(staleOrReopenedIDs, incID)
+			continue
+		}
+		reason := fmt.Sprintf("未得手结案后到达同来源 %s 的新告警 %s，自动重开并归并调查", m.ip, m.ruleID)
+		ok, err := reopenIncidentInTx(ctx, tx, inc, now, reason)
+		if err != nil {
+			return err
+		}
+		if ok {
+			staleOrReopenedIDs = append(staleOrReopenedIDs, incID)
+		}
+	}
+	if len(staleOrReopenedIDs) > 0 {
+		idsCopy := slices.Clone(staleOrReopenedIDs)
+		tx.OnCommit(func(next ent.Committer) ent.Committer {
+			return ent.CommitFunc(func(cctx context.Context, tx *ent.Tx) error {
+				if err := next.Commit(cctx, tx); err != nil {
+					return err
+				}
+				_ = DeleteClosures(context.WithoutCancel(cctx), sqlDB, idsCopy...)
+				return nil
+			})
+		})
+	}
+	return nil
+}
+
+// reopenPendingViaEntFallback 兼容未注入 SQL 的单元测试/集成测试 Engine：仍走 auth_attempt_closures (src_ip, resolved_at) 索引半连接。
+func reopenPendingViaEntFallback(
+	ctx context.Context,
+	tx *ent.Tx,
+	allIPs []string,
+	cutoff time.Time,
+	pendingIPByAsset map[uuid.UUID]map[string]string,
+	pendingIPByGroup map[uuid.UUID]map[string]string,
+	now time.Time,
+) error {
 	db := tx.Client()
+	anyIPs := make([]any, len(allIPs))
+	for i, ip := range allIPs {
+		anyIPs[i] = ip
+	}
 	closedIncs, err := db.Incident.Query().
 		Where(
 			incident.StatusEQ("closed"),
 			incident.ResolutionSourceEQ(ResolutionSource),
-			incident.ResolvedAtGTE(now.Add(-7*24*time.Hour)),
+			predicate.Incident(func(s *entsql.Selector) {
+				c := entsql.Table("auth_attempt_closures").As("c")
+				sub := entsql.Select(c.C("incident_id")).From(c).Where(entsql.And(
+					entsql.ColumnsEQ(c.C("incident_id"), s.C(incident.FieldID)),
+					entsql.In(c.C("src_ip"), anyIPs...),
+					entsql.GTE(c.C("resolved_at"), cutoff),
+				))
+				s.Where(entsql.Exists(sub))
+			}),
 		).
+		WithAlerts(func(q *ent.AlertQuery) { q.WithAsset() }).
 		All(ctx)
 	if err != nil || len(closedIncs) == 0 {
 		return err
 	}
-
 	for _, inc := range closedIncs {
 		if inc.ResolvedAt == nil {
 			continue
 		}
-		meta, err := extractClosedIncidentMeta(ctx, db, nil, inc, 3*time.Second)
-		if err != nil || len(meta.srcIPs) == 0 {
-			continue
-		}
 		matchedIP, matchedRule := "", ""
-		for _, ip := range meta.srcIPs {
-			for _, gid := range meta.groupIDs {
-				if r, ok := pendingIPByGroup[gid][ip]; ok {
+		for _, a := range inc.Edges.Alerts {
+			if a.AssetID != nil {
+				for ip, r := range pendingIPByAsset[*a.AssetID] {
 					matchedIP, matchedRule = ip, r
 					break
 				}
 			}
-			if matchedIP != "" {
-				break
-			}
-			for _, aid := range meta.assetIDs {
-				if r, ok := pendingIPByAsset[aid][ip]; ok {
+			if matchedIP == "" && a.Edges.Asset != nil && a.Edges.Asset.GroupID != nil {
+				for ip, r := range pendingIPByGroup[*a.Edges.Asset.GroupID] {
 					matchedIP, matchedRule = ip, r
 					break
 				}

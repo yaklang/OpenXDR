@@ -20,9 +20,11 @@ import (
 	entasset "openxdr/server/ent/asset"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/fact"
+	"openxdr/server/ent/predicate"
 	"openxdr/server/ent/sshlogin"
 	"openxdr/server/ent/trustedsource"
 	"openxdr/server/ent/zone"
+	"openxdr/server/internal/authevents"
 	"openxdr/server/internal/authfields"
 	"openxdr/server/internal/eventpart"
 	"openxdr/server/internal/facts"
@@ -32,7 +34,7 @@ import (
 type Outcome string
 
 const (
-	// OutcomeUnsuccessful 未得手：全部来源为外部公网地址、窗口内无任何成功认证、无其他非本族告警、采集完整
+	// OutcomeUnsuccessful 未得手：全部来源为外部公网地址、窗口内无任何成功认证、无其他非本族告警、采集完整且晚于物化起始时刻
 	OutcomeUnsuccessful Outcome = "unsuccessful"
 	// OutcomeSucceeded 有成功：窗口内存在同来源成功认证
 	OutcomeSucceeded Outcome = "succeeded"
@@ -40,7 +42,7 @@ const (
 	OutcomeInternalOrRegistered Outcome = "internal_or_registered"
 	// OutcomeOtherAlerts 同来源存在其他非认证失败族命中告警，不自动放行
 	OutcomeOtherAlerts Outcome = "other_alerts"
-	// OutcomeIncomplete 查不全或不适用（缺来源 IP、含非本族告警、采集中断、分区已退役、查询超时等），拿不准绝不自动结案
+	// OutcomeIncomplete 查不全或不适用（存量事件、缺来源 IP、含非本族告警、采集中断、分区已退役、查询超时等），拿不准绝不自动结案
 	OutcomeIncomplete Outcome = "incomplete"
 )
 
@@ -49,6 +51,8 @@ const (
 	maxFailureScanRows      = 50000
 	maxSuccessScanRows      = 5000
 	maxAlertScanRows        = 2000
+	// dedupLookbackSlack 覆盖告警去重折叠最大跨度（DEDUP_WINDOW_MINUTES / SprayWindow），使 alerts 查询只用索引列 a.ts 范围扫描
+	dedupLookbackSlack      = time.Hour
 	agentFreshnessLimit     = 15 * time.Minute
 	authentikFreshnessLimit = 15 * time.Minute
 	syslogQuietAliveWindow  = time.Hour
@@ -284,7 +288,24 @@ func (v *Verification) SubjectSummary() map[string]any {
 	return out
 }
 
-type rawEventRow struct {
+type authEventRow struct {
+	eventID    uuid.UUID
+	assetID    uuid.UUID
+	hostname   string
+	ts         time.Time
+	srcIP      string
+	service    string
+	sourceKind string
+	account    string
+	success    bool
+}
+
+type eventKeyPair struct {
+	id uuid.UUID
+	ts time.Time
+}
+
+type anchorRawRow struct {
 	id       uuid.UUID
 	ts       time.Time
 	classUID int
@@ -321,10 +342,10 @@ func Verify(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID uuid.
 }
 
 func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID uuid.UUID, opts Options) (*Verification, error) {
+	// 注意：绝不使用 .WithEvent()（Ent 会生成无 ts 的 WHERE id IN (...) 跨全部分区探主键）
 	alerts, err := db.Alert.Query().
 		Where(alert.IncidentIDEQ(incidentID)).
 		WithAsset().
-		WithEvent().
 		Order(ent.Asc(alert.FieldTs), ent.Asc(alert.FieldID)).
 		All(ctx)
 	if err != nil {
@@ -352,6 +373,7 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 	groupSet := map[uuid.UUID]bool{}
 	var authAlerts []*ent.Alert
 	var authAlertIDs []uuid.UUID
+	var anchorEventIDs []uuid.UUID
 	var minAlertTs, maxAlertTs time.Time
 	alertCountByAsset := map[uuid.UUID]int{}
 
@@ -370,6 +392,9 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 		}
 		authAlerts = append(authAlerts, a)
 		authAlertIDs = append(authAlertIDs, a.ID)
+		if a.EventID != nil {
+			anchorEventIDs = append(anchorEventIDs, *a.EventID)
+		}
 		alertCountByAsset[as.ID] += max(a.Count, 1)
 		endTs := a.Ts
 		if a.LastTs != nil && a.LastTs.After(endTs) {
@@ -404,33 +429,36 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 		}
 	}
 
-	// 补充跨主机时序告警（如 temporal:linux-account-auth-burst）关联的证据事件与涉及资产
-	temporalEvRows, err := loadTemporalEvidenceEvents(ctx, tx, authAlertIDs, minAlertTs.Add(-2*time.Hour), maxAlertTs.Add(time.Hour))
+	// 1. 从 auth_events 物化表读取锚点认证记录与跨主机时序证据明细（零 events 扫描）
+	anchorAuthMap, err := queryAuthEventsByIDs(ctx, tx, anchorEventIDs)
 	if err != nil {
 		return nil, err
 	}
-	for _, ev := range temporalEvRows {
-		if ev.assetID != uuid.Nil && assetsByID[ev.assetID] == nil {
-			if as, err := db.Asset.Get(ctx, ev.assetID); err == nil {
+	temporalAuthRows, err := loadTemporalEvidenceAuthEvents(ctx, tx, authAlertIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range temporalAuthRows {
+		if row.assetID != uuid.Nil && assetsByID[row.assetID] == nil {
+			if as, err := db.Asset.Get(ctx, row.assetID); err == nil {
 				assetsByID[as.ID] = as
 				if as.GroupID != nil {
 					groupSet[*as.GroupID] = true
 				}
 			}
 		}
-		if ev.ts.Before(minAlertTs) {
-			minAlertTs = ev.ts
+		if row.ts.Before(minAlertTs) {
+			minAlertTs = row.ts
 		}
-		if ev.ts.After(maxAlertTs) {
-			maxAlertTs = ev.ts
+		if row.ts.After(maxAlertTs) {
+			maxAlertTs = row.ts
 		}
 	}
 
 	assetIDs := sortedUUIDs(assetsByID)
 	groupIDs := sortedGroupIDs(groupSet)
 
-	// 1. 仅当告警发生去重折叠（last_ts > ts）或存在缺少明细证据的时序告警时，按实际折叠区间补扫原始失败事件；
-	// 单条未折叠告警直接取锚点事件，避免把同主机相邻时刻无关事件的来源 IP 串入本事件。
+	// 仅当告警发生去重折叠（last_ts > ts）或存在缺少明细证据的时序告警时，按 (asset_id, ts) 索引查 auth_events 折叠区间
 	var foldFrom, foldTo time.Time
 	needFoldScan := false
 	for _, a := range authAlerts {
@@ -442,7 +470,7 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 		switch {
 		case a.LastTs != nil && a.LastTs.After(a.Ts):
 			from, to = a.Ts.Add(-time.Second), end.Add(time.Second)
-		case strings.HasPrefix(a.RuleID, "temporal:") && len(temporalEvRows) == 0:
+		case strings.HasPrefix(a.RuleID, "temporal:") && len(temporalAuthRows) == 0:
 			from, to = a.Ts.Add(-15*time.Minute), end.Add(time.Second)
 		default:
 			continue
@@ -456,10 +484,10 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 		needFoldScan = true
 	}
 
-	var failWindowRows []rawEventRow
-	if needFoldScan {
+	var foldAuthRows []authEventRow
+	if needFoldScan && tx != nil {
 		var truncated bool
-		failWindowRows, truncated, err = queryAssetAuthEvents(ctx, db, tx, assetIDs, foldFrom, foldTo, false, maxFailureScanRows)
+		foldAuthRows, truncated, err = queryAssetFailedAuthEvents(ctx, tx, assetIDs, foldFrom, foldTo, maxFailureScanRows)
 		if err != nil {
 			return nil, err
 		}
@@ -468,37 +496,66 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 		}
 	}
 
-	seenEvents := map[uuid.UUID]rawEventRow{}
-	for _, r := range failWindowRows {
-		seenEvents[r.id] = r
+	seenAuth := map[uuid.UUID]authEventRow{}
+	for _, r := range foldAuthRows {
+		seenAuth[r.eventID] = r
 	}
-	for _, r := range temporalEvRows {
-		seenEvents[r.id] = r
+	for _, r := range temporalAuthRows {
+		seenAuth[r.eventID] = r
 	}
+
+	// 锚点优先取自 auth_events；仅当上线前存量告警或未注入 sqlDB 的会话研判在 auth_events 未命中时，才按主键 (id, ts) 单点取锚点事件正文
+	var missingAnchorKeys []eventKeyPair
+	missingAlertAsset := map[uuid.UUID]uuid.UUID{}
 	for _, a := range authAlerts {
-		if a.Edges.Event == nil {
+		if a.EventID == nil {
 			addIncomplete("认证失败告警缺少原始事件引用")
 			continue
 		}
-		ev := a.Edges.Event
-		aid := uuid.Nil
-		if ev.AssetID != nil {
-			aid = *ev.AssetID
-		} else if a.AssetID != nil {
-			aid = *a.AssetID
+		if r, ok := anchorAuthMap[*a.EventID]; ok {
+			seenAuth[r.eventID] = r
+			continue
 		}
-		uname := ""
-		if ev.Username != nil {
-			uname = *ev.Username
+		missingAnchorKeys = append(missingAnchorKeys, eventKeyPair{id: *a.EventID, ts: a.Ts})
+		if a.AssetID != nil {
+			missingAlertAsset[*a.EventID] = *a.AssetID
 		}
-		seenEvents[ev.ID] = rawEventRow{
-			id:       ev.ID,
-			ts:       ev.Ts,
-			classUID: ev.ClassUID,
-			source:   ev.Source,
-			assetID:  aid,
-			username: uname,
-			raw:      ev.Raw,
+	}
+	if len(missingAnchorKeys) > 0 {
+		rawAnchors, err := fetchAnchorEventsByPK(ctx, db, tx, missingAnchorKeys)
+		if err != nil {
+			return nil, err
+		}
+		foundIDs := map[uuid.UUID]bool{}
+		for _, rawEv := range rawAnchors {
+			foundIDs[rawEv.id] = true
+			aid := rawEv.assetID
+			if aid == uuid.Nil {
+				aid = missingAlertAsset[rawEv.id]
+			}
+			assetOS := ""
+			if as := assetsByID[aid]; as != nil && as.Os != nil {
+				assetOS = *as.Os
+			}
+			parsed, ok := ParseAuthEvent(rawEv.classUID, rawEv.source, assetOS, rawEv.username, rawEv.raw)
+			if !ok {
+				continue
+			}
+			seenAuth[rawEv.id] = authEventRow{
+				eventID:    rawEv.id,
+				assetID:    aid,
+				ts:         rawEv.ts,
+				srcIP:      parsed.SrcIP,
+				service:    parsed.ServiceSlug,
+				sourceKind: parsed.SourceKind,
+				account:    parsed.Account,
+				success:    parsed.Success,
+			}
+		}
+		for _, k := range missingAnchorKeys {
+			if !foundIDs[k.id] {
+				addIncomplete("认证失败告警缺少可读取的锚点事件")
+			}
 		}
 	}
 
@@ -514,41 +571,40 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 	eventsCountByAsset := map[uuid.UUID]int{}
 	hasAuthentik := false
 
-	orderedIDs := make([]uuid.UUID, 0, len(seenEvents))
-	for id := range seenEvents {
+	orderedIDs := make([]uuid.UUID, 0, len(seenAuth))
+	for id := range seenAuth {
 		orderedIDs = append(orderedIDs, id)
 	}
 	slices.SortFunc(orderedIDs, func(a, b uuid.UUID) int {
-		ra, rb := seenEvents[a], seenEvents[b]
+		ra, rb := seenAuth[a], seenAuth[b]
 		return cmp.Or(ra.ts.Compare(rb.ts), strings.Compare(a.String(), b.String()))
 	})
 
 	for _, id := range orderedIDs {
-		row := seenEvents[id]
+		row := seenAuth[id]
+		if row.success {
+			continue
+		}
 		as := assetsByID[row.assetID]
-		assetOS, hostname := "", ""
+		hostname := ""
 		var gid uuid.UUID
 		if as != nil {
-			if as.Os != nil {
-				assetOS = *as.Os
-			}
 			hostname = as.Hostname
 			if as.GroupID != nil {
 				gid = *as.GroupID
 			}
 		}
-		parsed, ok := ParseAuthEvent(row.classUID, row.source, assetOS, row.username, row.raw)
-		if !ok || !parsed.Failure {
-			continue
-		}
+		svcLabel := authevents.ServiceLabel(row.service)
 		if sourceKindsByAsset[row.assetID] == nil {
 			sourceKindsByAsset[row.assetID] = map[string]bool{}
 		}
-		sourceKindsByAsset[row.assetID][parsed.SourceKind] = true
-		if parsed.SourceKind == "authentik" {
+		if row.sourceKind != "" {
+			sourceKindsByAsset[row.assetID][row.sourceKind] = true
+		}
+		if row.sourceKind == "authentik" || row.service == "authentik" {
 			hasAuthentik = true
 		}
-		if parsed.SrcIP == "" {
+		if row.srcIP == "" {
 			addIncomplete("认证失败事件缺少可核验的来源 IP")
 			continue
 		}
@@ -559,16 +615,16 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 		if v.LastFailure.IsZero() || row.ts.After(v.LastFailure) {
 			v.LastFailure = row.ts
 		}
-		tk := tupleKey{srcIP: parsed.SrcIP, assetID: row.assetID, service: parsed.ServiceSlug, account: parsed.Account}
+		tk := tupleKey{srcIP: row.srcIP, assetID: row.assetID, service: row.service, account: row.account}
 		tup := tupleMap[tk]
 		if tup == nil {
 			tup = &AttemptTuple{
-				SrcIP:        parsed.SrcIP,
+				SrcIP:        row.srcIP,
 				AssetID:      row.assetID,
 				Hostname:     hostname,
-				ServiceSlug:  parsed.ServiceSlug,
-				ServiceLabel: parsed.ServiceLabel,
-				Account:      parsed.Account,
+				ServiceSlug:  row.service,
+				ServiceLabel: svcLabel,
+				Account:      row.account,
 				FirstTs:      row.ts,
 				LastTs:       row.ts,
 			}
@@ -581,20 +637,20 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 		if row.ts.After(tup.LastTs) {
 			tup.LastTs = row.ts
 		}
-		if !slices.Contains(v.SourceIPs, parsed.SrcIP) {
-			v.SourceIPs = append(v.SourceIPs, parsed.SrcIP)
+		if !slices.Contains(v.SourceIPs, row.srcIP) {
+			v.SourceIPs = append(v.SourceIPs, row.srcIP)
 		}
-		if parsed.Account != "" && !slices.Contains(v.Accounts, parsed.Account) {
-			v.Accounts = append(v.Accounts, parsed.Account)
+		if row.account != "" && !slices.Contains(v.Accounts, row.account) {
+			v.Accounts = append(v.Accounts, row.account)
 		}
-		tKey := row.assetID.String() + "|" + parsed.ServiceSlug
+		tKey := row.assetID.String() + "|" + row.service
 		if _, exists := targetMap[tKey]; !exists {
 			targetMap[tKey] = ServiceTarget{
 				GroupID:      gid,
 				AssetID:      row.assetID,
 				Hostname:     hostname,
-				ServiceSlug:  parsed.ServiceSlug,
-				ServiceLabel: parsed.ServiceLabel,
+				ServiceSlug:  row.service,
+				ServiceLabel: svcLabel,
 			}
 		}
 	}
@@ -617,7 +673,6 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 		v.Tuples = append(v.Tuples, *tup)
 		v.TotalFailures += tup.Count
 	}
-	// 若告警去重计数高于留存单条样本事件数（例如去重合并而部分原始事件只保留锚点或单测手工构造 count），取较大值
 	alertTotal := 0
 	for aid, cnt := range alertCountByAsset {
 		alertTotal += max(cnt, eventsCountByAsset[aid])
@@ -643,17 +698,11 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 	v.WindowTo = maxTime(opts.Now, v.LastFailure.Add(24*time.Hour))
 	queryTo := maxTime(opts.Now.Add(5*time.Minute), v.WindowTo)
 
-	// 3. 分区完整性与采集健康核查（任何缺口均记入 IncompleteReasons）
-	if tx != nil {
-		retired, err := isWindowPartitionRetired(ctx, sqlDB, tx, v.WindowFrom)
-		if err != nil {
-			return nil, err
-		}
-		if retired {
-			addIncomplete("核验时间窗起点所在的历史事件日分区已退役，无法证明全窗口无成功登录")
-		}
+	// 3. 上线前存量数据边界、分区保留期与采集健康核查（任何缺口均记入 IncompleteReasons，不自动结案）
+	if err := checkMaterializedCoverage(ctx, db, sqlDB, tx, v.FirstFailure, v.WindowFrom, addIncomplete); err != nil {
+		return nil, err
 	}
-	if err := checkCollectionCompleteness(ctx, db, tx, assetsByID, sourceKindsByAsset, hasAuthentik, opts.Now, queryTo, addIncomplete); err != nil {
+	if err := checkCollectionCompleteness(ctx, tx, assetsByID, sourceKindsByAsset, hasAuthentik, opts.Now, queryTo, addIncomplete); err != nil {
 		return nil, err
 	}
 
@@ -669,38 +718,34 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 		srcIPSet[ip] = true
 	}
 
-	// 5. 核查窗口内同来源是否有任何成功认证（events 目标资产 + ssh_logins 全组物化表）
-	succRows, succTrunc, err := queryAssetAuthEvents(ctx, db, tx, assetIDs, v.WindowFrom, queryTo, true, maxSuccessScanRows)
-	if err != nil {
-		return nil, err
-	}
-	if succTrunc {
-		addIncomplete("成功认证候选事件超出单次核验上限")
-	}
+	// 5. 核查窗口内同来源是否有任何成功认证（查 auth_events (src_ip, ts) 索引 + ssh_logins 全组物化表）
 	seenSuccIDs := map[uuid.UUID]bool{}
-	for _, row := range succRows {
-		as := assetsByID[row.assetID]
-		assetOS, hostname := "", ""
-		if as != nil {
-			if as.Os != nil {
-				assetOS = *as.Os
+	if tx != nil {
+		succRows, succTrunc, err := querySameSourceSuccessAuthEvents(ctx, tx, v.SourceIPs, assetIDs, groupIDs, v.WindowFrom, queryTo, maxSuccessScanRows)
+		if err != nil {
+			return nil, err
+		}
+		if succTrunc {
+			addIncomplete("成功认证候选事件超出单次核验上限")
+		}
+		for _, row := range succRows {
+			seenSuccIDs[row.eventID] = true
+			hostname := row.hostname
+			if hostname == "" {
+				if as := assetsByID[row.assetID]; as != nil {
+					hostname = as.Hostname
+				}
 			}
-			hostname = as.Hostname
+			v.Successes = append(v.Successes, SuccessHit{
+				SrcIP:        row.srcIP,
+				AssetID:      row.assetID,
+				Hostname:     hostname,
+				ServiceLabel: authevents.ServiceLabel(row.service),
+				Account:      row.account,
+				Ts:           row.ts,
+				Via:          "auth_events",
+			})
 		}
-		parsed, ok := ParseAuthEvent(row.classUID, row.source, assetOS, row.username, row.raw)
-		if !ok || !parsed.Success || !srcIPSet[parsed.SrcIP] {
-			continue
-		}
-		seenSuccIDs[row.id] = true
-		v.Successes = append(v.Successes, SuccessHit{
-			SrcIP:        parsed.SrcIP,
-			AssetID:      row.assetID,
-			Hostname:     hostname,
-			ServiceLabel: parsed.ServiceLabel,
-			Account:      parsed.Account,
-			Ts:           row.ts,
-			Via:          "events",
-		})
 	}
 
 	sshHits, err := queryGroupSSHLogins(ctx, db, tx, groupIDs, assetIDs, v.SourceIPs, v.WindowFrom, queryTo)
@@ -732,8 +777,12 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 		return cmp.Or(a.Ts.Compare(b.Ts), strings.Compare(a.SrcIP, b.SrcIP))
 	})
 
-	// 6. 核查窗口内同来源是否有其他命中告警（非本事件）
-	otherAlerts, latestSameSrcFailAlert, alertTrunc, err := querySameSourceAlerts(ctx, db, tx, incidentID, groupIDs, assetIDs, srcIPSet, v.WindowFrom, queryTo)
+	// 6. 核查窗口内同来源是否有其他命中告警（走 alert_asset_id_ts (asset_id, ts) 索引，锚点事件仅按 (id, ts) 主键点查）
+	scopeAssetIDs, err := resolveScopeAssetIDs(ctx, db, groupIDs, assetIDs)
+	if err != nil {
+		return nil, err
+	}
+	otherAlerts, latestSameSrcFailAlert, alertTrunc, err := querySameSourceAlerts(ctx, db, tx, incidentID, scopeAssetIDs, srcIPSet, v.WindowFrom, queryTo)
 	if err != nil {
 		return nil, err
 	}
@@ -766,113 +815,195 @@ func verifyInner(ctx context.Context, db *ent.Client, sqlDB *sql.DB, incidentID 
 	return v, nil
 }
 
-func loadTemporalEvidenceEvents(ctx context.Context, tx *sql.Tx, alertIDs []uuid.UUID, from, to time.Time) ([]rawEventRow, error) {
+// queryAuthEventsByIDs 按主键 event_id 批量读取 auth_events。
+func queryAuthEventsByIDs(ctx context.Context, tx *sql.Tx, eventIDs []uuid.UUID) (map[uuid.UUID]authEventRow, error) {
+	out := map[uuid.UUID]authEventRow{}
+	if tx == nil || len(eventIDs) == 0 {
+		return out, nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT event_id, asset_id, ts, src_ip, service, source_kind, account, success
+FROM auth_events
+WHERE event_id = ANY($1)`, eventIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r authEventRow
+		if err := rows.Scan(&r.eventID, &r.assetID, &r.ts, &r.srcIP, &r.service, &r.sourceKind, &r.account, &r.success); err != nil {
+			return nil, err
+		}
+		out[r.eventID] = r
+	}
+	return out, rows.Err()
+}
+
+// loadTemporalEvidenceAuthEvents 通过时序检测关联表直接按主键连接 auth_events，不碰原始 events 表。
+func loadTemporalEvidenceAuthEvents(ctx context.Context, tx *sql.Tx, alertIDs []uuid.UUID) ([]authEventRow, error) {
 	if tx == nil || len(alertIDs) == 0 {
 		return nil, nil
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT te.event_id
+	rows, err := tx.QueryContext(ctx, `
+SELECT ae.event_id, ae.asset_id, ae.ts, ae.src_ip, ae.service, ae.source_kind, ae.account, ae.success
 FROM temporal_detections td
 JOIN temporal_evidence te ON te.revision = td.revision AND te.rule_id = td.rule_id AND te.anchor_id = td.anchor_id
+JOIN auth_events ae ON ae.event_id = te.event_id
 WHERE td.alert_id = ANY($1)
 LIMIT 500`, alertIDs)
 	if err != nil {
 		return nil, err
 	}
-	var evIDs []uuid.UUID
+	defer rows.Close()
+	var out []authEventRow
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		evIDs = append(evIDs, id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil || len(evIDs) == 0 {
-		return nil, err
-	}
-
-	evRows, err := tx.QueryContext(ctx, `SELECT id, ts, class_uid, source, COALESCE(asset_id, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE(username, ''), raw
-FROM events
-WHERE id = ANY($1)
-  AND ts >= $2 AND ts <= $3
-ORDER BY ts ASC`, evIDs, from, to)
-	if err != nil {
-		return nil, err
-	}
-	defer evRows.Close()
-	var out []rawEventRow
-	for evRows.Next() {
-		var r rawEventRow
-		if err := evRows.Scan(&r.id, &r.ts, &r.classUID, &r.source, &r.assetID, &r.username, &r.raw); err != nil {
+		var r authEventRow
+		if err := rows.Scan(&r.eventID, &r.assetID, &r.ts, &r.srcIP, &r.service, &r.sourceKind, &r.account, &r.success); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
 	}
-	return out, evRows.Err()
+	return out, rows.Err()
 }
 
-// queryAssetAuthEvents 在明确限定 asset_id 与 [from, to] 的前提下查询认证事件，走分区裁剪与 event_asset_id_ts 索引。
-func queryAssetAuthEvents(ctx context.Context, db *ent.Client, tx *sql.Tx, assetIDs []uuid.UUID, from, to time.Time, onlySuccess bool, limit int) ([]rawEventRow, bool, error) {
-	if len(assetIDs) == 0 {
+// queryAssetFailedAuthEvents 按 auth_events_asset_id_ts (asset_id, ts) 索引查询去重折叠短窗口内的失败认证行。
+func queryAssetFailedAuthEvents(ctx context.Context, tx *sql.Tx, assetIDs []uuid.UUID, from, to time.Time, limit int) ([]authEventRow, bool, error) {
+	if tx == nil || len(assetIDs) == 0 {
 		return nil, false, nil
 	}
-	if tx != nil {
-		query := `SELECT id, ts, class_uid, source, asset_id, COALESCE(username, ''), raw
-FROM events
+	rows, err := tx.QueryContext(ctx, `
+SELECT event_id, asset_id, ts, src_ip, service, source_kind, account, success
+FROM auth_events
 WHERE asset_id = ANY($1)
   AND ts >= $2 AND ts <= $3
-  AND class_uid IN (3002, 100001)`
-		if onlySuccess {
-			query += `
-  AND (
-    (class_uid = 3002 AND (raw->>'status_id' = '1' OR lower(COALESCE(raw->>'status', '')) = 'success'))
-    OR (class_uid = 100001 AND COALESCE(raw->>'message', '') LIKE 'Accepted %')
-  )`
-		}
-		query += fmt.Sprintf("\nORDER BY ts ASC\nLIMIT %d", limit+1)
-		rows, err := tx.QueryContext(ctx, query, assetIDs, from, to)
-		if err != nil {
-			return nil, false, err
-		}
-		defer rows.Close()
-		var out []rawEventRow
-		for rows.Next() {
-			var r rawEventRow
-			if err := rows.Scan(&r.id, &r.ts, &r.classUID, &r.source, &r.assetID, &r.username, &r.raw); err != nil {
-				return nil, false, err
-			}
-			out = append(out, r)
-		}
-		if err := rows.Err(); err != nil {
-			return nil, false, err
-		}
-		if len(out) > limit {
-			return out[:limit], true, nil
-		}
-		return out, false, nil
-	}
-
-	evs, err := db.Event.Query().
-		Where(
-			event.AssetIDIn(assetIDs...),
-			event.TsGTE(from),
-			event.TsLTE(to),
-			event.ClassUIDIn(3002, 100001),
-		).
-		Order(ent.Asc(event.FieldTs)).
-		Limit(limit + 1).
-		All(ctx)
+  AND success = false
+LIMIT $4`, assetIDs, from, to, limit+1)
 	if err != nil {
 		return nil, false, err
 	}
-	truncated := len(evs) > limit
-	if truncated {
-		evs = evs[:limit]
+	defer rows.Close()
+	var out []authEventRow
+	for rows.Next() {
+		var r authEventRow
+		if err := rows.Scan(&r.eventID, &r.assetID, &r.ts, &r.srcIP, &r.service, &r.sourceKind, &r.account, &r.success); err != nil {
+			return nil, false, err
+		}
+		out = append(out, r)
 	}
-	out := make([]rawEventRow, 0, len(evs))
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(out) > limit {
+		return out[:limit], true, nil
+	}
+	return out, false, nil
+}
+
+// querySameSourceSuccessAuthEvents 按 auth_events_src_ip_ts (src_ip, ts) 索引核查同来源是否存在成功认证。
+func querySameSourceSuccessAuthEvents(
+	ctx context.Context,
+	tx *sql.Tx,
+	srcIPs []string,
+	assetIDs, groupIDs []uuid.UUID,
+	from, to time.Time,
+	limit int,
+) ([]authEventRow, bool, error) {
+	if tx == nil || len(srcIPs) == 0 {
+		return nil, false, nil
+	}
+	var rows *sql.Rows
+	var err error
+	if len(groupIDs) > 0 {
+		rows, err = tx.QueryContext(ctx, `
+SELECT ae.event_id, ae.asset_id, COALESCE(a.hostname, ''), ae.ts, ae.src_ip, ae.service, ae.account
+FROM auth_events ae
+LEFT JOIN assets a ON a.id = ae.asset_id
+WHERE ae.src_ip = ANY($1)
+  AND ae.ts >= $2 AND ae.ts <= $3
+  AND (ae.asset_id = ANY($4) OR a.group_id = ANY($5))
+  AND ae.success = true
+LIMIT $6`, srcIPs, from, to, assetIDs, groupIDs, limit+1)
+	} else {
+		rows, err = tx.QueryContext(ctx, `
+SELECT ae.event_id, ae.asset_id, COALESCE(a.hostname, ''), ae.ts, ae.src_ip, ae.service, ae.account
+FROM auth_events ae
+LEFT JOIN assets a ON a.id = ae.asset_id
+WHERE ae.src_ip = ANY($1)
+  AND ae.ts >= $2 AND ae.ts <= $3
+  AND ae.asset_id = ANY($4)
+  AND ae.success = true
+LIMIT $5`, srcIPs, from, to, assetIDs, limit+1)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var out []authEventRow
+	for rows.Next() {
+		var r authEventRow
+		r.success = true
+		if err := rows.Scan(&r.eventID, &r.assetID, &r.hostname, &r.ts, &r.srcIP, &r.service, &r.account); err != nil {
+			return nil, false, err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(out) > limit {
+		return out[:limit], true, nil
+	}
+	return out, false, nil
+}
+
+// fetchAnchorEventsByPK 严格按分区表主键 (id, ts) 单点读取锚点事件正文，每次只命中单个日分区主键索引。
+func fetchAnchorEventsByPK(ctx context.Context, db *ent.Client, tx *sql.Tx, keys []eventKeyPair) ([]anchorRawRow, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	if tx != nil {
+		ids := make([]uuid.UUID, len(keys))
+		tss := make([]time.Time, len(keys))
+		minTs, maxTs := keys[0].ts, keys[0].ts
+		for i, k := range keys {
+			ids[i] = k.id
+			tss[i] = k.ts
+			if k.ts.Before(minTs) {
+				minTs = k.ts
+			}
+			if k.ts.After(maxTs) {
+				maxTs = k.ts
+			}
+		}
+		rows, err := tx.QueryContext(ctx, `
+SELECT e.id, e.ts, e.class_uid, e.source, COALESCE(e.asset_id, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE(e.username, ''), e.raw
+FROM unnest($1::uuid[], $2::timestamptz[]) AS k(id, ts)
+JOIN events e ON e.id = k.id AND e.ts = k.ts
+WHERE e.ts >= $3 AND e.ts <= $4`, ids, tss, minTs, maxTs)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var out []anchorRawRow
+		for rows.Next() {
+			var r anchorRawRow
+			if err := rows.Scan(&r.id, &r.ts, &r.classUID, &r.source, &r.assetID, &r.username, &r.raw); err != nil {
+				return nil, err
+			}
+			out = append(out, r)
+		}
+		return out, rows.Err()
+	}
+
+	preds := make([]predicate.Event, len(keys))
+	for i, k := range keys {
+		preds[i] = event.And(event.IDEQ(k.id), event.TsEQ(k.ts))
+	}
+	evs, err := db.Event.Query().Where(event.Or(preds...)).All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]anchorRawRow, 0, len(evs))
 	for _, ev := range evs {
 		aid := uuid.Nil
 		if ev.AssetID != nil {
@@ -882,7 +1013,7 @@ WHERE asset_id = ANY($1)
 		if ev.Username != nil {
 			uname = *ev.Username
 		}
-		out = append(out, rawEventRow{
+		out = append(out, anchorRawRow{
 			id:       ev.ID,
 			ts:       ev.Ts,
 			classUID: ev.ClassUID,
@@ -892,7 +1023,7 @@ WHERE asset_id = ANY($1)
 			raw:      ev.Raw,
 		})
 	}
-	return out, truncated, nil
+	return out, nil
 }
 
 type sshLoginRow struct {
@@ -961,22 +1092,201 @@ LIMIT 200`, groupIDs, from, to, srcIPs)
 	return out, nil
 }
 
-// querySameSourceAlerts 查询同组（或同资产）在核验窗口内由相同来源 IP 触发的其他告警。
-// 使用 LATERAL (id, ts) 精确探测单个日分区主键，绝不触发全分区哈希连接。
+func resolveScopeAssetIDs(ctx context.Context, db *ent.Client, groupIDs, assetIDs []uuid.UUID) ([]uuid.UUID, error) {
+	seen := make(map[uuid.UUID]bool, len(assetIDs)+16)
+	for _, id := range assetIDs {
+		if id != uuid.Nil {
+			seen[id] = true
+		}
+	}
+	if len(groupIDs) > 0 {
+		ids, err := db.Asset.Query().
+			Where(entasset.GroupIDIn(groupIDs...)).
+			IDs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
+			seen[id] = true
+		}
+	}
+	out := make([]uuid.UUID, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+	slices.SortFunc(out, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	return out, nil
+}
+
+// querySameSourceAlerts 查询同组/目标资产在核验窗口内由相同来源 IP 触发的其他告警。
+// 查询条件严格收敛在 alert_asset_id_ts (asset_id, ts) 索引上（不用未建索引的 last_ts OR 或 assets LEFT JOIN）；
+// 认证失败族告警从 auth_events 取来源 IP，其余告警仅按主键 (id, ts) 点查锚点事件正文。
 func querySameSourceAlerts(
 	ctx context.Context,
 	db *ent.Client,
 	tx *sql.Tx,
 	incidentID uuid.UUID,
-	groupIDs, assetIDs []uuid.UUID,
+	scopeAssetIDs []uuid.UUID,
 	srcIPSet map[string]bool,
 	from, to time.Time,
 ) ([]OtherAlertHit, time.Time, bool, error) {
+	if len(scopeAssetIDs) == 0 || len(srcIPSet) == 0 {
+		return nil, time.Time{}, false, nil
+	}
+	scanFrom := from.Add(-dedupLookbackSlack)
+
+	type alertCand struct {
+		id      uuid.UUID
+		ts      time.Time
+		lastTs  *time.Time
+		ruleID  string
+		detail  *string
+		eventID *uuid.UUID
+	}
+	var cands []alertCand
+
+	if tx != nil {
+		rows, err := tx.QueryContext(ctx, `
+SELECT a.id, a.ts, a.last_ts, a.rule_id, a.detail, a.event_id
+FROM alerts a
+WHERE a.asset_id = ANY($1)
+  AND a.ts >= $2 AND a.ts <= $3
+  AND (a.incident_id IS NULL OR a.incident_id <> $4)
+ORDER BY a.ts ASC
+LIMIT $5`, scopeAssetIDs, scanFrom, to, incidentID, maxAlertScanRows+1)
+		if err != nil {
+			return nil, time.Time{}, false, err
+		}
+		for rows.Next() {
+			var (
+				id     uuid.UUID
+				ts     time.Time
+				lastTs sql.NullTime
+				ruleID string
+				detail sql.NullString
+				evID   uuid.NullUUID
+			)
+			if err := rows.Scan(&id, &ts, &lastTs, &ruleID, &detail, &evID); err != nil {
+				rows.Close()
+				return nil, time.Time{}, false, err
+			}
+			var lastPtr *time.Time
+			if lastTs.Valid {
+				t := lastTs.Time
+				lastPtr = &t
+			}
+			var detPtr *string
+			if detail.Valid {
+				d := detail.String
+				detPtr = &d
+			}
+			var evPtr *uuid.UUID
+			if evID.Valid {
+				eid := evID.UUID
+				evPtr = &eid
+			}
+			cands = append(cands, alertCand{id: id, ts: ts, lastTs: lastPtr, ruleID: ruleID, detail: detPtr, eventID: evPtr})
+		}
+		if err := rows.Close(); err != nil {
+			return nil, time.Time{}, false, err
+		}
+		if err := rows.Err(); err != nil {
+			return nil, time.Time{}, false, err
+		}
+	} else {
+		rows, err := db.Alert.Query().
+			Where(
+				alert.AssetIDIn(scopeAssetIDs...),
+				alert.TsGTE(scanFrom),
+				alert.TsLTE(to),
+				alert.Or(alert.IncidentIDIsNil(), alert.IncidentIDNEQ(incidentID)),
+			).
+			Order(ent.Asc(alert.FieldTs)).
+			Limit(maxAlertScanRows + 1).
+			All(ctx)
+		if err != nil {
+			return nil, time.Time{}, false, err
+		}
+		for _, r := range rows {
+			cands = append(cands, alertCand{
+				id:      r.ID,
+				ts:      r.Ts,
+				lastTs:  r.LastTs,
+				ruleID:  r.RuleID,
+				detail:  r.Detail,
+				eventID: r.EventID,
+			})
+		}
+	}
+
+	truncated := len(cands) > maxAlertScanRows
+	if truncated {
+		cands = cands[:maxAlertScanRows]
+	}
+
+	// 过滤掉仅落在 [from - 1h, from) 且未延续进 [from, to] 的去重前告警
+	activeCands := cands[:0]
+	var authEvIDs []uuid.UUID
+	for _, c := range cands {
+		endTs := c.ts
+		if c.lastTs != nil && c.lastTs.After(endTs) {
+			endTs = *c.lastTs
+		}
+		if endTs.Before(from) || c.ts.After(to) {
+			continue
+		}
+		activeCands = append(activeCands, c)
+		if c.eventID != nil && IsAuthFailureRule(c.ruleID) {
+			authEvIDs = append(authEvIDs, *c.eventID)
+		}
+	}
+	if len(activeCands) == 0 {
+		return nil, time.Time{}, truncated, nil
+	}
+
+	authByID, err := queryAuthEventsByIDs(ctx, tx, authEvIDs)
+	if err != nil {
+		return nil, time.Time{}, false, err
+	}
+
+	var needPKFetch []eventKeyPair
+	for _, c := range activeCands {
+		if c.eventID == nil {
+			continue
+		}
+		if _, ok := authByID[*c.eventID]; ok {
+			continue
+		}
+		needPKFetch = append(needPKFetch, eventKeyPair{id: *c.eventID, ts: c.ts})
+	}
+	rawByID := map[uuid.UUID]anchorRawRow{}
+	if len(needPKFetch) > 0 {
+		fetched, err := fetchAnchorEventsByPK(ctx, db, tx, needPKFetch)
+		if err != nil {
+			return nil, time.Time{}, false, err
+		}
+		for _, r := range fetched {
+			rawByID[r.id] = r
+		}
+	}
+
 	var otherHits []OtherAlertHit
 	var latestAuthFail time.Time
 
-	processCandidate := func(id uuid.UUID, ts time.Time, lastTs *time.Time, ruleID string, detail *string, classUID int, raw []byte) {
-		ips := ExtractAlertIPs(ruleID, detail, classUID, raw)
+	for _, c := range activeCands {
+		var ips []string
+		if c.eventID != nil {
+			if ae, ok := authByID[*c.eventID]; ok {
+				if ae.srcIP != "" {
+					ips = append(ips, ae.srcIP)
+				}
+			} else if ev, ok := rawByID[*c.eventID]; ok {
+				ips = ExtractAlertIPs(c.ruleID, c.detail, ev.classUID, ev.raw)
+			}
+		}
+		if len(ips) == 0 {
+			ips = ExtractAlertIPs(c.ruleID, c.detail, 0, nil)
+		}
 		matchedIP := ""
 		for _, ip := range ips {
 			if srcIPSet[ip] {
@@ -985,137 +1295,90 @@ func querySameSourceAlerts(
 			}
 		}
 		if matchedIP == "" {
-			return
+			continue
 		}
-		endTs := ts
-		if lastTs != nil && lastTs.After(endTs) {
-			endTs = *lastTs
+		endTs := c.ts
+		if c.lastTs != nil && c.lastTs.After(endTs) {
+			endTs = *c.lastTs
 		}
-		if IsAuthFailureRule(ruleID) {
+		if IsAuthFailureRule(c.ruleID) {
 			if endTs.After(latestAuthFail) {
 				latestAuthFail = endTs
 			}
-			return
+			continue
 		}
 		otherHits = append(otherHits, OtherAlertHit{
-			AlertID: id,
-			RuleID:  ruleID,
+			AlertID: c.id,
+			RuleID:  c.ruleID,
 			SrcIP:   matchedIP,
-			Ts:      ts,
+			Ts:      c.ts,
 		})
-	}
-
-	if tx != nil {
-		var rows *sql.Rows
-		var err error
-		const lateralSelect = `SELECT a.id, a.ts, a.last_ts, a.rule_id, a.detail, a.event_id, COALESCE(e.class_uid, 0), e.raw
-FROM alerts a
-LEFT JOIN assets s ON s.id = a.asset_id
-LEFT JOIN LATERAL (
-  SELECT class_uid, raw FROM events e WHERE e.id = a.event_id AND e.ts = a.ts LIMIT 1
-) e ON a.event_id IS NOT NULL
-WHERE (a.incident_id IS NULL OR a.incident_id <> $1)
-  AND ((a.ts >= $2 AND a.ts <= $3) OR (a.last_ts IS NOT NULL AND a.last_ts >= $2 AND a.last_ts <= $3))`
-
-		if len(groupIDs) > 0 {
-			rows, err = tx.QueryContext(ctx, lateralSelect+`
-  AND (s.group_id = ANY($4) OR a.asset_id = ANY($5))
-ORDER BY a.ts ASC
-LIMIT $6`, incidentID, from, to, groupIDs, assetIDs, maxAlertScanRows+1)
-		} else {
-			rows, err = tx.QueryContext(ctx, lateralSelect+`
-  AND a.asset_id = ANY($4)
-ORDER BY a.ts ASC
-LIMIT $5`, incidentID, from, to, assetIDs, maxAlertScanRows+1)
-		}
-		if err != nil {
-			return nil, time.Time{}, false, err
-		}
-		type alertCand struct {
-			id       uuid.UUID
-			ts       time.Time
-			lastTs   sql.NullTime
-			ruleID   string
-			detail   sql.NullString
-			eventID  uuid.NullUUID
-			classUID int
-			raw      []byte
-		}
-		var cands []alertCand
-		for rows.Next() {
-			var c alertCand
-			if err := rows.Scan(&c.id, &c.ts, &c.lastTs, &c.ruleID, &c.detail, &c.eventID, &c.classUID, &c.raw); err != nil {
-				rows.Close()
-				return nil, time.Time{}, false, err
-			}
-			cands = append(cands, c)
-		}
-		if err := rows.Close(); err != nil {
-			return nil, time.Time{}, false, err
-		}
-		if err := rows.Err(); err != nil {
-			return nil, time.Time{}, false, err
-		}
-		truncated := len(cands) > maxAlertScanRows
-		if truncated {
-			cands = cands[:maxAlertScanRows]
-		}
-		for _, c := range cands {
-			// 若单测中手工写入的 alert.ts 与 event.ts 不完全相等，在有界时间窗内补查一次该 event_id
-			if c.eventID.Valid && len(c.raw) == 0 {
-				_ = tx.QueryRowContext(ctx, `SELECT class_uid, raw FROM events WHERE id = $1 AND ts >= $2 AND ts <= $3 LIMIT 1`,
-					c.eventID.UUID, from.Add(-24*time.Hour), to.Add(24*time.Hour)).Scan(&c.classUID, &c.raw)
-			}
-			var lastPtr *time.Time
-			if c.lastTs.Valid {
-				t := c.lastTs.Time
-				lastPtr = &t
-			}
-			var detPtr *string
-			if c.detail.Valid {
-				d := c.detail.String
-				detPtr = &d
-			}
-			processCandidate(c.id, c.ts, lastPtr, c.ruleID, detPtr, c.classUID, c.raw)
-		}
-		return otherHits, latestAuthFail, truncated, nil
-	}
-
-	q := db.Alert.Query().Where(
-		alert.Or(alert.IncidentIDIsNil(), alert.IncidentIDNEQ(incidentID)),
-		alert.Or(
-			alert.And(alert.TsGTE(from), alert.TsLTE(to)),
-			alert.And(alert.LastTsGTE(from), alert.LastTsLTE(to)),
-		),
-	)
-	if len(groupIDs) > 0 {
-		q = q.Where(alert.HasAssetWith(entasset.GroupIDIn(groupIDs...)))
-	} else {
-		q = q.Where(alert.AssetIDIn(assetIDs...))
-	}
-	rows, err := q.WithEvent().Order(ent.Asc(alert.FieldTs)).Limit(maxAlertScanRows + 1).All(ctx)
-	if err != nil {
-		return nil, time.Time{}, false, err
-	}
-	truncated := len(rows) > maxAlertScanRows
-	if truncated {
-		rows = rows[:maxAlertScanRows]
-	}
-	for _, r := range rows {
-		cuid := 0
-		var raw []byte
-		if r.Edges.Event != nil {
-			cuid = r.Edges.Event.ClassUID
-			raw = r.Edges.Event.Raw
-		}
-		processCandidate(r.ID, r.Ts, r.LastTs, r.RuleID, r.Detail, cuid, raw)
 	}
 	return otherHits, latestAuthFail, truncated, nil
 }
 
-// isWindowPartitionRetired 判断核验窗口起点是否已落入被退役/冷归档的日分区。
-// 当库里存在归档分区（events_aYYYYMM，即执行过 eventpart.Retire）且 windowFrom 早于最老热日分区下界时，
-// 该日未被告警锚定的普通成功登录事件已被清理，不能再做「无成功登录」阴性证明。
+// checkMaterializedCoverage 校验：
+//  1. 首次失败时间必须严格晚于 settings['auth_events.recorded_since']（上线前存量事件因 auth_events 缺历史登录，一律走研判不自动结案）；
+//  2. 核验窗口起点不得早于已退役的事件保留期边界（janitor 按同保留期清理 auth_events 与退役日分区）。
+func checkMaterializedCoverage(
+	ctx context.Context,
+	db *ent.Client,
+	sqlDB *sql.DB,
+	tx *sql.Tx,
+	firstFailure, windowFrom time.Time,
+	addIncomplete func(string),
+) error {
+	recordedSince, ok, err := loadRecordedSince(ctx, db, tx)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		addIncomplete("认证事件物化表起始时间未初始化，无法确认历史窗口完整")
+	} else if !firstFailure.After(recordedSince) {
+		addIncomplete(fmt.Sprintf("首次失败时间（%s）不晚于认证物化表启用时间（%s），上线前存量事件不自动结案",
+			firstFailure.UTC().Format(time.RFC3339), recordedSince.UTC().Format(time.RFC3339)))
+	}
+
+	if tx != nil {
+		retired, err := isWindowPartitionRetired(ctx, sqlDB, tx, windowFrom)
+		if err != nil {
+			return err
+		}
+		if retired {
+			addIncomplete("核验时间窗起点已超出事件保留期（对应日分区已退役），无法证明全窗口无成功登录")
+		}
+	}
+	return nil
+}
+
+func loadRecordedSince(ctx context.Context, db *ent.Client, tx *sql.Tx) (time.Time, bool, error) {
+	var raw []byte
+	if tx != nil {
+		err := tx.QueryRowContext(ctx, `SELECT value FROM settings WHERE id = $1`, authevents.RecordedSinceKey).Scan(&raw)
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, false, nil
+		}
+		if err != nil {
+			return time.Time{}, false, err
+		}
+	} else {
+		row, err := db.Setting.Get(ctx, authevents.RecordedSinceKey)
+		if ent.IsNotFound(err) {
+			return time.Time{}, false, nil
+		}
+		if err != nil {
+			return time.Time{}, false, err
+		}
+		raw = row.Value
+	}
+	var at time.Time
+	if err := json.Unmarshal(raw, &at); err != nil || at.IsZero() {
+		return time.Time{}, false, nil
+	}
+	return at, true, nil
+}
+
+// isWindowPartitionRetired 判断核验窗口起点是否已超出保留期（存在月归档分区且早于最老热日分区下界）。
 func isWindowPartitionRetired(ctx context.Context, sqlDB *sql.DB, tx *sql.Tx, windowFrom time.Time) (bool, error) {
 	var hasArchive bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (
@@ -1140,7 +1403,6 @@ func isWindowPartitionRetired(ctx context.Context, sqlDB *sql.DB, tx *sql.Tx, wi
 
 func checkCollectionCompleteness(
 	ctx context.Context,
-	db *ent.Client,
 	tx *sql.Tx,
 	assetsByID map[uuid.UUID]*ent.Asset,
 	sourceKindsByAsset map[uuid.UUID]map[string]bool,
@@ -1170,12 +1432,16 @@ func checkCollectionCompleteness(
 			checkAgentAuthHealth(as, now, addIncomplete)
 		}
 		if kinds["syslog"] && as.AgentID == nil {
-			alive, err := hasRecentAssetEvent(ctx, db, tx, aid, now.Add(-syslogQuietAliveWindow), queryTo)
-			if err != nil {
-				return err
+			alive := as.LastSeen.After(now.Add(-syslogQuietAliveWindow))
+			if !alive && tx != nil {
+				var err error
+				alive, err = hasRecentAssetAuthEvent(ctx, tx, aid, now.Add(-syslogQuietAliveWindow), queryTo)
+				if err != nil {
+					return err
+				}
 			}
 			if !alive {
-				addIncomplete(fmt.Sprintf("纯 Syslog 资产 %s 近 %s 无任何新日志到达，无法排除日志链路中断",
+				addIncomplete(fmt.Sprintf("纯 Syslog 资产 %s 近 %s 无活跃上报心跳或认证日志，无法排除日志链路中断",
 					cmp.Or(as.Hostname, aid.String()), syslogQuietAliveWindow))
 			}
 		} else if kinds["syslog"] && as.AgentID != nil && as.LastSeen.Before(now.Add(-agentFreshnessLimit)) {
@@ -1227,15 +1493,12 @@ func checkAgentAuthHealth(as *ent.Asset, now time.Time, addIncomplete func(strin
 	}
 }
 
-func hasRecentAssetEvent(ctx context.Context, db *ent.Client, tx *sql.Tx, assetID uuid.UUID, from, to time.Time) (bool, error) {
-	if tx != nil {
-		var exists bool
-		err := tx.QueryRowContext(ctx, `SELECT EXISTS (
-  SELECT 1 FROM events WHERE asset_id = $1 AND ts >= $2 AND ts <= $3 LIMIT 1
+func hasRecentAssetAuthEvent(ctx context.Context, tx *sql.Tx, assetID uuid.UUID, from, to time.Time) (bool, error) {
+	var exists bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS (
+  SELECT 1 FROM auth_events WHERE asset_id = $1 AND ts >= $2 AND ts <= $3 LIMIT 1
 )`, assetID, from, to).Scan(&exists)
-		return exists, err
-	}
-	return db.Event.Query().Where(event.AssetIDEQ(assetID), event.TsGTE(from), event.TsLTE(to)).Exist(ctx)
+	return exists, err
 }
 
 func classifySourceIPs(

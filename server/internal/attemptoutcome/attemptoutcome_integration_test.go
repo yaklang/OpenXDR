@@ -24,12 +24,17 @@ import (
 	"openxdr/server/internal/attemptoutcome"
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/authentik"
+	"openxdr/server/internal/authevents"
 	"openxdr/server/internal/eventpart"
 	"openxdr/server/internal/ingest"
+	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
+	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/temporal"
 	"openxdr/server/internal/testdb"
 )
+
+var activeTestSQL *sql.DB
 
 func openTestDB(t *testing.T) (context.Context, *ent.Client, *sql.DB) {
 	t.Helper()
@@ -38,11 +43,18 @@ func openTestDB(t *testing.T) (context.Context, *ent.Client, *sql.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { sqlDB.Close() })
+	activeTestSQL = sqlDB
+	t.Cleanup(func() {
+		activeTestSQL = nil
+		sqlDB.Close()
+	})
 	if err := ingest.EnsureSchema(ctx, sqlDB); err != nil {
 		t.Fatal(err)
 	}
 	if err := temporal.EnsureSchema(ctx, sqlDB); err != nil {
+		t.Fatal(err)
+	}
+	if err := authevents.EnsureRecordedSince(ctx, sqlDB, time.Now().UTC().Add(-60*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	cleanTemporal := func(c context.Context) {
@@ -111,7 +123,17 @@ func insertAuthEvent(t *testing.T, ctx context.Context, client *ent.Client, asse
 	if user != "" {
 		q.SetUsername(user)
 	}
-	return q.SaveX(ctx)
+	ev := q.SaveX(ctx)
+	if activeTestSQL != nil && (classUID == 3002 || classUID == 100001) && assetID != uuid.Nil {
+		assetOS := ""
+		if as, err := client.Asset.Get(ctx, assetID); err == nil && as.Os != nil {
+			assetOS = *as.Os
+		}
+		if err := authevents.Record(ctx, activeTestSQL, ev.ID, assetID, ts, classUID, source, assetOS, user, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return ev
 }
 
 func TestExternalAuthFailuresQuietCloseAuditAPIAndHardeningFinding(t *testing.T) {
@@ -489,8 +511,7 @@ func TestSameSourceSuccessBlocksAutoCloseAndSilentLoginReopensClosedIncident(t *
 		t.Fatal("缺少静默成功登录触发的结案重开审计日志")
 	}
 
-	// 场景 C：关联引擎待归并同来源新告警（ReopenForPendingAlerts）在同一事务内当场重开已结案事件
-	resolvedAtC := now.Add(-time.Hour)
+	// 场景 C：关联引擎待归并同来源新告警（ReopenForPendingAlerts）点查 auth_attempt_closures 并在同一事务内重开
 	evFailC := insertAuthEvent(t, ctx, db, bastion.ID, now.Add(-8*time.Hour), 3002, "agent", "deploy", map[string]any{
 		"activity_id":  1,
 		"status_id":    2,
@@ -499,11 +520,7 @@ func TestSameSourceSuccessBlocksAutoCloseAndSilentLoginReopensClosedIncident(t *
 		"src_endpoint": map[string]any{"ip": "203.0.113.77"},
 	})
 	incC := db.Incident.Create().
-		SetStatus("closed").
-		SetResolutionSource(attemptoutcome.ResolutionSource).
-		SetResolvedBy("system").
-		SetResolvedAt(resolvedAtC).
-		SetResolution("verified").
+		SetStatus("open").
 		SetCreatedAt(now.Add(-8 * time.Hour)).
 		SetGraph(json.RawMessage(`{"nodes":[]}`)).
 		SaveX(ctx)
@@ -517,14 +534,59 @@ func TestSameSourceSuccessBlocksAutoCloseAndSilentLoginReopensClosedIncident(t *
 		SetRuleID(attemptoutcome.RuleLinuxLoginFailure).
 		SaveX(ctx)
 
-	newEvC := insertAuthEvent(t, ctx, db, bastion.ID, now, 4001, "agent", "", map[string]any{
+	// 先由 Closer 真实结案并写入 auth_attempt_closures
+	statsCloseC, err := closer.Sweep(ctx, laterNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statsCloseC.Closed != 1 || db.Incident.GetX(ctx, incC.ID).Status != "closed" {
+		t.Fatalf("incC 应经 Closer.Sweep 自动结案并登记闭包索引: %+v", statsCloseC)
+	}
+
+	// 无关公网 IP 的待归并告警：点查未命中，不得误重开 incC
+	unrelatedEv := insertAuthEvent(t, ctx, db, bastion.ID, laterNow, 4001, "agent", "", map[string]any{
+		"connection_info": map[string]any{"direction": "inbound"},
+		"src_endpoint":    map[string]any{"ip": "198.51.100.250", "port": 41110},
+	})
+	unrelatedAlert := db.Alert.Create().
+		SetAssetID(bastion.ID).
+		SetEventID(unrelatedEv.ID).
+		SetTs(laterNow).
+		SetCount(1).
+		SetSeverity(4).
+		SetRuleID("intel:ip:198.51.100.250").
+		SaveX(ctx)
+	unrelatedLoaded := db.Alert.Query().Where().WithAsset().WithEvent().AllX(ctx)
+	var onlyUnrelated []*ent.Alert
+	for _, a := range unrelatedLoaded {
+		if a.ID == unrelatedAlert.ID {
+			onlyUnrelated = append(onlyUnrelated, a)
+		}
+	}
+	txUnrelated, err := db.Tx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := attemptoutcome.ReopenForPendingAlerts(ctx, txUnrelated, sqlDB, onlyUnrelated, laterNow); err != nil {
+		txUnrelated.Rollback()
+		t.Fatal(err)
+	}
+	if err := txUnrelated.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if db.Incident.GetX(ctx, incC.ID).Status != "closed" {
+		t.Fatal("无关来源 IP 的告警绝不应误重开 incC")
+	}
+
+	// 同来源 203.0.113.77 的新告警进入关联队列：立即重开 incC 并清理 auth_attempt_closures
+	newEvC := insertAuthEvent(t, ctx, db, bastion.ID, laterNow, 4001, "agent", "", map[string]any{
 		"connection_info": map[string]any{"direction": "inbound"},
 		"src_endpoint":    map[string]any{"ip": "203.0.113.77", "port": 41111},
 	})
 	pendingAlert := db.Alert.Create().
 		SetAssetID(bastion.ID).
 		SetEventID(newEvC.ID).
-		SetTs(now).
+		SetTs(laterNow).
 		SetCount(1).
 		SetSeverity(4).
 		SetRuleID("intel:ip:203.0.113.77").
@@ -541,7 +603,7 @@ func TestSameSourceSuccessBlocksAutoCloseAndSilentLoginReopensClosedIncident(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := attemptoutcome.ReopenForPendingAlerts(ctx, tx, onlyPending, now); err != nil {
+	if err := attemptoutcome.ReopenForPendingAlerts(ctx, tx, sqlDB, onlyPending, laterNow); err != nil {
 		tx.Rollback()
 		t.Fatal(err)
 	}
@@ -550,6 +612,13 @@ func TestSameSourceSuccessBlocksAutoCloseAndSilentLoginReopensClosedIncident(t *
 	}
 	if db.Incident.GetX(ctx, incC.ID).Status != "open" {
 		t.Fatal("同来源新告警进入关联队列时应立即重开原 attempt_verified 事件")
+	}
+	var closureRemain int
+	if err := sqlDB.QueryRowContext(ctx, `SELECT count(*) FROM auth_attempt_closures WHERE incident_id = $1`, incC.ID).Scan(&closureRemain); err != nil {
+		t.Fatal(err)
+	}
+	if closureRemain != 0 {
+		t.Fatalf("事务提交后应清理已重开事件的 auth_attempt_closures 记录，剩余 %d", closureRemain)
 	}
 }
 
@@ -807,5 +876,252 @@ func TestManualHoldNonAuthRuleAndSameSourceOtherAlertNeverAutoClose(t *testing.T
 		if db.Incident.GetX(ctx, id).Status != "open" {
 			t.Fatalf("事件 %s 不应被自动结案", id)
 		}
+	}
+}
+
+func TestIngestMaterializesAuthEventsAndJanitorPrunes(t *testing.T) {
+	ctx, db, sqlDB := openTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	grp := db.Group.Create().SetName("ingest-materialize").SaveX(ctx)
+	host := db.Asset.Create().
+		SetHostname("sshd-edge").
+		SetOs("linux").
+		SetAgentID(uuid.New()).
+		SetGroupID(grp.ID).
+		SetLastSeen(now).
+		SaveX(ctx)
+
+	proc := &ingest.Processor{
+		DB:          sqlDB,
+		Rules:       sigma.LoadDir(t.TempDir()),
+		Suppress:    suppress.New(db, 0),
+		Intel:       intel.New(db, 0),
+		DedupWindow: time.Hour,
+	}
+
+	oldDay := eventpart.Today().AddDate(0, 0, -10)
+	if _, err := eventpart.EnsureDays(ctx, sqlDB, eventpart.Parent, oldDay, 1); err != nil {
+		t.Fatal(err)
+	}
+	expiredTs := oldDay.Add(2 * time.Hour)
+
+	batch := []ingest.Envelope{
+		// 1. 10 天前过期的 3002 失败认证 -> 应写入并被 Prune 清掉
+		{
+			Version:      ingest.EnvelopeVersion,
+			ID:           uuid.New(),
+			PartitionKey: host.ID.String(),
+			Timestamp:    expiredTs,
+			ClassUID:     3002,
+			Source:       "agent",
+			AssetID:      &host.ID,
+			AssetOS:      "linux",
+			Username:     "root",
+			Raw:          json.RawMessage(`{"activity_id":1,"status_id":2,"user":{"name":"root"},"service":{"name":"sshd"},"src_endpoint":{"ip":"203.0.113.10"}}`),
+		},
+		// 2. 当前 syslog 100001 sshd Failed -> 应写入
+		{
+			Version:      ingest.EnvelopeVersion,
+			ID:           uuid.New(),
+			PartitionKey: host.ID.String(),
+			Timestamp:    now.Add(-2 * time.Minute),
+			ClassUID:     100001,
+			Source:       "syslog",
+			AssetID:      &host.ID,
+			AssetOS:      "linux",
+			Raw:          json.RawMessage(`{"metadata":{"product":{"name":"sshd"}},"message":"Failed password for invalid user admin from 203.0.113.11 port 51234 ssh2"}`),
+		},
+		// 3. 当前 syslog 100001 sshd Accepted -> 应写入且 success=true
+		{
+			Version:      ingest.EnvelopeVersion,
+			ID:           uuid.New(),
+			PartitionKey: host.ID.String(),
+			Timestamp:    now.Add(-time.Minute),
+			ClassUID:     100001,
+			Source:       "syslog",
+			AssetID:      &host.ID,
+			AssetOS:      "linux",
+			Raw:          json.RawMessage(`{"metadata":{"product":{"name":"sshd"}},"message":"Accepted publickey for ubuntu from 203.0.113.11 port 51235 ssh2"}`),
+		},
+		// 4. 非认证的 3002（账户管理 activity_id=3）-> 不应写入 auth_events
+		{
+			Version:      ingest.EnvelopeVersion,
+			ID:           uuid.New(),
+			PartitionKey: host.ID.String(),
+			Timestamp:    now,
+			ClassUID:     3002,
+			Source:       "agent",
+			AssetID:      &host.ID,
+			AssetOS:      "windows",
+			Raw:          json.RawMessage(`{"activity_id":3,"event_id":4720,"status_id":1,"user":{"name":"svc"}}`),
+		},
+		// 5. 非 sshd 的 100001 syslog -> 不应写入 auth_events
+		{
+			Version:      ingest.EnvelopeVersion,
+			ID:           uuid.New(),
+			PartitionKey: host.ID.String(),
+			Timestamp:    now,
+			ClassUID:     100001,
+			Source:       "syslog",
+			AssetID:      &host.ID,
+			AssetOS:      "linux",
+			Raw:          json.RawMessage(`{"metadata":{"product":{"name":"systemd"}},"message":"Started OpenBSD Secure Shell server."}`),
+		},
+		// 6. 普通进程事件 1007 -> 不应写入 auth_events
+		{
+			Version:      ingest.EnvelopeVersion,
+			ID:           uuid.New(),
+			PartitionKey: host.ID.String(),
+			Timestamp:    now,
+			ClassUID:     1007,
+			Source:       "agent",
+			AssetID:      &host.ID,
+			AssetOS:      "linux",
+			Raw:          json.RawMessage(`{"process":{"name":"ls"}}`),
+		},
+	}
+	if err := proc.ProcessBatch(ctx, batch); err != nil {
+		t.Fatalf("ProcessBatch 失败: %v", err)
+	}
+
+	var countBefore int
+	if err := sqlDB.QueryRowContext(ctx, `SELECT count(*) FROM auth_events`).Scan(&countBefore); err != nil {
+		t.Fatal(err)
+	}
+	if countBefore != 3 {
+		t.Fatalf("auth_events 应仅物化 3 条认证事件，实际 %d", countBefore)
+	}
+
+	// 按 7 天保留期执行 Prune：10 天前的那条被清掉，近期的 2 条保留
+	pruned, err := authevents.Prune(ctx, sqlDB, now.Add(-7*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruned != 1 {
+		t.Fatalf("Prune 应清理 1 条过期记录，实际 %d", pruned)
+	}
+	var countAfter, succCount int
+	if err := sqlDB.QueryRowContext(ctx, `SELECT count(*), count(*) FILTER (WHERE success) FROM auth_events`).Scan(&countAfter, &succCount); err != nil {
+		t.Fatal(err)
+	}
+	if countAfter != 2 || succCount != 1 {
+		t.Fatalf("Prune 后剩余记录不符: total=%d succ=%d", countAfter, succCount)
+	}
+}
+
+func TestRecordedSinceBlocksPreExistingIncidentsAndBatchReopen(t *testing.T) {
+	ctx, db, sqlDB := openTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	grp := db.Group.Create().SetName("rollout-safety").SaveX(ctx)
+	host1 := db.Asset.Create().
+		SetHostname("node-1").
+		SetOs("linux").
+		SetAgentID(uuid.New()).
+		SetGroupID(grp.ID).
+		SetLastSeen(now).
+		SaveX(ctx)
+	host2 := db.Asset.Create().
+		SetHostname("node-2").
+		SetOs("linux").
+		SetAgentID(uuid.New()).
+		SetGroupID(grp.ID).
+		SetLastSeen(now).
+		SaveX(ctx)
+
+	// 清除 openTestDB 默认的 recorded_since，验证未记录起始时刻时绝不自动结案
+	if _, err := sqlDB.ExecContext(ctx, `DELETE FROM settings WHERE id = $1`, authevents.RecordedSinceKey); err != nil {
+		t.Fatal(err)
+	}
+
+	recordedSince := now.Add(-9 * time.Hour)
+	preFailTs := recordedSince.Add(-30 * time.Minute) // 早于物化起始时刻（上线前存量事件）
+	postFailTs := recordedSince.Add(30 * time.Minute) // 晚于物化起始时刻（上线后新事件，且距 now 已满 8.5 小时静默期）
+
+	evPre := insertAuthEvent(t, ctx, db, host1.ID, preFailTs, 3002, "agent", "root", map[string]any{
+		"activity_id":  1,
+		"status_id":    2,
+		"user":         map[string]any{"name": "root"},
+		"service":      map[string]any{"name": "sshd"},
+		"src_endpoint": map[string]any{"ip": "203.0.113.200"},
+	})
+	incPre := db.Incident.Create().SetStatus("open").SetCreatedAt(preFailTs).SetGraph(json.RawMessage(`{"nodes":[]}`)).SaveX(ctx)
+	db.Alert.Create().SetIncidentID(incPre.ID).SetAssetID(host1.ID).SetEventID(evPre.ID).SetTs(preFailTs).SetCount(4).SetSeverity(2).SetRuleID(attemptoutcome.RuleLinuxLoginFailure).SaveX(ctx)
+
+	// 1. 未设置 recorded_since：必须判为 OutcomeIncomplete
+	vMissing, err := attemptoutcome.Verify(ctx, db, sqlDB, incPre.ID, attemptoutcome.Options{Now: now, QuietWindow: 6 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vMissing.Outcome != attemptoutcome.OutcomeIncomplete || vMissing.ReadyToClose() {
+		t.Fatalf("未初始化 recorded_since 时不得自动结案: %+v", vMissing)
+	}
+
+	// 2. 初始化 recorded_since，且二次调用 EnsureRecordedSince 不得覆盖已有值
+	if err := authevents.EnsureRecordedSince(ctx, sqlDB, recordedSince); err != nil {
+		t.Fatal(err)
+	}
+	if err := authevents.EnsureRecordedSince(ctx, sqlDB, recordedSince.Add(-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. 构造三起晚于 recorded_since 的外部未得手事件（跨两台主机、三个不同公网 IP）
+	makePostIncident := func(assetID uuid.UUID, ip string) *ent.Incident {
+		ev := insertAuthEvent(t, ctx, db, assetID, postFailTs, 3002, "agent", "ubuntu", map[string]any{
+			"activity_id":  1,
+			"status_id":    2,
+			"user":         map[string]any{"name": "ubuntu"},
+			"service":      map[string]any{"name": "sshd"},
+			"src_endpoint": map[string]any{"ip": ip},
+		})
+		inc := db.Incident.Create().SetStatus("open").SetCreatedAt(postFailTs).SetGraph(json.RawMessage(`{"nodes":[]}`)).SaveX(ctx)
+		db.Alert.Create().SetIncidentID(inc.ID).SetAssetID(assetID).SetEventID(ev.ID).SetTs(postFailTs).SetCount(5).SetSeverity(2).SetRuleID(attemptoutcome.RuleLinuxLoginFailure).SaveX(ctx)
+		return inc
+	}
+	incPost1 := makePostIncident(host1.ID, "203.0.113.201")
+	incPost2 := makePostIncident(host2.ID, "203.0.113.202")
+	incPost3 := makePostIncident(host1.ID, "203.0.113.203")
+
+	closer := &attemptoutcome.Closer{DB: db, SQL: sqlDB, QuietWindow: 6 * time.Hour}
+	stats1, err := closer.Sweep(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats1.Closed != 3 {
+		t.Fatalf("应仅结案晚于 recorded_since 的 3 起新事件，实际: %+v", stats1)
+	}
+	if db.Incident.GetX(ctx, incPre.ID).Status != "open" {
+		t.Fatal("早于 recorded_since 的存量事件绝不应被自动结案")
+	}
+
+	// 4. 201 在同组另一台主机 host2 静默登录成功、202 在 host2 本机静默登录成功、203 无后续成功：单轮批量巡检应一次重开 2 起
+	laterNow := now.Add(5 * time.Minute)
+	db.Asset.UpdateOneID(host1.ID).SetLastSeen(laterNow).ExecX(ctx)
+	db.Asset.UpdateOneID(host2.ID).SetLastSeen(laterNow).ExecX(ctx)
+	insertAuthEvent(t, ctx, db, host2.ID, now.Add(2*time.Minute), 100001, "syslog", "ubuntu", map[string]any{
+		"metadata": map[string]any{"product": map[string]any{"name": "sshd"}},
+		"message":  "Accepted publickey for ubuntu from 203.0.113.201 port 40001 ssh2",
+	})
+	insertAuthEvent(t, ctx, db, host2.ID, now.Add(3*time.Minute), 3002, "agent", "ubuntu", map[string]any{
+		"activity_id":  1,
+		"status_id":    1,
+		"user":         map[string]any{"name": "ubuntu"},
+		"service":      map[string]any{"name": "sshd"},
+		"src_endpoint": map[string]any{"ip": "203.0.113.202"},
+	})
+
+	stats2, err := closer.Sweep(ctx, laterNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats2.Reopened != 2 {
+		t.Fatalf("批量重开巡检应一次重开 incPost1 与 incPost2 共 2 起，实际: %+v", stats2)
+	}
+	if db.Incident.GetX(ctx, incPost1.ID).Status != "open" || db.Incident.GetX(ctx, incPost2.ID).Status != "open" {
+		t.Fatal("出现同源静默成功登录的事件应已重开")
+	}
+	if db.Incident.GetX(ctx, incPost3.ID).Status != "closed" {
+		t.Fatal("未出现成功登录的 incPost3 应保持结案")
 	}
 }

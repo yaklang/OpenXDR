@@ -6,6 +6,7 @@ package correlate
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +39,7 @@ var (
 
 type Engine struct {
 	DB            *ent.Client
+	SQL           *sql.DB
 	Rules         sigma.Catalog
 	Window        time.Duration
 	Interval      time.Duration
@@ -93,7 +95,7 @@ func (e *Engine) batchTx(ctx context.Context, tx *ent.Tx) error {
 	if err != nil || len(pending) == 0 {
 		return err
 	}
-	if err := attemptoutcome.ReopenForPendingAlerts(ctx, tx, pending, time.Now()); err != nil {
+	if err := attemptoutcome.ReopenForPendingAlerts(ctx, tx, e.SQL, pending, time.Now()); err != nil {
 		return err
 	}
 

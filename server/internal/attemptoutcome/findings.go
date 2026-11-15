@@ -150,13 +150,12 @@ func upsertOneHardeningFinding(
 		}
 		return false, err
 	}
-	assetOS := ""
-	if as.Os != nil {
-		assetOS = *as.Os
-	}
 	hostLabel := cmp.Or(as.Hostname, tgt.Hostname, tgt.AssetID.String())
 
-	rows, _, err := queryAssetAuthEvents(qctx, db, tx, []uuid.UUID{tgt.AssetID}, windowFrom, queryTo, false, maxFailureScanRows)
+	if tx == nil {
+		return false, nil
+	}
+	rows, err := queryServiceFailedAuthEvents(qctx, tx, tgt.AssetID, tgt.ServiceSlug, windowFrom, queryTo, maxFailureScanRows)
 	if err != nil {
 		return false, err
 	}
@@ -172,17 +171,13 @@ func upsertOneHardeningFinding(
 	var earliestTs, latestTs time.Time
 
 	for _, r := range rows {
-		parsed, ok := ParseAuthEvent(r.classUID, r.source, assetOS, r.username, r.raw)
-		if !ok || !parsed.Failure || parsed.ServiceSlug != tgt.ServiceSlug || parsed.SrcIP == "" {
-			continue
-		}
-		if nonExternalChecker(parsed.SrcIP) {
+		if nonExternalChecker(r.srcIP) {
 			continue
 		}
 		totalFailures++
-		bySource[parsed.SrcIP]++
-		if parsed.Account != "" {
-			byAccount[parsed.Account]++
+		bySource[r.srcIP]++
+		if r.account != "" {
+			byAccount[r.account]++
 		}
 		if earliestTs.IsZero() || r.ts.Before(earliestTs) {
 			earliestTs = r.ts
@@ -196,53 +191,63 @@ func upsertOneHardeningFinding(
 		return false, nil
 	}
 
-	// 兼容告警去重合并后单条锚点事件代表多次命中的计数
+	// 兼容告警去重合并后单条锚点事件代表多次命中的计数：仅按 alert_asset_id_ts (asset_id, ts) 索引扫本资产告警，
+	// 锚点信息按主键从 auth_events 取，不碰原始 events 分区表
 	alerts, err := db.Alert.Query().
 		Where(
 			alert.AssetIDEQ(tgt.AssetID),
-			alert.RuleIDIn(
-				RuleLinuxLoginFailure,
-				RuleSSHAuthFailure,
-				RuleWinLoginFailure,
-				RuleTemporalLinuxAuthBurst,
-				RuleTemporalLinuxAccountAuthBurst,
-				RuleTemporalSSHDFailBurst,
-				RuleTemporalWindowsFailBurst,
-			),
-			alert.Or(alert.TsGTE(windowFrom), alert.LastTsGTE(windowFrom)),
+			alert.TsGTE(windowFrom.Add(-dedupLookbackSlack)),
+			alert.TsLTE(queryTo),
+			alert.RuleIDIn(authFailureRuleList...),
 		).
-		WithEvent().
+		Limit(maxAlertScanRows).
 		All(qctx)
-	if err == nil {
-		dedupSum := 0
+	if err == nil && len(alerts) > 0 {
+		var evIDs []uuid.UUID
 		for _, a := range alerts {
-			if a.Edges.Event == nil {
-				continue
-			}
-			parsed, ok := ParseAuthEvent(a.Edges.Event.ClassUID, a.Edges.Event.Source, assetOS, "", a.Edges.Event.Raw)
-			if !ok || !parsed.Failure || parsed.ServiceSlug != tgt.ServiceSlug || parsed.SrcIP == "" || nonExternalChecker(parsed.SrcIP) {
-				continue
-			}
-			dedupSum += max(a.Count, 1)
 			end := a.Ts
 			if a.LastTs != nil && a.LastTs.After(end) {
 				end = *a.LastTs
 			}
-			if end.After(latestTs) {
-				latestTs = end
+			if end.Before(windowFrom) {
+				continue
+			}
+			if a.EventID != nil {
+				evIDs = append(evIDs, *a.EventID)
 			}
 		}
-		if dedupSum > totalFailures {
-			extra := dedupSum - totalFailures
-			totalFailures = dedupSum
-			if len(byAccount) == 1 {
-				for k := range byAccount {
-					byAccount[k] += extra
+		authByID, aerr := queryAuthEventsByIDs(qctx, tx, evIDs)
+		if aerr == nil {
+			dedupSum := 0
+			for _, a := range alerts {
+				end := a.Ts
+				if a.LastTs != nil && a.LastTs.After(end) {
+					end = *a.LastTs
+				}
+				if end.Before(windowFrom) || a.EventID == nil {
+					continue
+				}
+				ae, ok := authByID[*a.EventID]
+				if !ok || ae.success || ae.service != tgt.ServiceSlug || ae.srcIP == "" || nonExternalChecker(ae.srcIP) {
+					continue
+				}
+				dedupSum += max(a.Count, 1)
+				if end.After(latestTs) {
+					latestTs = end
 				}
 			}
-			if len(bySource) == 1 {
-				for k := range bySource {
-					bySource[k] += extra
+			if dedupSum > totalFailures {
+				extra := dedupSum - totalFailures
+				totalFailures = dedupSum
+				if len(byAccount) == 1 {
+					for k := range byAccount {
+						byAccount[k] += extra
+					}
+				}
+				if len(bySource) == 1 {
+					for k := range bySource {
+						bySource[k] += extra
+					}
 				}
 			}
 		}
@@ -359,6 +364,45 @@ func upsertOneHardeningFinding(
 		return false, err
 	}
 	return true, nil
+}
+
+type serviceFailRow struct {
+	srcIP   string
+	account string
+	ts      time.Time
+}
+
+// queryServiceFailedAuthEvents 按 auth_events_asset_id_ts (asset_id, ts) 索引读取单台目标资产某服务的失败认证记录。
+func queryServiceFailedAuthEvents(
+	ctx context.Context,
+	tx *sql.Tx,
+	assetID uuid.UUID,
+	serviceSlug string,
+	from, to time.Time,
+	limit int,
+) ([]serviceFailRow, error) {
+	rows, err := tx.QueryContext(ctx, `
+SELECT src_ip, account, ts
+FROM auth_events
+WHERE asset_id = $1
+  AND ts >= $2 AND ts <= $3
+  AND service = $4
+  AND success = false
+  AND src_ip <> ''
+LIMIT $5`, assetID, from, to, serviceSlug, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []serviceFailRow
+	for rows.Next() {
+		var r serviceFailRow
+		if err := rows.Scan(&r.srcIP, &r.account, &r.ts); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 func buildNonExternalIPChecker(ctx context.Context, db *ent.Client, groupID uuid.UUID, now time.Time) (func(string) bool, error) {

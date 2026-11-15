@@ -35,6 +35,7 @@ import (
 	"openxdr/server/internal/auditchain"
 	"openxdr/server/internal/auth"
 	"openxdr/server/internal/authentik"
+	"openxdr/server/internal/authevents"
 	"openxdr/server/internal/automation"
 	"openxdr/server/internal/beacon"
 	"openxdr/server/internal/closurereview"
@@ -297,7 +298,10 @@ func migrateSchema(ctx context.Context, db *sql.DB, client *ent.Client) error {
 	if err := response.EnsureVerificationSchema(ctx, db); err != nil {
 		return err
 	}
-	return ingest.EnsureSchema(ctx, db)
+	if err := ingest.EnsureSchema(ctx, db); err != nil {
+		return err
+	}
+	return authevents.EnsureRecordedSince(ctx, db, time.Now().UTC())
 }
 
 // startDirectorySync 目录来源登记、单活同步、运行记录清理与身份图增量更新。
@@ -343,6 +347,7 @@ func startIntel(ctx context.Context, db *sql.DB, client *ent.Client, authKey fun
 func startAnalytics(ctx context.Context, db *sql.DB, client *ent.Client, rules sigma.Catalog, suppressions *suppress.Store, reviewer *suppressreview.Reviewer, closureReview func(context.Context, uuid.UUID) (bool, error)) {
 	correlator := &correlate.Engine{
 		DB:            client,
+		SQL:           db,
 		Rules:         rules,
 		Window:        time.Duration(getenvInt("CORRELATE_WINDOW_MINUTES", 30)) * time.Minute,
 		Interval:      time.Duration(getenvInt("CORRELATE_INTERVAL_SECONDS", 10)) * time.Second,
