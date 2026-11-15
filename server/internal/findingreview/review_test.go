@@ -46,6 +46,11 @@ func TestFindingReviewGroundedProofs(t *testing.T) {
 	if ok, _, err := validate(strings.Replace(spaced, "*:80", "*:8080", 1), []*ent.Command{col}); err == nil && ok {
 		t.Fatal("内容不同的引文不应命中")
 	}
+	// 一条指令的输出里取两段引文是常态（一条 systemctl show 同时证明两个单元）
+	twice := fmt.Sprintf(`{"approve":true,"reason":"服务恢复","proofs":[{"command_id":"%s","quote":"ActiveState=active"},{"command_id":"%s","quote":"SubState=running"}]}`, id, id)
+	if ok, _, err := validate(twice, []*ent.Command{c}); err != nil || !ok {
+		t.Fatalf("同一条指令的两段引文应被接受：%v %v", ok, err)
+	}
 	date := "/usr/bin/date"
 	c.Cmd = &date
 	if ok, _, err := validate(good, []*ent.Command{c}); err == nil || ok {

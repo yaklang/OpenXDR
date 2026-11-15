@@ -207,11 +207,21 @@ func (r *Reviewer) Review(ctx context.Context, session *ent.AgentSession, f *ent
 	llm.NoThinking = true
 	llm.MaxTokens = 1536
 	llm.OnUsage = r.OnUsage
-	reply, err := llm.Chat(ctx, []triage.Message{{Role: "system", Content: system}, {Role: "user", Content: string(material)}}, nil)
+	messages := []triage.Message{{Role: "system", Content: system}, {Role: "user", Content: string(material)}}
+	reply, err := llm.Chat(ctx, messages, nil)
 	if err != nil {
 		return false, "", err
 	}
 	approved, reason, err := validate(reply.Content, commands)
+	if err != nil {
+		// 回复格式或引文没过校验是复核员自己的失误，不是证据不足：把原因告诉它重答一次，免得执行方白白改措辞重试
+		messages = append(messages, triage.Message{Role: "assistant", Content: reply.Content}, triage.Message{Role: "user", Content: "你的回复没有通过校验：" + err.Error() +
+			"。引文必须从对应指令的 stdout 里逐字复制一段连续原文（取单独一行最稳），不要改写、拼接或加省略号；同一条指令可以给多段引文。结论不变的话只重新输出 JSON。"})
+		if reply, err = llm.Chat(ctx, messages, nil); err != nil {
+			return false, "", err
+		}
+		approved, reason, err = validate(reply.Content, commands)
+	}
 	if err == nil && approved && decision != nil {
 		current, e := findings.DecisionForSession(ctx, r.DB, session)
 		if e != nil {
@@ -227,6 +237,13 @@ func (r *Reviewer) Review(ctx context.Context, session *ent.AgentSession, f *ent
 // squash 把连续空白压成一个空格：引文仍须是真实 stdout 里的连续原文，但 ss、df 这类按列对齐的输出
 // 模型转述时空格数对不上，不该因此判成没有证据
 func squash(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
+}
 
 func validate(reply string, commands []*ent.Command) (bool, string, error) {
 	dec := json.NewDecoder(bytes.NewBufferString(strings.TrimSpace(reply)))
@@ -251,12 +268,14 @@ func validate(reply string, commands []*ent.Command) (bool, string, error) {
 	for _, c := range commands {
 		refs[c.ID] = c
 	}
-	seen := map[uuid.UUID]bool{}
 	for _, p := range v.Proofs {
 		c, ok := refs[p.CommandID]
 		quote := strings.TrimSpace(p.Quote)
-		if !ok || seen[p.CommandID] || c.Stdout == nil || c.Cmd == nil || len(quote) < 5 || !strings.ContainsAny(quote, " =:%\n") || len(quote) > 512 || !strings.Contains(squash(*c.Stdout), squash(quote)) {
-			return false, "", errors.New("复核引文未精确命中本轮真实stdout")
+		if !ok || c.Stdout == nil || c.Cmd == nil {
+			return false, "", errors.New("复核员引用了不在本轮证据里的指令 " + p.CommandID.String())
+		}
+		if len(quote) < 5 || !strings.ContainsAny(quote, " =:%\n") || len(quote) > 512 || !strings.Contains(squash(*c.Stdout), squash(quote)) {
+			return false, "", errors.New("复核员的引文不是指令 " + p.CommandID.String() + " stdout 里的连续原文：" + clip(quote, 120))
 		}
 		// 单纯主机信息即使被模型引用也不能成为正面效果证据。
 		words := strings.Fields(*c.Cmd)
@@ -267,7 +286,6 @@ func validate(reply string, commands []*ent.Command) (bool, string, error) {
 		case "date", "hostname", "uname", "echo", "printf", "true", "pwd", "whoami", "id":
 			return false, "", errors.New("主机基本信息不能证明原问题恢复")
 		}
-		seen[p.CommandID] = true
 	}
 	for _, p := range v.Proofs {
 		v.Reason += " [" + p.CommandID.String() + ": " + strings.TrimSpace(p.Quote) + "]"

@@ -2,6 +2,7 @@ package commandgate
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -342,6 +343,7 @@ var readOnlyPrograms = map[string]func(args []string) bool{
 	"lsmod": nil, "modinfo": nil, "vmstat": nil, "iostat": nil, "mpstat": nil, "getfacl": nil, "lsattr": nil,
 	"pveversion": nil, "printenv": nil, "locale": nil, "getconf": nil, "atq": nil, "ipcs": nil, "lsns": nil, "which": nil,
 	"hostid": nil, "arch": nil, "systemd-detect-virt": nil, "lslogins": nil,
+	"curl":             curlProbe,
 	"find":             noArg("-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"),
 	"sort":             noArgPrefix("-o", "--output"),
 	"uniq":             atMostOneFile, // uniq 输入 输出：第二个文件名会被写
@@ -466,6 +468,47 @@ func atMostOneFile(args []string) bool {
 		}
 	}
 	return files <= 1
+}
+
+// curlProbe 只取不存的 GET / HEAD 探测：不带请求体、不上传、不读配置文件，响应只许丢到 /dev/null 或标准输出。
+// 连通性与状态码探针不改主机状态，判成写操作会让它之前取的结案证据全部作废
+func curlProbe(args []string) bool {
+	plain := map[string]bool{"-s": true, "-S": true, "-k": true, "-I": true, "-L": true, "-f": true, "-v": true, "-4": true, "-6": true, "-i": true,
+		"--silent": true, "--show-error": true, "--insecure": true, "--head": true, "--location": true, "--fail": true, "--verbose": true, "--include": true, "--compressed": true}
+	// 带值的选项；值有限制的给出许可值，nil 表示任意
+	valued := map[string][]string{"-m": nil, "--max-time": nil, "--connect-timeout": nil, "-w": nil, "--write-out": nil, "-H": nil, "--header": nil,
+		"-A": nil, "--user-agent": nil, "--resolve": nil, "-x": nil, "--proxy": nil, "--noproxy": nil, "--retry": nil,
+		"-o": {"/dev/null"}, "--output": {"/dev/null"}, "-D": {"-", "/dev/null"}, "--dump-header": {"-", "/dev/null"}, "-X": {"GET", "HEAD"}, "--request": {"GET", "HEAD"}}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") || plain[a] {
+			continue
+		}
+		name, value, joined := strings.Cut(a, "=")
+		allowed, ok := valued[name]
+		if !ok && !strings.HasPrefix(a, "--") && len(a) > 2 {
+			// -sS、-sk 这类合并的短选项；合并里带值的（-so /dev/null）不认，分开写
+			for _, c := range a[1:] {
+				if !plain["-"+string(c)] {
+					return false
+				}
+			}
+			continue
+		}
+		if !ok {
+			return false
+		}
+		if !joined {
+			if i++; i >= len(args) {
+				return false
+			}
+			value = args[i]
+		}
+		if allowed != nil && !slices.Contains(allowed, value) {
+			return false
+		}
+	}
+	return true
 }
 
 func flagsOnly(args []string) bool {
