@@ -1040,6 +1040,7 @@ export interface QuestionAnswer {
   content?: string
   ruleId?: string
   tier?: StandingRuleTier
+  scope?: string
   expiresAt?: string
 }
 export interface Question {
@@ -1062,6 +1063,9 @@ export interface Question {
   factRef?: string
   ruleRef?: string
   ruleId?: string
+  // 域名问题：注册域只用于分组展示；scopes 是可选父域，共享托管、外带、隧道类域为空
+  domainGroup?: string
+  scopes?: string[]
 }
 export interface QuestionEvidence {
   at: string
@@ -1082,6 +1086,7 @@ export const fetchQuestions = (status: 'open' | 'answered' = 'open') => get<Ques
 export const fetchQuestion = (id: string) => get<QuestionDetail>(`/api/questions/${encodeURIComponent(id)}`)
 export async function answerQuestion(id: string, body: {
   choice: string
+  scope?: string
   holder?: string
   content?: string
   ruleId?: string

@@ -48,9 +48,23 @@ function OpenList({ rows, loading }: { rows: Question[]; loading: boolean }) {
   const [answering, setAnswering] = useState<Question | null>(null)
   if (loading) return <Card loading />
   if (rows.length === 0) return <EmptyHint title={t('questionsEmpty')} hint={t('questionsEmptyHint')} />
+  // 同一注册域下的多个主机名放在一组展示，方便一次看完；每个问题仍各自作答，范围各自选
+  const groups: { key: string; domain?: string; items: Question[] }[] = []
+  for (const q of rows) {
+    const key = q.domainGroup ? `domain:${q.domainGroup}` : q.id
+    const g = groups.find(x => x.key === key)
+    if (g) g.items.push(q)
+    else groups.push({ key, domain: q.domainGroup, items: [q] })
+  }
   return (
     <Flex vertical gap={12}>
-      {rows.map(q => <QuestionCard key={q.id} q={q} onAnswer={() => setAnswering(q)} />)}
+      {groups.map(g => g.domain && g.items.length > 1
+        ? (
+          <Card key={g.key} size="small" title={t('questionDomainGroup', { domain: g.domain, n: g.items.length })} styles={{ body: { display: 'flex', flexDirection: 'column', gap: 10 } }}>
+            {g.items.map(q => <QuestionCard key={q.id} q={q} onAnswer={() => setAnswering(q)} />)}
+          </Card>
+        )
+        : g.items.map(q => <QuestionCard key={q.id} q={q} onAnswer={() => setAnswering(q)} />))}
       {answering && <AnswerModal q={answering} onClose={() => setAnswering(null)} />}
     </Flex>
   )
@@ -127,6 +141,7 @@ function QuestionEvidence({ id }: { id: string }) {
 
 interface AnswerValues {
   choice: string
+  scope?: string
   holder?: string
   content?: string
   ruleId?: string
@@ -160,7 +175,7 @@ function AnswerModal({ q, onClose }: { q: Question; onClose: () => void }) {
     const v = await form.validateFields()
     setSaving(true)
     try {
-      const res = await answerQuestion(q.id, { ...v, expiresInDays: grantLike ? v.expiresInDays : undefined })
+      const res = await answerQuestion(q.id, { ...v, scope: v.scope || undefined, expiresInDays: grantLike ? v.expiresInDays : undefined })
       message.success(t('questionAnswered', { ref: res.factRef ?? res.ruleRef ?? q.ref, n: res.requeuedFindings }))
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['questions'] }),
@@ -176,10 +191,18 @@ function AnswerModal({ q, onClose }: { q: Question; onClose: () => void }) {
   }
   return (
     <Modal open title={`${q.ref} ${sentence(q)}`} onCancel={onClose} onOk={submit} confirmLoading={saving} okText={t('questionSubmit')} destroyOnHidden width={560}>
-      <Form form={form} layout="vertical" initialValues={{ choice: choices[0], expiresInDays: 30, ruleId: q.subjectKind === 'rule' ? q.subject : undefined }}>
+      <Form form={form} layout="vertical" initialValues={{ choice: choices[0], scope: '', expiresInDays: 30, ruleId: q.subjectKind === 'rule' ? q.subject : undefined }}>
         <Form.Item name="choice" label={t('questionChoice')}>
           <Radio.Group optionType="button" options={choices.map(c => ({ value: c, label: choiceLabel(c) }))} />
         </Form.Item>
+        {q.subjectKind === 'domain' && choice !== 'rule' && (
+          <Form.Item name="scope" label={t('questionDomainScope')} extra={q.scopes?.length ? t('questionDomainScopeHint') : t('questionDomainShared')}>
+            <Select options={[
+              { value: '', label: t('questionScopeExact', { host: q.subject }) },
+              ...(q.scopes ?? []).map(d => ({ value: d, label: t('questionScopeTree', { domain: d }) })),
+            ]} />
+          </Form.Item>
+        )}
         {q.kind === 'owner' && (
           <>
             <Form.Item name="holder" label={t('questionHolder')} extra={t('questionHolderHint')} rules={[{ required: choice === 'claim', whitespace: true, max: 200 }]}>
@@ -237,6 +260,7 @@ function AnsweredTable({ rows, loading }: { rows: Question[]; loading: boolean }
             title: t('questionResult'), key: 'a', width: 280, render: (_, q) => (
               <Space size={4} wrap>
                 {q.answer && <Tag>{q.subjectKind === 'fact' ? t(q.answer.choice === 'grant' ? 'questionChoice_renew' : 'questionChoice_noRenew') : t(`questionChoice_${q.answer.choice}` as MsgKey)}</Tag>}
+                {q.subjectKind === 'domain' && <Tag>{q.answer?.scope ? t('questionScopeTree', { domain: q.answer.scope }) : t('questionScopeExact', { host: q.subject })}</Tag>}
                 {q.factRef && <RefTag value={q.factRef} />}
                 {q.ruleRef && <RefTag value={q.ruleRef} />}
                 {q.answer?.expiresAt && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t('questionUntil', { at: fmtTime(q.answer.expiresAt) })}</Typography.Text>}
