@@ -53,3 +53,11 @@ func TestRenderSharedKeyFact(t *testing.T) {
 		t.Fatalf("共享钥匙应渲染共享标记: %s", outShared)
 	}
 }
+
+func TestHostCoverageSQLExcludesSingleChange(t *testing.T) {
+	got := HostCoverageSQL("f")
+	want := "f.kind IN ('asset_role', 'change') AND f.subject NOT LIKE 'authorization:change:%' AND f.subject NOT LIKE 'permission:change:%'"
+	if got != want {
+		t.Fatalf("手写 SQL 与 HostCoverage 口径一致：\n%s\n%s", got, want)
+	}
+}

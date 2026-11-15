@@ -12,6 +12,7 @@ import (
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/predicate"
 	"openxdr/server/internal/decoy"
+	"openxdr/server/internal/facts"
 )
 
 // Severity 高危及以上的级别阈值：用于高危可疑事件的复核判定、误报统计与自动化识别的安全边界
@@ -50,13 +51,13 @@ func humanEscalation() predicate.Incident {
 
 func severe() predicate.Incident { return incident.HasAlertsWith(alert.SeverityGTE(Severity)) }
 
-// uncoveredSevere 有严重告警，或有高危告警所在主机没有有效的资产角色或已授权变更事实（facts.HostKinds）：
+// uncoveredSevere 有严重告警，或有高危告警所在主机没有能兜底的有效主机事实（facts.HostCoverage，单项变更的批准不算）：
 // 这时 AI 的良性结论没有人写过的业务依据兜底，既进不了良性结案，也不能静默
 func uncoveredSevere() predicate.Incident {
 	return func(s *sql.Selector) {
 		s.Where(sql.ExprP(fmt.Sprintf(`EXISTS (SELECT 1 FROM alerts a WHERE a.incident_id = %s AND a.severity >= %d AND (a.severity > %d OR NOT EXISTS (
-			SELECT 1 FROM facts f WHERE f.asset_id = a.asset_id AND f.kind IN ('asset_role', 'change') AND f.retired_at IS NULL AND (f.expires_at IS NULL OR f.expires_at > now()))))`,
-			s.C(incident.FieldID), Severity, Severity)))
+			SELECT 1 FROM facts f WHERE f.asset_id = a.asset_id AND %s AND f.retired_at IS NULL AND (f.expires_at IS NULL OR f.expires_at > now()))))`,
+			s.C(incident.FieldID), Severity, Severity, facts.HostCoverageSQL("f"))))
 	}
 }
 

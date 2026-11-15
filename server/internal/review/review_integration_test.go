@@ -72,6 +72,21 @@ func TestPredicates(t *testing.T) {
 			db.Alert.Create().SetTs(old).SetRuleID("r2").SetSeverity(4).SetIncidentID(id).SetAssetID(covered.ID).ExecX(ctx)
 		}
 	}
+	// 单项变更的批准（总控问题按变更写回）不是整台主机的业务兜底；管理员录入的主机级已授权变更照旧算
+	single := db.Asset.Create().SetHostname("pve1").SaveX(ctx)
+	db.Fact.Create().SetKind("change").SetAssetID(single.ID).SetSubject("authorization:change:" + single.ID.String() + "/retire-agent").SetContent("授权：仅这一项变更").SetCreatedBy("admin").ExecX(ctx)
+	hostLevel := db.Asset.Create().SetHostname("build2").SaveX(ctx)
+	db.Fact.Create().SetKind("change").SetAssetID(hostLevel.ID).SetContent("本机在 /tmp 构建是业务").SetCreatedBy("admin").ExecX(ctx)
+	mk("判良性高危仅单项变更", "triaged", benign, old)
+	mk("判良性高危主机级变更", "triaged", benign, old)
+	for id, name := range names {
+		switch name {
+		case "判良性高危仅单项变更":
+			db.Alert.Create().SetTs(old).SetRuleID("r2").SetSeverity(4).SetIncidentID(id).SetAssetID(single.ID).ExecX(ctx)
+		case "判良性高危主机级变更":
+			db.Alert.Create().SetTs(old).SetRuleID("r2").SetSeverity(4).SetIncidentID(id).SetAssetID(hostLevel.ID).ExecX(ctx)
+		}
+	}
 	mk("判可疑低危旧", "triaged", suspicious, old, al{"r1", 3})
 	mk("判可疑高危", "triaged", suspicious, old, al{"r1", 4})
 	mk("判可疑低危需响应", "triaged", suspiciousResp, old, al{"r1", 3})
@@ -105,11 +120,11 @@ func TestPredicates(t *testing.T) {
 	}
 
 	expect("Needed", query(Needed()),
-		"未研判", "判恶意", "重开良性低危旧", "判良性高危旧", "判良性严重旧", "判可疑高危", "判可疑低危需响应", "判良性含诱饵与真实告警", "判良性仅诱饵", "未研判仅诱饵", "结论缺 verdict 字段", "结论大小写不符")
-	expect("StaleBenign", query(StaleBenign(cutoff)), "判良性低危旧", "判良性高危有事实")
-	expect("SevereBenign", query(SevereBenign()), "判良性高危旧", "判良性严重旧")
+		"未研判", "判恶意", "重开良性低危旧", "判良性高危旧", "判良性严重旧", "判良性高危仅单项变更", "判可疑高危", "判可疑低危需响应", "判良性含诱饵与真实告警", "判良性仅诱饵", "未研判仅诱饵", "结论缺 verdict 字段", "结论大小写不符")
+	expect("StaleBenign", query(StaleBenign(cutoff)), "判良性低危旧", "判良性高危有事实", "判良性高危主机级变更")
+	expect("SevereBenign", query(SevereBenign()), "判良性高危旧", "判良性严重旧", "判良性高危仅单项变更")
 	// 截止时间放到未来，新创建的良性低危事件也算过期；未核实的可疑事件（判可疑低危旧）虽静默不通知，但绝不自动按误报结案
-	expect("StaleBenign(未来)", query(StaleBenign(now.Add(time.Hour))), "判良性低危旧", "判良性高危有事实", "判良性低危新")
+	expect("StaleBenign(未来)", query(StaleBenign(now.Add(time.Hour))), "判良性低危旧", "判良性高危有事实", "判良性高危主机级变更", "判良性低危新")
 	expect("DecoyOnly", query(DecoyOnly()), "判良性仅诱饵", "未研判仅诱饵", "已结案含诱饵")
 
 	// 自动结案与人工复核互斥：任何事件都不能同时属于两边

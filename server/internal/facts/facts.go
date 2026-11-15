@@ -117,9 +117,32 @@ func Live(now time.Time) predicate.Fact {
 // HostKinds 写明一台主机做什么、授权过什么的事实：高危告警上的良性结论要有它覆盖才交审计结案
 var HostKinds = []string{"asset_role", "change"}
 
-// HostRefs 这台主机上有效的资产角色与已授权变更事实编号
+// singleChangePrefixes 总控问题按单项变更写回的 change 事实主题前缀（主题带 /<变更标识> 或 legacy-q-…，存量也有裸资产 UUID 的）。
+// 它只证明「这一项变更被批准过」，不证明这台机器上别的高危行为是业务：可以进审计材料当上下文，但不算主机级业务兜底
+var singleChangePrefixes = []string{"authorization:change:", "permission:change:"}
+
+// HostCoverage 能给高危告警兜底的主机事实：资产角色，以及主机级已授权变更（管理员在事实页录入的，或总控主机级问题写回的），不含单项变更的批准
+func HostCoverage() predicate.Fact {
+	ps := []predicate.Fact{fact.KindIn(HostKinds...)}
+	for _, p := range singleChangePrefixes {
+		ps = append(ps, fact.Not(fact.SubjectHasPrefix(p)))
+	}
+	return fact.And(ps...)
+}
+
+// HostCoverageSQL 同 HostCoverage，给手写 SQL 用；alias 是 facts 表别名
+func HostCoverageSQL(alias string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s.kind IN ('%s')", alias, strings.Join(HostKinds, "', '"))
+	for _, p := range singleChangePrefixes {
+		fmt.Fprintf(&b, " AND %s.subject NOT LIKE '%s%%'", alias, p)
+	}
+	return b.String()
+}
+
+// HostRefs 这台主机上能给高危告警兜底的有效事实编号（见 HostCoverage）
 func HostRefs(ctx context.Context, db *ent.Client, asset uuid.UUID, now time.Time) ([]string, error) {
-	ids, err := db.Fact.Query().Where(fact.AssetIDEQ(asset), fact.KindIn(HostKinds...), Live(now)).IDs(ctx)
+	ids, err := db.Fact.Query().Where(fact.AssetIDEQ(asset), HostCoverage(), Live(now)).IDs(ctx)
 	refs := make([]string, 0, len(ids))
 	for _, id := range ids {
 		refs = append(refs, Ref("F", id))
