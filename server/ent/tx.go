@@ -90,6 +90,8 @@ type Tx struct {
 	Memory *MemoryClient
 	// ProcessBaseline is the client for interacting with the ProcessBaseline builders.
 	ProcessBaseline *ProcessBaselineClient
+	// Question is the client for interacting with the Question builders.
+	Question *QuestionClient
 	// Report is the client for interacting with the Report builders.
 	Report *ReportClient
 	// ReportRead is the client for interacting with the ReportRead builders.
@@ -296,6 +298,7 @@ func (tx *Tx) init() {
 	tx.Intent = NewIntentClient(tx.config)
 	tx.Memory = NewMemoryClient(tx.config)
 	tx.ProcessBaseline = NewProcessBaselineClient(tx.config)
+	tx.Question = NewQuestionClient(tx.config)
 	tx.Report = NewReportClient(tx.config)
 	tx.ReportRead = NewReportReadClient(tx.config)
 	tx.SSHKeyBaseline = NewSSHKeyBaselineClient(tx.config)

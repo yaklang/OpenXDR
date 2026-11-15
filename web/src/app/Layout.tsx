@@ -7,7 +7,7 @@ import { App, Avatar, Badge, Button, Drawer, Dropdown, Grid, Layout as AntLayout
 import type { MenuProps } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router'
-import { fetchAgentReports, fetchApprovals, fetchFindingsPage, fetchStats, fetchSuppressions } from '../api'
+import { fetchAgentReports, fetchApprovals, fetchFindingsPage, fetchQuestions, fetchStats, fetchSuppressions } from '../api'
 import { errText, ROLE_KEY } from '../components/format'
 import { useI18n } from '../i18n'
 import { Logo } from '../components/Logo'
@@ -31,11 +31,13 @@ function useNavCounts(): Record<string, number | undefined> {
     refetchInterval: 10_000,
   })
   const suppressions = useQuery({ queryKey: ['suppressions'], queryFn: fetchSuppressions, refetchInterval: 60_000 })
+  const questions = useQuery({ queryKey: ['questions', 'open'], queryFn: () => fetchQuestions('open'), refetchInterval: 60_000 })
   // 未读报告：只算需要处理的，「无异常」只存档的不催
   const reports = useQuery({ queryKey: ['reports', group?.id], queryFn: () => fetchAgentReports(group!.id), enabled: !!group, refetchInterval: 30_000 })
   return {
     '/reports': reports.data?.filter(r => !r.read && r.level !== 'ok').length || undefined,
     '/suppressions': suppressions.data?.filter(s => s.status === 'proposed').length || undefined,
+    '/control': questions.data?.length || undefined,
     '/incidents': stats.data?.reviewIncidents,
     '/findings': findings.data?.total,
     '/approvals': approvals.data?.filter(a => a.status === 'pending').length,

@@ -45,6 +45,7 @@ import (
 	"openxdr/server/ent/ipinfo"
 	"openxdr/server/ent/memory"
 	"openxdr/server/ent/processbaseline"
+	"openxdr/server/ent/question"
 	"openxdr/server/ent/report"
 	"openxdr/server/ent/reportread"
 	"openxdr/server/ent/session"
@@ -168,6 +169,7 @@ func checkColumn(t, c string) error {
 			intent.Table:                  intent.ValidColumn,
 			memory.Table:                  memory.ValidColumn,
 			processbaseline.Table:         processbaseline.ValidColumn,
+			question.Table:                question.ValidColumn,
 			report.Table:                  report.ValidColumn,
 			reportread.Table:              reportread.ValidColumn,
 			sshkeybaseline.Table:          sshkeybaseline.ValidColumn,

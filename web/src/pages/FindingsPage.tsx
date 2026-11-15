@@ -13,6 +13,7 @@ import { Ago, EmptyHint, Refreshed } from '../components/Ago'
 import { LoadError } from '../components/LoadError'
 import { ResolveModal } from '../components/ResolveModal'
 import { CommandDetailDrawer } from '../components/CommandDetailDrawer'
+import { RefTag } from '../components/ControlRefs'
 import { FindingDecisionPanel } from '../components/FindingDecisionPanel'
 import { errText, fmtTime } from '../components/format'
 import { useI18n, type MsgKey } from '../i18n'
@@ -88,7 +89,7 @@ function FindingWorkDetails({ finding: f, onCommand }: { finding: FindingRow; on
       {w.risk_kind && <Descriptions.Item label={t('findingWorkRisk')}>{risks[w.risk_kind] ?? w.risk_kind}</Descriptions.Item>}
       {w.risk_since && <Descriptions.Item label={t('findingWorkRiskSince')}>{fmtTime(w.risk_since)}</Descriptions.Item>}
       {w.escalated_at && <Descriptions.Item label={t('findingWorkEscalatedAt')}>{fmtTime(w.escalated_at)}</Descriptions.Item>}
-      {w.blocker && <Descriptions.Item label={t('findingWorkBlocker')}>{blockers[w.blocker] ?? w.blocker}{w.blocker_detail && <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{w.blocker_detail}</Typography.Paragraph>}</Descriptions.Item>}
+      {w.blocker && <Descriptions.Item label={t('findingWorkBlocker')}>{blockers[w.blocker] ?? w.blocker}{w.question && <> · {t('findingWorkAskedController')} <RefTag value={w.question} /></>}{w.blocker_detail && <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{w.blocker_detail}</Typography.Paragraph>}</Descriptions.Item>}
       {w.repair_command && <Descriptions.Item label={t('findingWorkRepairCommand')}><Typography.Text code>{w.repair_command}</Typography.Text></Descriptions.Item>}
       {w.retry_at && <Descriptions.Item label={t('findingWorkRetryAt')}>{fmtTime(w.retry_at)}</Descriptions.Item>}
       {w.wake_at && <Descriptions.Item label={t('findingWorkWakeAt')}>{fmtTime(w.wake_at)}</Descriptions.Item>}

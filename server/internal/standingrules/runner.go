@@ -20,7 +20,9 @@ import (
 	"openxdr/server/ent/standingrulerun"
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/commandgate"
+	"openxdr/server/internal/facts"
 	"openxdr/server/internal/findings"
+	"openxdr/server/internal/questions"
 	"openxdr/server/internal/repairpolicy"
 	"openxdr/server/internal/response"
 )
@@ -137,7 +139,7 @@ func (r *Runner) Tick(ctx context.Context) error {
 			if !MatchFinding(latest, f) {
 				continue
 			}
-			already, err := r.alreadyHandled(ctx, latest.ID, f, r.now())
+			already, err := r.alreadyHandled(ctx, latest, f, r.now())
 			if err != nil || already {
 				continue
 			}
@@ -157,9 +159,9 @@ func (r *Runner) Tick(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runner) alreadyHandled(ctx context.Context, ruleID uuid.UUID, f *ent.Finding, now time.Time) (bool, error) {
+func (r *Runner) alreadyHandled(ctx context.Context, rule *ent.StandingRule, f *ent.Finding, now time.Time) (bool, error) {
 	runs, err := r.DB.StandingRuleRun.Query().
-		Where(standingrulerun.RuleIDEQ(ruleID), standingrulerun.FindingIDEQ(f.ID)).
+		Where(standingrulerun.RuleIDEQ(rule.ID), standingrulerun.FindingIDEQ(f.ID)).
 		Order(ent.Desc(standingrulerun.FieldCreatedAt)).
 		Limit(10).
 		All(ctx)
@@ -172,8 +174,11 @@ func (r *Runner) alreadyHandled(ctx context.Context, ruleID uuid.UUID, f *ent.Fi
 			continue
 		}
 		switch run.Status {
-		case standingrulerun.StatusSucceeded, standingrulerun.StatusFailed, standingrulerun.StatusPendingApproval, standingrulerun.StatusRejected, standingrulerun.StatusQueuedHuman:
+		case standingrulerun.StatusSucceeded, standingrulerun.StatusFailed, standingrulerun.StatusPendingApproval, standingrulerun.StatusRejected:
 			return true, nil
+		case standingrulerun.StatusQueuedHuman:
+			// 人工档的转交只在规矩仍是人工档时算处理过：管理员作答把档位改了，同一待办按新档位再走一次
+			return rule.Tier == standingrule.TierHuman, nil
 		case standingrulerun.StatusSkipped:
 			runAt := run.CreatedAt
 			if run.CompletedAt != nil {
@@ -222,6 +227,9 @@ func (r *Runner) recordSkip(ctx context.Context, rule *ent.StandingRule, f *ent.
 	return err
 }
 
+// handleHuman 人工档：不再逐条推送，而是向总控提一个策略问题（同一规矩的命中合并成一条），
+// 待办阻塞并关联问题编号；管理员作答（改档位或写决定）后总控解除阻塞重新排队。
+// 管理员已对这条规矩写过决定的，总控直接答复，待办交回平台按决定跟进
 func (r *Runner) handleHuman(ctx context.Context, rule *ent.StandingRule, f *ent.Finding, a *ent.Asset) error {
 	now := r.now()
 	ref := Ref(rule.ID)
@@ -230,13 +238,30 @@ func (r *Runner) handleHuman(ctx context.Context, rule *ent.StandingRule, f *ent
 	if len(f.Work) > 0 {
 		_ = json.Unmarshal(f.Work, &work)
 	}
-	work.Stage = "blocked"
-	work.Blocker = "manual_business_decision"
-	summary := fmt.Sprintf("命中常设规矩 [%s] %s，已转入人工队列等待管理员确认", ref, rule.Name)
-	work.BlockedReason = summary
+	hit := fmt.Sprintf("%s：%s", a.Hostname, f.Title)
+	asked, err := questions.Ask(ctx, r.DB, questions.Request{Kind: "policy", SubjectKind: "rule", Subject: rule.ID.String(),
+		Groups: []uuid.UUID{f.GroupID}, Assets: []uuid.UUID{a.ID}, Finding: &f.ID, Source: "standing_rule", Ref: ref,
+		Note: "命中人工档常设规矩：" + hit, CreatedBy: "system"}, now)
+	if err != nil {
+		return err
+	}
+	owner, summary := "human", fmt.Sprintf("命中常设规矩 [%s] %s，已向总控提问", ref, rule.Name)
+	if asked.Answered {
+		var refs []string
+		for _, fc := range asked.Facts {
+			refs = append(refs, facts.Ref("F", fc.ID))
+		}
+		owner = "ai"
+		summary = fmt.Sprintf("命中常设规矩 [%s] %s，管理员已有决定 %s，交回平台按决定跟进", ref, rule.Name, strings.Join(refs, "、"))
+		work.Plan, work.Stage, work.Blocker, work.Question = summary, "waiting", "", ""
+	} else {
+		summary += " " + questions.Ref(asked.Question.ID)
+		work.Stage, work.Blocker, work.Question = "blocked", "manual_business_decision", questions.Ref(asked.Question.ID)
+	}
+	work.BlockedReason = work.Blocker
 	work.BlockerDetail = summary
 	if err := r.DB.Finding.UpdateOneID(f.ID).
-		SetWorkOwner("human").
+		SetWorkOwner(owner).
 		SetWork(findings.EncodeWork(work)).
 		Exec(ctx); err != nil {
 		return err
@@ -250,7 +275,7 @@ func (r *Runner) handleHuman(ctx context.Context, rule *ent.StandingRule, f *ent
 		SetFindingFirstSeen(firstSeen).
 		SetTier("human").
 		SetStatus(standingrulerun.StatusQueuedHuman).
-		SetHitSummary(fmt.Sprintf("%s：%s", a.Hostname, f.Title)).
+		SetHitSummary(hit).
 		SetResult(summary).
 		SetRollback(tpl.RollbackHint).
 		SetCompletedAt(now).
@@ -259,10 +284,7 @@ func (r *Runner) handleHuman(ctx context.Context, rule *ent.StandingRule, f *ent
 		return err
 	}
 	_ = r.DB.StandingRule.UpdateOneID(rule.ID).SetLastRunAt(now).SetLastRunStatus("queued_human").Exec(ctx)
-	audit.System(ctx, r.DB, "standing_rule_queued_human", run.ID.String(), fmt.Sprintf("rule=%s host=%s finding=%s", ref, a.Hostname, f.ID))
-	if r.Notify != nil {
-		_ = r.Notify(ctx, "常设规矩转交人工确认", fmt.Sprintf("规矩：[%s] %s\n主机：%s\n待办：%s\n说明：%s", ref, rule.Name, a.Hostname, f.Title, tpl.RollbackHint), "/control?tab=rules&ref="+ref)
-	}
+	audit.System(ctx, r.DB, "standing_rule_queued_human", run.ID.String(), fmt.Sprintf("rule=%s host=%s finding=%s %s", ref, a.Hostname, f.ID, summary))
 	return nil
 }
 

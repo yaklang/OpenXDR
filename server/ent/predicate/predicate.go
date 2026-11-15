@@ -123,6 +123,9 @@ type Memory func(*sql.Selector)
 // ProcessBaseline is the predicate function for processbaseline builders.
 type ProcessBaseline func(*sql.Selector)
 
+// Question is the predicate function for question builders.
+type Question func(*sql.Selector)
+
 // Report is the predicate function for report builders.
 type Report func(*sql.Selector)
 

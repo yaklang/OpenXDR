@@ -11,6 +11,7 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/internal/findings"
+	"openxdr/server/internal/questions"
 	"openxdr/server/internal/testdb"
 )
 
@@ -84,6 +85,10 @@ func TestBusinessBlockerNeedsFreshActualDiagnostic(t *testing.T) {
 		t.Fatal("candidate business blocker unnecessarily handed to human")
 	}
 	db.Command.UpdateOneID(c.ID).SetCmd("date").SetStdout("2026-11-06 UTC").ExecX(ctx)
+	// 已向总控提过问，证据要求照旧
+	if _, err := questions.Ask(ctx, db, questions.Request{Kind: "policy", SubjectKind: "asset", Subject: a.ID.String(), Groups: []uuid.UUID{g.ID}, Finding: &f.ID}, now); err != nil {
+		t.Fatal(err)
+	}
 	if err := svc.saveFindingPlan(ctx, session, got, "confirm", "manual_business_decision", []uuid.UUID{c.ID}); err == nil {
 		t.Fatal("basic host data treated as business blocker proof")
 	}

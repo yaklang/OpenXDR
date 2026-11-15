@@ -1302,6 +1302,53 @@ var (
 			},
 		},
 	}
+	// QuestionsColumns holds the columns for the "questions" table.
+	QuestionsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "kind", Type: field.TypeString},
+		{Name: "subject_kind", Type: field.TypeString},
+		{Name: "subject", Type: field.TypeString},
+		{Name: "status", Type: field.TypeString, Default: "open"},
+		{Name: "group_ids", Type: field.TypeJSON, Nullable: true},
+		{Name: "incident_ids", Type: field.TypeJSON, Nullable: true},
+		{Name: "finding_ids", Type: field.TypeJSON, Nullable: true},
+		{Name: "evidence", Type: field.TypeJSON, Nullable: true},
+		{Name: "asked_count", Type: field.TypeInt, Default: 1},
+		{Name: "created_by", Type: field.TypeString},
+		{Name: "answer", Type: field.TypeJSON, Nullable: true},
+		{Name: "answered_by", Type: field.TypeString, Nullable: true},
+		{Name: "answered_at", Type: field.TypeTime, Nullable: true},
+		{Name: "fact_id", Type: field.TypeUUID, Nullable: true},
+		{Name: "rule_id", Type: field.TypeUUID, Nullable: true},
+	}
+	// QuestionsTable holds the schema information for the "questions" table.
+	QuestionsTable = &schema.Table{
+		Name:       "questions",
+		Columns:    QuestionsColumns,
+		PrimaryKey: []*schema.Column{QuestionsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "question_open_subject",
+				Unique:  true,
+				Columns: []*schema.Column{QuestionsColumns[3], QuestionsColumns[4], QuestionsColumns[5]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "status = 'open'",
+				},
+			},
+			{
+				Name:    "question_status_updated_at",
+				Unique:  false,
+				Columns: []*schema.Column{QuestionsColumns[6], QuestionsColumns[2]},
+			},
+			{
+				Name:    "question_subject_kind_subject",
+				Unique:  false,
+				Columns: []*schema.Column{QuestionsColumns[4], QuestionsColumns[5]},
+			},
+		},
+	}
 	// ReportsColumns holds the columns for the "reports" table.
 	ReportsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -1879,6 +1926,7 @@ var (
 		IntentsTable,
 		MemoriesTable,
 		ProcessBaselinesTable,
+		QuestionsTable,
 		ReportsTable,
 		ReportReadsTable,
 		SSHKeyBaselinesTable,

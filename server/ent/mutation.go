@@ -47,6 +47,7 @@ import (
 	"openxdr/server/ent/memory"
 	"openxdr/server/ent/predicate"
 	"openxdr/server/ent/processbaseline"
+	"openxdr/server/ent/question"
 	"openxdr/server/ent/report"
 	"openxdr/server/ent/reportread"
 	"openxdr/server/ent/schema"
@@ -122,6 +123,7 @@ const (
 	TypeIntent                  = "Intent"
 	TypeMemory                  = "Memory"
 	TypeProcessBaseline         = "ProcessBaseline"
+	TypeQuestion                = "Question"
 	TypeReport                  = "Report"
 	TypeReportRead              = "ReportRead"
 	TypeSSHKeyBaseline          = "SSHKeyBaseline"
@@ -39893,6 +39895,1480 @@ func (m *ProcessBaselineMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *ProcessBaselineMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown ProcessBaseline edge %s", name)
+}
+
+// QuestionMutation represents an operation that mutates the Question nodes in the graph.
+type QuestionMutation struct {
+	config
+	op                 Op
+	typ                string
+	id                 *uuid.UUID
+	created_at         *time.Time
+	updated_at         *time.Time
+	kind               *string
+	subject_kind       *string
+	subject            *string
+	status             *string
+	group_ids          *[]uuid.UUID
+	appendgroup_ids    []uuid.UUID
+	incident_ids       *[]uuid.UUID
+	appendincident_ids []uuid.UUID
+	finding_ids        *[]uuid.UUID
+	appendfinding_ids  []uuid.UUID
+	evidence           *[]schema.QuestionEvidence
+	appendevidence     []schema.QuestionEvidence
+	asked_count        *int
+	addasked_count     *int
+	created_by         *string
+	answer             **schema.QuestionAnswer
+	answered_by        *string
+	answered_at        *time.Time
+	fact_id            *uuid.UUID
+	rule_id            *uuid.UUID
+	clearedFields      map[string]struct{}
+	done               bool
+	oldValue           func(context.Context) (*Question, error)
+	predicates         []predicate.Question
+}
+
+var _ ent.Mutation = (*QuestionMutation)(nil)
+
+// questionOption allows management of the mutation configuration using functional options.
+type questionOption func(*QuestionMutation)
+
+// newQuestionMutation creates new mutation for the Question entity.
+func newQuestionMutation(c config, op Op, opts ...questionOption) *QuestionMutation {
+	m := &QuestionMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeQuestion,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withQuestionID sets the ID field of the mutation.
+func withQuestionID(id uuid.UUID) questionOption {
+	return func(m *QuestionMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *Question
+		)
+		m.oldValue = func(ctx context.Context) (*Question, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().Question.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withQuestion sets the old Question of the mutation.
+func withQuestion(node *Question) questionOption {
+	return func(m *QuestionMutation) {
+		m.oldValue = func(context.Context) (*Question, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m QuestionMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m QuestionMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of Question entities.
+func (m *QuestionMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *QuestionMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *QuestionMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().Question.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *QuestionMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *QuestionMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *QuestionMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *QuestionMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *QuestionMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *QuestionMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetKind sets the "kind" field.
+func (m *QuestionMutation) SetKind(s string) {
+	m.kind = &s
+}
+
+// Kind returns the value of the "kind" field in the mutation.
+func (m *QuestionMutation) Kind() (r string, exists bool) {
+	v := m.kind
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKind returns the old "kind" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldKind(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKind is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKind requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKind: %w", err)
+	}
+	return oldValue.Kind, nil
+}
+
+// ResetKind resets all changes to the "kind" field.
+func (m *QuestionMutation) ResetKind() {
+	m.kind = nil
+}
+
+// SetSubjectKind sets the "subject_kind" field.
+func (m *QuestionMutation) SetSubjectKind(s string) {
+	m.subject_kind = &s
+}
+
+// SubjectKind returns the value of the "subject_kind" field in the mutation.
+func (m *QuestionMutation) SubjectKind() (r string, exists bool) {
+	v := m.subject_kind
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSubjectKind returns the old "subject_kind" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldSubjectKind(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSubjectKind is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSubjectKind requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSubjectKind: %w", err)
+	}
+	return oldValue.SubjectKind, nil
+}
+
+// ResetSubjectKind resets all changes to the "subject_kind" field.
+func (m *QuestionMutation) ResetSubjectKind() {
+	m.subject_kind = nil
+}
+
+// SetSubject sets the "subject" field.
+func (m *QuestionMutation) SetSubject(s string) {
+	m.subject = &s
+}
+
+// Subject returns the value of the "subject" field in the mutation.
+func (m *QuestionMutation) Subject() (r string, exists bool) {
+	v := m.subject
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSubject returns the old "subject" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldSubject(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSubject is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSubject requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSubject: %w", err)
+	}
+	return oldValue.Subject, nil
+}
+
+// ResetSubject resets all changes to the "subject" field.
+func (m *QuestionMutation) ResetSubject() {
+	m.subject = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *QuestionMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *QuestionMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *QuestionMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetGroupIds sets the "group_ids" field.
+func (m *QuestionMutation) SetGroupIds(u []uuid.UUID) {
+	m.group_ids = &u
+	m.appendgroup_ids = nil
+}
+
+// GroupIds returns the value of the "group_ids" field in the mutation.
+func (m *QuestionMutation) GroupIds() (r []uuid.UUID, exists bool) {
+	v := m.group_ids
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGroupIds returns the old "group_ids" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldGroupIds(ctx context.Context) (v []uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGroupIds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGroupIds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGroupIds: %w", err)
+	}
+	return oldValue.GroupIds, nil
+}
+
+// AppendGroupIds adds u to the "group_ids" field.
+func (m *QuestionMutation) AppendGroupIds(u []uuid.UUID) {
+	m.appendgroup_ids = append(m.appendgroup_ids, u...)
+}
+
+// AppendedGroupIds returns the list of values that were appended to the "group_ids" field in this mutation.
+func (m *QuestionMutation) AppendedGroupIds() ([]uuid.UUID, bool) {
+	if len(m.appendgroup_ids) == 0 {
+		return nil, false
+	}
+	return m.appendgroup_ids, true
+}
+
+// ClearGroupIds clears the value of the "group_ids" field.
+func (m *QuestionMutation) ClearGroupIds() {
+	m.group_ids = nil
+	m.appendgroup_ids = nil
+	m.clearedFields[question.FieldGroupIds] = struct{}{}
+}
+
+// GroupIdsCleared returns if the "group_ids" field was cleared in this mutation.
+func (m *QuestionMutation) GroupIdsCleared() bool {
+	_, ok := m.clearedFields[question.FieldGroupIds]
+	return ok
+}
+
+// ResetGroupIds resets all changes to the "group_ids" field.
+func (m *QuestionMutation) ResetGroupIds() {
+	m.group_ids = nil
+	m.appendgroup_ids = nil
+	delete(m.clearedFields, question.FieldGroupIds)
+}
+
+// SetIncidentIds sets the "incident_ids" field.
+func (m *QuestionMutation) SetIncidentIds(u []uuid.UUID) {
+	m.incident_ids = &u
+	m.appendincident_ids = nil
+}
+
+// IncidentIds returns the value of the "incident_ids" field in the mutation.
+func (m *QuestionMutation) IncidentIds() (r []uuid.UUID, exists bool) {
+	v := m.incident_ids
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIncidentIds returns the old "incident_ids" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldIncidentIds(ctx context.Context) (v []uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIncidentIds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIncidentIds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIncidentIds: %w", err)
+	}
+	return oldValue.IncidentIds, nil
+}
+
+// AppendIncidentIds adds u to the "incident_ids" field.
+func (m *QuestionMutation) AppendIncidentIds(u []uuid.UUID) {
+	m.appendincident_ids = append(m.appendincident_ids, u...)
+}
+
+// AppendedIncidentIds returns the list of values that were appended to the "incident_ids" field in this mutation.
+func (m *QuestionMutation) AppendedIncidentIds() ([]uuid.UUID, bool) {
+	if len(m.appendincident_ids) == 0 {
+		return nil, false
+	}
+	return m.appendincident_ids, true
+}
+
+// ClearIncidentIds clears the value of the "incident_ids" field.
+func (m *QuestionMutation) ClearIncidentIds() {
+	m.incident_ids = nil
+	m.appendincident_ids = nil
+	m.clearedFields[question.FieldIncidentIds] = struct{}{}
+}
+
+// IncidentIdsCleared returns if the "incident_ids" field was cleared in this mutation.
+func (m *QuestionMutation) IncidentIdsCleared() bool {
+	_, ok := m.clearedFields[question.FieldIncidentIds]
+	return ok
+}
+
+// ResetIncidentIds resets all changes to the "incident_ids" field.
+func (m *QuestionMutation) ResetIncidentIds() {
+	m.incident_ids = nil
+	m.appendincident_ids = nil
+	delete(m.clearedFields, question.FieldIncidentIds)
+}
+
+// SetFindingIds sets the "finding_ids" field.
+func (m *QuestionMutation) SetFindingIds(u []uuid.UUID) {
+	m.finding_ids = &u
+	m.appendfinding_ids = nil
+}
+
+// FindingIds returns the value of the "finding_ids" field in the mutation.
+func (m *QuestionMutation) FindingIds() (r []uuid.UUID, exists bool) {
+	v := m.finding_ids
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFindingIds returns the old "finding_ids" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldFindingIds(ctx context.Context) (v []uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFindingIds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFindingIds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFindingIds: %w", err)
+	}
+	return oldValue.FindingIds, nil
+}
+
+// AppendFindingIds adds u to the "finding_ids" field.
+func (m *QuestionMutation) AppendFindingIds(u []uuid.UUID) {
+	m.appendfinding_ids = append(m.appendfinding_ids, u...)
+}
+
+// AppendedFindingIds returns the list of values that were appended to the "finding_ids" field in this mutation.
+func (m *QuestionMutation) AppendedFindingIds() ([]uuid.UUID, bool) {
+	if len(m.appendfinding_ids) == 0 {
+		return nil, false
+	}
+	return m.appendfinding_ids, true
+}
+
+// ClearFindingIds clears the value of the "finding_ids" field.
+func (m *QuestionMutation) ClearFindingIds() {
+	m.finding_ids = nil
+	m.appendfinding_ids = nil
+	m.clearedFields[question.FieldFindingIds] = struct{}{}
+}
+
+// FindingIdsCleared returns if the "finding_ids" field was cleared in this mutation.
+func (m *QuestionMutation) FindingIdsCleared() bool {
+	_, ok := m.clearedFields[question.FieldFindingIds]
+	return ok
+}
+
+// ResetFindingIds resets all changes to the "finding_ids" field.
+func (m *QuestionMutation) ResetFindingIds() {
+	m.finding_ids = nil
+	m.appendfinding_ids = nil
+	delete(m.clearedFields, question.FieldFindingIds)
+}
+
+// SetEvidence sets the "evidence" field.
+func (m *QuestionMutation) SetEvidence(se []schema.QuestionEvidence) {
+	m.evidence = &se
+	m.appendevidence = nil
+}
+
+// Evidence returns the value of the "evidence" field in the mutation.
+func (m *QuestionMutation) Evidence() (r []schema.QuestionEvidence, exists bool) {
+	v := m.evidence
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEvidence returns the old "evidence" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldEvidence(ctx context.Context) (v []schema.QuestionEvidence, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEvidence is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEvidence requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEvidence: %w", err)
+	}
+	return oldValue.Evidence, nil
+}
+
+// AppendEvidence adds se to the "evidence" field.
+func (m *QuestionMutation) AppendEvidence(se []schema.QuestionEvidence) {
+	m.appendevidence = append(m.appendevidence, se...)
+}
+
+// AppendedEvidence returns the list of values that were appended to the "evidence" field in this mutation.
+func (m *QuestionMutation) AppendedEvidence() ([]schema.QuestionEvidence, bool) {
+	if len(m.appendevidence) == 0 {
+		return nil, false
+	}
+	return m.appendevidence, true
+}
+
+// ClearEvidence clears the value of the "evidence" field.
+func (m *QuestionMutation) ClearEvidence() {
+	m.evidence = nil
+	m.appendevidence = nil
+	m.clearedFields[question.FieldEvidence] = struct{}{}
+}
+
+// EvidenceCleared returns if the "evidence" field was cleared in this mutation.
+func (m *QuestionMutation) EvidenceCleared() bool {
+	_, ok := m.clearedFields[question.FieldEvidence]
+	return ok
+}
+
+// ResetEvidence resets all changes to the "evidence" field.
+func (m *QuestionMutation) ResetEvidence() {
+	m.evidence = nil
+	m.appendevidence = nil
+	delete(m.clearedFields, question.FieldEvidence)
+}
+
+// SetAskedCount sets the "asked_count" field.
+func (m *QuestionMutation) SetAskedCount(i int) {
+	m.asked_count = &i
+	m.addasked_count = nil
+}
+
+// AskedCount returns the value of the "asked_count" field in the mutation.
+func (m *QuestionMutation) AskedCount() (r int, exists bool) {
+	v := m.asked_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAskedCount returns the old "asked_count" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldAskedCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAskedCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAskedCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAskedCount: %w", err)
+	}
+	return oldValue.AskedCount, nil
+}
+
+// AddAskedCount adds i to the "asked_count" field.
+func (m *QuestionMutation) AddAskedCount(i int) {
+	if m.addasked_count != nil {
+		*m.addasked_count += i
+	} else {
+		m.addasked_count = &i
+	}
+}
+
+// AddedAskedCount returns the value that was added to the "asked_count" field in this mutation.
+func (m *QuestionMutation) AddedAskedCount() (r int, exists bool) {
+	v := m.addasked_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetAskedCount resets all changes to the "asked_count" field.
+func (m *QuestionMutation) ResetAskedCount() {
+	m.asked_count = nil
+	m.addasked_count = nil
+}
+
+// SetCreatedBy sets the "created_by" field.
+func (m *QuestionMutation) SetCreatedBy(s string) {
+	m.created_by = &s
+}
+
+// CreatedBy returns the value of the "created_by" field in the mutation.
+func (m *QuestionMutation) CreatedBy() (r string, exists bool) {
+	v := m.created_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedBy returns the old "created_by" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldCreatedBy(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedBy: %w", err)
+	}
+	return oldValue.CreatedBy, nil
+}
+
+// ResetCreatedBy resets all changes to the "created_by" field.
+func (m *QuestionMutation) ResetCreatedBy() {
+	m.created_by = nil
+}
+
+// SetAnswer sets the "answer" field.
+func (m *QuestionMutation) SetAnswer(sa *schema.QuestionAnswer) {
+	m.answer = &sa
+}
+
+// Answer returns the value of the "answer" field in the mutation.
+func (m *QuestionMutation) Answer() (r *schema.QuestionAnswer, exists bool) {
+	v := m.answer
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAnswer returns the old "answer" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldAnswer(ctx context.Context) (v *schema.QuestionAnswer, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAnswer is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAnswer requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAnswer: %w", err)
+	}
+	return oldValue.Answer, nil
+}
+
+// ClearAnswer clears the value of the "answer" field.
+func (m *QuestionMutation) ClearAnswer() {
+	m.answer = nil
+	m.clearedFields[question.FieldAnswer] = struct{}{}
+}
+
+// AnswerCleared returns if the "answer" field was cleared in this mutation.
+func (m *QuestionMutation) AnswerCleared() bool {
+	_, ok := m.clearedFields[question.FieldAnswer]
+	return ok
+}
+
+// ResetAnswer resets all changes to the "answer" field.
+func (m *QuestionMutation) ResetAnswer() {
+	m.answer = nil
+	delete(m.clearedFields, question.FieldAnswer)
+}
+
+// SetAnsweredBy sets the "answered_by" field.
+func (m *QuestionMutation) SetAnsweredBy(s string) {
+	m.answered_by = &s
+}
+
+// AnsweredBy returns the value of the "answered_by" field in the mutation.
+func (m *QuestionMutation) AnsweredBy() (r string, exists bool) {
+	v := m.answered_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAnsweredBy returns the old "answered_by" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldAnsweredBy(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAnsweredBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAnsweredBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAnsweredBy: %w", err)
+	}
+	return oldValue.AnsweredBy, nil
+}
+
+// ClearAnsweredBy clears the value of the "answered_by" field.
+func (m *QuestionMutation) ClearAnsweredBy() {
+	m.answered_by = nil
+	m.clearedFields[question.FieldAnsweredBy] = struct{}{}
+}
+
+// AnsweredByCleared returns if the "answered_by" field was cleared in this mutation.
+func (m *QuestionMutation) AnsweredByCleared() bool {
+	_, ok := m.clearedFields[question.FieldAnsweredBy]
+	return ok
+}
+
+// ResetAnsweredBy resets all changes to the "answered_by" field.
+func (m *QuestionMutation) ResetAnsweredBy() {
+	m.answered_by = nil
+	delete(m.clearedFields, question.FieldAnsweredBy)
+}
+
+// SetAnsweredAt sets the "answered_at" field.
+func (m *QuestionMutation) SetAnsweredAt(t time.Time) {
+	m.answered_at = &t
+}
+
+// AnsweredAt returns the value of the "answered_at" field in the mutation.
+func (m *QuestionMutation) AnsweredAt() (r time.Time, exists bool) {
+	v := m.answered_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAnsweredAt returns the old "answered_at" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldAnsweredAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAnsweredAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAnsweredAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAnsweredAt: %w", err)
+	}
+	return oldValue.AnsweredAt, nil
+}
+
+// ClearAnsweredAt clears the value of the "answered_at" field.
+func (m *QuestionMutation) ClearAnsweredAt() {
+	m.answered_at = nil
+	m.clearedFields[question.FieldAnsweredAt] = struct{}{}
+}
+
+// AnsweredAtCleared returns if the "answered_at" field was cleared in this mutation.
+func (m *QuestionMutation) AnsweredAtCleared() bool {
+	_, ok := m.clearedFields[question.FieldAnsweredAt]
+	return ok
+}
+
+// ResetAnsweredAt resets all changes to the "answered_at" field.
+func (m *QuestionMutation) ResetAnsweredAt() {
+	m.answered_at = nil
+	delete(m.clearedFields, question.FieldAnsweredAt)
+}
+
+// SetFactID sets the "fact_id" field.
+func (m *QuestionMutation) SetFactID(u uuid.UUID) {
+	m.fact_id = &u
+}
+
+// FactID returns the value of the "fact_id" field in the mutation.
+func (m *QuestionMutation) FactID() (r uuid.UUID, exists bool) {
+	v := m.fact_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFactID returns the old "fact_id" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldFactID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFactID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFactID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFactID: %w", err)
+	}
+	return oldValue.FactID, nil
+}
+
+// ClearFactID clears the value of the "fact_id" field.
+func (m *QuestionMutation) ClearFactID() {
+	m.fact_id = nil
+	m.clearedFields[question.FieldFactID] = struct{}{}
+}
+
+// FactIDCleared returns if the "fact_id" field was cleared in this mutation.
+func (m *QuestionMutation) FactIDCleared() bool {
+	_, ok := m.clearedFields[question.FieldFactID]
+	return ok
+}
+
+// ResetFactID resets all changes to the "fact_id" field.
+func (m *QuestionMutation) ResetFactID() {
+	m.fact_id = nil
+	delete(m.clearedFields, question.FieldFactID)
+}
+
+// SetRuleID sets the "rule_id" field.
+func (m *QuestionMutation) SetRuleID(u uuid.UUID) {
+	m.rule_id = &u
+}
+
+// RuleID returns the value of the "rule_id" field in the mutation.
+func (m *QuestionMutation) RuleID() (r uuid.UUID, exists bool) {
+	v := m.rule_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRuleID returns the old "rule_id" field's value of the Question entity.
+// If the Question object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *QuestionMutation) OldRuleID(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRuleID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRuleID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRuleID: %w", err)
+	}
+	return oldValue.RuleID, nil
+}
+
+// ClearRuleID clears the value of the "rule_id" field.
+func (m *QuestionMutation) ClearRuleID() {
+	m.rule_id = nil
+	m.clearedFields[question.FieldRuleID] = struct{}{}
+}
+
+// RuleIDCleared returns if the "rule_id" field was cleared in this mutation.
+func (m *QuestionMutation) RuleIDCleared() bool {
+	_, ok := m.clearedFields[question.FieldRuleID]
+	return ok
+}
+
+// ResetRuleID resets all changes to the "rule_id" field.
+func (m *QuestionMutation) ResetRuleID() {
+	m.rule_id = nil
+	delete(m.clearedFields, question.FieldRuleID)
+}
+
+// Where appends a list predicates to the QuestionMutation builder.
+func (m *QuestionMutation) Where(ps ...predicate.Question) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the QuestionMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *QuestionMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.Question, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *QuestionMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *QuestionMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (Question).
+func (m *QuestionMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *QuestionMutation) Fields() []string {
+	fields := make([]string, 0, 17)
+	if m.created_at != nil {
+		fields = append(fields, question.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, question.FieldUpdatedAt)
+	}
+	if m.kind != nil {
+		fields = append(fields, question.FieldKind)
+	}
+	if m.subject_kind != nil {
+		fields = append(fields, question.FieldSubjectKind)
+	}
+	if m.subject != nil {
+		fields = append(fields, question.FieldSubject)
+	}
+	if m.status != nil {
+		fields = append(fields, question.FieldStatus)
+	}
+	if m.group_ids != nil {
+		fields = append(fields, question.FieldGroupIds)
+	}
+	if m.incident_ids != nil {
+		fields = append(fields, question.FieldIncidentIds)
+	}
+	if m.finding_ids != nil {
+		fields = append(fields, question.FieldFindingIds)
+	}
+	if m.evidence != nil {
+		fields = append(fields, question.FieldEvidence)
+	}
+	if m.asked_count != nil {
+		fields = append(fields, question.FieldAskedCount)
+	}
+	if m.created_by != nil {
+		fields = append(fields, question.FieldCreatedBy)
+	}
+	if m.answer != nil {
+		fields = append(fields, question.FieldAnswer)
+	}
+	if m.answered_by != nil {
+		fields = append(fields, question.FieldAnsweredBy)
+	}
+	if m.answered_at != nil {
+		fields = append(fields, question.FieldAnsweredAt)
+	}
+	if m.fact_id != nil {
+		fields = append(fields, question.FieldFactID)
+	}
+	if m.rule_id != nil {
+		fields = append(fields, question.FieldRuleID)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *QuestionMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case question.FieldCreatedAt:
+		return m.CreatedAt()
+	case question.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case question.FieldKind:
+		return m.Kind()
+	case question.FieldSubjectKind:
+		return m.SubjectKind()
+	case question.FieldSubject:
+		return m.Subject()
+	case question.FieldStatus:
+		return m.Status()
+	case question.FieldGroupIds:
+		return m.GroupIds()
+	case question.FieldIncidentIds:
+		return m.IncidentIds()
+	case question.FieldFindingIds:
+		return m.FindingIds()
+	case question.FieldEvidence:
+		return m.Evidence()
+	case question.FieldAskedCount:
+		return m.AskedCount()
+	case question.FieldCreatedBy:
+		return m.CreatedBy()
+	case question.FieldAnswer:
+		return m.Answer()
+	case question.FieldAnsweredBy:
+		return m.AnsweredBy()
+	case question.FieldAnsweredAt:
+		return m.AnsweredAt()
+	case question.FieldFactID:
+		return m.FactID()
+	case question.FieldRuleID:
+		return m.RuleID()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *QuestionMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case question.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case question.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case question.FieldKind:
+		return m.OldKind(ctx)
+	case question.FieldSubjectKind:
+		return m.OldSubjectKind(ctx)
+	case question.FieldSubject:
+		return m.OldSubject(ctx)
+	case question.FieldStatus:
+		return m.OldStatus(ctx)
+	case question.FieldGroupIds:
+		return m.OldGroupIds(ctx)
+	case question.FieldIncidentIds:
+		return m.OldIncidentIds(ctx)
+	case question.FieldFindingIds:
+		return m.OldFindingIds(ctx)
+	case question.FieldEvidence:
+		return m.OldEvidence(ctx)
+	case question.FieldAskedCount:
+		return m.OldAskedCount(ctx)
+	case question.FieldCreatedBy:
+		return m.OldCreatedBy(ctx)
+	case question.FieldAnswer:
+		return m.OldAnswer(ctx)
+	case question.FieldAnsweredBy:
+		return m.OldAnsweredBy(ctx)
+	case question.FieldAnsweredAt:
+		return m.OldAnsweredAt(ctx)
+	case question.FieldFactID:
+		return m.OldFactID(ctx)
+	case question.FieldRuleID:
+		return m.OldRuleID(ctx)
+	}
+	return nil, fmt.Errorf("unknown Question field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *QuestionMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case question.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case question.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case question.FieldKind:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKind(v)
+		return nil
+	case question.FieldSubjectKind:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSubjectKind(v)
+		return nil
+	case question.FieldSubject:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSubject(v)
+		return nil
+	case question.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case question.FieldGroupIds:
+		v, ok := value.([]uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGroupIds(v)
+		return nil
+	case question.FieldIncidentIds:
+		v, ok := value.([]uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIncidentIds(v)
+		return nil
+	case question.FieldFindingIds:
+		v, ok := value.([]uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFindingIds(v)
+		return nil
+	case question.FieldEvidence:
+		v, ok := value.([]schema.QuestionEvidence)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEvidence(v)
+		return nil
+	case question.FieldAskedCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAskedCount(v)
+		return nil
+	case question.FieldCreatedBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedBy(v)
+		return nil
+	case question.FieldAnswer:
+		v, ok := value.(*schema.QuestionAnswer)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAnswer(v)
+		return nil
+	case question.FieldAnsweredBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAnsweredBy(v)
+		return nil
+	case question.FieldAnsweredAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAnsweredAt(v)
+		return nil
+	case question.FieldFactID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFactID(v)
+		return nil
+	case question.FieldRuleID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRuleID(v)
+		return nil
+	}
+	return fmt.Errorf("unknown Question field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *QuestionMutation) AddedFields() []string {
+	var fields []string
+	if m.addasked_count != nil {
+		fields = append(fields, question.FieldAskedCount)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *QuestionMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case question.FieldAskedCount:
+		return m.AddedAskedCount()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *QuestionMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case question.FieldAskedCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddAskedCount(v)
+		return nil
+	}
+	return fmt.Errorf("unknown Question numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *QuestionMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(question.FieldGroupIds) {
+		fields = append(fields, question.FieldGroupIds)
+	}
+	if m.FieldCleared(question.FieldIncidentIds) {
+		fields = append(fields, question.FieldIncidentIds)
+	}
+	if m.FieldCleared(question.FieldFindingIds) {
+		fields = append(fields, question.FieldFindingIds)
+	}
+	if m.FieldCleared(question.FieldEvidence) {
+		fields = append(fields, question.FieldEvidence)
+	}
+	if m.FieldCleared(question.FieldAnswer) {
+		fields = append(fields, question.FieldAnswer)
+	}
+	if m.FieldCleared(question.FieldAnsweredBy) {
+		fields = append(fields, question.FieldAnsweredBy)
+	}
+	if m.FieldCleared(question.FieldAnsweredAt) {
+		fields = append(fields, question.FieldAnsweredAt)
+	}
+	if m.FieldCleared(question.FieldFactID) {
+		fields = append(fields, question.FieldFactID)
+	}
+	if m.FieldCleared(question.FieldRuleID) {
+		fields = append(fields, question.FieldRuleID)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *QuestionMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *QuestionMutation) ClearField(name string) error {
+	switch name {
+	case question.FieldGroupIds:
+		m.ClearGroupIds()
+		return nil
+	case question.FieldIncidentIds:
+		m.ClearIncidentIds()
+		return nil
+	case question.FieldFindingIds:
+		m.ClearFindingIds()
+		return nil
+	case question.FieldEvidence:
+		m.ClearEvidence()
+		return nil
+	case question.FieldAnswer:
+		m.ClearAnswer()
+		return nil
+	case question.FieldAnsweredBy:
+		m.ClearAnsweredBy()
+		return nil
+	case question.FieldAnsweredAt:
+		m.ClearAnsweredAt()
+		return nil
+	case question.FieldFactID:
+		m.ClearFactID()
+		return nil
+	case question.FieldRuleID:
+		m.ClearRuleID()
+		return nil
+	}
+	return fmt.Errorf("unknown Question nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *QuestionMutation) ResetField(name string) error {
+	switch name {
+	case question.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case question.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case question.FieldKind:
+		m.ResetKind()
+		return nil
+	case question.FieldSubjectKind:
+		m.ResetSubjectKind()
+		return nil
+	case question.FieldSubject:
+		m.ResetSubject()
+		return nil
+	case question.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case question.FieldGroupIds:
+		m.ResetGroupIds()
+		return nil
+	case question.FieldIncidentIds:
+		m.ResetIncidentIds()
+		return nil
+	case question.FieldFindingIds:
+		m.ResetFindingIds()
+		return nil
+	case question.FieldEvidence:
+		m.ResetEvidence()
+		return nil
+	case question.FieldAskedCount:
+		m.ResetAskedCount()
+		return nil
+	case question.FieldCreatedBy:
+		m.ResetCreatedBy()
+		return nil
+	case question.FieldAnswer:
+		m.ResetAnswer()
+		return nil
+	case question.FieldAnsweredBy:
+		m.ResetAnsweredBy()
+		return nil
+	case question.FieldAnsweredAt:
+		m.ResetAnsweredAt()
+		return nil
+	case question.FieldFactID:
+		m.ResetFactID()
+		return nil
+	case question.FieldRuleID:
+		m.ResetRuleID()
+		return nil
+	}
+	return fmt.Errorf("unknown Question field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *QuestionMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *QuestionMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *QuestionMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *QuestionMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *QuestionMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *QuestionMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *QuestionMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown Question unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *QuestionMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown Question edge %s", name)
 }
 
 // ReportMutation represents an operation that mutates the Report nodes in the graph.

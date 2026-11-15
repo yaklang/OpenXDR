@@ -46,3 +46,28 @@ func TestParseDecisionStripsCodeFence(t *testing.T) {
 		t.Fatal("围栏不完整应拒绝")
 	}
 }
+
+func TestMissingFactsOnlyOnRejection(t *testing.T) {
+	gap := `{"kind":"authorization","subject_kind":"domain","subject":"gzmpc.com"}`
+	reject := `{"approve":false,"reason":"扫描目标不在已登记的授权范围内","missing_facts":[` + gap + `]}`
+	if d, err := ParseDecision(reject); err != nil || len(d.MissingFacts) != 1 || d.MissingFacts[0].Subject != "gzmpc.com" {
+		t.Fatalf("拒绝可带缺口：%v %+v", err, d)
+	}
+	for _, raw := range []string{
+		`{"approve":false,"reason":"扫描目标不在已登记的授权范围内","missing_facts":[` + gap + `,` + gap + `,` + gap + `,` + gap + `]}`,
+		`{"approve":false,"reason":"扫描目标不在已登记的授权范围内","missing_facts":[{"kind":"authorization","subject_kind":"domain","subject":"x","why":"y"}]}`,
+	} {
+		if _, err := ParseDecision(raw); err == nil {
+			t.Fatalf("应拒绝 %s", raw)
+		}
+	}
+	m := &material{Benign: &benignEvidence{Hosts: []benignHost{{ID: uuid.New(), Hostname: "raid"}}}}
+	if s, ok := missingSubject(MissingFact{Kind: "owner", SubjectKind: "asset", Subject: "raid"}, m, ""); !ok || s != m.Benign.Hosts[0].ID.String() {
+		t.Fatal("主机名换成资产 ID")
+	}
+	for _, mf := range []MissingFact{{Kind: "permission", SubjectKind: "domain", Subject: "gzmpc.com"}, {Kind: "owner", SubjectKind: "rule", Subject: "x"}, {Kind: "owner", SubjectKind: "domain", Subject: "evil.example"}} {
+		if _, ok := missingSubject(mf, m, `{"cmd":"nmap gzmpc.com"}`); ok {
+			t.Fatalf("应丢弃 %+v", mf)
+		}
+	}
+}

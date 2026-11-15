@@ -42,6 +42,7 @@ import (
 	"openxdr/server/ent/ipinfo"
 	"openxdr/server/ent/memory"
 	"openxdr/server/ent/processbaseline"
+	"openxdr/server/ent/question"
 	"openxdr/server/ent/report"
 	"openxdr/server/ent/reportread"
 	"openxdr/server/ent/schema"
@@ -834,6 +835,30 @@ func init() {
 	processbaselineDescID := processbaselineFields[0].Descriptor()
 	// processbaseline.DefaultID holds the default value on creation for the id field.
 	processbaseline.DefaultID = processbaselineDescID.Default.(func() uuid.UUID)
+	questionFields := schema.Question{}.Fields()
+	_ = questionFields
+	// questionDescCreatedAt is the schema descriptor for created_at field.
+	questionDescCreatedAt := questionFields[1].Descriptor()
+	// question.DefaultCreatedAt holds the default value on creation for the created_at field.
+	question.DefaultCreatedAt = questionDescCreatedAt.Default.(func() time.Time)
+	// questionDescUpdatedAt is the schema descriptor for updated_at field.
+	questionDescUpdatedAt := questionFields[2].Descriptor()
+	// question.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	question.DefaultUpdatedAt = questionDescUpdatedAt.Default.(func() time.Time)
+	// question.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	question.UpdateDefaultUpdatedAt = questionDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// questionDescStatus is the schema descriptor for status field.
+	questionDescStatus := questionFields[6].Descriptor()
+	// question.DefaultStatus holds the default value on creation for the status field.
+	question.DefaultStatus = questionDescStatus.Default.(string)
+	// questionDescAskedCount is the schema descriptor for asked_count field.
+	questionDescAskedCount := questionFields[11].Descriptor()
+	// question.DefaultAskedCount holds the default value on creation for the asked_count field.
+	question.DefaultAskedCount = questionDescAskedCount.Default.(int)
+	// questionDescID is the schema descriptor for id field.
+	questionDescID := questionFields[0].Descriptor()
+	// question.DefaultID holds the default value on creation for the id field.
+	question.DefaultID = questionDescID.Default.(func() uuid.UUID)
 	reportFields := schema.Report{}.Fields()
 	_ = reportFields
 	// reportDescCreatedAt is the schema descriptor for created_at field.

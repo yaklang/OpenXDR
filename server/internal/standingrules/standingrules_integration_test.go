@@ -4,6 +4,7 @@ package standingrules_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -15,6 +16,8 @@ import (
 	"openxdr/server/ent/approval"
 	"openxdr/server/ent/standingrule"
 	"openxdr/server/ent/standingrulerun"
+	"openxdr/server/internal/findings"
+	"openxdr/server/internal/questions"
 	"openxdr/server/internal/repaircmd"
 	"openxdr/server/internal/repairpolicy"
 	"openxdr/server/internal/standingrules"
@@ -97,6 +100,13 @@ func TestStandingRulesLifecycleAndAutoDowngrade(t *testing.T) {
 	fHuman = db.Finding.GetX(ctx, fHuman.ID)
 	if fHuman.WorkOwner != "human" {
 		t.Fatalf("human 档应将待办转交 human，实际 %s", fHuman.WorkOwner)
+	}
+	// human 档不逐条推送，而是向总控提一个按规矩合并的策略问题，待办记下问题编号
+	hq := db.Question.Query().OnlyX(ctx)
+	var hw findings.Work
+	_ = json.Unmarshal(fHuman.Work, &hw)
+	if hq.Kind != "policy" || hq.SubjectKind != "rule" || hq.Subject != staleRule.ID.String() || len(hq.FindingIds) != 1 || hw.Question != questions.Ref(hq.ID) || hw.Blocker != "manual_business_decision" {
+		t.Fatalf("human 档应提问总控：%+v %+v", hq, hw)
 	}
 
 	// 2. propose 档：生成 Approval，批准后原子消费并执行
