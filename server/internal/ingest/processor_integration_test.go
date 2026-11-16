@@ -390,3 +390,67 @@ func TestTemporalMatchRollsBackWithAlert(t *testing.T) {
 		t.Fatalf("恢复后应能重试生成告警: %d %v", n, err)
 	}
 }
+
+// 研判之后同指纹并进来的命中要记成新证据，否则事件既不重研判、也进不了良性结案
+func TestDedupHitAfterTriageMarksEvidence(t *testing.T) {
+	p, client, db := testProcessor(t)
+	defer client.Close()
+	defer db.Close()
+	ctx := context.Background()
+	dir := t.TempDir()
+	rule := `title: Test
+id: 22222222-2222-4222-8222-222222222222
+status: test
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains: evil-marker
+  condition: selection
+level: high
+`
+	if err := os.WriteFile(filepath.Join(dir, "rule.yml"), []byte(rule), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.Rules = sigma.LoadDir(dir)
+	now := time.Now()
+	base := Envelope{Version: EnvelopeVersion, PartitionKey: "asset-a", ClassUID: 1007, Source: "agent", AssetOS: "linux", Raw: json.RawMessage(`{"process":{"cmd_line":"evil-marker"}}`)}
+	send := func(n string, ts time.Time) {
+		e := base
+		e.ID = StableID(t.Name(), n)
+		e.Timestamp = ts
+		if err := p.Process(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send("1", now.Add(-10*time.Minute))
+	a, err := client.Alert.Query().Only(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	triaged := now.Add(-5 * time.Minute)
+	inc, err := client.Incident.Create().SetGraph(json.RawMessage(`{}`)).SetStatus("triaged").SetTriagedAt(triaged).Save(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`UPDATE alerts SET incident_id=NULL WHERE incident_id=$1`, inc.ID)
+		_, _ = db.Exec(`DELETE FROM incidents WHERE id=$1`, inc.ID)
+	})
+	if err := client.Alert.UpdateOne(a).SetIncidentID(inc.ID).Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	send("2", now.Add(-7*time.Minute))
+	if got := client.Incident.GetX(ctx, inc.ID); got.EvidenceAt != nil {
+		t.Fatalf("研判前的命中不算新证据，evidence_at=%v", got.EvidenceAt)
+	}
+	send("3", now)
+	got := client.Incident.GetX(ctx, inc.ID)
+	if got.EvidenceAt == nil || !got.EvidenceAt.After(triaged) {
+		t.Fatalf("研判后的命中应刷新 evidence_at，实际 %v", got.EvidenceAt)
+	}
+	if n := client.Alert.GetX(ctx, a.ID).Count; n != 3 {
+		t.Fatalf("三次命中应合并成 count=3，实际 %d", n)
+	}
+}
