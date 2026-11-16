@@ -71,3 +71,24 @@ func TestMissingFactsOnlyOnRejection(t *testing.T) {
 		}
 	}
 }
+
+// 审计员把服务端列写成原文路径、或把事件级字段挂到 process 下时仍能核对；原路径存在就不再换路径
+func TestClaimValuePathSlips(t *testing.T) {
+	user := "postgres"
+	ev := &ent.Event{ID: uuid.New(), Username: &user, Raw: json.RawMessage(`{"process":{"cmd_line":"bash -c initdb","name":"bash"},"container":{"name":"scutum-test-pg-1"},"name":"other"}`)}
+	for field, want := range map[string]string{
+		"username":                   "postgres",
+		"raw.username":               "postgres",
+		"raw.process.username":       "postgres",
+		"raw.process.container.name": "scutum-test-pg-1",
+		"process.cmd_line":           "bash -c initdb",
+		"raw.process.name":           "bash",
+	} {
+		if got, ok := claimValue(ev, field); !ok || got != want {
+			t.Errorf("%s = %q %v，应为 %q", field, got, ok, want)
+		}
+	}
+	if _, ok := claimValue(ev, "raw.process.parent_process.cmd_line"); ok {
+		t.Error("不存在的字段不应凑出取值")
+	}
+}

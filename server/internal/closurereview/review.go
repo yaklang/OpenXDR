@@ -524,10 +524,24 @@ func claimValue(ev *ent.Event, field string) (string, bool) {
 	if json.Unmarshal(b, &doc) != nil || json.Unmarshal(ev.Raw, &raw) != nil {
 		return "", false
 	}
-	if v, ok := suppress.Lookup(doc, field); ok {
-		return v, true
+	// 审计员常把服务端列写成原文路径（raw.username、raw.process.username），或把事件级字段挂到 process 下
+	// （raw.process.container.name）：原路径不存在时才依次去掉 raw.、process. 前缀再找，叶子字段与取值仍逐字比对
+	paths := []string{field}
+	if rest, ok := strings.CutPrefix(field, "raw."); ok {
+		paths = append(paths, rest)
+		if leaf, ok := strings.CutPrefix(rest, "process."); ok {
+			paths = append(paths, leaf)
+		}
 	}
-	return suppress.Lookup(raw, field)
+	for _, path := range paths {
+		if v, ok := suppress.Lookup(doc, path); ok {
+			return v, true
+		}
+		if v, ok := suppress.Lookup(raw, path); ok {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 // Review 对当前快照独立复核；相同快照被拒绝后不重复调用模型，新增证据/新提案才唤醒。
