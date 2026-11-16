@@ -407,3 +407,68 @@ cases:
             path: /usr/local/bin/node
           cmd_line: "/usr/local/bin/node /tmp/vite build"
     expect: detected
+
+  # 7. GitHub Actions runner 下 rustc 调系统 cc 链接，命令行带 libwhoami-*.rlib 触发侦察规则
+  - name: 良性链：GitHub Actions Runner 下 rustc 调 cc 链接放行
+    technique: T1082
+    source: prod github-actions-rustc-linker
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: cc
+        file:
+          path: /usr/bin/cc
+        cmd_line: "cc -m64 /opt/scutum-runner-backend/_work/Scutum/Scutum/target/debug/deps/scutum-1a2b.o /opt/scutum-runner-backend/_work/Scutum/Scutum/target/debug/deps/libwhoami-9f8e.rlib -o /opt/scutum-runner-backend/_work/Scutum/Scutum/target/debug/deps/scutum-1a2b"
+        parent_process:
+          name: rustc
+          file:
+            path: /home/scutum-backend/.rustup/toolchains/1.95.0-x86_64-unknown-linux-gnu/bin/rustc
+          cmd_line: "/home/scutum-backend/.rustup/toolchains/1.95.0-x86_64-unknown-linux-gnu/bin/rustc --crate-name scutum --edition=2021 src/main.rs"
+    ancestors:
+      - name: cargo
+        file:
+          path: /home/scutum-backend/.cargo/bin/cargo
+        cmd_line: "/home/scutum-backend/.cargo/bin/cargo test --locked"
+      - name: bash
+        file:
+          path: /usr/bin/bash
+        cmd_line: "/usr/bin/bash -e /opt/scutum-runner-backend/_work/_temp/4f8a9c12.sh"
+      - name: Runner.Worker
+        file:
+          path: /opt/scutum-runner-backend/bin/Runner.Worker
+        cmd_line: "/opt/scutum-runner-backend/bin/Runner.Worker spawnclient 142 145"
+      - name: Runner.Listener
+        file:
+          path: /opt/scutum-runner-backend/bin/Runner.Listener
+        cmd_line: "/opt/scutum-runner-backend/bin/Runner.Listener run"
+    expect: undetected
+
+  - name: 仿冒链：shell 直接调 cc 且命令行带 whoami、没有 rustc 父进程告警
+    technique: T1082
+    source: counterfactual github-actions-rustc-linker
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: cc
+        file:
+          path: /usr/bin/cc
+        cmd_line: "cc -o /tmp/_work/x/target/debug/whoami /tmp/x.c"
+        parent_process:
+          name: bash
+          file:
+            path: /usr/bin/bash
+          cmd_line: "-bash"
+    ancestors:
+      - name: Runner.Worker
+        file:
+          path: /opt/scutum-runner-backend/bin/Runner.Worker
+        cmd_line: "/opt/scutum-runner-backend/bin/Runner.Worker spawnclient 142 145"
+      - name: Runner.Listener
+        file:
+          path: /opt/scutum-runner-backend/bin/Runner.Listener
+        cmd_line: "/opt/scutum-runner-backend/bin/Runner.Listener run"
+    expect: detected

@@ -1,0 +1,38 @@
+id: github-actions-rustc-linker
+title: GitHub Actions Runner 下 rustc 调系统链接器（cargo → rustc → cc）
+description: >-
+  自托管 GitHub Actions Runner 构建 Rust 项目时，rustc 调用系统 cc 链接 target/ 下的目标文件，
+  命令行里会出现 libwhoami-*.rlib 之类的 crate 文件名而触发侦察规则，长度常超过 30KB。
+  要求当前进程是系统 cc/gcc/clang、命令行链接 _work/.../target/(debug|release)/ 产物、直接父进程是 rustup 工具链里的 rustc，
+  且祖先里有 Runner.Worker spawnclient 与 Runner.Listener。
+sample: >-
+  /opt/scutum-runner-backend/bin/Runner.Listener run →
+  /opt/scutum-runner-backend/bin/Runner.Worker spawnclient 10 11 →
+  /usr/bin/bash -e /opt/scutum-runner-backend/_work/_temp/4f8a9c12.sh →
+  /home/scutum-backend/.cargo/bin/cargo test →
+  /home/scutum-backend/.rustup/toolchains/1.95.0-x86_64-unknown-linux-gnu/bin/rustc →
+  cc -m64 /opt/scutum-runner-backend/_work/Scutum/Scutum/target/debug/deps/…
+rules:
+  - "*"
+conditions:
+  - field: process.file.path
+    op: regex
+    value: '^/usr/bin/(cc|gcc|x86_64-linux-gnu-gcc(-[0-9]+)?|clang(-[0-9]+)?)$'
+  - field: process.cmd_line
+    op: regex
+    value: '^(cc|gcc|clang)\s.*/_work/\S+/target/(debug|release)/'
+  - field: process.parent_process.file.path
+    op: regex
+    value: '^/(root|home/[^/\s]+|opt/[^/\s]+)/\.rustup/toolchains/[^/\s]+/bin/rustc$'
+  - field: ancestor.file.path
+    op: endswith
+    value: /Runner.Worker
+    group: 1
+  - field: ancestor.cmd_line
+    op: regex
+    value: 'Runner\.Worker\s+spawnclient\b'
+    group: 1
+  - field: ancestor.file.path
+    op: endswith
+    value: /Runner.Listener
+    group: 2

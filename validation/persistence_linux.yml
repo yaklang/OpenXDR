@@ -132,6 +132,44 @@ cases:
         file:
           name: "diamorphine"
 
+  - name: 良性对照：docker 自动加载内核树里的 br_netfilter
+    technique: T1547.006
+    source: 生产 raid-server / blue-server（docker 启动建网桥）
+    class: 1005
+    os: linux
+    event:
+      activity_id: 1
+      module:
+        file:
+          path: "/lib/modules/6.1.0-55-cloud-amd64/kernel/net/bridge/br_netfilter.ko"
+          name: "br_netfilter.ko"
+    expect: undetected
+
+  - name: 良性对照：ss -u 按需加载内核树里压缩形态的 udp_diag
+    technique: T1547.006
+    source: 生产 uos-server（巡检 ss -ulnH）
+    class: 1005
+    os: linux
+    event:
+      activity_id: 1
+      module:
+        file:
+          path: "/lib/modules/4.19.90-2601.1.0.0007.uel20.x86_64/kernel/net/ipv4/udp_diag.ko.xz"
+          name: "udp_diag.ko.xz"
+    expect: undetected
+
+  - name: 树外模块冒用自动加载模块名仍告警
+    technique: T1547.006
+    source: rootkit 冒名（insmod 到 extra/）
+    class: 1005
+    os: linux
+    event:
+      activity_id: 1
+      module:
+        file:
+          path: "/lib/modules/6.1.0-55-cloud-amd64/extra/br_netfilter.ko"
+          name: "br_netfilter.ko"
+
   - name: 内核模块卸载（rootkit 收摊）
     technique: T1547.006
     source: rmmod 对照

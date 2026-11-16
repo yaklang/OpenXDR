@@ -1,0 +1,29 @@
+id: scutum-test-pg-init
+title: Scutum CI 一次性 PostgreSQL 测试容器初始化（runc init → bash -c initdb/postgres）
+description: >-
+  Scutum 的 CI 用 docker run 起名为 scutum-test-pg-<n> 的一次性 PostgreSQL 容器，入口 bash 在容器内 /tmp/pgdata 用固定测试口令
+  initdb，并循环拉起 postgres，触发"可疑目录执行脚本"规则。要求容器名、bash 路径、直接父进程 runc init 都吻合，
+  且命令行与这段固定初始化脚本逐字一致（只允许 PostgreSQL 主版本号不同）。
+sample: >-
+  [container:docker scutum-test-pg-4037943] runc init →
+  bash -c export PATH=/usr/lib/postgresql/17/bin:$PATH PGDATA=/tmp/pgdata … postgres -c listen_addresses=* -c fsync=off
+rules:
+  - "*"
+conditions:
+  - field: container.name
+    op: regex
+    value: '^scutum-test-pg-[0-9]+$'
+  - field: process.file.path
+    op: in
+    values:
+      - /bin/bash
+      - /usr/bin/bash
+  - field: process.cmd_line
+    op: regex
+    value: '^bash -c export PATH=/usr/lib/postgresql/[0-9]+/bin:\$PATH PGDATA=/tmp/pgdata\necho test >/tmp/pw\ninitdb -U scutum -A scram-sha-256 --pwfile=/tmp/pw >/dev/null\necho ''host all all all scram-sha-256'' >>\$PGDATA/pg_hba\.conf\nwhile :; do\n  while \[ -f /tmp/hold \]; do sleep 0\.2; done\n  postgres -c listen_addresses=\* -c fsync=off\ndone$'
+  - field: process.parent_process.file.path
+    op: equals
+    value: /runc
+  - field: process.parent_process.cmd_line
+    op: equals
+    value: runc init
