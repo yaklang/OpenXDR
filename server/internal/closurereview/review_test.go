@@ -19,10 +19,10 @@ func TestStrictDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !validate(d, &material{Basis: []positiveBasis{{Type: "verified_platform_readonly", EventID: id}}, Events: []*ent.Event{{ID: id, Raw: json.RawMessage(`{"process":{"cmd_line":"/bin/build"}}`)}}}) {
+	if rejection(d, &material{Basis: []positiveBasis{{Type: "verified_platform_readonly", EventID: id}}, Events: []*ent.Event{{ID: id, Raw: json.RawMessage(`{"process":{"cmd_line":"/bin/build"}}`)}}}) != "" {
 		t.Fatal("应接受相同事件引用")
 	}
-	if validate(d, &material{Events: []*ent.Event{{ID: uuid.New()}}}) {
+	if rejection(d, &material{Events: []*ent.Event{{ID: uuid.New()}}}) == "" {
 		t.Fatal("禁止伪造引用")
 	}
 }

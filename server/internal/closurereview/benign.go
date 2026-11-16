@@ -88,10 +88,22 @@ func loadBenign(ctx context.Context, db *ent.Client, inc *ent.Incident) (*materi
 	if len(alerts) == 0 || len(alerts) > 20 {
 		return nil, ErrIneligible
 	}
+	// 研判时已看过的规则与主机：之后关联进来的同规则同主机告警，关联引擎不当新证据、不重研判，
+	// 这里也放行（原始事件照样逐条交审计员），否则事件既不重研判也结不了案，就此挂住
+	type ruleHost struct {
+		rule  string
+		asset uuid.UUID
+	}
+	seen := map[ruleHost]bool{}
+	for _, a := range alerts {
+		if a.AssetID != nil && seenAtTriage(a, *inc.TriagedAt) {
+			seen[ruleHost{a.RuleID, *a.AssetID}] = true
+		}
+	}
 	be := &benignEvidence{SettleHours: int(benignSettle / time.Hour)}
 	m := &material{IncidentID: inc.ID, Verdict: inc.AiVerdict, TriagedAt: *inc.TriagedAt, EvidenceKey: triage.IncidentEvidenceKey(inc), VerdictHash: VerdictHash(inc.AiVerdict), Benign: be, Alerts: bareAlerts(alerts)}
 	for _, a := range alerts {
-		if !benignAlert(a, *inc.TriagedAt) {
+		if !benignAlert(a) || !seenAtTriage(a, *inc.TriagedAt) && !seen[ruleHost{a.RuleID, *a.AssetID}] {
 			return nil, ErrIneligible
 		}
 		if err := requireNonCore(ctx, db, a.Edges.Asset); err != nil {
@@ -335,7 +347,7 @@ func ancestorOf(ctx context.Context, db *ent.Client, asset, guid uuid.UUID, befo
 
 // benignAlert 情报命中、诱饵观测、严重告警与平台合成检测不走良性自动结案（高危告警另要主机事实覆盖，见 loadBenign）；
 // 唯一例外是首次出现的新进程：它是最常见的良性噪声，原始进程事件足以核验。
-func benignAlert(a *ent.Alert, triagedAt time.Time) bool {
+func benignAlert(a *ent.Alert) bool {
 	if a.Severity <= 0 || a.Severity > review.Severity || a.EventID == nil || a.AssetID == nil || a.Edges.Asset == nil {
 		return false
 	}
@@ -343,6 +355,11 @@ func benignAlert(a *ent.Alert, triagedAt time.Time) bool {
 		strings.HasPrefix(a.RuleID, "xdr:") && a.RuleID != sigma.RuleNewProcess {
 		return false
 	}
+	return true
+}
+
+// seenAtTriage 告警的首末次命中都在研判之前，研判看过它
+func seenAtTriage(a *ent.Alert, triagedAt time.Time) bool {
 	return !a.Ts.After(triagedAt) && (a.LastTs == nil || !a.LastTs.After(triagedAt))
 }
 

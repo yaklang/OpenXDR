@@ -138,7 +138,7 @@ func TestValidateOpsSessionCitationsAndRouting(t *testing.T) {
 		}
 	}
 
-	if !validate(mkDecision("已核对会话钥匙 F-00000001、F-00000002 与部署意图 I-00000011、I-00000022，行为吻合"), m) {
+	if rejection(mkDecision("已核对会话钥匙 F-00000001、F-00000002 与部署意图 I-00000011、I-00000022，行为吻合"), m) != "" {
 		t.Fatal("完整引用所有会话钥匙与意图的决定应通过校验")
 	}
 	for _, badReason := range []string{
@@ -147,7 +147,7 @@ func TestValidateOpsSessionCitationsAndRouting(t *testing.T) {
 		"已核对会话一钥匙 F-00000001 与意图 I-00000011，行为吻合",
 		"已核对钥匙 F-00000001、F-00000002 与意图 I-00000011，漏引第二个意图",
 	} {
-		if validate(mkDecision(badReason), m) {
+		if rejection(mkDecision(badReason), m) == "" {
 			t.Fatalf("漏引编号的理由不应通过校验: %s", badReason)
 		}
 	}

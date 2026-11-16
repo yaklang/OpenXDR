@@ -433,23 +433,34 @@ func fingerprint(m *material) string {
 	b, _ := json.Marshal(m)
 	return digest(append(append(b, 0), closurePrompt(string(b))...))
 }
-func validate(d Decision, m *material) bool {
+
+// rejection 返回服务端驳回审计员批准的原因，空串表示通过；原因写进审计，排查时不用重放
+func rejection(d Decision, m *material) string {
 	// 已遏制、运维会话与良性分支由服务端核验范围，提案分支要求每个事件都有平台只读来源链
 	serverScoped := m.Contained != nil || m.OpsSession != nil || m.Benign != nil
-	if len(m.Events) == 0 || !serverScoped && (len(m.Basis) != len(m.Events) || len(m.Basis) == 0) || !d.Approve || strings.TrimSpace(d.Reason) == "" || len(strings.TrimSpace(d.PositiveEvidence)) < 20 {
-		return false
+	switch {
+	case !d.Approve:
+		return "审计员未批准"
+	case len(m.Events) == 0:
+		return "材料没有原始事件"
+	case !serverScoped && (len(m.Basis) != len(m.Events) || len(m.Basis) == 0):
+		return "提案来源链没有覆盖每个事件"
+	case strings.TrimSpace(d.Reason) == "":
+		return "理由为空"
+	case len(strings.TrimSpace(d.PositiveEvidence)) < 20:
+		return "正面证据不足 20 字节"
 	}
 	// 运维会话放行：批准理由必须引用覆盖本事件每个会话的权威钥匙事实编号与事前运维意图编号（服务端逐项校验）
 	if m.OpsSession != nil {
 		if len(m.OpsSession.Sessions) == 0 {
-			return false
+			return "运维会话为空"
 		}
 		for _, s := range m.OpsSession.Sessions {
 			if len(s.KeyFacts) == 0 || !slices.ContainsFunc(s.KeyFacts, func(ref string) bool { return strings.Contains(d.Reason, ref) }) {
-				return false
+				return "理由没有引用会话的钥匙事实编号"
 			}
 			if len(s.Intents) == 0 || !slices.ContainsFunc(s.Intents, func(ref string) bool { return strings.Contains(d.Reason, ref) }) {
-				return false
+				return "理由没有引用会话的运维意图编号"
 			}
 		}
 	}
@@ -457,7 +468,7 @@ func validate(d Decision, m *material) bool {
 	if m.Benign != nil {
 		for _, h := range m.Benign.Severe {
 			if !slices.ContainsFunc(h.Facts, func(ref string) bool { return strings.Contains(d.Reason, ref) }) {
-				return false
+				return "理由没有引用高危主机 " + h.Hostname + " 的事实编号"
 			}
 		}
 	}
@@ -471,12 +482,12 @@ func validate(d Decision, m *material) bool {
 		return slices.Compact(ids)
 	}
 	if !slices.Equal(sortIDs(d.EventIDs), sortIDs(expected)) {
-		return false
+		return "event_ids 与材料里的原始事件不一致"
 	}
 	covered := map[uuid.UUID]bool{}
 	for _, c := range d.Claims {
 		if c.Field == "" || len(c.Field) > 200 || len(c.Value) < 3 || len(c.Value) > 8192 {
-			return false
+			return "引用 " + c.Field + " 的字段名或取值长度不合规"
 		}
 		found := false
 		for _, ev := range m.Events {
@@ -484,22 +495,25 @@ func validate(d Decision, m *material) bool {
 				continue
 			}
 			value, ok := claimValue(ev, c.Field)
-			if !ok || value != c.Value {
-				return false
+			if !ok {
+				return "引用的字段 " + c.Field + " 在事件 " + c.EventID.String() + " 里不存在"
+			}
+			if value != c.Value {
+				return "引用的字段 " + c.Field + " 与事件 " + c.EventID.String() + " 的原值不符"
 			}
 			found = true
 			covered[ev.ID] = true
 		}
 		if !found {
-			return false
+			return "引用了材料外的事件 " + c.EventID.String()
 		}
 	}
 	for _, id := range expected {
 		if !covered[id] {
-			return false
+			return "事件 " + id.String() + " 没有字段级引用"
 		}
 	}
-	return true
+	return ""
 }
 
 // claimValue 引用的路径可相对于材料里的事件对象（raw.process.cmd_line、username 等服务端入库字段），
@@ -552,7 +566,8 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 	if _, err := ParseDecision(string(decisionJSON)); err != nil {
 		d = invalidDecision()
 	}
-	approved := validate(d, m)
+	why := rejection(d, m)
+	approved := why == ""
 	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return false, err
@@ -615,6 +630,9 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 		mechanism = OpsSessionSource
 	}
 	detail := prefix + fmt.Sprintf("approved=%t mechanism=%s model=%s decision=%s", approved, mechanism, model, decision)
+	if !approved {
+		detail += " rejected=" + why
+	}
 	if err = audit.Checked(ctx, tx.AuditLog.Create(), Actor, "server", "incident_closure_ai_reviewed", id.String(), detail); err != nil {
 		return false, err
 	}

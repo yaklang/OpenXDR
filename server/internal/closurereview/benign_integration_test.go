@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"openxdr/server/ent"
 	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/schema"
 	"openxdr/server/internal/decoy"
@@ -280,5 +281,53 @@ func TestBenignSevereNeedsHostFact(t *testing.T) {
 	f.db.Fact.UpdateOneID(fact.ID).SetContent("包管理更新是本机业务").ExecX(f.ctx)
 	if ok, err := f.r.Review(f.ctx, f.inc.ID); !ok || err != nil {
 		t.Fatal("引用覆盖事实后应能结案", ok, err)
+	}
+}
+
+// 研判后关联进来的同规则同主机告警：关联引擎不当新证据，这里也放行，原始事件照样逐条交审计；
+// 研判后才出现的别的规则仍是没看过的证据，不送审
+func TestBenignAlertAfterTriage(t *testing.T) {
+	later := func(f *fixture, rule string) *ent.Event {
+		ts := f.inc.TriagedAt.Add(30 * time.Minute)
+		raw, _ := json.Marshal(map[string]any{"activity_id": 1, "process": map[string]any{"cmd_line": benignCmd, "pid": 43}})
+		ev := f.db.Event.Create().SetTs(ts).SetAssetID(f.asset.ID).SetSource("agent").SetClassUID(1007).SetRaw(raw).SaveX(f.ctx)
+		f.db.Alert.Create().SetTs(ts).SetLastTs(ts).SetRuleID(rule).SetSeverity(f.al.Severity).SetEventID(ev.ID).SetAssetID(f.asset.ID).SetIncidentID(f.inc.ID).ExecX(f.ctx)
+		return ev
+	}
+	t.Run("same_rule", func(t *testing.T) {
+		f := setupBenign(t)
+		ev := later(f, f.al.RuleID)
+		f.r.Judge = func(context.Context, string, string) (Decision, error) {
+			f.calls++
+			d := benignApproval(f.ev.ID, benignCmd)
+			d.EventIDs = append(d.EventIDs, ev.ID)
+			d.Claims = append(d.Claims, Claim{EventID: ev.ID, Field: "process.cmd_line", Value: benignCmd})
+			return d, nil
+		}
+		if ok, err := f.r.Review(f.ctx, f.inc.ID); !ok || err != nil || f.calls != 1 {
+			t.Fatal(ok, err, f.calls)
+		}
+	})
+	t.Run("other_rule", func(t *testing.T) {
+		f := setupBenign(t)
+		later(f, "other-rule")
+		if ok, err := f.r.Review(f.ctx, f.inc.ID); ok || err != nil || f.calls != 0 {
+			t.Fatal(ok, err, f.calls)
+		}
+	})
+}
+
+// 审计员批准但引用对不上时，驳回原因写进审计，排查不用重放
+func TestBenignRejectionReasonAudited(t *testing.T) {
+	f := setupBenign(t)
+	f.r.Judge = func(context.Context, string, string) (Decision, error) {
+		f.calls++
+		return benignApproval(f.ev.ID, "/usr/bin/apt-get upgrade"), nil
+	}
+	if ok, err := f.r.Review(f.ctx, f.inc.ID); ok || err != nil || f.calls != 1 {
+		t.Fatal(ok, err, f.calls)
+	}
+	if !f.db.AuditLog.Query().Where(auditlog.TargetEQ(f.inc.ID.String()), auditlog.DetailContains("approved=false"), auditlog.DetailContains("rejected=引用的字段 process.cmd_line 与事件")).ExistX(f.ctx) {
+		t.Fatal("审计缺驳回原因")
 	}
 }
