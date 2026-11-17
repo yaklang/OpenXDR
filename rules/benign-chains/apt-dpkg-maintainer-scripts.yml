@@ -1,0 +1,37 @@
+id: apt-dpkg-maintainer-scripts
+title: apt 驱动的 dpkg 包维护脚本（unattended-upgrade/apt → dpkg --status-fd → postinst/grub/initramfs）
+description: >-
+  unattended-upgrade 或管理员用 apt 升级内核等软件包时，dpkg 依次执行包的 preinst/postinst/prerm/postrm 维护脚本，
+  再经 run-parts 调 /etc/kernel/postinst.d、update-grub、grub-mkconfig 与 /etc/grub.d、update-initramfs 与 initramfs 钩子，
+  一次升级会冒出几十个首次出现的新进程。只放行首次出现的新进程（低危合成检测），其余规则照常告警。
+  要求当前可执行文件在系统目录、包维护脚本目录或 grub/kernel/initramfs 钩子目录，命令行不含下载或网络连接，
+  且祖先里有 apt 驱动的 dpkg（命令行带 --status-fd，手工 dpkg -i 不带）。
+sample: >-
+  /usr/bin/unattended-upgrade →
+  /usr/bin/dpkg --status-fd 11 --configure --pending →
+  /var/lib/dpkg/info/linux-image-6.1.0-55-cloud-amd64.postinst configure →
+  run-parts --report --exit-on-error /etc/kernel/postinst.d → update-grub →
+  grub-mkconfig -o /boot/grub/grub.cfg → /etc/grub.d/10_linux
+rules:
+  - xdr:new-process
+conditions:
+  - field: process.file.path
+    op: regex
+    value: '^(/usr)?/(s?bin|lib|libexec|share)/|^/etc/(grub\.d|kernel/(pre|post)(inst|rm)\.d|initramfs-tools)/|^/var/lib/dpkg/info/[^/]+\.(preinst|postinst|prerm|postrm)$'
+  - field: process.cmd_line
+    op: not_contains
+    value: curl
+  - field: process.cmd_line
+    op: not_contains
+    value: wget
+  - field: process.cmd_line
+    op: not_contains
+    value: /dev/tcp
+  - field: ancestor.file.path
+    op: endswith
+    value: /dpkg
+    group: 1
+  - field: ancestor.cmd_line
+    op: regex
+    value: '(^|\s)--status-fd\s+[0-9]+(\s|$)'
+    group: 1

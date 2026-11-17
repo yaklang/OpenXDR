@@ -118,7 +118,7 @@ func TestValidateOpsSessionCitationsAndRouting(t *testing.T) {
 	}
 
 	raw, _ := json.Marshal(m)
-	if closurePrompt(string(raw)) != opsPrompt {
+	if closurePrompt(string(raw)) != opsPrompt+feedbackRule {
 		t.Fatal("含 ops_session 的材料应路由到 opsPrompt")
 	}
 	if s, ok := missingSubject(MissingFact{Kind: "owner", SubjectKind: "asset", Subject: "gateway"}, m, string(raw)); !ok || s != assetID.String() {

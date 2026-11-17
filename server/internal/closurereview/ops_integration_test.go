@@ -246,7 +246,7 @@ func TestOpsSessionCloseWithLineageAndTmpScript(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("期望运维会话审计通过结案: ok=%v err=%v", ok, err)
 	}
-	if usedPrompt != opsPrompt {
+	if usedPrompt != opsPrompt+feedbackRule {
 		t.Fatal("应使用运维会话专用审计提示词 opsPrompt")
 	}
 	if !strings.Contains(f.lastMat, facts.Ref("F", f.keyFact.ID)) || !strings.Contains(f.lastMat, facts.Ref("I", f.intent.ID)) {

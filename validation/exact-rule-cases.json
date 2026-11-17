@@ -3171,5 +3171,98 @@
     },
     "hit": false,
     "signal": false
+  },
+  {
+    "name": "drop_and_execute_in_container/kaniko-build-run-step",
+    "rule": "fc47e45c-4ec9-4cf4-b909-69ee8b69dd16",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/bin/sh",
+          "upper_layer": true
+        },
+        "name": "sh",
+        "cmd_line": "/bin/sh -c npm run build",
+        "parent_process": {
+          "file": {
+            "path": "/kaniko/executor"
+          },
+          "name": "executor",
+          "cmd_line": "/kaniko/executor --context /builds/root/app --dockerfile /builds/root/app/Dockerfile"
+        }
+      },
+      "container": {
+        "name": "build",
+        "runtime": "containerd",
+        "uid": "9a1b2c3d4e5f"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "drop_and_execute_in_container/athens-go-toolchain",
+    "rule": "fc47e45c-4ec9-4cf4-b909-69ee8b69dd16",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/tmp/athens723170957/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.11.linux-amd64/bin/go",
+          "upper_layer": true
+        },
+        "name": "go",
+        "cmd_line": "go mod download -json github.com/k3d-io/k3d/v5@v5.9.0",
+        "parent_process": {
+          "file": {
+            "path": "/bin/athens-proxy"
+          },
+          "name": "athens-proxy",
+          "cmd_line": "athens-proxy -config_file=/config/config.toml"
+        }
+      },
+      "container": {
+        "name": "athens",
+        "runtime": "docker",
+        "uid": "1a2b3c4d5e6f"
+      }
+    },
+    "hit": false,
+    "signal": false
+  },
+  {
+    "name": "drop_and_execute_in_container/athens-path-without-proxy-parent",
+    "rule": "fc47e45c-4ec9-4cf4-b909-69ee8b69dd16",
+    "class": 1007,
+    "os": "linux",
+    "event": {
+      "activity_id": 1,
+      "process": {
+        "file": {
+          "path": "/tmp/athens1/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.11.linux-amd64/bin/go",
+          "upper_layer": true
+        },
+        "name": "go",
+        "cmd_line": "go run /tmp/x.go",
+        "parent_process": {
+          "file": {
+            "path": "/bin/sh"
+          },
+          "name": "sh",
+          "cmd_line": "/bin/sh -c go run /tmp/x.go"
+        }
+      },
+      "container": {
+        "name": "web",
+        "runtime": "docker",
+        "uid": "6f5e4d3c2b1a"
+      }
+    },
+    "hit": true,
+    "signal": false
   }
 ]

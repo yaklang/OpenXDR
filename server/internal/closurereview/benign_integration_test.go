@@ -61,7 +61,7 @@ func TestBenignCloseWithoutProposal(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatal(ok, err)
 	}
-	if prompt != benignPrompt {
+	if prompt != benignPrompt+feedbackRule {
 		t.Fatal("良性分支应使用良性审计提示词")
 	}
 	inc := f.db.Incident.GetX(f.ctx, f.inc.ID)
@@ -116,7 +116,12 @@ func TestBenignDisqualifiers(t *testing.T) {
 		"verify_source": verdict(`{"verdict":"benign","action_codes":["verify_source","monitor"]}`),
 		"no_codes":      verdict(`{"verdict":"benign"}`),
 		"tier":          verdict(`{"verdict":"benign","response_tier":"contain","action_codes":["monitor"]}`),
-		"core":          func(f *fixture) { f.db.Asset.UpdateOneID(f.asset.ID).SetResponseTier("core").ExecX(f.ctx) },
+		// 核心资产只挡高危：有主机事实兜底的高危告警，落在核心资产上仍不送审
+		"core_severe": func(f *fixture) {
+			f.db.Fact.Create().SetKind("asset_role").SetAssetID(f.asset.ID).SetContent("构建机").SetCreatedBy("admin").ExecX(f.ctx)
+			f.db.Asset.UpdateOneID(f.asset.ID).SetResponseTier("core").ExecX(f.ctx)
+			f.db.Alert.UpdateOneID(f.al.ID).SetSeverity(4).ExecX(f.ctx)
+		},
 		"active": func(f *fixture) {
 			f.db.Alert.UpdateOneID(f.al.ID).SetLastTs(time.Now().Add(-10 * time.Minute)).ExecX(f.ctx)
 		},

@@ -113,7 +113,7 @@ func invalidDecision() Decision {
 
 func ParseDecision(text string) (Decision, error) {
 	var d Decision
-	if len(text) > 16384 {
+	if len(text) > 32768 {
 		return d, errors.New("审计回复过长")
 	}
 	// 模型常把 JSON 包在代码块里；只剥外层围栏，正文仍按严格 JSON 解析
@@ -132,7 +132,7 @@ func ParseDecision(text string) (Decision, error) {
 	if dec.Decode(new(any)) != io.EOF {
 		return d, errors.New("审计回复含尾随数据")
 	}
-	if len(strings.TrimSpace(d.Reason)) < 10 || len(d.Reason) > 3000 || len(d.PositiveEvidence) > 4000 || len(d.EventIDs) > 20 || len(d.Claims) > 40 {
+	if len(strings.TrimSpace(d.Reason)) < 10 || len(d.Reason) > 3000 || len(d.PositiveEvidence) > 4000 || len(d.EventIDs) > 60 || len(d.Claims) > 120 {
 		return d, errors.New("审计回复字段无效")
 	}
 	if d.Approve && (len(strings.TrimSpace(d.PositiveEvidence)) < 20 || len(d.EventIDs) == 0 || len(d.Claims) == 0) {
@@ -232,6 +232,8 @@ type material struct {
 	CorroboratingChanges string            `json:"corroborating_changes,omitempty"`
 	Commands             []commandEvidence `json:"commands"`
 	Basis                []positiveBasis   `json:"positive_basis"`
+	// ServerFeedback 同一快照第二次审计时，服务端对上一次批准的驳回原因；不进快照指纹
+	ServerFeedback string `json:"server_feedback,omitempty"`
 }
 
 func (m *material) hosts() []benignHost {
@@ -307,7 +309,30 @@ func loadWithRules(ctx context.Context, db *ent.Client, rules []*sigma.Rule, id 
 	if benignEligible(inc) {
 		return loadBenign(ctx, db, inc)
 	}
-	return nil, ErrIneligible
+	if !systemReviewable(inc) || VerdictHash(inc.AiVerdict) == "" {
+		return nil, ErrIneligible
+	}
+	return nil, verdictStall(inc.AiVerdict)
+}
+
+// verdictStall 研判结论本身不是可结的良性：可疑、要求处置，或要求的调查动作没有自动执行者
+func verdictStall(raw json.RawMessage) error {
+	var v struct {
+		Verdict string   `json:"verdict"`
+		Tier    string   `json:"response_tier"`
+		Codes   []string `json:"action_codes"`
+	}
+	_ = json.Unmarshal(raw, &v)
+	switch {
+	case v.Verdict == "suspicious":
+		return stall("研判结论为可疑，结案审计只收良性结论，需要人判断")
+	case v.Verdict != "benign":
+		return stall("研判结论为 %q，需要人判断", v.Verdict)
+	case v.Tier != "" && v.Tier != "observe":
+		return stall("研判要求处置（%s），需要人决定", v.Tier)
+	default:
+		return stall("研判要求的后续动作（%s）没有自动执行者，需要人跟进", strings.Join(v.Codes, "、"))
+	}
 }
 
 func loadProposal(ctx context.Context, db *ent.Client, inc *ent.Incident) (*material, error) {
@@ -476,20 +501,19 @@ func rejection(d Decision, m *material) string {
 	for _, e := range m.Events {
 		expected = append(expected, e.ID)
 	}
-	sortIDs := func(ids []uuid.UUID) []uuid.UUID {
-		ids = slices.Clone(ids)
-		slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
-		return slices.Compact(ids)
+	// event_ids 要覆盖材料里的全部原始事件；多写的（常见是 lineage 里的祖先事件）不算错
+	for _, id := range expected {
+		if !slices.Contains(d.EventIDs, id) {
+			return "event_ids 漏了原始事件 " + id.String()
+		}
 	}
-	if !slices.Equal(sortIDs(d.EventIDs), sortIDs(expected)) {
-		return "event_ids 与材料里的原始事件不一致"
-	}
+	// 太短、太长、落在被截断字段上或指向材料外事件的引用只是不计入覆盖；
+	// 指向材料里的事件却与原值对不上（或字段不存在）仍整份驳回，那是在编证据
 	covered := map[uuid.UUID]bool{}
 	for _, c := range d.Claims {
-		if c.Field == "" || len(c.Field) > 200 || len(c.Value) < 3 || len(c.Value) > 8192 {
-			return "引用 " + c.Field + " 的字段名或取值长度不合规"
+		if c.Field == "" || len(c.Field) > 200 || len(c.Value) < 3 || len(c.Value) > 8192 || strings.Contains(c.Value, truncMark) {
+			continue
 		}
-		found := false
 		for _, ev := range m.Events {
 			if ev.ID != c.EventID {
 				continue
@@ -501,11 +525,7 @@ func rejection(d Decision, m *material) string {
 			if value != c.Value {
 				return "引用的字段 " + c.Field + " 与事件 " + c.EventID.String() + " 的原值不符"
 			}
-			found = true
 			covered[ev.ID] = true
-		}
-		if !found {
-			return "引用了材料外的事件 " + c.EventID.String()
 		}
 	}
 	for _, id := range expected {
@@ -551,16 +571,27 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 	rules := r.rules()
 	m, err := loadWithRules(ctx, r.DB, rules, id)
 	if errors.Is(err, ErrIneligible) {
-		return false, nil
+		return false, r.settle(ctx, id, err)
 	}
 	if err != nil {
 		return false, err
 	}
 	hash := fingerprint(m)
 	prefix := "snapshot=" + hash + " "
-	seen, err := r.DB.AuditLog.Query().Where(auditlog.ActionEQ("incident_closure_ai_reviewed"), auditlog.TargetEQ(id.String()), auditlog.DetailHasPrefix(prefix)).Exist(ctx)
-	if err != nil || seen {
+	prior, err := r.DB.AuditLog.Query().Where(auditlog.ActionEQ("incident_closure_ai_reviewed"), auditlog.TargetEQ(id.String()), auditlog.DetailHasPrefix(prefix)).Order(ent.Asc(auditlog.FieldTs)).All(ctx)
+	if err != nil {
 		return false, err
+	}
+	// 同一快照只审一次；只有服务端驳回了审计员的批准、或审计回复不合格时，带着驳回原因再给一次机会
+	if len(prior) > 0 {
+		last := ""
+		if d := prior[len(prior)-1].Detail; d != nil {
+			last = *d
+		}
+		if len(prior) > 1 || !retryable(last) {
+			return false, r.handoff(ctx, id, "结案审计未通过："+auditReason(last), nil)
+		}
+		m.ServerFeedback = serverFeedback(last)
 	}
 	if r.Model == nil || r.Judge == nil {
 		return false, nil
@@ -655,6 +686,9 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 	}
 	if !approved && (m.Benign != nil || m.OpsSession != nil) {
 		r.askMissing(ctx, m, d, hash)
+	}
+	if !approved && !retryable(detail) {
+		return false, r.handoff(ctx, id, "结案审计未通过："+auditReason(detail), nil)
 	}
 	return approved, nil
 }

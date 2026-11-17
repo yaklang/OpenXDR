@@ -26,10 +26,10 @@ func TestContainedEligibility(t *testing.T) {
 }
 
 func TestSeparateContainedPrompt(t *testing.T) {
-	if closurePrompt(`{"contained":{"quiet_hours":6}}`) != containedPrompt {
+	if closurePrompt(`{"contained":{"quiet_hours":6}}`) != containedPrompt+feedbackRule {
 		t.Fatal("遏制审计必须使用独立提示词")
 	}
-	if closurePrompt(`{"verdict":{"verdict":"benign"}}`) != prompt {
+	if closurePrompt(`{"verdict":{"verdict":"benign"}}`) != prompt+feedbackRule {
 		t.Fatal("良性审计提示词应保留")
 	}
 }

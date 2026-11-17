@@ -173,14 +173,15 @@ func TestInFlightChangesNeverOverwrite(t *testing.T) {
 func TestRejectDedupAndBadCitation(t *testing.T) {
 	f := setup(t)
 	f.r.Judge = func(context.Context, string, string) (Decision, error) { f.calls++; return approved(uuid.New()), nil }
-	for range 2 {
+	// 服务端驳回批准后，同一快照带着驳回原因再审一次；第二次仍被驳回就不再审
+	for range 3 {
 		ok, err := f.r.Review(f.ctx, f.inc.ID)
 		if ok || err != nil {
 			t.Fatal(ok, err)
 		}
 	}
-	if f.calls != 1 {
-		t.Fatal("同快照重复审查", f.calls)
+	if f.calls != 2 {
+		t.Fatal("同快照只许纠正重审一次", f.calls)
 	}
 	if f.db.Incident.GetX(f.ctx, f.inc.ID).Status != "triaged" {
 		t.Fatal("伪造引用结案")
@@ -298,14 +299,14 @@ func TestMalformedJudgeDecisionRecordsDenialOnce(t *testing.T) {
 		f.calls++
 		return Decision{Approve: true}, nil
 	}
-	for range 2 {
+	for range 3 {
 		ok, err := f.r.Review(f.ctx, f.inc.ID)
 		if ok || err != nil {
 			t.Fatal(ok, err)
 		}
 	}
-	if f.calls != 1 {
-		t.Fatal("坏回复不应无限重审", f.calls)
+	if f.calls != 2 {
+		t.Fatal("坏回复只许重审一次，不应无限重审", f.calls)
 	}
 }
 

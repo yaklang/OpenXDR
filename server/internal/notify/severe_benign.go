@@ -36,11 +36,20 @@ func (n *Notifier) severeBenignDigest(ctx context.Context, now time.Time) error 
 		return nil
 	}
 	rows, err := n.DB.Incident.Query().Where(review.SevereBenign()).Order(ent.Asc(incident.FieldCreatedAt)).All(ctx)
-	if err != nil || len(rows) == 0 {
+	if err != nil {
 		return err
 	}
-	body := severeBenignBody(rows, t.LinkBase)
-	if err := send(ctx, n.Client, t.URL, t.Format, payload(t.Format, Text{Title: "高危良性待确认", Body: body}, body)); err != nil {
+	// 结案审计确定结不掉、已转人工的事件一起汇总：这类事件创建时 AI 还在跟进，没有逐条推过
+	handed, err := n.DB.Incident.Query().Where(review.HandedOff(), incident.Not(review.SevereBenign())).Order(ent.Asc(incident.FieldCreatedAt)).All(ctx)
+	if err != nil || len(rows)+len(handed) == 0 {
+		return err
+	}
+	body := severeBenignBody(rows, t.LinkBase) + handedOffBody(handed, t.LinkBase)
+	title := "高危良性待确认"
+	if len(rows) == 0 {
+		title = "AI 无法自动结案的事件"
+	}
+	if err := send(ctx, n.Client, t.URL, t.Format, payload(t.Format, Text{Title: title, Body: body}, body)); err != nil {
 		n.Settings.Record(ctx, err)
 		return err
 	}
@@ -50,12 +59,15 @@ func (n *Notifier) severeBenignDigest(ctx context.Context, now time.Time) error 
 	if err == nil && c == 0 {
 		err = n.DB.Setting.Create().SetID(severeBenignKey).SetValue(value).Exec(ctx)
 	}
-	slog.Info("高危良性汇总已推送", "incidents", len(rows))
+	slog.Info("高危良性汇总已推送", "incidents", len(rows), "handed_off", len(handed))
 	return err
 }
 
 // severeBenignBody 每个事件一行，最多 20 行
 func severeBenignBody(rows []*ent.Incident, linkBase string) string {
+	if len(rows) == 0 {
+		return ""
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "📋【OpenXDR】高危良性待确认：%d 个事件\nAI 判为良性，但告警是高危或严重级、主机上没有写明业务的资产角色或授权事实，需要人确认后结案（给主机补上事实，同类事件以后可由审计员自动结案）。\n", len(rows))
 	for i, inc := range rows {
@@ -68,6 +80,37 @@ func severeBenignBody(rows []*ent.Incident, linkBase string) string {
 			title = *inc.Title
 		}
 		fmt.Fprintf(&b, "· %s", title)
+		if linkBase != "" {
+			fmt.Fprintf(&b, "｜%s/incidents/%s", linkBase, inc.ID)
+		}
+		b.WriteString("\n")
+	}
+	if linkBase != "" {
+		fmt.Fprintf(&b, "🔗 待复核列表：%s/incidents?status=review\n", linkBase)
+	}
+	return b.String()
+}
+
+// handedOffBody 结案审计结不掉的事件：每行带上结不掉的原因，最多 20 行
+func handedOffBody(rows []*ent.Incident, linkBase string) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "📋【OpenXDR】AI 无法自动结案：%d 个事件\nAI 已研判，但结案审计因下列原因结不掉，已转人工复核。\n", len(rows))
+	for i, inc := range rows {
+		if i == 20 {
+			fmt.Fprintf(&b, "…另有 %d 个\n", len(rows)-20)
+			break
+		}
+		title := inc.ID.String()
+		if inc.Title != nil {
+			title = *inc.Title
+		}
+		fmt.Fprintf(&b, "· %s", title)
+		if inc.Work != nil {
+			fmt.Fprintf(&b, "：%s", strings.TrimPrefix(inc.Work.Reason, review.HandoffPrefix))
+		}
 		if linkBase != "" {
 			fmt.Fprintf(&b, "｜%s/incidents/%s", linkBase, inc.ID)
 		}

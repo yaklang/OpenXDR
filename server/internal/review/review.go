@@ -21,6 +21,9 @@ const Severity = 4
 // ClosedBy 系统自动结案的 resolved_by，用来和分析师的人工结论区分
 const ClosedBy = "system"
 
+// HandoffPrefix 结案审计确定结不掉、转人工复核时工作原因的前缀；每日汇总按它挑出这类事件
+const HandoffPrefix = "AI 无法自动结案："
+
 // unresolved 引擎已研判但分析师还没结案的也算未结案
 func unresolved() predicate.Incident { return incident.StatusIn("open", "triaged") }
 
@@ -59,6 +62,13 @@ func uncoveredSevere() predicate.Incident {
 			SELECT 1 FROM facts f WHERE f.asset_id = a.asset_id AND %s AND f.retired_at IS NULL AND (f.expires_at IS NULL OR f.expires_at > now()))))`,
 			s.C(incident.FieldID), Severity, Severity, facts.HostCoverageSQL("f"))))
 	}
+}
+
+// HandedOff 结案审计确定结不掉、已转人工复核的未结案事件（工作原因带 HandoffPrefix）：进每日汇总，不再静默挂着
+func HandedOff() predicate.Incident {
+	return incident.And(unresolved(), func(s *sql.Selector) {
+		s.Where(sql.ExprP(fmt.Sprintf(`COALESCE(%[1]s->>'owner', '') = 'human' AND COALESCE(%[1]s->>'reason', '') LIKE '%[2]s%%'`, s.C(incident.FieldWork), HandoffPrefix)))
+	})
 }
 
 // SevereBenign 未结案、AI 判良性但带没有事实兜底的高危或严重告警：要人确认，按天汇总推送而不逐条推
