@@ -142,6 +142,7 @@ func main() {
 	suppressionReviewer := startSuppressionReview(ctx, db, client, suppressions, rules, conf)
 	closureReviewer := closurereview.New(client, func() (string, string) { c := conf(); return c.BaseURL, c.APIKey }, func() string { return conf().Model }, aiconf.Recorder(client, "closure_review"))
 	closureReviewer.Rules = rules.Rules
+	closureReviewer.Suppress = suppressions
 	startAnalytics(ctx, db, client, rules, suppressions, suppressionReviewer, closureReviewer.Review)
 
 	// 研判与资产标注共用一个端点与模型，每次调用按当时的配置，用量按用途分开记

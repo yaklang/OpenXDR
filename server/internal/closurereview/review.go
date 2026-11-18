@@ -65,8 +65,10 @@ type MissingFact struct {
 }
 type Judge func(context.Context, string, string) (Decision, error)
 type Reviewer struct {
-	DB       *ent.Client
-	Rules    func() []*sigma.Rule
+	DB    *ent.Client
+	Rules func() []*sigma.Rule
+	// Suppress 生效抑制与内置良性链：被它覆盖的告警按噪声剔出结案审计（与抑制回头结案同一口径）
+	Suppress *suppress.Store
 	Model    func() string
 	Judge    Judge
 	Interval time.Duration
@@ -278,10 +280,10 @@ func eligible(inc *ent.Incident) bool {
 	return true
 }
 func load(ctx context.Context, db *ent.Client, id uuid.UUID) (*material, error) {
-	return loadWithRules(ctx, db, nil, id)
+	return loadWithRules(ctx, db, nil, nil, id)
 }
 
-func loadWithRules(ctx context.Context, db *ent.Client, rules []*sigma.Rule, id uuid.UUID) (*material, error) {
+func loadWithRules(ctx context.Context, db *ent.Client, rules []*sigma.Rule, sift *sifter, id uuid.UUID) (*material, error) {
 	inc, err := db.Incident.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -307,7 +309,7 @@ func loadWithRules(ctx context.Context, db *ent.Client, rules []*sigma.Rule, id 
 		}
 	}
 	if benignEligible(inc) {
-		return loadBenign(ctx, db, inc)
+		return loadBenign(ctx, db, sift, inc)
 	}
 	if !systemReviewable(inc) || VerdictHash(inc.AiVerdict) == "" {
 		return nil, ErrIneligible
@@ -522,6 +524,10 @@ func rejection(d Decision, m *material) string {
 			if !ok {
 				return "引用的字段 " + c.Field + " 在事件 " + c.EventID.String() + " 里不存在"
 			}
+			// 字段在材料里被截断过：审计员只看得到首尾，引用了其中一段也对不上原值，不计入覆盖
+			if strings.Contains(value, truncMark) {
+				continue
+			}
 			if value != c.Value {
 				return "引用的字段 " + c.Field + " 与事件 " + c.EventID.String() + " 的原值不符"
 			}
@@ -569,7 +575,12 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	rules := r.rules()
-	m, err := loadWithRules(ctx, r.DB, rules, id)
+	sift := newSifter(r.DB, rules, r.Suppress)
+	m, err := loadWithRules(ctx, r.DB, rules, sift, id)
+	var allNoise *errAllNoise
+	if errors.As(err, &allNoise) {
+		return r.closeNoise(ctx, id, allNoise.alerts)
+	}
 	if errors.Is(err, ErrIneligible) {
 		return false, r.settle(ctx, id, err)
 	}
@@ -618,7 +629,7 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 		return false, err
 	}
 	defer tx.Rollback()
-	fresh, err := loadWithRules(ctx, tx.Client(), rules, id)
+	fresh, err := loadWithRules(ctx, tx.Client(), rules, sift, id)
 	if err != nil || fingerprint(fresh) != hash {
 		if errors.Is(err, ErrIneligible) {
 			return false, nil

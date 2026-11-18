@@ -59,6 +59,8 @@ type benignEvidence struct {
 	Severe      []severeHost `json:"severe_hosts,omitempty"`
 	QuietSince  time.Time    `json:"quiet_since"`
 	SettleHours int          `json:"settle_hours"`
+	// Noise 按当前规则与良性链已是噪声、没交审计员的告警
+	Noise []noiseAlert `json:"noise_alerts,omitempty"`
 }
 
 // benignEligible 研判为良性、只建议观察类动作；带核实来源等动作说明研判自己也没把握，不进自动结案。
@@ -82,12 +84,33 @@ func benignEligible(inc *ent.Incident) bool {
 	return true
 }
 
-func loadBenign(ctx context.Context, db *ent.Client, inc *ent.Incident) (*material, error) {
-	alerts, err := db.Alert.Query().Where(alert.IncidentIDEQ(inc.ID)).WithAsset().Order(ent.Asc(alert.FieldID)).All(ctx)
+func loadBenign(ctx context.Context, db *ent.Client, sift *sifter, inc *ent.Incident) (*material, error) {
+	all, err := db.Alert.Query().Where(alert.IncidentIDEQ(inc.ID)).WithAsset().WithEvent().Order(ent.Asc(alert.FieldID)).All(ctx)
 	if err != nil {
 		return nil, err
 	}
+	// 按当前规则与良性链已是噪声的告警先剔出去：不计条数、不进审计，只在材料里列明
+	var noise []noiseAlert
+	var alerts []*ent.Alert
+	for _, a := range all {
+		os := ""
+		if a.Edges.Asset != nil && a.Edges.Asset.Os != nil {
+			os = *a.Edges.Asset.Os
+		}
+		why, err := sift.noise(ctx, a, a.Edges.Event, os)
+		if err != nil {
+			return nil, err
+		}
+		if why != "" {
+			noise = append(noise, noiseAlert{AlertID: a.ID.String(), RuleID: a.RuleID, Reason: why})
+			continue
+		}
+		alerts = append(alerts, a)
+	}
 	if len(alerts) == 0 {
+		if len(noise) > 0 {
+			return nil, &errAllNoise{alerts: noise}
+		}
 		return nil, ErrIneligible
 	}
 	// 研判时已看过的规则与主机：之后关联进来的同规则同主机告警，关联引擎不当新证据、不重研判，
@@ -111,7 +134,7 @@ func loadBenign(ctx context.Context, db *ent.Client, inc *ent.Incident) (*materi
 	if len(alerts) > maxBenignAlerts {
 		return nil, stall("告警 %d 条，超过结案审计单次上限 %d 条", len(alerts), maxBenignAlerts)
 	}
-	be := &benignEvidence{SettleHours: int(benignSettle / time.Hour)}
+	be := &benignEvidence{SettleHours: int(benignSettle / time.Hour), Noise: noise}
 	m := &material{IncidentID: inc.ID, Verdict: auditVerdict(inc.AiVerdict), TriagedAt: *inc.TriagedAt, EvidenceKey: triage.IncidentEvidenceKey(inc), VerdictHash: VerdictHash(inc.AiVerdict), Benign: be, Alerts: bareAlerts(alerts)}
 	for _, a := range alerts {
 		if err := alertStall(a); err != nil {

@@ -96,3 +96,20 @@ func TestAuditDetailParsing(t *testing.T) {
 		t.Fatal("重审要带上驳回原因")
 	}
 }
+
+// 字段在材料里被截断过，审计员引用了其中一段：不计入覆盖，不整份驳回
+func TestClaimOnTruncatedFieldIsSkipped(t *testing.T) {
+	id := uuid.New()
+	long := "rustc --crate-name scutum " + strings.Repeat("-C link-arg=/opt/runner/_work/target/debug/deps/x.o ", 200)
+	raw, _ := json.Marshal(map[string]any{"process": map[string]any{"name": "cc", "cmd_line": "cc -m64", "parent_process": map[string]any{"cmd_line": long}}})
+	cut, _ := truncateRaw(raw)
+	m := &material{Benign: &benignEvidence{}, Events: []*ent.Event{{ID: id, Raw: cut}}}
+	head := Claim{EventID: id, Field: "raw.process.parent_process.cmd_line", Value: long[:120]}
+	good := Claim{EventID: id, Field: "raw.process.cmd_line", Value: "cc -m64"}
+	if got := rejection(approve([]uuid.UUID{id}, head, good), m); got != "" {
+		t.Fatalf("截断字段上的引用应不计入而不是驳回：%q", got)
+	}
+	if got := rejection(approve([]uuid.UUID{id}, head), m); got != "事件 "+id.String()+" 没有字段级引用" {
+		t.Fatalf("只有截断字段上的引用应判为缺引用：%q", got)
+	}
+}

@@ -171,6 +171,19 @@ cases:
           name: "ip_set.ko"
     expect: undetected
 
+  - name: 良性对照：tailscaled 建 tailscale0 时按需加载内核树里的 tun
+    technique: T1547.006
+    source: 生产 openxdr-node1（内核升级重启后 tailscaled 拉起）
+    class: 1005
+    os: linux
+    event:
+      activity_id: 1
+      module:
+        file:
+          path: "/lib/modules/6.1.0-56-cloud-amd64/kernel/drivers/net/tun.ko"
+          name: "tun.ko"
+    expect: undetected
+
   - name: 树外模块冒用自动加载模块名仍告警
     technique: T1547.006
     source: rootkit 冒名（insmod 到 extra/）

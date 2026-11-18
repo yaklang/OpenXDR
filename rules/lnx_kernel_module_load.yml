@@ -20,6 +20,6 @@ detection:
   # 路径在 /lib/modules/<kver>/kernel/ 下且名字在名单里才排除；树外模块（extra/、updates/、/tmp 等）
   # 与只报名字的事件照常告警
   filter_intree_autoload:
-    ImageLoaded|re: '^/lib/modules/[^/]+/kernel/(net|drivers/net|fs/overlayfs)/(.+/)?(bridge|br_netfilter|llc|stp|veth|macvlan|ipvlan|vxlan|overlay|udp_tunnel|ip6_udp_tunnel|tls|(inet|tcp|udp|unix|netlink|packet|raw|af_packet)_diag|x_tables|ip_tables|ip6_tables|iptable_[a-z]+|ip6table_[a-z]+|ipt_[A-Za-z]+|ip6t_[A-Za-z]+|xt_[A-Za-z0-9_]+|nf_[a-z0-9_]+|nft_[a-z0-9_]+|nfnetlink[a-z_]*|ip_set[a-z_]*|xt_set|ip_vs[a-z_]*|xfrm_[a-z_]+)\.ko(\.(xz|zst|gz))?$'
+    ImageLoaded|re: '^/lib/modules/[^/]+/kernel/(net|drivers/net|fs/overlayfs)/(.+/)?(bridge|br_netfilter|llc|stp|veth|tun|macvlan|ipvlan|vxlan|overlay|udp_tunnel|ip6_udp_tunnel|tls|(inet|tcp|udp|unix|netlink|packet|raw|af_packet)_diag|x_tables|ip_tables|ip6_tables|iptable_[a-z]+|ip6table_[a-z]+|ipt_[A-Za-z]+|ip6t_[A-Za-z]+|xt_[A-Za-z0-9_]+|nf_[a-z0-9_]+|nft_[a-z0-9_]+|nfnetlink[a-z_]*|ip_set[a-z_]*|xt_set|ip_vs[a-z_]*|xfrm_[a-z_]+)\.ko(\.(xz|zst|gz))?$'
   condition: 1 of selection* and not filter_intree_autoload
 level: high
