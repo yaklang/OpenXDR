@@ -60,7 +60,7 @@ gofmt -l .                                  # 格式检查（必须无输出）
 go vet ./...                                # 静态检查
 go test ./...                               # 单元测试
 INTEGRATION_DATABASE_URL=postgres://openxdr:openxdr@localhost:5432/openxdr_test?sslmode=disable \
-  go test -tags integration -p 1 ./...      # 集成测试（共享测试库，必须 -p 1 串行）
+  sh integration-test.sh                    # 集成测试（每个包独立测试库、并行跑，约 1.5 分钟；并行失败的包自动串行重跑一次）
 go run ./cmd/sigmacheck --strict ../rules   # 自带规则必须全部可加载
 go run ./cmd/detectcheck --strict           # 检测回归对拍（validation/ 语料）
 go run ./cmd/gencerts ../certs <server地址> [主机名...]   # 生成 mTLS 证书
@@ -173,9 +173,12 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
 ## 测试策略
 
 - Go：单元测试就近放在包内（`*_test.go`）；集成测试以 `//go:build integration`
-  标记，依赖真实 Postgres，共享同一测试库且跑前清表，因此必须 `-p 1` 串行
-  （见 `server/internal/testdb`）。跑集成测试需 `INTEGRATION_DATABASE_URL` 指向
-  测试库（可用 `docker compose up -d postgres` 起一个）。
+  标记，依赖真实 Postgres。`server/integration-test.sh` 经 `cmd/integrationexec` 给每个包分一个独立测试库
+  （`<库名>_<包目录摘要>`，不存在自动建），包之间并行跑；`testdb.New` 在每个测试开始时清空 public 下全部表、
+  拆掉残留月归档分区，schema 指纹不变时不重复迁移。测试库用户须是超级用户（清表时暂停外键），
+  建议关掉落盘保证（`ALTER SYSTEM SET fsync / synchronous_commit / full_page_writes = off`）。
+  跑集成测试需 `INTEGRATION_DATABASE_URL` 指向测试库（可用 `docker compose up -d postgres` 起一个）。
+  只跑单个包时直接 `go test -tags integration ./internal/<包>/` 即可（共用基础库）。
 - Rust：`cargo test`（默认特性即可，CI 不跑内核特性的测试）。
 - Web：无单测，靠 `tsc` 类型检查 + oxlint + 构建把关。
 - 检测能力回归：`validation/` 语料 + `cmd/detectcheck` 是核心防线——验证规则

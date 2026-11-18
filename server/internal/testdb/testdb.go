@@ -3,15 +3,18 @@
 // Package testdb 提供集成测试共用的 Postgres 连接与表清理。
 // 仅在使用 -tags integration 构建时编译。
 //
-// 所有集成测试共享同一测试库并在跑前清空表，因此多包集成测试必须串行：
+// 每个测试开始时清空库里全部表，同一个库上的测试不能并发；多包并行用 server/integration-test.sh，
+// 它经 cmd/integrationexec 给每个包分配独立的库：
 //
-//	go test -tags integration -p 1 ./...
+//	INTEGRATION_DATABASE_URL=postgres://... sh integration-test.sh
 package testdb
 
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
+	"sync"
 	"testing"
 
 	"entgo.io/ent/dialect"
@@ -41,105 +44,89 @@ func New(t *testing.T) (context.Context, *ent.Client) {
 	t.Cleanup(func() { client.Close() })
 
 	ctx := context.Background()
-	if err := eventpart.Migrate(ctx, client, db); err != nil {
-		t.Fatalf("schema 迁移失败: %v", err)
-	}
-	if err := aijob.EnsureSchema(ctx, db); err != nil {
-		t.Fatalf("AI 任务索引失败: %v", err)
-	}
-	if err := temporal.EnsureSchema(ctx, db); err != nil {
-		t.Fatalf("时序处理状态初始化失败: %v", err)
-	}
-	if err := graphqueue.EnsureSchema(ctx, db); err != nil {
+	if err := migrate(ctx, client, db, dsn); err != nil {
 		t.Fatal(err)
 	}
-	if err := authevents.EnsureSchema(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-	truncateRaw(ctx, t, db)
-	truncate(ctx, t, client)
+	clean(ctx, t, db)
 	return ctx, client
 }
 
-// truncateRaw 清空不归 ent 管的身份图表（由 identity.EnsureSchema 建，表可能还不存在）。
-// 游标表也要清，否则上一个测试的增量游标会让新数据被跳过。
-func truncateRaw(ctx context.Context, t *testing.T, db *sql.DB) {
-	t.Helper()
-	for _, table := range []string{"auth_attempt_closures", "auth_events", "assetmap_queue", "identity_login_matches", "identity_candidate_rejections", "identity_links", "identities", "identity_accounts", "identity_graph_cursors"} {
-		if _, err := db.ExecContext(ctx, `DO $$ BEGIN IF to_regclass('`+table+`') IS NOT NULL THEN DELETE FROM `+table+`; END IF; END $$`); err != nil {
-			t.Fatalf("清空表 %s 失败: %v", table, err)
-		}
+var (
+	migratedMu sync.Mutex
+	// migrated 每个库上次建完 schema 后的指纹
+	migrated = map[string]string{}
+)
+
+// migrate 建表与 ent diff 每次要上百毫秒：schema 指纹和上次建完时一致就跳过，只清表。
+// 有些测试会改 schema（events 在分区表与普通表之间迁移、删冗余索引、换外键与触发器），
+// 指纹一变就整套重建，下一个测试照样拿到完整 schema
+func migrate(ctx context.Context, client *ent.Client, db *sql.DB, dsn string) error {
+	migratedMu.Lock()
+	defer migratedMu.Unlock()
+	if fp, err := fingerprint(ctx, db); err != nil {
+		return err
+	} else if fp == migrated[dsn] {
+		return nil
 	}
+	if err := eventpart.Migrate(ctx, client, db); err != nil {
+		return fmt.Errorf("schema 迁移失败: %w", err)
+	}
+	if err := aijob.EnsureSchema(ctx, db); err != nil {
+		return fmt.Errorf("AI 任务索引失败: %w", err)
+	}
+	if err := temporal.EnsureSchema(ctx, db); err != nil {
+		return fmt.Errorf("时序处理状态初始化失败: %w", err)
+	}
+	if err := graphqueue.EnsureSchema(ctx, db); err != nil {
+		return err
+	}
+	if err := authevents.EnsureSchema(ctx, db); err != nil {
+		return err
+	}
+	fp, err := fingerprint(ctx, db)
+	if err != nil {
+		return err
+	}
+	migrated[dsn] = fp
+	return nil
 }
 
-// truncate 按外键依赖顺序清空全部表，保证每个测试从干净状态开始。
-func truncate(ctx context.Context, t *testing.T, c *ent.Client) {
+// fingerprint public 下表、索引、约束、函数与触发器的摘要；分区子表及其索引、约束、克隆触发器不计，
+// 测试按需预建日分区不触发重建
+func fingerprint(ctx context.Context, db *sql.DB) (string, error) {
+	var fp sql.NullString
+	err := db.QueryRowContext(ctx, `SELECT md5(string_agg(x, ',' ORDER BY x)) FROM (
+  SELECT 'r:' || c.relname || ':' || c.relkind::text AS x FROM pg_class c
+   WHERE c.relnamespace = 'public'::regnamespace AND NOT c.relispartition AND c.relkind IN ('r','p','i','I','v','m','S')
+  UNION ALL
+  SELECT 'c:' || r.relname || ':' || k.conname || ':' || k.contype::text FROM pg_constraint k JOIN pg_class r ON r.oid = k.conrelid
+   WHERE k.connamespace = 'public'::regnamespace AND NOT r.relispartition
+  UNION ALL
+  SELECT 'f:' || p.proname || ':' || md5(p.prosrc) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+  UNION ALL
+  SELECT 't:' || r.relname || ':' || g.tgname FROM pg_trigger g JOIN pg_class r ON r.oid = g.tgrelid
+   WHERE NOT g.tgisinternal AND g.tgparentid = 0 AND r.relnamespace = 'public'::regnamespace
+ ) s`).Scan(&fp)
+	return fp.String, err
+}
+
+// clean 每个测试从全空的库开始：public 下的全部表（分区子表随父表）一次清空，不维护名单——
+// 不归 ent 管的表（身份图、时序证据、归档记录、队列游标……）以前要靠别的包的测试先清，换个顺序或上次中途失败就带着残留。
+// 月归档分区（events_aYYYYMM）跨整月，残留会挡住测试要建的历史日分区，一并拆掉。
+// 清表时在本事务里暂停外键与触发器（session_replication_role=replica，测试库用户须是超级用户），顺序无关，一次往返
+func clean(ctx context.Context, t *testing.T, db *sql.DB) {
 	t.Helper()
-	dels := []func(context.Context) (int, error){
-		func(ctx context.Context) (int, error) { return c.TriageRun.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Containment.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.IntegrationIdempotency.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.ExternalTicket.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.IntegrationAttempt.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.IntegrationDelivery.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.IntegrationSubscription.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.IntegrationEvent.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.IntegrationToken.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.IntegrationGroup.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Integration.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.DecoyObservation.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.DecoyRevision.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.DecoyEngineRelease.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.DecoyDeployment.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.AIJob.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.HostCredential.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Finding.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Memory.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.StandingRuleRun.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.StandingRule.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Question.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.ChangeRecordAsset.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.ChangeRecord.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.ChangeSource.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Fact.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Intent.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.TaskRun.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Task.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Approval.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.CommandPolicy.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Report.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.ReportRead.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.SessionMessage.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.AgentSession.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.TrustedSource.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.SSHKeyObservation.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.SSHKeyBaseline.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.SSHLogin.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.GroupMember.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Group.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Alert.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Event.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Incident.Delete().Exec(ctx) },
-		// Command 引用 Asset，必须先删
-		func(ctx context.Context) (int, error) { return c.Command.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Asset.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Session.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.User.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.AuditLog.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Intel.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Suppression.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.ProcessBaseline.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.VulnRecord.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.BeaconBaseline.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Setting.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.AssetLink.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.IPInfo.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.AIUsage.Delete().Exec(ctx) },
-		func(ctx context.Context) (int, error) { return c.Zone.Delete().Exec(ctx) },
-	}
-	for i, del := range dels {
-		if _, err := del(ctx); err != nil {
-			t.Fatalf("清空表 #%d 失败: %v", i, err)
-		}
+	if _, err := db.ExecContext(ctx, `DO $$ DECLARE r record; BEGIN
+ PERFORM set_config('session_replication_role', 'replica', true);
+ FOR r IN SELECT c.relname FROM pg_class c JOIN pg_inherits i ON c.oid = i.inhrelid
+  WHERE i.inhparent = 'events'::regclass AND c.relname LIKE 'events_a%' LOOP
+  EXECUTE format('DROP TABLE IF EXISTS %I', r.relname);
+ END LOOP;
+ FOR r IN SELECT c.relname FROM pg_class c
+  WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p') AND NOT c.relispartition LOOP
+  EXECUTE format('DELETE FROM %I', r.relname);
+ END LOOP;
+END $$`); err != nil {
+		t.Fatalf("清空测试库失败（测试库用户须是超级用户）: %v", err)
 	}
 }

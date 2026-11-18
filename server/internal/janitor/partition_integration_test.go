@@ -24,7 +24,8 @@ func TestJanitorRetiresPartitionsAndSweepsOnlyArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	// 用 t.Cleanup 关连接：后注册的删归档分区先执行，连接还开着（defer 会先关连接，删表静默失败）
+	t.Cleanup(func() { db.Close() })
 	if err := ingest.EnsureSchema(ctx, db); err != nil {
 		t.Fatal(err)
 	}

@@ -60,10 +60,15 @@ jobs:
           DYGK_UPSTREAM_TOKEN: ${{ secrets.DYGK_UPSTREAM_TOKEN }}
       - name: 构建真实沙箱契约测试镜像
         run: docker build --build-arg NPM_REGISTRY=https://registry.npmjs.org -t openxdr-pi-sandbox:ci deploy/pi-sandbox
-      # 集成测试共享一个测试库，必须 -p 1 串行
+      # 测试库不需要崩溃安全：关掉落盘保证，并行跑时数据库不再是瓶颈（三项都可在线生效）
+      - name: 测试库关闭落盘保证
+        run: psql "$INTEGRATION_DATABASE_URL" -c "ALTER SYSTEM SET fsync = off" -c "ALTER SYSTEM SET synchronous_commit = off" -c "ALTER SYSTEM SET full_page_writes = off" -c "SELECT pg_reload_conf()"
+        env:
+          INTEGRATION_DATABASE_URL: postgres://openxdr:openxdr@localhost:5432/openxdr_test?sslmode=disable
+      # 每个包用独立测试库并行跑；并行时失败的包串行重跑一次，仍失败才算失败
       - name: 集成测试
         working-directory: server
-        run: go test -tags integration -p 1 ./...
+        run: sh integration-test.sh
         env:
           INTEGRATION_DATABASE_URL: postgres://openxdr:openxdr@localhost:5432/openxdr_test?sslmode=disable
           OPENXDR_SANDBOX_TEST_IMAGE: openxdr-pi-sandbox:ci
