@@ -63,9 +63,10 @@ var (
 func migrate(ctx context.Context, client *ent.Client, db *sql.DB, dsn string) error {
 	migratedMu.Lock()
 	defer migratedMu.Unlock()
+	// 空库的指纹也是空串，必须看「迁移过」而不是拿零值比
 	if fp, err := fingerprint(ctx, db); err != nil {
 		return err
-	} else if fp == migrated[dsn] {
+	} else if prev, ok := migrated[dsn]; ok && fp == prev {
 		return nil
 	}
 	if err := eventpart.Migrate(ctx, client, db); err != nil {
