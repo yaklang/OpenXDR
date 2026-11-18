@@ -201,3 +201,34 @@ func TestSevereHostWithoutFactsAsksQuestion(t *testing.T) {
 		t.Fatal("应向总控提问这台主机的业务")
 	}
 }
+
+// 早先转人工的事件每轮照样重审：结不掉的原因变了就改写，原因不变不重复写；人工接管的不动
+func TestHandoffReasonRefreshes(t *testing.T) {
+	f := setupBenign(t)
+	verdict(f, `{"verdict":"benign","action_codes":["review_closure","hunt_related"]}`)
+	aiOwned(t, f)
+	if _, err := f.r.Review(f.ctx, f.inc.ID); err != nil {
+		t.Fatal(err)
+	}
+	handedOff(t, f, "hunt_related")
+	verdict(f, `{"verdict":"suspicious","action_codes":["monitor"]}`)
+	for range 2 {
+		if _, err := f.r.Review(f.ctx, f.inc.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handedOff(t, f, "研判结论为可疑")
+	if n := f.db.AuditLog.Query().Where(auditlog.ActionEQ("incident_closure_handoff")).CountX(f.ctx); n != 2 {
+		t.Fatal("原因变一次记一次", n)
+	}
+	w := *f.db.Incident.GetX(f.ctx, f.inc.ID).Work
+	w.ManualOwner = "analyst"
+	f.db.Incident.UpdateOneID(f.inc.ID).SetWork(&w).ExecX(f.ctx)
+	verdict(f, `{"verdict":"benign","action_codes":["review_closure","hunt_related"]}`)
+	if _, err := f.r.Review(f.ctx, f.inc.ID); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.db.Incident.GetX(f.ctx, f.inc.ID).Work.Reason; !strings.Contains(r, "研判结论为可疑") {
+		t.Fatal("人工接管的事件不改写", r)
+	}
+}

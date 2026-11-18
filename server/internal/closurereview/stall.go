@@ -50,17 +50,22 @@ func (r *Reviewer) handoff(ctx context.Context, id uuid.UUID, reason string, ask
 	if ask != nil {
 		r.askHost(ctx, inc, *ask, reason)
 	}
-	if inc.Status != "triaged" || inc.TriagedAt == nil || inc.Work == nil || inc.Work.Owner != "ai" || inc.Work.Stage != "monitoring" {
+	if inc.Status != "triaged" || inc.TriagedAt == nil || inc.Work == nil {
 		return nil
 	}
 	reason = review.HandoffPrefix + clip(reason, 300)
 	w := *inc.Work
+	// 早先由结案审计交出的事件每轮照样重审：结不掉的原因变了就改写，人看到的不能是已经不成立的旧原因
+	refresh := w.Owner == "human" && w.Stage == "escalated" && w.ManualOwner == "" && !w.ManualLock && strings.HasPrefix(w.Reason, review.HandoffPrefix) && w.Reason != reason
+	if !refresh && (w.Owner != "ai" || w.Stage != "monitoring") {
+		return nil
+	}
 	w.Owner, w.Stage, w.Reason = "human", "escalated", reason
 	n, err := r.DB.Incident.Update().Where(incident.IDEQ(id), incident.StatusEQ("triaged"), incident.TriagedAtEQ(*inc.TriagedAt)).SetWork(&w).ClearWorkNextCheckAt().Save(ctx)
 	if err != nil || n == 0 {
 		return err
 	}
-	slog.Info("结案审计结不掉，转人工", "incident", id, "reason", reason)
+	slog.Info("结案审计结不掉，转人工", "incident", id, "reason", reason, "refresh", refresh)
 	return audit.Checked(ctx, r.DB.AuditLog.Create(), Actor, "server", "incident_closure_handoff", id.String(), reason)
 }
 
