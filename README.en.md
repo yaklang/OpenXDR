@@ -79,7 +79,7 @@ See [install](docs/install.md) and [deployment guide](docs/deployment.md); the f
 
 ## Status
 
-v0.4.0. The maintainers run it in their own network as a two-node high-availability deployment, covering twenty-odd Linux and Windows hosts.
+v0.5.0. The maintainers run it in their own network as a two-node high-availability deployment, covering twenty-odd Linux and Windows hosts.
 Autonomous response is off by default; the quality of AI verdicts depends on the model you connect, and the platform keeps it within permission, allowlist and approval boundaries.
 Known gaps are in the [roadmap](docs/roadmap.md); changes per release are in the [CHANGELOG](CHANGELOG.md).
 

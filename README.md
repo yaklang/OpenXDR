@@ -77,7 +77,7 @@ curl -fsSL https://github.com/yaklang/OpenXDR/releases/latest/download/install.s
 
 ## 当前状态
 
-v0.4.0。维护团队自己的内网以双节点高可用部署持续运行，纳管二十多台 Linux 与 Windows 主机。
+v0.5.0。维护团队自己的内网以双节点高可用部署持续运行，纳管二十多台 Linux 与 Windows 主机。
 自主响应默认关闭；AI 结论的质量取决于所接模型，平台保证它越不过权限、名单与审批的边界。
 已知缺口见 [路线图](docs/roadmap.md)，版本变化见 [CHANGELOG](CHANGELOG.md)。
 
