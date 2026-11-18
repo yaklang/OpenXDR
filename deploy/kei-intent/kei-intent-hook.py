@@ -6,18 +6,18 @@
 
 只做登记，从不拦命令：任何失败都只记日志，钩子照常放行（退出码 0、不输出决定）。
 
-识别的命令形态：ssh / scp / rsync / sftp 的目标，以及 wrappers 目录下的单机包装脚本（如 ~/.kei-deploy/node1）。
+识别的命令形态：ssh / scp / rsync / sftp 的目标，以及 wrappers 目录下的单机包装脚本（如 ~/ops/node1）。
 目标经 `ssh -G` 按 SSH 配置解析出真实地址与这次会用的钥匙，再按资产的 IP 或主机名对上纳管资产；
 只为配置里声明归本令牌所有的钥匙登记（平台也会校验：意图只能为事实库里持有人是自己的钥匙登记）。
 
 配置 ~/.config/kei-intent/config.json：
 {
-  "base": "http://10.1.1.199:8080/api/integration/v1",
-  "tokenFile": "~/.kei-deploy/openxdr-intent-token",
+  "base": "https://<控制台地址>/api/integration/v1",
+  "tokenFile": "~/.config/kei-intent/token",  // 集成 Token（scope intents:write），600 权限
   "keys": ["SHA256:..."],            // 本令牌名下的钥匙指纹
-  "sourceAddr": "10.1.1.3",          // 纳管主机看到的来源（WireGuard 出口）
-  "sshConfigs": ["/mnt/d/RoyalSecurity-Network/configs/ssh/config"],
-  "wrappers": "~/.kei-deploy",       // 单机包装脚本目录，可省略
+  "sourceAddr": "<来源地址>",        // 纳管主机看到的本机来源地址（经 NAT / VPN 时填出口地址）
+  "sshConfigs": ["~/.ssh/config"],
+  "wrappers": "~/ops",               // 单机包装脚本目录，可省略
   "category": "maintenance",         // 固定目录里的用途
   "minutes": 120
 }
@@ -123,7 +123,7 @@ def resolve(target, opts, ssh_configs):
     """ssh -G：真实地址与这次会用的钥匙文件（命令自带 -F 时只按它解析）"""
     configs = [None] if "-F" in opts else ssh_configs + [None]
     for cfg in configs:
-        cmd = ["ssh", "-G"] + (["-F", cfg] if cfg else []) + [os.path.expanduser(o) for o in opts] + [target]
+        cmd = ["ssh", "-G"] + (["-F", os.path.expanduser(cfg)] if cfg else []) + [os.path.expanduser(o) for o in opts] + [target]
         try:
             out = subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout
         except (OSError, subprocess.TimeoutExpired):
