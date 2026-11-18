@@ -283,12 +283,17 @@ func SyncBuiltins(ctx context.Context, db *ent.Client, catalog sigma.Catalog, di
 		ruleID := JoinRuleIDs(c.Rules)
 		reason := c.Reason()
 		if cur, ok := byKey[c.ID]; ok {
-			if err := db.Suppression.UpdateOneID(cur.ID).
+			upd := db.Suppression.UpdateOneID(cur.ID).
 				SetBuiltinTitle(c.Title).
 				SetRuleID(ruleID).
 				SetReason(reason).
-				SetConditions(c.Conditions).
-				Exec(ctx); err != nil {
+				SetConditions(c.Conditions)
+			// 仓库里又有这条链、而它是被同步自动停用的（没有人工启停记录）：重新启用。
+			// 滚动发布或回滚时旧版本节点会把它没见过的新链当成「已移除」停掉，不恢复就永远停着
+			if cur.Status == "disabled" && cur.ReviewedBy == nil {
+				upd.SetStatus("active")
+			}
+			if err := upd.Exec(ctx); err != nil {
 				return 0, err
 			}
 			continue
@@ -306,14 +311,15 @@ func SyncBuiltins(ctx context.Context, db *ent.Client, catalog sigma.Catalog, di
 		}
 	}
 
-	// 仓库中已移除的旧内置链自动停用，不删历史计数记录
+	// 仓库中已移除的旧内置链自动停用，不删历史计数记录；管理员手动停用的链（reviewed_by 非空）同步不会再启用
 	for _, row := range existing {
 		key := ""
 		if row.BuiltinKey != nil {
 			key = *row.BuiltinKey
 		}
+		// 清掉人工启停记录：reviewed_by 只表示最后一次人工启停，自动停用的链回到仓库时据此重新启用
 		if !keep[key] && row.Status == "active" {
-			if err := db.Suppression.UpdateOneID(row.ID).SetStatus("disabled").Exec(ctx); err != nil {
+			if err := db.Suppression.UpdateOneID(row.ID).SetStatus("disabled").ClearReviewedBy().ClearReviewedAt().Exec(ctx); err != nil {
 				return 0, err
 			}
 		}

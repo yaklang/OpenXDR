@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -171,7 +173,8 @@ func TestBuiltinSyncLineageAndDisablePersistence(t *testing.T) {
 	}
 
 	// 管理员停用该内置链后重载：不再压制；再次 SyncBuiltins（模拟发版重启）必须保留 disabled 状态与 matched_count
-	client.Suppression.UpdateOneID(runnerChain.ID).SetStatus("disabled").ExecX(ctx)
+	// 与控制台启停接口一致：人工停用会记下 reviewed_by
+	client.Suppression.UpdateOneID(runnerChain.ID).SetStatus("disabled").SetReviewedBy("admin").SetReviewedAt(time.Now()).ExecX(ctx)
 	if _, err := SyncBuiltins(ctx, client, engine, "../../../rules/benign-chains"); err != nil {
 		t.Fatalf("二次 SyncBuiltins 失败: %v", err)
 	}
@@ -321,5 +324,55 @@ ORDER BY ts ASC LIMIT 1`, host.ID, listenerGUID, now, now.Add(-LineageLookback))
 		if len(got) != 1 {
 			t.Fatalf("[%s] 直接父进程早于窗口时应退回单跳内嵌 parent_process，实际 %d: %+v", name, len(got), got)
 		}
+	}
+}
+
+// 滚动发布或回滚时，旧版本节点会把它没见过的新链当成「已从仓库移除」自动停用；
+// 新版本再同步时要把这类自动停用的链重新启用，人工停用的保持不动
+func TestSyncBuiltinsReenablesAutoDisabledChains(t *testing.T) {
+	ctx, client := testdb.New(t)
+	engine, _ := sigma.LoadDirReport("../../../rules")
+	full := "../../../rules/benign-chains"
+	if _, err := SyncBuiltins(ctx, client, engine, full); err != nil {
+		t.Fatal(err)
+	}
+	// 人工停用另一条链
+	manual := client.Suppression.Query().Where(suppression.BuiltinKeyEQ("kafka-tool-uname")).OnlyX(ctx)
+	client.Suppression.UpdateOneID(manual.ID).SetStatus("disabled").SetReviewedBy("admin").SetReviewedAt(time.Now()).ExecX(ctx)
+
+	// 旧版本的链目录里没有这条新链
+	old := t.TempDir()
+	entries, err := os.ReadDir(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".yml") || e.Name() == "apt-dpkg-maintainer-scripts.yml" {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(full, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(old, e.Name()), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := SyncBuiltins(ctx, client, engine, old); err != nil {
+		t.Fatal(err)
+	}
+	chain := client.Suppression.Query().Where(suppression.BuiltinKeyEQ("apt-dpkg-maintainer-scripts")).OnlyX(ctx)
+	if chain.Status != "disabled" || chain.ReviewedBy != nil {
+		t.Fatalf("旧版本应把没见过的链自动停用且不留人工记录：%+v", chain)
+	}
+
+	if _, err := SyncBuiltins(ctx, client, engine, full); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.Suppression.GetX(ctx, chain.ID); got.Status != "active" {
+		t.Fatalf("新版本同步应重新启用被自动停用的链：%+v", got)
+	}
+	if got := client.Suppression.GetX(ctx, manual.ID); got.Status != "disabled" {
+		t.Fatalf("人工停用的链不应被同步启用：%+v", got)
 	}
 }
