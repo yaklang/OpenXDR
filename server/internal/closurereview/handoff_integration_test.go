@@ -5,6 +5,7 @@ package closurereview
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -55,15 +56,17 @@ func TestStalledIncidentsHandOffToHuman(t *testing.T) {
 		want string
 	}{
 		"告警超限": {func(f *fixture) {
-			for range maxBenignAlerts {
-				ev := f.db.Event.Create().SetTs(f.ev.Ts).SetAssetID(f.asset.ID).SetSource("agent").SetClassUID(1007).SetRaw(f.ev.Raw).SaveX(f.ctx)
+			// 原文各不相同，归并不了
+			for i := range maxBenignAlerts {
+				raw, _ := json.Marshal(map[string]any{"activity_id": 1, "process": map[string]any{"cmd_line": benignCmd + " " + strconv.Itoa(i)}})
+				ev := f.db.Event.Create().SetTs(f.ev.Ts).SetAssetID(f.asset.ID).SetSource("agent").SetClassUID(1007).SetRaw(raw).SaveX(f.ctx)
 				f.db.Alert.Create().SetTs(f.al.Ts).SetAssetID(f.asset.ID).SetEventID(ev.ID).SetIncidentID(f.inc.ID).SetSeverity(3).SetRuleID(f.al.RuleID).ExecX(f.ctx)
 			}
 		}, "超过结案审计单次上限"},
 		"可疑结论": {func(f *fixture) { verdict(f, `{"verdict":"suspicious","action_codes":["monitor"]}`) }, "研判结论为可疑"},
 		"后续动作无人执行": {func(f *fixture) {
-			verdict(f, `{"verdict":"benign","action_codes":["review_closure","inspect_history"]}`)
-		}, "inspect_history"},
+			verdict(f, `{"verdict":"benign","action_codes":["review_closure","hunt_related"]}`)
+		}, "hunt_related"},
 		"审计员实质拒绝": {func(f *fixture) {
 			f.r.Judge = func(context.Context, string, string) (Decision, error) {
 				f.calls++

@@ -379,6 +379,11 @@ func Run(ctx context.Context, db *ent.Client) {
 		} else if ans+enr > 0 {
 			slog.Info("待答问题确定性收敛完成", "answered", ans, "enriched", enr)
 		}
+		if n, err := BlockedSweep(ctx, db, now); err != nil && ctx.Err() == nil {
+			slog.Error("受阻待办提问失败", "err", err)
+		} else if n > 0 {
+			slog.Info("受阻待办已提问总控", "count", n)
+		}
 		if n, err := RenewalSweep(ctx, db, now); err != nil && ctx.Err() == nil {
 			slog.Error("授权到期续期提问失败", "err", err)
 		} else if n > 0 {

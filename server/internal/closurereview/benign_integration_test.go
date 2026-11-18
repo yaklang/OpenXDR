@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -112,10 +113,10 @@ func TestBenignDisqualifiers(t *testing.T) {
 		"decoy": func(f *fixture) {
 			f.db.Alert.UpdateOneID(f.al.ID).SetRuleID(decoy.ObservationRulePrefix + "x").ExecX(f.ctx)
 		},
-		"suspicious":    verdict(`{"verdict":"suspicious","action_codes":["monitor"]}`),
-		"verify_source": verdict(`{"verdict":"benign","action_codes":["verify_source","monitor"]}`),
-		"no_codes":      verdict(`{"verdict":"benign"}`),
-		"tier":          verdict(`{"verdict":"benign","response_tier":"contain","action_codes":["monitor"]}`),
+		"suspicious":      verdict(`{"verdict":"suspicious","action_codes":["monitor"]}`),
+		"collect_records": verdict(`{"verdict":"benign","action_codes":["collect_original_records","monitor"]}`),
+		"no_codes":        verdict(`{"verdict":"benign"}`),
+		"tier":            verdict(`{"verdict":"benign","response_tier":"contain","action_codes":["monitor"]}`),
 		// 核心资产只挡高危：有主机事实兜底的高危告警，落在核心资产上仍不送审
 		"core_severe": func(f *fixture) {
 			f.db.Fact.Create().SetKind("asset_role").SetAssetID(f.asset.ID).SetContent("构建机").SetCreatedBy("admin").ExecX(f.ctx)
@@ -334,5 +335,45 @@ func TestBenignRejectionReasonAudited(t *testing.T) {
 	}
 	if !f.db.AuditLog.Query().Where(auditlog.TargetEQ(f.inc.ID.String()), auditlog.DetailContains("approved=false"), auditlog.DetailContains("rejected=引用的字段 process.cmd_line 与事件")).ExistX(f.ctx) {
 		t.Fatal("审计缺驳回原因")
+	}
+}
+
+// 研判建议的核对动作由审计员凭材料完成：这类良性事件照常送审，不转人工
+func TestBenignInspectionCodesGoToReview(t *testing.T) {
+	f := setupBenign(t)
+	verdict(f, `{"verdict":"benign","response_tier":"observe","action_codes":["trace_process","inspect_history","inspect_baseline","verify_source"]}`)
+	if ok, err := f.r.Review(f.ctx, f.inc.ID); !ok || err != nil || f.calls != 1 {
+		t.Fatal("核对类动作应交审计员结案", ok, err, f.calls)
+	}
+}
+
+// 同一行为反复触发的告警只交一条代表事件：进程号、唯一标识、端口与时间不同不算不同，上限按组数算
+func TestBenignGroupsIdenticalEvents(t *testing.T) {
+	f := setupBenign(t)
+	for i := range maxBenignAlerts + 10 {
+		raw, _ := json.Marshal(map[string]any{"activity_id": 1, "process": map[string]any{"cmd_line": benignCmd, "pid": 1000 + i, "uid": uuid.NewString(),
+			"parent_process": map[string]any{"pid": 7, "uid": uuid.NewString()}}, "login_session": map[string]any{"src_port": 40000 + i, "uid": strconv.Itoa(i)}})
+		ev := f.db.Event.Create().SetTs(f.inc.CreatedAt).SetAssetID(f.asset.ID).SetSource("agent").SetClassUID(1007).SetRaw(raw).SaveX(f.ctx)
+		f.db.Alert.Create().SetTs(f.inc.CreatedAt).SetAssetID(f.asset.ID).SetEventID(ev.ID).SetIncidentID(f.inc.ID).SetSeverity(3).SetRuleID(f.al.RuleID).ExecX(f.ctx)
+	}
+	var m material
+	f.r.Judge = func(_ context.Context, _, raw string) (Decision, error) {
+		f.calls++
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			return Decision{}, err
+		}
+		d := benignApproval(f.ev.ID, benignCmd)
+		d.EventIDs, d.Claims = nil, nil
+		for _, ev := range m.Events {
+			d.EventIDs = append(d.EventIDs, ev.ID)
+			d.Claims = append(d.Claims, Claim{EventID: ev.ID, Field: "process.cmd_line", Value: benignCmd})
+		}
+		return d, nil
+	}
+	if ok, err := f.r.Review(f.ctx, f.inc.ID); !ok || err != nil || f.calls != 1 {
+		t.Fatal("归并后应照常送审并结案", ok, err, f.calls)
+	}
+	if len(m.Events) != 2 || len(m.Alerts) != 2 || len(m.Benign.Groups) != 2 || m.Benign.Groups[1].Alerts != maxBenignAlerts+10 {
+		t.Fatalf("应归并成两组：夹具原有一条 + 新增的一组，%d %d %+v", len(m.Events), len(m.Alerts), m.Benign.Groups)
 	}
 }
