@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"openxdr/server/ent"
 	"openxdr/server/ent/auditlog"
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/question"
@@ -57,12 +58,8 @@ func TestStalledIncidentsHandOffToHuman(t *testing.T) {
 	}{
 		"告警超限": {func(f *fixture) {
 			// 原文各不相同，归并不了
-			for i := range maxBenignAlerts {
-				raw, _ := json.Marshal(map[string]any{"activity_id": 1, "process": map[string]any{"cmd_line": benignCmd + " " + strconv.Itoa(i)}})
-				ev := f.db.Event.Create().SetTs(f.ev.Ts).SetAssetID(f.asset.ID).SetSource("agent").SetClassUID(1007).SetRaw(raw).SaveX(f.ctx)
-				f.db.Alert.Create().SetTs(f.al.Ts).SetAssetID(f.asset.ID).SetEventID(ev.ID).SetIncidentID(f.inc.ID).SetSeverity(3).SetRuleID(f.al.RuleID).ExecX(f.ctx)
-			}
-		}, "超过结案审计单次上限"},
+			distinctAlerts(f, maxBenignAlerts*maxBenignBatches)
+		}, "超过分批审计上限"},
 		"可疑结论": {func(f *fixture) { verdict(f, `{"verdict":"suspicious","action_codes":["monitor"]}`) }, "研判结论为可疑"},
 		"后续动作无人执行": {func(f *fixture) {
 			verdict(f, `{"verdict":"benign","action_codes":["review_closure","hunt_related"]}`)
@@ -231,4 +228,80 @@ func TestHandoffReasonRefreshes(t *testing.T) {
 	if r := f.db.Incident.GetX(f.ctx, f.inc.ID).Work.Reason; !strings.Contains(r, "研判结论为可疑") {
 		t.Fatal("人工接管的事件不改写", r)
 	}
+}
+
+// distinctAlerts 补 n 条原文各不相同的低危告警，时间与夹具一致（已安静、研判前）
+func distinctAlerts(f *fixture, n int) {
+	evs := make([]*ent.EventCreate, n)
+	for i := range n {
+		raw, _ := json.Marshal(map[string]any{"activity_id": 1, "process": map[string]any{"cmd_line": benignCmd + " " + strconv.Itoa(i)}})
+		evs[i] = f.db.Event.Create().SetTs(f.inc.CreatedAt).SetAssetID(f.asset.ID).SetSource("agent").SetClassUID(1007).SetRaw(raw)
+	}
+	saved := f.db.Event.CreateBulk(evs...).SaveX(f.ctx)
+	als := make([]*ent.AlertCreate, n)
+	for i, ev := range saved {
+		als[i] = f.db.Alert.Create().SetTs(f.inc.CreatedAt).SetAssetID(f.asset.ID).SetEventID(ev.ID).SetIncidentID(f.inc.ID).SetSeverity(3).SetRuleID(f.al.RuleID)
+	}
+	f.db.Alert.CreateBulk(als...).ExecX(f.ctx)
+}
+
+// batchJudge 按材料里的事件逐条引用 cmd_line 批准；reject 指定的批次拒绝
+func batchJudge(f *fixture, reject string, seen *[]string) {
+	f.r.Judge = func(_ context.Context, _, raw string) (Decision, error) {
+		f.calls++
+		var m material
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			return Decision{}, err
+		}
+		*seen = append(*seen, m.Batch)
+		if m.Batch == reject {
+			return Decision{Reason: "这一批里有下载后执行的形态"}, nil
+		}
+		d := Decision{Approve: true, Reason: "批 " + m.Batch + " 都是包管理器刷新软件源", PositiveEvidence: "process.cmd_line 均为 apt-get update 的正常软件源更新"}
+		for _, ev := range m.Events {
+			var r struct {
+				Process struct {
+					Cmd string `json:"cmd_line"`
+				} `json:"process"`
+			}
+			_ = json.Unmarshal(ev.Raw, &r)
+			d.EventIDs = append(d.EventIDs, ev.ID)
+			d.Claims = append(d.Claims, Claim{EventID: ev.ID, Field: "process.cmd_line", Value: r.Process.Cmd})
+		}
+		return d, nil
+	}
+}
+
+// 组数超过单次上限按组分批：每批单独送审，全部批准才结案
+func TestBenignBatchedReview(t *testing.T) {
+	f := setupBenign(t)
+	distinctAlerts(f, maxBenignAlerts*2)
+	var seen []string
+	batchJudge(f, "", &seen)
+	if ok, err := f.r.Review(f.ctx, f.inc.ID); !ok || err != nil {
+		t.Fatal(ok, err, seen)
+	}
+	if strings.Join(seen, ",") != "1/3,2/3,3/3" {
+		t.Fatal("41 组应分三批依次送审", seen)
+	}
+	inc := f.db.Incident.GetX(f.ctx, f.inc.ID)
+	if inc.Status != "false_positive" || inc.Resolution == nil || !strings.Contains(*inc.Resolution, "分 3 批审计全部批准") {
+		t.Fatalf("%+v", inc.Resolution)
+	}
+}
+
+// 任一批不批就停，整件转人工并写明哪一批、为什么
+func TestBenignBatchRejectHandsOff(t *testing.T) {
+	f := setupBenign(t)
+	distinctAlerts(f, maxBenignAlerts*2)
+	aiOwned(t, f)
+	var seen []string
+	batchJudge(f, "2/3", &seen)
+	if ok, err := f.r.Review(f.ctx, f.inc.ID); ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	if strings.Join(seen, ",") != "1/3,2/3" {
+		t.Fatal("第二批不过就不再审第三批", seen)
+	}
+	handedOff(t, f, "第 2/3 批：这一批里有下载后执行的形态")
 }

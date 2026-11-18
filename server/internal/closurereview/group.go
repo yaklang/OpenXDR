@@ -52,24 +52,30 @@ func rawSignature(a *ent.Alert) string {
 	return string(b)
 }
 
+// alertSet 一组告警：代表、全部成员与交审计员的组摘要
+type alertSet struct {
+	rep     *ent.Alert
+	members []*ent.Alert
+	group   alertGroup
+}
+
 // groupAlerts 按首次出现的顺序分组，组里第一条告警是代表
-func groupAlerts(alerts []*ent.Alert) ([]*ent.Alert, []alertGroup) {
-	var reps []*ent.Alert
-	var groups []alertGroup
-	index := map[string]int{}
+func groupAlerts(alerts []*ent.Alert) []*alertSet {
+	var sets []*alertSet
+	index := map[string]*alertSet{}
 	for _, a := range alerts {
 		key := a.RuleID + "\x00" + a.AssetID.String() + "\x00" + rawSignature(a)
-		if i, ok := index[key]; ok {
-			groups[i].Alerts++
+		if s, ok := index[key]; ok {
+			s.members = append(s.members, a)
+			s.group.Alerts++
 			continue
 		}
-		index[key] = len(reps)
-		reps = append(reps, a)
-		g := alertGroup{RuleID: a.RuleID, Alerts: 1}
+		s := &alertSet{rep: a, members: []*ent.Alert{a}, group: alertGroup{RuleID: a.RuleID, Alerts: 1}}
 		if a.EventID != nil {
-			g.EventID = *a.EventID
+			s.group.EventID = *a.EventID
 		}
-		groups = append(groups, g)
+		index[key] = s
+		sets = append(sets, s)
 	}
-	return reps, groups
+	return sets
 }

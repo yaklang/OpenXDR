@@ -236,7 +236,13 @@ type material struct {
 	Basis                []positiveBasis   `json:"positive_basis"`
 	// ServerFeedback 同一快照第二次审计时，服务端对上一次批准的驳回原因；不进快照指纹
 	ServerFeedback string `json:"server_feedback,omitempty"`
+	// Batch 分批审计时本批的序号（「2/5」）；rest 是第一批之后的各批，只挂在第一批上
+	Batch string `json:"batch,omitempty"`
+	rest  []*material
 }
+
+// batches 本次审计要逐批送审的材料，不分批时只有它自己
+func (m *material) batches() []*material { return append([]*material{m}, m.rest...) }
 
 func (m *material) hosts() []benignHost {
 	if m == nil {
@@ -458,7 +464,12 @@ func bareAlerts(alerts []*ent.Alert) []*ent.Alert {
 
 func fingerprint(m *material) string {
 	b, _ := json.Marshal(m)
-	return digest(append(append(b, 0), closurePrompt(string(b))...))
+	b = append(append(b, 0), closurePrompt(string(b))...)
+	for _, r := range m.rest {
+		x, _ := json.Marshal(r)
+		b = append(append(b, 0), x...)
+	}
+	return digest(b)
 }
 
 // rejection 返回服务端驳回审计员批准的原因，空串表示通过；原因写进审计，排查时不用重放
@@ -611,19 +622,26 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 	if model == "" {
 		return false, nil
 	}
-	raw, _ := json.Marshal(m)
-	judgeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	d, err := r.Judge(judgeCtx, model, string(raw))
-	cancel()
-	if err != nil {
-		return false, err
+	// 逐批送审，任一批不过就停：审计记录与转人工原因写的是这一批
+	batches := m.batches()
+	failed, d, why := m, Decision{}, ""
+	var reasons, evidence []string
+	for _, b := range batches {
+		b.ServerFeedback = m.ServerFeedback
+		if d, err = r.judge(ctx, model, b); err != nil {
+			return false, err
+		}
+		failed = b
+		if why = rejection(d, b); why != "" {
+			break
+		}
+		reasons, evidence = append(reasons, d.Reason), append(evidence, d.PositiveEvidence)
 	}
-	decisionJSON, _ := json.Marshal(d)
-	if _, err := ParseDecision(string(decisionJSON)); err != nil {
-		d = invalidDecision()
-	}
-	why := rejection(d, m)
 	approved := why == ""
+	if approved && len(batches) > 1 {
+		d.Reason = fmt.Sprintf("分 %d 批审计全部批准：", len(batches)) + strings.Join(reasons, "；")
+		d.PositiveEvidence = strings.Join(evidence, "；")
+	}
 	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return false, err
@@ -685,7 +703,11 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 	if m.OpsSession != nil {
 		mechanism = OpsSessionSource
 	}
-	detail := prefix + fmt.Sprintf("approved=%t mechanism=%s model=%s decision=%s", approved, mechanism, model, decision)
+	detail := prefix
+	if failed.Batch != "" {
+		detail += "batch=" + failed.Batch + " "
+	}
+	detail += fmt.Sprintf("approved=%t mechanism=%s model=%s decision=%s", approved, mechanism, model, decision)
 	if !approved {
 		detail += " rejected=" + why
 	}
@@ -696,12 +718,28 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 		return false, err
 	}
 	if !approved && (m.Benign != nil || m.OpsSession != nil) {
-		r.askMissing(ctx, m, d, hash)
+		r.askMissing(ctx, failed, d, hash)
 	}
 	if !approved && !retryable(detail) {
 		return false, r.handoff(ctx, id, "结案审计未通过："+auditReason(detail), nil)
 	}
 	return approved, nil
+}
+
+// judge 送审一份材料；回复不合格按不合格决定处理
+func (r *Reviewer) judge(ctx context.Context, model string, m *material) (Decision, error) {
+	raw, _ := json.Marshal(m)
+	judgeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	d, err := r.Judge(judgeCtx, model, string(raw))
+	cancel()
+	if err != nil {
+		return Decision{}, err
+	}
+	decisionJSON, _ := json.Marshal(d)
+	if _, err := ParseDecision(string(decisionJSON)); err != nil {
+		d = invalidDecision()
+	}
+	return d, nil
 }
 
 // Sweep 分页轮转，已拒绝或旧提案不会长期占住队首。

@@ -103,6 +103,14 @@ func serverFeedback(detail string) string {
 
 // auditReason 审计记录里最能说明结论的一句：服务端驳回原因优先，其次是审计员给的理由
 func auditReason(detail string) string {
+	// 分批审计记的是不过的那一批：「snapshot=… batch=2/5 approved=…」
+	if f := strings.SplitN(detail, " ", 3); len(f) == 3 && strings.HasPrefix(f[1], "batch=") {
+		return "第 " + strings.TrimPrefix(f[1], "batch=") + " 批：" + reasonOf(detail)
+	}
+	return reasonOf(detail)
+}
+
+func reasonOf(detail string) string {
 	if _, why, ok := strings.Cut(detail, " rejected="); ok && why != "审计员未批准" {
 		return clip(why, 200)
 	}
