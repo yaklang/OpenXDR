@@ -90,13 +90,13 @@ func (r *Reviewer) askHost(ctx context.Context, inc *ent.Incident, hostID uuid.U
 // retryable 服务端驳回了审计员的批准，或审计回复不合格：都是可纠正的失误，同一快照再审一次
 func retryable(detail string) bool {
 	return strings.Contains(detail, `"approve":true`) && strings.Contains(detail, " rejected=") ||
-		strings.Contains(detail, invalidDecision().Reason)
+		strings.Contains(detail, invalidReason)
 }
 
 // serverFeedback 给第二次审计的驳回说明
 func serverFeedback(detail string) string {
-	if strings.Contains(detail, invalidDecision().Reason) {
-		return "上一次回复不是合格的 JSON 或缺必填字段，请严格按格式输出"
+	if strings.Contains(detail, invalidReason) {
+		return "上一次回复不合格（" + auditReason(detail) + "），请严格按格式只输出一个 JSON 对象，引用值保持简短完整"
 	}
 	return "上一次批准被服务端驳回：" + auditReason(detail) + "。请对照材料修正 event_ids 与 claims 后重新判断"
 }

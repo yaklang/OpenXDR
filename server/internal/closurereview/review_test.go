@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/google/uuid"
 	"openxdr/server/ent"
+	"strings"
 	"testing"
 )
 
@@ -90,5 +91,35 @@ func TestClaimValuePathSlips(t *testing.T) {
 	}
 	if _, ok := claimValue(ev, "raw.process.parent_process.cmd_line"); ok {
 		t.Error("不存在的字段不应凑出取值")
+	}
+}
+
+// 材料原样给审计员：< > & 不转义，照抄出来的引用才能与原值逐字对上
+func TestEncodeKeepsShellMetachars(t *testing.T) {
+	cmd := `timeout 3 bash -c '</dev/tcp/127.0.0.1/18080' && echo ok`
+	id := uuid.New()
+	// 库里的原文是 jsonb 文本，本来就不转义；截断处理过一遍也不能转义
+	raw, ok := truncateRaw(json.RawMessage(`{"process":{"cmd_line":"` + cmd + `"}}`))
+	if !ok {
+		t.Fatal("原文应能处理")
+	}
+	m := &material{Benign: &benignEvidence{}, Events: []*ent.Event{{ID: id, Raw: raw}}}
+	b, err := encode(m)
+	if err != nil || !strings.Contains(string(b), `'</dev/tcp/127.0.0.1/18080' && echo`) {
+		t.Fatal("材料不应转义 shell 元字符", string(b), err)
+	}
+	// 事件里没有的字段只是不计入覆盖；别的引用覆盖了就照常通过
+	d := Decision{Approve: true, Reason: "本机端口探测脚本", PositiveEvidence: "命令行只探测本机回环端口，是健康检查",
+		EventIDs: []uuid.UUID{id}, Claims: []Claim{{EventID: id, Field: "raw.answers.0.ip", Value: "1.2.3.4"}, {EventID: id, Field: "process.cmd_line", Value: cmd}}}
+	if why := rejection(d, m); why != "" {
+		t.Fatal(why)
+	}
+	d.Claims = d.Claims[:1]
+	if why := rejection(d, m); !strings.Contains(why, "没有字段级引用") {
+		t.Fatal("只有不存在字段的引用不算覆盖", why)
+	}
+	m.Benign.Severe = []severeHost{{Hostname: "yuesheng-gpu", Facts: []string{"F-8867eeac"}}}
+	if why := rejection(d, m); !strings.Contains(why, "F-8867eeac") {
+		t.Fatal("驳回原因应列出可引用的事实编号", why)
 	}
 }

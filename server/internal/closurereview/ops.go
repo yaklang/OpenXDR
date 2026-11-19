@@ -233,7 +233,7 @@ func loadOpsSession(ctx context.Context, db *ent.Client, rules []*sigma.Rule, in
 		}
 	}
 
-	raw, _ := json.Marshal(m)
+	raw, _ := encode(m)
 	if len(raw) > materialBytes {
 		return nil, ErrIneligible
 	}
@@ -243,7 +243,7 @@ func loadOpsSession(ctx context.Context, db *ent.Client, rules []*sigma.Rule, in
 	if m.CorroboratingChanges, err = corroboratingChanges(ctx, db, alerts); err != nil {
 		return nil, err
 	}
-	raw, _ = json.Marshal(m)
+	raw, _ = encode(m)
 	if len(raw) > materialBytes {
 		return nil, ErrIneligible
 	}

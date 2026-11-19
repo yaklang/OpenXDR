@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"unicode/utf8"
+
+	"openxdr/server/internal/triage"
 )
 
 // maxBenignAlerts 良性结案单次交审计员的告警上限：审计员要为每个原始事件给出字段级引用，再多就引用不全
@@ -29,8 +31,8 @@ func truncateRaw(raw json.RawMessage) (json.RawMessage, bool) {
 	if _, ok := doc.(map[string]any); !ok {
 		return nil, false
 	}
-	out, err := json.Marshal(truncateValue(doc))
-	return out, err == nil
+	out := triage.RawJSON(truncateValue(doc))
+	return out, out != nil
 }
 
 func truncateValue(v any) any {

@@ -221,7 +221,7 @@ func benignBatch(ctx context.Context, db *ent.Client, inc *ent.Incident, sets []
 		}
 		m.Events = append(m.Events, ev)
 	}
-	raw, _ := json.Marshal(m)
+	raw, _ := encode(m)
 	if len(raw) > materialBytes {
 		return nil, stall("审计材料 %d 字节，超过上限 %d", len(raw), materialBytes)
 	}
@@ -232,7 +232,7 @@ func benignBatch(ctx context.Context, db *ent.Client, inc *ent.Incident, sets []
 	if m.CorroboratingChanges, err = corroboratingChanges(ctx, db, alerts); err != nil {
 		return nil, err
 	}
-	raw, _ = json.Marshal(m)
+	raw, _ = encode(m)
 	if len(raw) > materialBytes {
 		return nil, ErrIneligible
 	}

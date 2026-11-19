@@ -186,7 +186,7 @@ func loadContained(ctx context.Context, db *ent.Client, inc *ent.Incident) (*mat
 	if !quiet {
 		return nil, ErrIneligible
 	}
-	raw, _ := json.Marshal(m)
+	raw, _ := encode(m)
 	if len(raw) > 64000 {
 		return nil, ErrIneligible
 	}

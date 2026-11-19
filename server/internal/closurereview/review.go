@@ -89,16 +89,19 @@ func New(db *ent.Client, endpoint func() (string, string), model func() string, 
 		base, key := endpoint()
 		llm := triage.NewLLM(base, model, key, time.Minute)
 		llm.NoThinking = true
-		// 批准要逐条引用原始字段的完整原值，留足输出，截断的 JSON 只会被判不合格
-		llm.MaxTokens = 4000
+		// 批准要逐条引用原始字段的完整原值，一批 20 个事件的引用要留足输出，截断的 JSON 只会被判不合格
+		llm.MaxTokens = 8000
 		llm.OnUsage = usage
 		msg, err := llm.Chat(ctx, []triage.Message{{Role: "system", Content: closurePrompt(material)}, {Role: "user", Content: material}}, nil)
 		if err != nil {
 			return Decision{}, err
 		}
+		if msg.FinishReason == "length" {
+			return invalidDecision("回复超过输出上限被截断"), nil
+		}
 		d, err := ParseDecision(msg.Content)
 		if err != nil {
-			return invalidDecision(), nil
+			return invalidDecision(err.Error()), nil
 		}
 		return d, nil
 	}}
@@ -109,8 +112,15 @@ const prompt = `你是独立结案审计员，仅评审本次事件是否有充�
 批准必须逐一引用材料中全部事件 id，明确指出正面证据及它如何解释所有告警；无肯定证据或仅阴性日志必须拒绝。结案不生成长期白名单。
 仅输出JSON：{"approve":false,"reason":"理由","positive_evidence":"具体正面证据，不能是缺失/未发现","event_ids":["已给出的原始事件UUID"],"claims":[{"event_id":"原始事件UUID","field":"process.cmd_line 等已有结构化原文字段","value":"该字段中完整原值"}]}`
 
-func invalidDecision() Decision {
-	return Decision{Reason: "独立审计回复不合格，保留事件，不自动结案"}
+// invalidReason 不合格回复的固定前缀：重审判定（retryable）认它
+const invalidReason = "独立审计回复不合格，保留事件，不自动结案"
+
+// invalidDecision 不合格的具体原因跟在前缀后，重审时作为反馈给审计员
+func invalidDecision(why ...string) Decision {
+	if len(why) > 0 && why[0] != "" {
+		return Decision{Reason: invalidReason + "：" + clip(why[0], 200)}
+	}
+	return Decision{Reason: invalidReason}
 }
 
 func ParseDecision(text string) (Decision, error) {
@@ -442,7 +452,7 @@ func loadProposal(ctx context.Context, db *ent.Client, inc *ent.Incident) (*mate
 	if m.CorroboratingChanges, err = corroboratingChanges(ctx, db, alerts); err != nil {
 		return nil, err
 	}
-	raw, _ := json.Marshal(m)
+	raw, _ := encode(m)
 	if len(raw) > 64000 {
 		return nil, ErrIneligible
 	}
@@ -462,11 +472,20 @@ func bareAlerts(alerts []*ent.Alert) []*ent.Alert {
 	return out
 }
 
+// encode 材料原样给审计员：不把 < > & 转成 \u003c 之类的转义，否则审计员照抄出来的引用与原值对不上
+func encode(m *material) ([]byte, error) {
+	b := triage.RawJSON(m)
+	if b == nil {
+		return nil, errors.New("审计材料序列化失败")
+	}
+	return b, nil
+}
+
 func fingerprint(m *material) string {
-	b, _ := json.Marshal(m)
+	b, _ := encode(m)
 	b = append(append(b, 0), closurePrompt(string(b))...)
 	for _, r := range m.rest {
-		x, _ := json.Marshal(r)
+		x, _ := encode(r)
 		b = append(append(b, 0), x...)
 	}
 	return digest(b)
@@ -506,7 +525,7 @@ func rejection(d Decision, m *material) string {
 	if m.Benign != nil {
 		for _, h := range m.Benign.Severe {
 			if !slices.ContainsFunc(h.Facts, func(ref string) bool { return strings.Contains(d.Reason, ref) }) {
-				return "理由没有引用高危主机 " + h.Hostname + " 的事实编号"
+				return "理由没有引用高危主机 " + h.Hostname + " 的事实编号（reason 里须写出其中之一：" + strings.Join(h.Facts, "、") + "）"
 			}
 		}
 	}
@@ -531,9 +550,10 @@ func rejection(d Decision, m *material) string {
 			if ev.ID != c.EventID {
 				continue
 			}
+			// 事件里没有的字段（审计员想当然的路径，如 DNS 事件的 answers）只是不计入覆盖
 			value, ok := claimValue(ev, c.Field)
 			if !ok {
-				return "引用的字段 " + c.Field + " 在事件 " + c.EventID.String() + " 里不存在"
+				continue
 			}
 			// 字段在材料里被截断过：审计员只看得到首尾，引用了其中一段也对不上原值，不计入覆盖
 			if strings.Contains(value, truncMark) {
@@ -728,7 +748,7 @@ func (r *Reviewer) Review(ctx context.Context, id uuid.UUID) (bool, error) {
 
 // judge 送审一份材料；回复不合格按不合格决定处理
 func (r *Reviewer) judge(ctx context.Context, model string, m *material) (Decision, error) {
-	raw, _ := json.Marshal(m)
+	raw, _ := encode(m)
 	judgeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	d, err := r.Judge(judgeCtx, model, string(raw))
 	cancel()

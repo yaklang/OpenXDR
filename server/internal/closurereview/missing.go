@@ -2,7 +2,6 @@ package closurereview
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"slices"
 	"strings"
@@ -21,7 +20,7 @@ func (r *Reviewer) askMissing(ctx context.Context, m *material, d Decision, hash
 	if len(d.MissingFacts) == 0 {
 		return
 	}
-	raw, _ := json.Marshal(m)
+	raw, _ := encode(m)
 	rawText := string(raw)
 	var hosts []uuid.UUID
 	for _, h := range m.hosts() {

@@ -1,6 +1,7 @@
 package triage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -137,12 +138,23 @@ func ProcessRecord(raw []byte) json.RawMessage {
 		return nil
 	}
 	delete(proc, "parent_process")
-	doc["process"], _ = json.Marshal(proc)
-	b, _ := json.Marshal(doc)
+	doc["process"] = RawJSON(proc)
+	b := RawJSON(doc)
 	if len(b) > processRecordBytes {
 		return nil
 	}
 	return b
+}
+
+// RawJSON 序列化给模型看的原文：不把 < > & 转成 \u003c 之类的转义，模型照抄引用时才能与原值逐字对上
+func RawJSON(v any) json.RawMessage {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(v) != nil {
+		return nil
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
 func (e *Engine) toolQueryEvents(ctx context.Context, args string) (any, error) {
