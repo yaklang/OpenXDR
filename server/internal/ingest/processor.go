@@ -393,8 +393,11 @@ func (p *Processor) upsertAlert(ctx context.Context, tx *sql.Tx, e Envelope, hit
 		}
 		// 指纹只到规则加主机，研判之后并进来的命中可能是研判没看过的另一条命令：
 		// 记成新证据让研判重看，不然事件既不重研判、也进不了良性结案，就此挂住（同 dedup.Deduper.Flush）
+		// 首次研判进行中（还是 open）并进来的命中同样要记：研判落库的 triaged_at 是开始时刻，晚到的命中它没看过
 		if _, err := tx.ExecContext(ctx, `UPDATE incidents i SET evidence_at=now(), closure_proposal=NULL FROM alerts a
-WHERE a.id=$1 AND i.id=a.incident_id AND i.status='triaged' AND i.triaged_at<$2 AND (i.evidence_at IS NULL OR i.evidence_at<=i.triaged_at)`, alertID, e.Timestamp); err != nil {
+WHERE a.id=$1 AND i.id=a.incident_id AND (
+  i.status='triaged' AND i.triaged_at<$2 AND (i.evidence_at IS NULL OR i.evidence_at<=i.triaged_at) OR
+  i.status='open' AND i.triage_started_at IS NOT NULL AND (i.evidence_at IS NULL OR i.evidence_at<i.triage_started_at))`, alertID, e.Timestamp); err != nil {
 			return false, err
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE alert_dedup_state SET last_ts=GREATEST(last_ts,$2) WHERE fingerprint=$1`, fingerprint, e.Timestamp)

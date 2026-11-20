@@ -118,6 +118,17 @@ func TestEncodeKeepsShellMetachars(t *testing.T) {
 	if why := rejection(d, m); !strings.Contains(why, "没有字段级引用") {
 		t.Fatal("只有不存在字段的引用不算覆盖", why)
 	}
+	// 长值抄错是誊写失误，只是不计入覆盖；短值对不上整份驳回
+	long := strings.Repeat("QUFBQUIzTnphQzF5", 40)
+	d.Claims = append(d.Claims, Claim{EventID: id, Field: "process.cmd_line", Value: long})
+	if why := rejection(d, m); !strings.Contains(why, "没有字段级引用") {
+		t.Fatal("长值抄错不应整份驳回", why)
+	}
+	d.Claims = []Claim{{EventID: id, Field: "process.cmd_line", Value: "timeout 3 bash"}}
+	if why := rejection(d, m); !strings.Contains(why, "原值不符") {
+		t.Fatal("短值对不上应整份驳回", why)
+	}
+	d.Claims = d.Claims[:0]
 	m.Benign.Severe = []severeHost{{Hostname: "yuesheng-gpu", Facts: []string{"F-8867eeac"}}}
 	if why := rejection(d, m); !strings.Contains(why, "F-8867eeac") {
 		t.Fatal("驳回原因应列出可引用的事实编号", why)

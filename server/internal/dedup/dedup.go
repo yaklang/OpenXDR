@@ -64,8 +64,11 @@ func (d *Deduper) Flush(ctx context.Context, db *ent.Client) error {
 		// 指纹只到规则加主机，研判之后并进来的命中可能是研判没看过的另一条命令：
 		// 记成新证据让研判重看，不然事件既不重研判、也进不了良性结案，就此挂住
 		if a.IncidentID != nil {
+			// 首次研判进行中（还是 open）并进来的命中同样要记：研判落库的 triaged_at 是开始时刻，晚到的命中它没看过
 			if err := db.Incident.Update().
-				Where(incident.IDEQ(*a.IncidentID), incident.StatusEQ("triaged"), incident.TriagedAtLT(e.lastTs)).
+				Where(incident.IDEQ(*a.IncidentID), incident.Or(
+					incident.And(incident.StatusEQ("triaged"), incident.TriagedAtLT(e.lastTs)),
+					incident.And(incident.StatusEQ("open"), incident.TriageStartedAtNotNil()))).
 				SetEvidenceAt(time.Now()).ClearClosureProposal().
 				Exec(ctx); err != nil {
 				return err

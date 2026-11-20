@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"openxdr/server/ent"
@@ -491,6 +492,9 @@ func fingerprint(m *material) string {
 	return digest(b)
 }
 
+// longClaim 超过这么多字符的引用值抄错按誊写失误处理
+const longClaim = 256
+
 // rejection 返回服务端驳回审计员批准的原因，空串表示通过；原因写进审计，排查时不用重放
 func rejection(d Decision, m *material) string {
 	// 已遏制、运维会话与良性分支由服务端核验范围，提案分支要求每个事件都有平台只读来源链
@@ -559,7 +563,11 @@ func rejection(d Decision, m *material) string {
 			if strings.Contains(value, truncMark) {
 				continue
 			}
+			// 长值（常见是几百字节的 base64、长命令行）抄错是誊写失误，只是不计入覆盖；短值对不上才是在编证据
 			if value != c.Value {
+				if utf8.RuneCountInString(c.Value) > longClaim {
+					continue
+				}
 				return "引用的字段 " + c.Field + " 与事件 " + c.EventID.String() + " 的原值不符"
 			}
 			covered[ev.ID] = true

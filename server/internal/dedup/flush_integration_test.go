@@ -75,3 +75,28 @@ func TestDeduperFlushMarksEvidenceAfterTriage(t *testing.T) {
 		t.Fatal("研判之后的命中应记成新证据", got)
 	}
 }
+
+// 首次研判进行中（还是 open）并进来的命中也要记：落库的 triaged_at 是开始时刻，研判没看过它
+func TestDeduperFlushMarksEvidenceDuringFirstTriage(t *testing.T) {
+	ctx, client := testdb.New(t)
+	started := time.Now().Add(-10 * time.Second)
+	inc := client.Incident.Create().SetStatus("open").SetGraph([]byte(`{}`)).SaveX(ctx)
+	a := client.Alert.Create().SetTs(started.Add(-time.Minute)).SetRuleID("r-1").SetSeverity(3).SetIncidentID(inc.ID).SaveX(ctx)
+	d := New(time.Hour)
+	d.Track("k", a.ID, a.Ts)
+	d.Hit("k", started.Add(-time.Second))
+	if err := d.Flush(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	if client.Incident.GetX(ctx, inc.ID).EvidenceAt != nil {
+		t.Fatal("还没开始研判的命中研判会看到，不用记")
+	}
+	client.Incident.UpdateOneID(inc.ID).SetTriageStartedAt(started).ExecX(ctx)
+	d.Hit("k", time.Now())
+	if err := d.Flush(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.Incident.GetX(ctx, inc.ID).EvidenceAt; got == nil || !got.After(started) {
+		t.Fatal("研判进行中的命中应记成新证据", got)
+	}
+}

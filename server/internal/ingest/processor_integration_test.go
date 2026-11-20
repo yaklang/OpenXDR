@@ -453,4 +453,11 @@ level: high
 	if n := client.Alert.GetX(ctx, a.ID).Count; n != 3 {
 		t.Fatalf("三次命中应合并成 count=3，实际 %d", n)
 	}
+	// 首次研判进行中（还是 open）并进来的命中也要记：落库的 triaged_at 是开始时刻，研判没看过它
+	started := time.Now()
+	client.Incident.UpdateOneID(inc.ID).SetStatus("open").ClearTriagedAt().SetTriageStartedAt(started).SetEvidenceAt(started.Add(-time.Minute)).ExecX(ctx)
+	send("4", now.Add(time.Second))
+	if got := client.Incident.GetX(ctx, inc.ID); got.EvidenceAt == nil || got.EvidenceAt.Before(started) {
+		t.Fatalf("首次研判期间的命中应刷新 evidence_at，实际 %v", got.EvidenceAt)
+	}
 }
