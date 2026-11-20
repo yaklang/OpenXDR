@@ -984,3 +984,50 @@ func TestReverseShellKillsProcessAndBlocksPeer(t *testing.T) {
 		t.Fatalf("核心资产上的两条处置都应记为跳过：%d", n)
 	}
 }
+
+// 触发告警所在事件在处置之后按误报结案：处置随之解除，不等租约；按 closed 结案的不动
+func TestFalsePositiveClosureLiftsContainment(t *testing.T) {
+	for _, status := range []string{"false_positive", "closed"} {
+		t.Run(status, func(t *testing.T) {
+			f := setup(t)
+			gw := f.host(t, "gateway", "10.1.1.100", nil, "")
+			shell := `{"activity_id":99,"process":{"pid":31337,"name":"bash","file":{"path":"/usr/bin/bash"}},` +
+				`"stdio_socket":{"fd":0,"protocol":"tcp"},"dst_endpoint":{"ip":"203.0.113.9","port":1922}}`
+			al := f.alertOn(t, gw, RuleShellStdio, 1007, "", shell)
+			e := f.engine(ScopeAll)
+			if err := e.Tick(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+			f.received("gateway")
+			block := f.client.Containment.Query().Where(entcontainment.KindEQ("block_network")).OnlyX(f.ctx)
+			if block.IncidentID != nil {
+				t.Fatal("前提：快路径处置时告警还没进事件")
+			}
+			// 告警之后才进事件，研判后结案
+			inc := f.client.Incident.Create().SetGraph([]byte(`{}`)).SetStatus(status).SetResolvedAt(f.now.Add(time.Minute)).SaveX(f.ctx)
+			f.client.Alert.UpdateOneID(al.ID).SetIncidentID(inc.ID).ExecX(f.ctx)
+			if err := e.Tick(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+			got := f.received("gateway")
+			if status == "closed" {
+				if len(got) != 0 {
+					t.Fatalf("按 closed 结案不该解除：%v", got)
+				}
+				return
+			}
+			if len(got) != 1 || got[0].Kind != pb.CommandKind_UNBLOCK_NETWORK {
+				t.Fatalf("误报结案应下发 unblock：%v", got)
+			}
+			if c := f.client.Containment.GetX(f.ctx, block.ID); c.LiftedBy == nil || *c.LiftedBy != ClearedActor {
+				t.Fatalf("应记成误报结案解除：%+v", c)
+			}
+			if err := e.Tick(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+			if got := f.received("gateway"); len(got) != 0 {
+				t.Fatalf("解除只下发一次：%v", got)
+			}
+		})
+	}
+}

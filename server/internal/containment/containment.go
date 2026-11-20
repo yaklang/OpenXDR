@@ -121,6 +121,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	if err := e.expireProposals(ctx); err != nil {
 		return err
 	}
+	if err := e.liftCleared(ctx); err != nil {
+		return err
+	}
 	if err := e.expire(ctx); err != nil {
 		return err
 	}
