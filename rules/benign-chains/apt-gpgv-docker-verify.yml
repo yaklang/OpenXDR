@@ -9,6 +9,8 @@ sample: >-
   /bin/sh /usr/lib/apt/apt.systemd.daily update → /usr/bin/apt-get -y update →
   /usr/lib/apt/methods/gpgv → /bin/sh /usr/bin/apt-key --quiet --readonly verify /tmp/apt.sig /tmp/apt.data →
   /usr/bin/base64 -d
+  （生产实测 2026-11-20 k3s-master-3：父进程与 apt.systemd.daily 以脚本自身路径出现，
+  /usr/bin/apt-key --quiet --readonly --keyring /etc/apt/keyrings/docker.asc verify …）
 rules:
   - "*"
 conditions:
@@ -20,9 +22,11 @@ conditions:
   - field: process.cmd_line
     op: regex
     value: '^((/usr)?/bin/)?base64\s+(-d|--decode)$'
+  # 脚本被直接执行时，agent 记的是脚本自身路径（生产上就是 /usr/bin/apt-key），不是解释器
   - field: process.parent_process.file.path
     op: in
     values:
+      - /usr/bin/apt-key
       - /bin/sh
       - /usr/bin/sh
       - /bin/dash
@@ -31,7 +35,7 @@ conditions:
       - /usr/bin/bash
   - field: process.parent_process.cmd_line
     op: regex
-    value: '^(/usr)?/bin/(da|ba)?sh\s+/usr/bin/apt-key\b.*\bverify\b'
+    value: '^((/usr)?/bin/(da|ba)?sh\s+)?/usr/bin/apt-key\b.*\bverify\b'
   - field: ancestor.file.path
     op: equals
     value: /usr/lib/apt/methods/gpgv
@@ -49,6 +53,7 @@ conditions:
   - field: ancestor.file.path
     op: in
     values:
+      - /usr/lib/apt/apt.systemd.daily
       - /bin/sh
       - /usr/bin/sh
       - /bin/dash

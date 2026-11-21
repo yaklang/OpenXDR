@@ -1,0 +1,45 @@
+id: gitlab-ci-kaniko-chmod
+title: GitLab CI kaniko 构建装证书包时 chmod 证书目录
+description: >-
+  k3s 上的 GitLab Runner 作业容器里，/kaniko/executor 按 Dockerfile 执行 RUN 步骤：装软件包
+  （apt-get install 触发 dpkg 维护脚本、update-ca-certificates 改写 /etc/ssl、chmod 证书目录）、
+  写版本文件、go build / npm run build 等，常触发「疑似修改敏感或关键文件」「对敏感目录执行 chmod」
+  这类通用规则。要求进程在 containerd 容器里，祖先中有 /kaniko/executor，且它的构建上下文在 GitLab CI
+  工作目录 /builds/ 下、推送目标是公司镜像仓库 registry.internal.yuzhian.com.cn。只放行低危（≤3）规则，
+  高危类别由内置链硬门禁排除。
+sample: >-
+  /bin/sh /scripts-5-11815/step_script → /kaniko/executor --context /builds/root/DynamicDefend/.
+  --dockerfile …/Dockerfile --destination registry.internal.yuzhian.com.cn/root/dynamicdefend/… →
+  /bin/sh -c apt-get install … → apt-get → dpkg → ca-certificates.postinst → update-ca-certificates → sed
+  （生产实测 2026-11-20 k3s-ci-agent-1）
+# 通配会整类排除削弱防御类规则，kaniko 装证书包时必然触发的 chmod 规则在这里点名放行
+# （生产 11-17～11-20 k3s-ci-agent-1 共 41 次）；条件与 gitlab-ci-kaniko-build.yml 完全相同
+rules:
+  - 6419afd1-3742-47a5-a7e6-b50386cd15f8   # 对敏感目录执行 chmod（SigmaHQ，medium）
+conditions:
+  # 只认系统与工具链目录下的程序：从 /tmp、/dev/shm、/var/tmp 等可写目录投放执行的照常告警
+  - field: process.file.path
+    op: regex
+    value: '^/(usr/(local/)?)?(s?bin)/[^/\s]+$|^/usr/(lib|libexec|share)/[^\s]+$|^/var/lib/dpkg/info/[^/\s]+$|^/usr/local/(go|node)/[^\s]+$|^/kaniko/[^/\s]+$'
+  - field: container.runtime
+    op: in
+    values:
+      - containerd
+  - field: process.cmd_line
+    op: not_contains
+    value: /var/run/docker.sock
+  - field: process.cmd_line
+    op: not_contains
+    value: nsenter
+  - field: ancestor.file.path
+    op: equals
+    value: /kaniko/executor
+    group: 1
+  - field: ancestor.cmd_line
+    op: regex
+    value: '--context(\s+|=)/builds/'
+    group: 1
+  - field: ancestor.cmd_line
+    op: regex
+    value: '--destination(\s+|=)registry\.internal\.yuzhian\.com\.cn/'
+    group: 1
