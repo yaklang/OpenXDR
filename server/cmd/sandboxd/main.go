@@ -68,7 +68,7 @@ func load() (config, error) {
 // 网络用专用网桥，出口只放行模型端点由宿主防火墙负责。代理变量清空：Docker 会把宿主代理注入容器
 func (c config) args(name string) []string {
 	return []string{"run", "-i", "--rm", "--name", name, "--network", c.network,
-		"--read-only", "--tmpfs", "/tmp:size=256m", "--tmpfs", "/home/agent:size=" + c.tmpfs + ",uid=10010,gid=10010",
+		"--read-only", "--tmpfs", "/tmp:size=256m,noexec,nosuid,nodev", "--tmpfs", "/home/agent:size=" + c.tmpfs + ",uid=10010,gid=10010,noexec,nosuid,nodev",
 		"--memory", c.memory, "--memory-swap", c.memory, "--cpus", c.cpus, "--pids-limit", c.pids,
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "10010:10010",
 		"-e", "HTTP_PROXY=", "-e", "HTTPS_PROXY=", "-e", "http_proxy=", "-e", "https_proxy=", "-e", "ALL_PROXY=", "-e", "all_proxy=",

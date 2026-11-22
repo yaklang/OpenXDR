@@ -112,3 +112,23 @@ func TestLoadValidates(t *testing.T) {
 		}
 	}
 }
+
+func TestArgsHardening(t *testing.T) {
+	c := config{image: "img", network: "net", memory: "1g", cpus: "1.5", pids: "256", tmpfs: "512m"}
+	got := c.args("openxdr-sbx-test")
+	var tmpfs []string
+	for i := 0; i < len(got)-1; i++ {
+		if got[i] == "--tmpfs" {
+			tmpfs = append(tmpfs, got[i+1])
+		}
+	}
+	if len(tmpfs) != 2 {
+		t.Fatalf("应配置两个 tmpfs 挂载，实际 %v", tmpfs)
+	}
+	want := []string{"/tmp:size=256m,noexec,nosuid,nodev", "/home/agent:size=512m,uid=10010,gid=10010,noexec,nosuid,nodev"}
+	for i := range want {
+		if tmpfs[i] != want[i] {
+			t.Errorf("tmpfs[%d] = %q，期望 %q", i, tmpfs[i], want[i])
+		}
+	}
+}

@@ -28,7 +28,7 @@ server/web 使用 `docker-compose.logs.yml`，DYGK 补充配置同样使用 jour
 ```json
 {"sources":[
   {"name":"node2","command":["/usr/bin/python3","/opt/openxdr-ha/deploy/ha/logs/export.py"]},
-  {"name":"node1","command":["ssh","-o","BatchMode=yes","-o","ConnectTimeout=5","-o","IdentitiesOnly=yes","-o","UserKnownHostsFile=/var/lib/openxdr-logs/known_hosts","-i","/var/lib/openxdr-logs/id_ed25519","root@10.1.1.198"]}
+  {"name":"node1","command":["ssh","-o","BatchMode=yes","-o","ConnectTimeout=5","-o","IdentitiesOnly=yes","-o","UserKnownHostsFile=/var/lib/openxdr-logs/known_hosts","-i","/var/lib/openxdr-logs/id_ed25519","root@10.0.0.198"]}
 ]}
 ```
 

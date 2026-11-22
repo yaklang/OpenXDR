@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main, master]
@@ -46,7 +49,7 @@ jobs:
         run: go vet ./...
       - name: 测试
         working-directory: server
-        run: go test ./...
+        run: go test -race ./...
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -154,6 +157,21 @@ jobs:
       - working-directory: web
         run: npm run lint
       - working-directory: web
+        run: npm run build
+
+  pages:
+    name: Pages (项目主页)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pages/package-lock.json
+      - working-directory: pages
+        run: npm ci
+      - working-directory: pages
         run: npm run build
 
   # 默认构建不需要 nightly 和 bpf-linker，这一项守住"开箱即用"

@@ -8,8 +8,8 @@
 #            经 NAT 出网时是 NAT 后的公网地址；witness 不主动连节点）。链名 OPENXDR-ETCDGUARD。
 #            6222 拿到路由口令就能以集群成员身份读写整个事件流，不能只靠口令。
 # 环境变量（systemd 单元从 /etc/default/openxdr-guard 读）：
-#   NODE_IPS     两个节点地址，默认 "10.1.1.198 10.1.1.197"
-#   VIP          默认 10.1.1.199
+#   NODE_IPS     两个节点地址，默认 "10.0.0.198 10.0.0.197"
+#   VIP          默认 10.0.0.199
 #   MONITOR_IPS  可选，空格分隔
 #   ETCD_ALLOW   witness 必填，空格分隔，可写 CIDR
 # IPv6 同样建这条链：etcd、NATS 是 Go 程序，监听 0.0.0.0 实际是双栈，IPv6 也连得进来。
@@ -21,7 +21,7 @@ case "$role" in
   node)
     chain=OPENXDR-DBGUARD
     ports=5432,8008,6222
-    allow="${NODE_IPS:-10.1.1.198 10.1.1.197} ${VIP:-10.1.1.199}"
+    allow="${NODE_IPS:-10.0.0.198 10.0.0.197} ${VIP:-10.0.0.199}"
     ;;
   witness)
     chain=OPENXDR-ETCDGUARD

@@ -24,3 +24,8 @@ linux/process_creation/proc_creation_lnx_file_deletion.yml
 linux/process_creation/proc_creation_lnx_bash_interactive_shell.yml
 # bash 发起任何连接即判严重：bash /dev/tcp 端口探测都会命中；反弹 shell 由自研 lnx_reverse_shell 按命令行判断
 linux/network_connection/net_connection_lnx_back_connect_shell_dev.yml
+# 死规则：依赖 Linux 进程事件不存在的 Windows 风格字段 LogonId，当前采集端永不触发
+linux/process_creation/proc_creation_lnx_omigod_scx_runasprovider_executescript.yml
+linux/process_creation/proc_creation_lnx_omigod_scx_runasprovider_executeshellcommand.yml
+# 死规则：依赖 DNS TXT 应答正文（record_type/answer），当前采集端不解析 TXT 文本内容，永不触发
+network/dns/net_dns_susp_txt_exec_strings.yml

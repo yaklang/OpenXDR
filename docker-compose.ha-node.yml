@@ -101,11 +101,11 @@ services:
       MAINTENANCE_EXCLUDE: ${MAINTENANCE_EXCLUDE:-}
       # 夜间维护重启平台节点前，经 Patroni 接口把数据库主节点计划内切到另一台
       PATRONI_RESTAPI_PASSWORD: ${PATRONI_RESTAPI_PASSWORD:-}
-      ISOLATION_ALLOW: ${ISOLATION_ALLOW:-10.1.1.199:8081}
+      ISOLATION_ALLOW: ${ISOLATION_ALLOW:-10.0.0.199:8081}
       TLS_CA_FILE: /certs/ca.crt
       TLS_CERT_FILE: /certs/server.crt
       TLS_KEY_FILE: /certs/server.key
-      AI_BASE_URL: ${AI_BASE_URL:-http://10.1.1.180:80/v1}
+      AI_BASE_URL: ${AI_BASE_URL:-http://10.0.0.180:80/v1}
       AI_MODEL: ${AI_MODEL:-}
       AI_TEMPLATE_NO_THINKING: ${AI_TEMPLATE_NO_THINKING:-false}
       AI_API_KEY: ${AI_API_KEY:-}
@@ -124,11 +124,11 @@ services:
       WEBHOOK_FORMAT: ${WEBHOOK_FORMAT:-generic}
       # 控制台「添加主机」：agent 经 VIP 连 gRPC；CA 私钥放进 runtime/app-certs 并设
       # TLS_CA_KEY_FILE=/certs/ca.key 才能在线签发；agent 安装包放在 ./dist
-      ENROLL_GRPC_URL: ${ENROLL_GRPC_URL:-https://10.1.1.199:8081}
+      ENROLL_GRPC_URL: ${ENROLL_GRPC_URL:-https://10.0.0.199:8081}
       TLS_CA_KEY_FILE: ${TLS_CA_KEY_FILE:-}
       AGENT_DIST_DIR: /dist
-      # 采信 X-Forwarded-For 的上游：两节点的 haproxy 与网关 Caddy（xdr.internal.yuzhian.com.cn）
-      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-10.1.1.197,10.1.1.198,10.1.1.100}
+      # 采信 X-Forwarded-For 的上游：两节点的 haproxy 与网关 Caddy（xdr.example.internal）
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-10.0.0.197,10.0.0.198,10.0.0.100}
       # 文档中的登录凭据独立加密保存；HA 节点必须使用同一密钥
       HOST_CREDENTIAL_KEY: ${HOST_CREDENTIAL_KEY:-}
       ENROLL_PUBLIC_URL: ${ENROLL_PUBLIC_URL:-}

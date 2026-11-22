@@ -1,7 +1,14 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   nats:
     image: nats:2.11-alpine
     command: ["--config", "/etc/nats/openxdr.conf", "--http_port", "8222"]
+    logging: *default-logging
     volumes:
       - natsdata:/data
       - ./deploy/nats.conf:/etc/nats/openxdr.conf:ro
@@ -11,6 +18,7 @@ services:
 
   postgres:
     image: postgres:16-alpine
+    logging: *default-logging
     environment:
       POSTGRES_USER: openxdr
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openxdr}
@@ -24,6 +32,7 @@ services:
 
   server:
     stop_grace_period: 30s  # 停机时等进行中的定时任务把运行记成 interrupted，交给接手的节点重跑；Docker 默认只给 10 秒
+    logging: *default-logging
     build:
       context: .
       dockerfile: server/Dockerfile
@@ -119,6 +128,7 @@ services:
 
   deception:
     profiles: [dygk]
+    logging: *default-logging
     build:
       context: .
       dockerfile: integrations/dygk/Dockerfile
@@ -147,6 +157,7 @@ services:
     stop_grace_period: 30s
 
   web:
+    logging: *default-logging
     build:
       context: ./web
       args:

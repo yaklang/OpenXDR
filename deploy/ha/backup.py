@@ -55,9 +55,9 @@ def main():
         capture('roles.sql', shlex.join(pg + ['pg_dumpall', '--roles-only']))
         capture('runtime.tar.gz', shlex.join([
             'tar', '-C', args.ha_dir, '-czf', '-', '.env', 'docker-compose.ha-node.yml',
-            'runtime/.env', 'runtime/patroni.yml', 'runtime/nats.conf',
-            'runtime/keepalived.conf', 'runtime/app-certs', 'runtime/secrets',
-            'rules', 'tasks', 'temporal-rules',
+            'runtime/.env', 'runtime/patroni.yml', 'runtime/openxdr-db-password',
+            'runtime/nats.conf', 'runtime/keepalived.conf', 'runtime/app-certs',
+            'runtime/secrets', 'rules', 'tasks', 'temporal-rules',
         ]))
         capture('database.dump', shlex.join(pg + [
             'pg_dump', '--format=custom', '--compress=1', '--lock-wait-timeout=10s',

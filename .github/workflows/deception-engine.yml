@@ -54,10 +54,17 @@ jobs:
         env:
           OWNER: ${{ github.repository_owner }}
           REVISION: ${{ github.sha }}
+          REF: ${{ github.ref }}
         run: |
           owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
-          echo "tag=ghcr.io/$owner/openxdr-deception:$REVISION" >> "$GITHUB_OUTPUT"
-          echo "latest=ghcr.io/$owner/openxdr-deception:latest" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "ghcr.io/$owner/openxdr-deception:$REVISION"
+            if [ "$REF" = "refs/heads/master" ]; then
+              echo "ghcr.io/$owner/openxdr-deception:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -69,6 +76,4 @@ jobs:
           push: true
           secrets: |
             dygk_upstream_token=${{ secrets.DYGK_UPSTREAM_TOKEN }}
-          tags: |
-            ${{ steps.image.outputs.tag }}
-            ${{ steps.image.outputs.latest }}
+          tags: ${{ steps.image.outputs.tags }}

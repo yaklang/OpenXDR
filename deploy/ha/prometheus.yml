@@ -8,11 +8,11 @@ rule_files:
 scrape_configs:
   - job_name: openxdr
     static_configs:
-      - targets: [10.1.1.198:18080, 10.1.1.197:18080]
+      - targets: [10.0.0.198:18080, 10.0.0.197:18080]
   - job_name: patroni
     metrics_path: /metrics
     static_configs:
-      - targets: [10.1.1.198:8008, 10.1.1.197:8008]
+      - targets: [10.0.0.198:8008, 10.0.0.197:8008]
   - job_name: nats
     static_configs:
       - targets: [127.0.0.1:7777]

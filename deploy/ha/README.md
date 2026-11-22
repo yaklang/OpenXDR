@@ -1,7 +1,7 @@
 # 跨宿主机高可用部署
 
-该部署面向两个 PVE 故障域：`node1=10.1.1.198`、`node2=10.1.1.197`，入口 VIP
-为 `10.1.1.199`。独立 witness 运行 etcd DCS 和第三个 JetStream 节点，只通过
+该部署面向两个 PVE 故障域：`node1=10.0.0.198`、`node2=10.0.0.197`，入口 VIP
+为 `10.0.0.199`（按实际网段替换）。独立 witness 运行 etcd DCS 和第三个 JetStream 节点，只通过
 mTLS 接受连接。任一 PVE 整机失联后，剩余 PostgreSQL 副本可晋升，JetStream
 仍保有 2/3 quorum，VIP 漂移到存活节点。
 
@@ -10,7 +10,7 @@ mTLS 接受连接。任一 PVE 整机失联后，剩余 PostgreSQL 副本可晋�
 - Patroni 管理两个 PostgreSQL 16 数据节点，同步复制降低自动切换的数据损失窗口；
 - 每个应用节点的 HAProxy 在 `127.0.0.1:15432` 只转发 Patroni primary；
 - 三节点 NATS JetStream 使用 mTLS route，应用仅访问本机 `127.0.0.1:4222`；
-- Keepalived 以 `/readyz` 为依据持有 `10.1.1.199`；
+- Keepalived 以 `/readyz` 为依据持有 `10.0.0.199`；
 - 两个 Prometheus 各自抓取两端 OpenXDR、Patroni 和本机 NATS exporter。
 
 ## 初始化
@@ -133,7 +133,7 @@ Patroni 探测使用 `HEAD /primary`，保留主库 200、从库 503 判定，�
 
 1. `docker exec openxdr-ha-patroni-1 patronictl list` 必须是一主一同步副本；
 2. JetStream stream 必须 `replicas=3` 且三个 peer current；
-3. `curl http://10.1.1.199:8080/readyz` 与实际 agent 上报均成功；
+3. `curl http://10.0.0.199:8080/readyz` 与实际 agent 上报均成功；
 4. 依次停止 node1、node2（一次只停一个），确认 VIP 漂移、PostgreSQL 晋升、事件持续增长；
 5. 恢复节点后确认 Patroni 自动追平、JetStream replica current、Prometheus targets 全绿。
 

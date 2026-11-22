@@ -1,6 +1,8 @@
 #!/bin/sh
 # 沙箱主机防火墙：容器出口只放行模型端点（其余立刻拒绝），容器不能访问宿主；sandboxd 端口只对平台节点开放。
 # 规则放在自有链里，重复执行只会重建自有链；Docker 不管 DOCKER-USER，重启 docker 也不会冲掉。
+# DNS 隔离建议：宿主机可在创建 openxdr-sandbox 网桥或启动容器时配合 --dns 指向受控解析器（或仅使用模型端点直连 IP），
+# 防止容器向外部任意 DNS 发起隧道查询；默认出站 UDP/53 亦被下方 OPENXDR-SBX-FWD 拒绝。
 # 用法：MODEL_ENDPOINTS="10.0.0.5:8000 ..." PLATFORM_NODES="10.0.0.1 10.0.0.2" sh firewall.sh
 set -eu
 BRIDGE=${SANDBOX_BRIDGE:-br-sandbox}
@@ -71,6 +73,18 @@ for ip in $PLATFORM_NODES; do
   iptables -A OPENXDR-SBX-IN -p tcp -s "$ip" --dport "$PORT" -j RETURN
 done
 iptables -A OPENXDR-SBX-IN -p tcp --dport "$PORT" -j DROP
+
+# 如宿主机支持 ip6tables，默认阻断沙箱网桥全部 IPv6 转发与入站流量，消除 IPv6 旁路外泄面。
+if command -v ip6tables >/dev/null 2>&1 && ip6tables -L -n >/dev/null 2>&1; then
+  chain6() { ip6tables -N "$1" 2>/dev/null || ip6tables -F "$1"; ip6tables -C "$2" -j "$1" 2>/dev/null || ip6tables -I "$2" 1 -j "$1"; }
+  chain6 OPENXDR-SBX-FWD6 FORWARD
+  ip6tables -A OPENXDR-SBX-FWD6 -i "$BRIDGE" -j DROP
+  ip6tables -A OPENXDR-SBX-FWD6 -o "$BRIDGE" -j DROP
+  chain6 OPENXDR-SBX-IN6 INPUT
+  ip6tables -A OPENXDR-SBX-IN6 -i "$BRIDGE" -j DROP
+  ip6tables -A OPENXDR-SBX-IN6 -p tcp --dport "$PORT" -j DROP
+fi
+
 echo "沙箱防火墙已生效：出口 $MODEL_ENDPOINTS，平台 $PLATFORM_NODES"
 iptables -D DOCKER-USER -i "$BRIDGE" -j REJECT
 iptables -D DOCKER-USER -o "$BRIDGE" -j DROP

@@ -37,8 +37,10 @@ issue() {
   trap - EXIT
 }
 
-issue nats-node1 'IP:10.1.1.198,DNS:openxdr-node1' 'serverAuth,clientAuth'
-issue nats-node2 'IP:10.1.1.197,DNS:openxdr-node2' 'serverAuth,clientAuth'
+node1_ip=${NODE1_IP:-10.0.0.198}
+node2_ip=${NODE2_IP:-10.0.0.197}
+issue nats-node1 "IP:$node1_ip,DNS:openxdr-node1" 'serverAuth,clientAuth'
+issue nats-node2 "IP:$node2_ip,DNS:openxdr-node2" 'serverAuth,clientAuth'
 case "$witness" in
   *[!0-9.]*) witness_san="DNS:$witness" ;;
   *) witness_san="IP:$witness" ;;

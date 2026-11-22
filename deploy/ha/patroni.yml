@@ -76,10 +76,10 @@ postgresql:
     - local all all trust
     - host all all 127.0.0.1/32 scram-sha-256
     - host replication replicator 127.0.0.1/32 scram-sha-256
-    - host replication replicator 10.1.1.198/32 scram-sha-256
-    - host replication replicator 10.1.1.197/32 scram-sha-256
-    - host all all 10.1.1.198/32 scram-sha-256
-    - host all all 10.1.1.197/32 scram-sha-256
+    - host replication replicator 10.0.0.198/32 scram-sha-256
+    - host replication replicator 10.0.0.197/32 scram-sha-256
+    - host all all 10.0.0.198/32 scram-sha-256
+    - host all all 10.0.0.197/32 scram-sha-256
 
 tags:
   nofailover: false

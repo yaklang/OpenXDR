@@ -2,7 +2,7 @@
 // 用 Pi SDK 驱动默认工具（bash/read/edit/write）+ Skill；沙箱里的 xdr 命令行经 unix socket 把工具请求交给桥，
 // 桥再转成 tool_request 交给平台——平台照常判权、审批、审计，沙箱本身不持有任何平台凭据，也不需要访问平台网络。
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
@@ -46,7 +46,7 @@ function writeModels(request) {
     }],
   };
   const path = `${XDR_DIR}/models.json`;
-  writeFileSync(path, JSON.stringify({ providers: { openxdr: provider } }));
+  writeFileSync(path, JSON.stringify({ providers: { openxdr: provider } }), { mode: 0o600 });
   return { path, reasoning: glm };
 }
 
@@ -98,13 +98,20 @@ export async function run(request, send, callTool, signal) {
   const maxTurns = request.max_turns ?? 32;
   if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 1000) throw new Error('max_turns 超出范围');
   const allowed = new Set((request.tools || []).map(tool => tool.name));
-  mkdirSync(XDR_DIR, { recursive: true });
+  mkdirSync(XDR_DIR, { recursive: true, mode: 0o700 });
+  chmodSync(XDR_DIR, 0o700);
   mkdirSync(WORK, { recursive: true });
   mkdirSync(AGENT_DIR, { recursive: true });
-  writeFileSync(`${XDR_DIR}/context.json`, JSON.stringify(request.context ?? {}));
+  writeFileSync(`${XDR_DIR}/context.json`, JSON.stringify(request.context ?? {}), { mode: 0o600 });
   const models = writeModels(request);
 
-  const modelRuntime = await ModelRuntime.create({ modelsPath: models.path, authPath: `${XDR_DIR}/auth.json`, allowModelNetwork: false });
+  // ModelRuntime.create 会将 models.json 读入内存，后续不再读盘；加载完立刻删除以防沙箱内工具读取明文 API key。
+  let modelRuntime;
+  try {
+    modelRuntime = await ModelRuntime.create({ modelsPath: models.path, authPath: `${XDR_DIR}/auth.json`, allowModelNetwork: false });
+  } finally {
+    rmSync(models.path, { force: true });
+  }
   const model = modelRuntime.getModel('openxdr', request.model);
   if (!model) throw new Error('模型配置无效');
   const loader = new DefaultResourceLoader({

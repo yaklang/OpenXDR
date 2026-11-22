@@ -24,6 +24,11 @@
 | [attack-campaign-design.md](attack-campaign-design.md) | 跨主机攻击的关联与升级设计：2026-11 Prowl 跳板事件复盘、按实体分桶、受害方横向、内网喷洒合成告警、研判明细与通知看门狗、分期与验收 | 改关联、研判或升级逻辑前 |
 | [contained-incident-closure.md](contained-incident-closure.md) | 已遏制威胁结案门禁、独立复核、人工接管与新证据重开 | 改自动结案或评估结案边界 |
 | [autonomous-response-design.md](autonomous-response-design.md) | 自主响应与自身防护设计：按角色选目标、区域处置等级、遏制租约、容器隔离、熔断、端到端指令签名与分期 | 改自动响应、处置指令或控制面安全前 |
+| [response-verification.md](response-verification.md) | 响应效果复核：按来源记录动作效果、证据边界与权限约定 | 改处置回执、效果核验或相关 API 前 |
+| [autonomy-controller-design.md](autonomy-controller-design.md) | 自治总控设计：事实库、运维意图、常设规矩、提问协议与待答问题闭环 | 改总控事实/规矩/提问协议或子代理协作前 |
+| [feishu-approvals.md](feishu-approvals.md) | 飞书应用机器人配置、账号绑定与私聊命令审批 | 配置或改动飞书交互审批前 |
+| [model-fallback.md](model-fallback.md) | 多模型与备用 API 服务自动切换、冷却策略与沙箱同步约定 | 配置模型容灾或改 `model-fallback.mjs` 前 |
+| [xdr-foundations.md](xdr-foundations.md) | XDR 基础能力补齐阶段汇总：采集可靠性、跨事件检测、身份关联与响应闭环边界 | 核对基础能力实现与验收边界时 |
 | [detection-evidence.md](detection-evidence.md) | 补充规则、同源 IP 关联、Sysmon/NTLM 与 auditd 证据采集前提和验证边界 | 启用新增检测或核对事件输入 |
 | [api.md](api.md) | REST API 参考：端点、参数、权限约定、对接示例 | 对接外部系统；改 `server/internal/api` |
 | [open-integrations-design.md](open-integrations-design.md) | 资产导出与系统联动详细设计（待实施）：集成身份、API、事件订阅、工单回写及验收 | 实施导出、CMDB 对接或工单联动前 |

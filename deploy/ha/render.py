@@ -54,10 +54,12 @@ def main() -> None:
         raise SystemExit("密码不能包含模板分隔符 __")
 
     node1 = args.node == "node1"
+    node1_ip = os.environ.get("NODE1_IP", "10.0.0.198")
+    node2_ip = os.environ.get("NODE2_IP", "10.0.0.197")
     values = {
         "NODE_NAME": f"openxdr-{args.node}",
-        "NODE_IP": "10.1.1.198" if node1 else "10.1.1.197",
-        "PEER_IP": "10.1.1.197" if node1 else "10.1.1.198",
+        "NODE_IP": node1_ip if node1 else node2_ip,
+        "PEER_IP": node2_ip if node1 else node1_ip,
         "DCS_HOST": args.witness,
         "WITNESS_HOST": args.witness,
         "KEEPALIVED_STATE": "MASTER" if node1 else "BACKUP",

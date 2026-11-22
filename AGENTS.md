@@ -27,8 +27,8 @@
   与内核模块加载监控（Linux /proc/modules diff，class_uid=1005），以及设备清单
   （监听端口与属主进程、云厂商元数据，class_uid=5001，供资产图谱与攻击面）。
   容器或 WSL2 中 netlink 不可用，agent 会主动退回轮询——宁可弱采集也不产假数据。
-- **sensor/**（Rust，crate 名 `openxdr-sensor`）：全流量探针，只出会话元数据不存 PCAP。
-  双抓包后端：AF_PACKET v3（默认）与 AF_XDP（`--features xdp`，需驱动支持，仅入向）。
+- **sensor/**（Rust，crate 名 `openxdr-sensor`）：全流量探针，支持 Linux / Windows，只出会话元数据不存 PCAP。
+  抓包后端：Linux 下 AF_PACKET v3（默认）与 AF_XDP（`--features xdp`，需驱动支持，仅入向）；Windows 下 Packet Monitor。
   协议解析：DNS 查询/应答、TLS SNI/JA3/JA3S 与证书元数据（仅 TLS ≤1.2，
   有界重组 16KB，`x509.rs` 迷你 DER 解析）、HTTP 头。
 - **server/**（Go 1.26，module `openxdr/server`）：可单机或多节点运行。Ent ORM + PostgreSQL；
@@ -89,15 +89,15 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
 
 提交前确保本地能过这些检查，CI 完全一致：
 
-- server：gofmt、build、vet、单测、集成测试（带 Postgres service）、
+- server：gofmt、build、vet、单测（`-race`）、集成测试（带 Postgres service）、
   `sigmacheck --strict`、`detectcheck --strict`。
 - agent / sensor：默认特性下 fmt / build / clippy(-D warnings) / test，arm64 原生 runner 上再跑一遍 build / clippy / test；
-  另有 ebpf/xdp 特性的单独构建项，以及 agent 交叉编译到
-  `x86_64-pc-windows-gnu` 的 clippy（Windows 侧 ETW 代码平时编不到，改
+  另有 ebpf/xdp 特性的单独构建项，以及 agent / sensor 交叉编译到
+  `x86_64-pc-windows-gnu` 的 clippy（Windows 侧 ETW 与 Packet Monitor 代码平时编不到，改
   `windows.rs`、`registry.rs` 等文件时注意 cfg 分支别破编译）。
-- web：`npm run build`。容器镜像：server 与 web 的 Dockerfile 都要能构建。
+- web：`npm run lint`（oxlint）与 `npm run build`；pages：`npm run build`。容器镜像：server 与 web 的 Dockerfile 都要能构建。
 
-发版（.github/workflows/release.yml）：推 `v*` 标签即编 agent（Linux amd64 / arm64 musl 静态 + eBPF、Windows）与 sensor（amd64 / arm64；arm64 在原生 arm runner 上编），
+发版（.github/workflows/release.yml）：推 `v*` 标签即编 agent（Linux amd64 / arm64 musl 静态 + eBPF、Windows，另含桌面托盘产物 `openxdr-tray`）与 sensor（amd64 / arm64；arm64 在原生 arm runner 上编），
 把 agent 安装包、默认规则与预设任务打进 server 镜像，推 `ghcr.io/yaklang/openxdr-{server,web}`（amd64 / arm64），
 再建 GitHub Release（附 `deploy/install/` 的一行安装脚本与编排文件，说明取 `deploy/install/RELEASE_NOTES.md`
 加 CHANGELOG 对应版本）。改安装流程时同步 `docs/install.md`，它也是给用户 AI agent 的安装说明。
@@ -121,8 +121,7 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
 - `repairpolicy` / `repaircmd`：管理员有限修复委托（失败服务重启、磁盘回收封闭模板），精确资产/目录、有效期、冷却、一次性预留与审计；磁盘回收须保留前后 `df -P` 独立效果证据
 - `commandreview`：AI 审计员——AI 发起、命中名单的命令用会话自己的模型当场评审，结果记审批与审计
 - `schedule` / `report`：`tasks/*.yml` 预设任务按组定时拉起 Pi 会话（系统身份），报告 HTML/PDF 渲染
-- `response`：响应处置（结束进程 / 隔离与解封主机或容器 / 封禁与解封 IP / 隔离与恢复文件），含自动响应钩子
-- `cmdsign`：响应指令端到端 Ed25519 签名（由 `HOST_CREDENTIAL_KEY` 派生，绑定指令 ID、目标 agent、签发时间与动作参数，agent 侧 TOFU 钉住公钥验签）
+- `response`：响应处置（结束进程 / 隔离与解封主机或容器 / 封禁与解封 IP / 隔离与恢复文件），含自动响应钩子；`response/sign.go` 实现响应指令端到端 Ed25519 签名（私钥来自 `COMMAND_SIGNING_KEY_FILE`，绑定指令 ID、目标 agent、签发时间与动作参数，agent 侧 TOFU 钉住公钥验签）
 - `containment`：自主响应引擎（见 `docs/autonomous-response-design.md`）——快路径对确定性高危告警（横向喷洒、数据库进程拉起 shell、反弹 shell、高置信情报外联、爆破等）秒级下发容器/主机隔离、结束进程、封禁 IP 或文件隔离；慢路径按 AI 研判 `response_tier`（`observe` / `contain` / `isolate`）分级处置；所有自动处置带 TTL 租约到期自动解除、支持人工提前解除与全局熔断保护
 - `natsretry`：NATS 选主瞬断的有界重试，只用于调用方能证明对端没收下的错误（事件发布、跨节点指令投递）
 - `notify`：Webhook 通知（generic / dingtalk / feishu / wecom）
@@ -137,7 +136,7 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
 - `review`：需人工复核的统一口径（通知、总览计数、列表筛选与自动结案共用）
 - `questions`：自治总控提问协议（P2）——子代理、常设规矩人工档与结案审计的归属 / 授权 / 策略 / 权限问题先确定性查找（事实、平台指令），答不了按主题合并成待答问题，管理员在控制台作答写回事实或规矩、关联待办重新排队，授权到期前 3 天提问续期，待答问题每天至多一条群消息
 - `testdb`：集成测试共享的 Postgres 连接与清表（仅 `integration` tag 编译）
-- `cmd/`：`detectcheck`（检测对拍）、`sigmacheck`（规则兼容检查）、`backtest`（用真实事件回测规则命中量）、`gencerts`（证书工具）、`sandboxd`（Pi 沙箱守护进程，见 `deploy/pi-sandbox`）、`eventpartition`（老库 events 在线迁移成分区表，见 `docs/event-partitioning.md`）
+- `cmd/`：`detectcheck`（检测对拍）、`sigmacheck`（规则兼容检查）、`backtest`（用真实事件回测规则命中量）、`gencerts`（签发 mTLS 与指令签名密钥）、`sandboxd`（Pi 沙箱守护进程，见 `deploy/pi-sandbox`）、`eventpartition`（老库 events 在线迁移成分区表，见 `docs/event-partitioning.md`）、`eventarchive`（冷归档与恢复，见 `docs/event-archive.md`）、`integrationexec`（集成测试按包独立库并行执行器）、`ipdb`（离线 IP 归属库拉取校验）、`suricata-import`（Suricata EVE 导入）、`triagecheck`（研判回归核验）、`decoyhost` / `decoyunit` / `sshdecoy`（欺骗诱饵运行与测试工具）等
 
 数据库实体定义在 `server/ent/schema/`（ent 代码生成，生成物已提交在 `server/ent/` 下）。
 
@@ -192,8 +191,8 @@ Web（工作目录 `web/`）：`npm ci && npm run build`（`tsc -b && vite build
   agent 可签发 CN 前缀 `host:` 的主机绑定证书）。
 - RBAC 三档角色：admin / analyst / viewer；REST 走 cookie 会话，敏感操作有审计。
 - 响应处置（结束进程、隔离主机或容器、封禁 IP、隔离文件）是系统中唯一能影响被监控主机的功能：
-  改 `response/`、`containment/`、`cmdsign/`、`grpcsvc/commands.go` 或 agent `respond/` 时，必须保持
-  闸门（全局开关 `RESPONSE_ENABLED`、端到端指令签名 `cmdsign`、隔离放行清单 `ISOLATION_ALLOW`、自主响应保护与熔断、exec 的组权限 /
+  改 `response/`、`containment/`、`response/sign.go`、`grpcsvc/commands.go` 或 agent `respond/` 时，必须保持
+  闸门（全局开关 `RESPONSE_ENABLED`、端到端指令签名 `COMMAND_SIGNING_KEY_FILE`、隔离放行清单 `ISOLATION_ALLOW`、自主响应保护与熔断、exec 的组权限 /
   命令名单 / 审批（AI 审计员或人工）/ 硬拒绝清单、审计落库）不被绕过。指令一律真执行，不要重新引入演练模式。
 - 不要把密钥、证书提交进仓库；`certs/` 等产物只应存在于本地。
 - 推理服务在内网时注意 `NO_PROXY`：Go 默认读 `HTTP_PROXY`，内网 LLM 端点可能被错误代理。

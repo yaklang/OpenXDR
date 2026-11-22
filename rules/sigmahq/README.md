@@ -1,7 +1,7 @@
 # SigmaHQ 社区规则
 
 来自 [SigmaHQ/sigma](https://github.com/SigmaHQ/sigma)（同步于 `b7920ed`，2026-10-18），只取本平台有数据源的部分：
-`rules/linux/{process_creation,file_event,network_connection}` 与 `rules/network/dns`，共 131 条。
+`rules/linux/{process_creation,file_event,network_connection}` 与 `rules/network/dns`，共 128 条。
 
 这些规则按 [Detection Rule License (DRL) 1.1](LICENSE.Detection.Rules.md) 授权：
 规则文件原样保留（含 `author` 等字段）；基于规则命中产生的消息（告警、事件、报告、通知）都会带上规则作者。

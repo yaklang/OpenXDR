@@ -6,7 +6,7 @@
 #   节点为 ssh 目的地（可以是 ssh config 里的别名）。
 # 环境变量：
 #   SSH          ssh 命令，默认 ssh；需要指定配置文件时如 SSH="ssh -F ~/.ssh/openxdr"
-#   VIP          虚拟 IP，用来判断谁在对外服务，默认 10.1.1.199
+#   VIP          虚拟 IP，用来判断谁在对外服务，默认 10.0.0.199
 #   HA_DIR       节点上的部署目录，默认 /opt/openxdr-ha
 #   GOPROXY      构建 server 时的 Go 代理，国内网络可设 https://goproxy.cn,direct
 #   NPM_REGISTRY 构建 web 时的 npm 源，如 https://registry.npmmirror.com
@@ -24,7 +24,7 @@ set -eu
 
 [ $# -eq 2 ] || { sed -n '2,9p' "$0"; exit 2; }
 SSH=${SSH:-ssh}
-VIP=${VIP:-10.1.1.199}
+VIP=${VIP:-10.0.0.199}
 HA_DIR=${HA_DIR:-/opt/openxdr-ha}
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 TAG=$(git -C "$ROOT" rev-parse --short HEAD)

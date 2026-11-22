@@ -11,7 +11,7 @@
 | 组件 | 技术 | 监听 | 职责 |
 |---|---|---|---|
 | agent | Rust | 不监听（主动连出） | 端点采集（Linux/Windows）+ 响应执行 |
-| sensor | Rust | 不监听（主动连出） | 全流量会话元数据（仅 Linux） |
+| sensor | Rust | 不监听（主动连出） | 全流量会话元数据（Linux AF_PACKET v3 / AF_XDP，Windows Packet Monitor） |
 | server | Go 1.26 + Ent | `:8080` REST/健康/指标、`:8081` gRPC、syslog UDP+TCP（可选） | 可横向扩展的 gateway + worker；接入、检测、关联、研判、响应 |
 | web | React 19 + Vite | nginx `:5173→80` | 管理控制台 |
 | NATS JetStream | — | `:4222`，监控 `:8222` | 持久事件队列、按资产分片、故障重投、跨节点指令路由 |
@@ -59,9 +59,9 @@ web (React): 概览漏斗 / 事件列表+图 / 检索 / 情报 / 审计
 
 > 注：旧版本图把"归一化"整体画在 server 框内——实际上 agent 事件的归一化
 > 在 **agent 侧**完成（raw_json 已是 OCSF 风格，server 原样落库），server
-> 只做 sensor 与 syslog 两路的归一化。且 agent 实际产出五类事件
-> （1001/1007/3002/4001/201002），不止进程事件。详见
-> [events.md](events.md)。
+> 只做 sensor 与 syslog 两路的归一化。且 agent 实际产出多类事件
+> （1001/1005/1007/3002/4001/4003/5001/5020/201002），涵盖文件、内核模块、
+> 进程、认证、网络、DNS、设备与软件清单及注册表。详见 [events.md](events.md)。
 
 ## 降噪的四道闸
 
@@ -103,9 +103,13 @@ incident 的 status/graph 随关联与研判演进。janitor 只删无告警引�
 容器/WSL2 里会因 pid 命名空间错位采出假数据，agent 检测到后主动退回轮询——
 宁可弱采集也不产假数据。
 
-**AI 只动手边界内的工具。** LLM 只能调用参数空间受限且已转义的调查工具，
-刻意不做 NL2SQL；研判最多 6 轮，模型不支持 tool calling 时自动退化单轮；
-模型输出视为不可信输入，AI 不能改检测面——规则只来自规则目录。详见 [detection.md](detection.md)。
+**AI 只动手边界内的工具。** 自动研判（`triage`）只能调用参数空间受限且已转义的
+只读调查工具，最多 6 轮，模型不支持 tool calling 时自动退化单轮；AI 助手与定时
+任务（Pi 会话，`agentchat`）通过组专属只读数据库视图提供受限 `query`，`exec`
+绑定组权限、命令名单、AI 审计员评审与硬拒绝清单。控制台支持经 `customrule`
+入库并热叠加自定义 Sigma 规则；模型输出与工具结果视为不可信输入，AI 不能直接
+修改检测规则，只能提交抑制草案（由独立 AI 审计员或组管理员审批生效）。详见
+[detection.md](detection.md) 与 [pi-backend.md](pi-backend.md)。
 
 **危险能力默认关闭且多道闸门。** 响应处置（结束进程/主机隔离）有
 `RESPONSE_ENABLED` 全局开关、`ISOLATION_ALLOW` 隔离自保两道闸门，指令一律真执行；
@@ -131,21 +135,26 @@ incident 的 status/graph 随关联与研判演进。janitor 只删无告警引�
 | `server/internal/cluster` | PostgreSQL advisory lock 后台任务租约与迁移锁 |
 | `server/internal/telemetry` | Prometheus 处理链指标 |
 | `server/internal/syslog` | RFC3164/5424 解析与接入 |
-| `server/internal/sigma` | Sigma 规则编译与求值（dot path 取值，class 分桶，热重载） |
+| `server/internal/sigma` | Sigma 规则编译与求值（dot path 取值，class 分桶，热重载；`Overlay` 叠加自定义规则） |
+| `server/internal/customrule` | 控制台自定义 Sigma 规则读写与各节点热加载 |
 | `server/internal/intel` | 威胁情报内存索引与碰撞 |
 | `server/internal/dedup` | 告警去重 |
 | `server/internal/suppress` | 误报抑制 |
 | `server/internal/correlate` | 告警→incident 归并与实体图 |
 | `server/internal/ueba` | 新进程首次出现检测（先学习后告警） |
 | `server/internal/triage` | LLM 研判（带只读调查工具） |
+| `server/internal/piruntime` / `agentchat` | Pi 会话托管（可选隔离沙箱 `cmd/sandboxd`）、工具路由与后台运行 |
+| `server/internal/commandgate` / `commandreview` | 人工与 AI 命令执行闸门、硬拒绝清单、AI 审计员评审与审批审计 |
+| `server/internal/closurereview` | 良性误报与已遏制威胁的独立复核结案与新证据重开 |
+| `server/internal/assetmap` / `automation` / `questions` | 资产图谱与攻击面、已知运维自动化识别、自治总控提问协议 |
 | `server/internal/notify` | webhook 通知 |
-| `server/internal/response` | 响应处置指令下发（结束进程/主机隔离）与自动响应 |
+| `server/internal/response` / `containment` | 响应处置指令下发、Ed25519 端到端签名（`sign.go`）与自主响应遏制引擎 |
 | `server/internal/janitor` | 数据保留与过期清理（events 分区表上整体退役日分区） |
 | `server/internal/eventpart` | events 按天分区：建表、ent 共存、预建、退役、在线迁移（见 event-partitioning.md） |
 | `server/internal/auth` | 会话、RBAC、登录限速 |
 | `server/internal/audit` | 操作审计 |
 | `agent/src/collector` | 端点采集（平台差异封死在模块内，对外一个 channel） |
-| `agent/src/respond` | 响应指令执行（结束进程/主机隔离） |
-| `sensor/src/capture` | 抓包后端（AF_PACKET v3 / AF_XDP） |
+| `agent/src/respond` | 响应指令验签与执行（结束进程/隔离主机与容器/封禁 IP/隔离文件） |
+| `sensor/src/capture` | 抓包后端（Linux AF_PACKET v3 / AF_XDP，Windows Packet Monitor） |
 | `sensor/src/proto_id.rs` | 应用层协议识别与元数据提取（DNS 含应答/rcode、TLS 含证书元数据、HTTP、JA3/JA3S） |
 | `sensor/src/flow.rs` | 五元组流聚合与老化 |

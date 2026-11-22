@@ -49,6 +49,13 @@ if [ -z "$TLS" ]; then
   fi
 fi
 case $TLS in acme|internal) ;; *) die "OPENXDR_TLS 只能是 acme 或 internal" ;; esac
+if [ -n "${OPENXDR_EMAIL:-}" ]; then
+  case "$OPENXDR_EMAIL" in
+    *[!A-Za-z0-9.@_%+-]*|*@*@*|@*|*@) die "OPENXDR_EMAIL 格式不合法，禁止包含空白、换行或特殊符号" ;;
+    *@*) ;;
+    *) die "OPENXDR_EMAIL 格式不合法，禁止包含空白、换行或特殊符号" ;;
+  esac
+fi
 
 # 端口是否被监听：ss 优先，netstat 兜底；两者都没有返回 2，让调用方明确说跳过
 listening() {
@@ -98,7 +105,7 @@ put OPENXDR_VERSION "$VERSION"
 
 IMAGE=ghcr.io/yaklang/openxdr-server:$VERSION
 say "拉取镜像"
-docker compose --progress quiet pull --policy missing
+docker compose --progress quiet pull
 
 # 首次安装、地址变了或缺指令签名私钥（旧版装的）才签（沿用已有 CA 与签名私钥）；私钥给 server 容器里的 openxdr 用户（uid 10001）读
 CHANGED=""
@@ -107,6 +114,31 @@ if [ ! -f certs/server.crt ] || [ ! -f certs/command-signing.key ] || [ "$PREV_H
   docker run --rm --user 0 -v "$DIR/certs:/certs" --entrypoint openxdr-gencerts "$IMAGE" /certs "$HOST" >/dev/null
   chown -R 10001 certs && chmod 600 certs/*.key
   CHANGED=1
+fi
+
+# 最小证书暴露：公网 Caddy 只挂 caddy-certs/，绝不暴露 ca.key 与 command-signing.key
+mkdir -p "$DIR/caddy-certs"
+chmod 755 "$DIR/caddy-certs"
+if [ "$TLS" = internal ]; then
+  for f in ca.crt server.crt server.key; do
+    if ! cmp -s "certs/$f" "caddy-certs/$f" 2>/dev/null; then
+      cp "certs/$f" "caddy-certs/$f"
+      CHANGED=1
+    fi
+  done
+  chmod 644 caddy-certs/ca.crt caddy-certs/server.crt
+  chmod 600 caddy-certs/server.key
+else
+  # acme 模式不需要自签服务端私钥，若从 internal 切换过来则清理残留
+  if [ -e caddy-certs/server.crt ] || [ -e caddy-certs/server.key ]; then
+    rm -f caddy-certs/server.crt caddy-certs/server.key
+    CHANGED=1
+  fi
+  if ! cmp -s certs/ca.crt caddy-certs/ca.crt 2>/dev/null; then
+    cp certs/ca.crt caddy-certs/ca.crt
+    CHANGED=1
+  fi
+  chmod 644 caddy-certs/ca.crt
 fi
 
 if [ "$TLS" = acme ]; then
@@ -160,7 +192,7 @@ docker compose --progress quiet up -d --remove-orphans
 i=0
 until docker compose exec -T server wget -qO- http://127.0.0.1:8080/readyz >/dev/null 2>&1; do
   i=$((i + 1))
-  [ $i -lt 90 ] || die "server 两分钟内没有就绪，查看日志：cd $DIR && docker compose logs server"
+  [ $i -lt 90 ] || die "server 三分钟内没有就绪，查看日志：cd $DIR && docker compose logs server"
   sleep 2
 done
 

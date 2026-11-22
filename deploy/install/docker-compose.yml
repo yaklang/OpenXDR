@@ -3,11 +3,18 @@
 # 升级：改 .env 里的 OPENXDR_VERSION 后 docker compose pull && docker compose up -d，或重新跑 install.sh。
 name: openxdr
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   nats:
     image: nats:2.11-alpine
     command: ["--config", "/etc/nats/openxdr.conf"]
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - natsdata:/data
       - ./nats.conf:/etc/nats/openxdr.conf:ro
@@ -15,6 +22,7 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: openxdr
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?缺少 POSTGRES_PASSWORD，先运行 install.sh}
@@ -31,6 +39,7 @@ services:
     # 镜像自带默认规则、预设任务与 agent 安装包；升级镜像，在线 agent 跟着自动升级
     image: ghcr.io/yaklang/openxdr-server:${OPENXDR_VERSION:-latest}
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,6 +98,7 @@ services:
     profiles: [dygk]
     image: ghcr.io/yaklang/openxdr-deception:${DYGK_VERSION:-latest}
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - server
     environment:
@@ -110,12 +120,14 @@ services:
   web:
     image: ghcr.io/yaklang/openxdr-web:${OPENXDR_VERSION:-latest}
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - server
 
   caddy:
     image: caddy:2.11.7-alpine
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - web
     ports:
@@ -123,7 +135,7 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./certs:/certs:ro
+      - ./caddy-certs:/certs:ro
       - caddydata:/data
 
 networks:
