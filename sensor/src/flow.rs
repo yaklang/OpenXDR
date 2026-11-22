@@ -124,8 +124,9 @@ pub const DEFAULT_MAX_TLS_HS_BYTES: usize = 32 * 1024 * 1024;
 /// 满表触发时间清理时暂存待导出流的数量上限，避免洪泛场景在内存里无限囤积
 const MAX_PENDING_EXPIRED: usize = 65536;
 
-/// 满表且无法清理/驱逐任何流时的全表扫描冷却间隔（100ms），避免每包全表扫描
-const FULL_REJECT_COOLDOWN_NS: u64 = 100_000_000;
+/// 满表回收的最短间隔（1s），不论上次腾没腾出空间：百万条流的全表扫描要几十毫秒，
+/// SYN 洪泛下每腾一批就再扫一次，worker 会被扫描吃满，连已有流都统计不过来
+const FULL_RECLAIM_COOLDOWN_NS: u64 = 1_000_000_000;
 
 /// worker 级 TLS 服务端握手重组缓冲预算。每张流表独享一份，无锁。
 #[derive(Debug)]
@@ -196,7 +197,7 @@ pub struct FlowTable {
     sweep_interval_ns: u64,
     tls_budget: TlsBufBudget,
     pending_expired: Vec<Flow>,
-    last_full_reject_ns: Option<u64>,
+    last_full_reclaim_ns: Option<u64>,
 }
 
 pub struct Config {
@@ -228,7 +229,7 @@ impl FlowTable {
             sweep_interval_ns: cfg.sweep_interval_secs * 1_000_000_000,
             tls_budget: TlsBufBudget::default(),
             pending_expired: Vec::new(),
-            last_full_reject_ns: None,
+            last_full_reclaim_ns: None,
         }
     }
 
@@ -236,28 +237,33 @@ impl FlowTable {
         self.flows.len()
     }
 
-    /// 满表时回收空间：先做一次按时间清理（保留待导出的合法到期流），
-    /// 若仍满再批量驱逐最老的一批空/短连接流，防止 SYN 洪泛阻断新流长达 30 秒。
+    /// 满表时回收空间：先做一次按时间清理（到期流暂存待导出，暂存满了就留在表里等下次清理，不丢），
+    /// 若仍满再批量驱逐最新的一批空/短连接流，防止 SYN 洪泛阻断新流长达 30 秒。
+    /// 驱逐最新的而不是最老的：洪泛的伪造 SYN 都是新的，较早的单包流（DNS 外传、UDP beacon）是证据，要留到正常超时导出
     fn reclaim_on_full(&mut self, now_ns: u64) {
         let idle = self.idle_timeout_ns;
         let lifetime = self.max_lifetime_ns;
         self.last_sweep_ns = now_ns;
+        let mut room = MAX_PENDING_EXPIRED.saturating_sub(self.pending_expired.len());
         for (_, mut flow) in self.flows.extract_if(|_, flow| {
-            flow.finished()
+            let due = flow.finished()
                 || now_ns.saturating_sub(flow.last_ns) >= idle
-                || now_ns.saturating_sub(flow.start_ns) >= lifetime
+                || now_ns.saturating_sub(flow.start_ns) >= lifetime;
+            if due && room > 0 {
+                room -= 1;
+                return true;
+            }
+            false
         }) {
             self.tls_budget.release(&mut flow.tls_hs_buf);
-            if self.pending_expired.len() < MAX_PENDING_EXPIRED {
-                self.pending_expired.push(flow);
-            }
+            self.pending_expired.push(flow);
         }
         if self.flows.len() < self.max_flows {
             return;
         }
 
-        // 仍满：挑最老的一批空/短连接流驱逐，单次批量腾出槽位避免后续每包全表扫描
-        let target = (self.max_flows / 16).clamp(1, 4096);
+        // 仍满：挑最新的一批空/短连接流驱逐，一次腾出表的 1/16，配合冷却间隔把全表扫描压到每秒至多一次
+        let target = (self.max_flows / 16).max(1);
         let mut shorts: Vec<(FlowKey, u64)> = self
             .flows
             .iter()
@@ -265,7 +271,7 @@ impl FlowTable {
             .map(|(k, f)| (*k, f.last_ns))
             .collect();
         if shorts.len() > target {
-            shorts.select_nth_unstable_by_key(target, |&(_, last_ns)| last_ns);
+            shorts.select_nth_unstable_by_key(target, |&(_, last_ns)| std::cmp::Reverse(last_ns));
             shorts.truncate(target);
         }
         for (k, _) in shorts {
@@ -288,17 +294,16 @@ impl FlowTable {
                 return None;
             }
             if self
-                .last_full_reject_ns
-                .is_some_and(|t| ts_ns.saturating_sub(t) < FULL_REJECT_COOLDOWN_NS)
+                .last_full_reclaim_ns
+                .is_some_and(|t| ts_ns.saturating_sub(t) < FULL_RECLAIM_COOLDOWN_NS)
             {
                 return None;
             }
             self.reclaim_on_full(ts_ns);
+            self.last_full_reclaim_ns = Some(ts_ns);
             if self.flows.len() >= self.max_flows {
-                self.last_full_reject_ns = Some(ts_ns);
                 return None;
             }
-            self.last_full_reject_ns = None;
         }
 
         // 方向判定：SYN 且无 ACK 的发送方是客户端；SYN+ACK 的发送方是服务端；
@@ -362,7 +367,7 @@ impl FlowTable {
             out.push(flow);
         }
         if self.flows.len() < before {
-            self.last_full_reject_ns = None;
+            self.last_full_reclaim_ns = None;
         }
     }
 
@@ -375,7 +380,7 @@ impl FlowTable {
             self.tls_budget.release(&mut flow.tls_hs_buf);
             out.push(flow);
         }
-        self.last_full_reject_ns = None;
+        self.last_full_reclaim_ns = None;
     }
 }
 
@@ -557,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn flow_table_full_evicts_oldest_syn_flood() {
+    fn flow_table_full_evicts_newest_syn_flood() {
         let cfg = Config {
             idle_timeout_secs: 30,
             max_lifetime_secs: 300,
@@ -597,11 +602,11 @@ mod tests {
         }
         assert_eq!(ft.len(), 4);
 
-        // t=5（远未到 30s 超时）新合法流到达：应驱逐最老的 SYN 流（t=2，192.0.2.1）并放行新流
+        // t=5（远未到 30s 超时）新合法流到达：应驱逐最新的 SYN 流（t=4，192.0.2.3）并放行新流，较早的单包流留作证据
         let legit = pkt(v4(10, 0, 0, 9), v4(10, 0, 0, 2), 3000, 443, TCP_SYN, 60);
         assert!(
             ft.update(&legit, 5).is_some(),
-            "SYN 洪泛占满流表时应驱逐最老短流放行新流"
+            "SYN 洪泛占满流表时应驱逐短流放行新流"
         );
         assert_eq!(ft.len(), 4);
         assert!(
@@ -613,9 +618,20 @@ mod tests {
         assert!(
             !ft.flows
                 .keys()
-                .any(|k| k.a_ip == v4(192, 0, 2, 1) || k.b_ip == v4(192, 0, 2, 1)),
-            "最老的 SYN 半开流应被优先驱逐"
+                .any(|k| k.a_ip == v4(192, 0, 2, 3) || k.b_ip == v4(192, 0, 2, 3)),
+            "最新的 SYN 半开流应被优先驱逐"
         );
+        assert!(
+            ft.flows
+                .keys()
+                .any(|k| k.a_ip == v4(192, 0, 2, 1) || k.b_ip == v4(192, 0, 2, 1)),
+            "较早的短流应留到正常超时导出"
+        );
+
+        // 冷却期内再满：直接丢新流，不再全表扫描；过了冷却期才再回收
+        let next = pkt(v4(10, 0, 0, 10), v4(10, 0, 0, 2), 3001, 443, TCP_SYN, 60);
+        assert!(ft.update(&next, 6).is_none());
+        assert!(ft.update(&next, 5 + FULL_RECLAIM_COOLDOWN_NS).is_some());
     }
 
     #[test]

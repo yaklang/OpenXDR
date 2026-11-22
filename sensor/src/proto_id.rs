@@ -1,5 +1,5 @@
 //! 协议识别与元数据提取：DNS 查询/应答、TLS SNI/JA3/JA3S、HTTP 请求头。
-//! 每条流每个方向只探测一次，命中或明确不是就置 probed，避免对大流反复解析。
+//! 每条流每个方向探到命中、或前几个包都没命中就置 probed，避免对大流反复解析。
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -22,6 +22,9 @@ const MAX_HEADER_LEN: usize = 512;
 const MAX_TLS_HS_BUF: usize = 16 * 1024;
 /// TLS record 长度上限（明文 16KB，加密后最多再多 2KB），超过即不是 TLS record
 const MAX_TLS_RECORD: usize = 16 * 1024 + 2048;
+/// 每个方向最多看前这么多个包找 ClientHello / ServerHello：STARTTLS（SMTP/IMAP/LDAP/PG）、RDP、
+/// CONNECT 代理都先走几轮明文才进 TLS，只看首个载荷包会把它们全漏掉；再往后就是长流的数据，不再扫
+const MAX_PROBE_PACKETS: u64 = 24;
 /// 应用数据 record 至少要这么长才算带了载荷：TLS 1.3 加密的 alert（close_notify）是
 /// 2 字节明文 + 1 字节类型 + 16 字节认证标签 = 19，装不下任何请求
 const MIN_DATA_RECORD: usize = 20;
@@ -56,19 +59,31 @@ pub fn probe(flow: &mut Flow, pkt: &Packet, from_client: bool, tls_budget: &mut 
                 if flow.meta.tls_alpn.is_none() {
                     flow.meta.tls_alpn = hello.alpn;
                 }
+                flow.probed = true;
             } else if let Some(http) = parse_http_request(pkt.payload) {
                 flow.meta.http_host = http.host;
                 flow.meta.http_uri = Some(http.uri);
                 flow.meta.http_user_agent = http.user_agent;
+                flow.probed = true;
+            } else if direction_packets(flow, true) >= MAX_PROBE_PACKETS {
+                // 前几个包都没命中就不是要找的协议，避免 SSH/DB/gRPC 长流每包重复扫描
+                flow.probed = true;
             }
-            // 无论是否命中，首段客户端载荷探完即置 probed，避免 SSH/DB/gRPC 长流每包重复扫描
-            flow.probed = true;
         }
         return;
     }
     // 仅服务端方向进入 TLS handshake 重组，杜绝客户端包污染服务端 tls_hs_buf
     if !flow.probed_server {
         probe_tls_server(flow, pkt.payload, tls_budget);
+    }
+}
+
+/// 流在客户端或服务端方向上已经过了多少个包（含本包）
+fn direction_packets(flow: &Flow, client: bool) -> u64 {
+    if client == flow.client_is_a {
+        flow.a_to_b_packets
+    } else {
+        flow.b_to_a_packets
     }
 }
 
@@ -110,7 +125,7 @@ fn probe_dns_payload(flow: &mut Flow, payload: &[u8]) -> bool {
 /// TLS 服务端方向探测：把 handshake record 攒进 tls_hs_buf 做有界重组，
 /// 增量解析 ServerHello（JA3S、TLS1.3 判定）与 Certificate（证书元数据）。
 /// 完成条件：拿到 JA3S 且证书已见（或判定 TLS1.3 等不到证书）；
-/// 或看到应用数据 record（0x17）；或非 TLS 握手首包；或单流/全局缓冲超限。完成后置 probed_server。
+/// 或看到应用数据 record（0x17）；或前 MAX_PROBE_PACKETS 个包都不是握手；或单流/全局缓冲超限。完成后置 probed_server。
 fn probe_tls_server(flow: &mut Flow, payload: &[u8], budget: &mut TlsBufBudget) {
     if flow.tls_hs_buf.is_empty() {
         // 缓冲为空时，0x17 应用数据说明握手窗口已过（TLS1.3、会话复用等），不等了
@@ -124,7 +139,10 @@ fn probe_tls_server(flow: &mut Flow, payload: &[u8], budget: &mut TlsBufBudget) 
         let starts_hs =
             payload.first() == Some(&0x16) && matches!(payload.get(5), Some(&2) | Some(&11));
         if !starts_hs {
-            flow.probed_server = true;
+            // 明文阶段（STARTTLS 的 220、代理的 200 Connection established）之后才是 ServerHello
+            if direction_packets(flow, false) >= MAX_PROBE_PACKETS {
+                flow.probed_server = true;
+            }
             return;
         }
 
@@ -782,11 +800,14 @@ mod tests {
         }
     }
 
+    // 同 FlowTable::update：先给本方向记一个包再探测
     fn probe_client(flow: &mut Flow, pkt: &Packet) {
+        flow.a_to_b_packets += 1;
         probe(flow, pkt, true, &mut TlsBufBudget::default());
     }
 
     fn probe_server(flow: &mut Flow, pkt: &Packet) {
+        flow.b_to_a_packets += 1;
         probe(flow, pkt, false, &mut TlsBufBudget::default());
     }
 
@@ -1011,11 +1032,10 @@ mod tests {
         assert_eq!(flow.meta.dns_answers, vec!["9.9.9.9"]);
         assert!(flow.probed_server);
 
-        // TCP 53 上不带长度前缀的裸报文：绝不错位解析出垃圾域名，且首包即置 probed
+        // TCP 53 上不带长度前缀的裸报文：绝不错位解析出垃圾域名
         let mut raw_flow = default_flow();
         probe_client(&mut raw_flow, &pkt(54321, DNS_PORT, &q));
         assert!(raw_flow.meta.dns_query.is_none());
-        assert!(raw_flow.probed);
 
         // TCP 53 复用跑 TLS 隧道：不被误当 DNS，能正常识别 SNI
         let mut tls_flow = default_flow();
@@ -1305,19 +1325,46 @@ mod tests {
     }
 
     #[test]
-    fn probe_non_http_tls_sets_probed_immediately() {
-        // SSH/DB/gRPC 等非 HTTP/TLS 流量首包即置 probed 与 probed_server，避免长流反复扫描
+    fn probe_non_http_tls_gives_up_after_first_packets() {
+        // SSH/DB/gRPC 等非 HTTP/TLS 流量：前 MAX_PROBE_PACKETS 个包都没命中就置 probed，避免长流反复扫描
         let mut flow = default_flow();
-        probe_client(&mut flow, &pkt(52000, 22, b"SSH-2.0-OpenSSH_9.6\r\n"));
-        assert!(flow.probed, "非 HTTP/TLS 客户端首包应立即置 probed");
+        for _ in 0..MAX_PROBE_PACKETS {
+            assert!(!flow.probed && !flow.probed_server);
+            probe_client(&mut flow, &pkt(52000, 22, b"SSH-2.0-OpenSSH_9.6\r\n"));
+            probe_server(&mut flow, &pkt(22, 52000, b"SSH-2.0-OpenSSH_9.6\r\n"));
+        }
+        assert!(flow.probed && flow.probed_server);
         assert!(flow.meta.http_uri.is_none());
         assert!(flow.meta.tls_sni.is_none());
+    }
 
-        probe_server(&mut flow, &pkt(22, 52000, b"SSH-2.0-OpenSSH_9.6\r\n"));
-        assert!(
-            flow.probed_server,
-            "非 TLS 服务端首包应立即置 probed_server"
+    #[test]
+    fn probe_starttls_after_plaintext() {
+        // SMTP STARTTLS：两边先走几轮明文，之后的 ClientHello / ServerHello 照样要提取
+        let mut flow = default_flow();
+        probe_server(&mut flow, &pkt(25, 52000, b"220 mx.example ESMTP\r\n"));
+        probe_client(&mut flow, &pkt(52000, 25, b"EHLO c.example\r\n"));
+        probe_server(
+            &mut flow,
+            &pkt(25, 52000, b"250-mx.example\r\n250 STARTTLS\r\n"),
         );
+        probe_client(&mut flow, &pkt(52000, 25, b"STARTTLS\r\n"));
+        probe_server(
+            &mut flow,
+            &pkt(25, 52000, b"220 2.0.0 Ready to start TLS\r\n"),
+        );
+        assert!(!flow.probed && !flow.probed_server);
+        probe_client(
+            &mut flow,
+            &pkt(52000, 25, &client_hello("mx.example", false)),
+        );
+        assert_eq!(flow.meta.tls_sni.as_deref(), Some("mx.example"));
+        assert!(flow.probed);
+        let mut payload = server_hello(0x1301, &[]);
+        payload.extend_from_slice(&certificate_record(LEAF_DER));
+        probe_server(&mut flow, &pkt(25, 52000, &payload));
+        assert!(flow.meta.ja3s.is_some());
+        assert_eq!(flow.meta.cert_subject.as_deref(), Some("leaf.example"));
     }
 
     #[test]
