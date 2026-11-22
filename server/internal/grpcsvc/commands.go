@@ -91,7 +91,7 @@ func (s *Server) Commands(stream pb.AgentService_CommandsServer) error {
 }
 
 func (s *Server) touch(ctx context.Context, agentID uuid.UUID) {
-	if err := s.DB.Asset.Update().Where(asset.AgentIDEQ(agentID)).SetLastSeen(time.Now()).Exec(ctx); err != nil {
+	if err := s.DB.Asset.Update().Where(asset.AgentIDEQ(agentID), asset.RetiredAtIsNil()).SetLastSeen(time.Now()).Exec(ctx); err != nil {
 		slog.Warn("刷新 agent 心跳失败", "agent", agentID, "err", err)
 	}
 }

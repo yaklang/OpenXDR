@@ -127,6 +127,49 @@ func TestQuestionsAPI(t *testing.T) {
 	if code := post(asAdmin, "/api/questions/"+rq.Question.ID.String()+"/answer", `{"choice":"rule","ruleId":"`+stale+`","tier":"human"}`); code != http.StatusOK {
 		t.Fatalf("选规矩与档位：%d", code)
 	}
+
+	// 跨组问题详情裁剪：同一问题涉及组 g 与 other 时，组 g 用户只能看到本组事件/待办/证据，不能看到 other 组的主机名或标题
+	otherHost := client.Asset.Create().SetHostname("secret-other-host").SetGroupID(other.ID).SaveX(ctx)
+	incMine := client.Incident.Create().SetTitle("本组事件标题").SetStatus("triaged").SetGraph([]byte(`{}`)).SaveX(ctx)
+	client.Alert.Create().SetTs(time.Now()).SetRuleID("r1").SetSeverity(4).SetAssetID(host.ID).SetIncidentID(incMine.ID).SaveX(ctx)
+	incOther := client.Incident.Create().SetTitle("他组机密事件").SetStatus("triaged").SetGraph([]byte(`{}`)).SaveX(ctx)
+	client.Alert.Create().SetTs(time.Now()).SetRuleID("r2").SetSeverity(4).SetAssetID(otherHost.ID).SetIncidentID(incOther.ID).SaveX(ctx)
+	fMine := client.Finding.Create().SetGroupID(g.ID).SetAssetID(host.ID).SetKey("k-cross-a").SetTitle("本组待办").SaveX(ctx)
+	fOther := client.Finding.Create().SetGroupID(other.ID).SetAssetID(otherHost.ID).SetKey("k-cross-b").SetTitle("他组机密待办").SaveX(ctx)
+
+	sharedQ, err := questions.Ask(ctx, client, questions.Request{
+		Kind: "owner", SubjectKind: "ip", Subject: "198.51.100.77",
+		Groups: []uuid.UUID{g.ID}, Incident: &incMine.ID, Finding: &fMine.ID, Note: "本组证据原文",
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := questions.Ask(ctx, client, questions.Request{
+		Kind: "owner", SubjectKind: "ip", Subject: "198.51.100.77",
+		Groups: []uuid.UUID{other.ID}, Incident: &incOther.ID, Finding: &fOther.ID, Note: "他组机密证据",
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	var anaDetail, adminDetail questionDetail
+	if code := get(asAna, "/api/questions/"+sharedQ.Question.ID.String(), &anaDetail); code != http.StatusOK {
+		t.Fatalf("组用户看跨组问题详情失败：%d", code)
+	}
+	if len(anaDetail.Incidents) != 1 || anaDetail.Incidents[0].ID != incMine.ID || anaDetail.Incidents[0].Title != "本组事件标题" {
+		t.Fatalf("非全局 admin 不应看到他组事件：%+v", anaDetail.Incidents)
+	}
+	if len(anaDetail.Findings) != 1 || anaDetail.Findings[0].ID != fMine.ID || anaDetail.Findings[0].Hostname != "raid" {
+		t.Fatalf("非全局 admin 不应看到他组待办或主机名：%+v", anaDetail.Findings)
+	}
+	if len(anaDetail.Evidence) != 1 || anaDetail.Evidence[0].Note != "本组证据原文" {
+		t.Fatalf("非全局 admin 不应看到他组证据：%+v", anaDetail.Evidence)
+	}
+	if anaDetail.IncidentCount != 1 || anaDetail.FindingCount != 1 {
+		t.Fatalf("非全局 admin 计数应与裁剪后一致：inc=%d find=%d", anaDetail.IncidentCount, anaDetail.FindingCount)
+	}
+	if code := get(asAdmin, "/api/questions/"+sharedQ.Question.ID.String(), &adminDetail); code != http.StatusOK || len(adminDetail.Incidents) != 2 || len(adminDetail.Findings) != 2 || len(adminDetail.Evidence) != 2 {
+		t.Fatalf("全局 admin 应看到全部关联条目：%d %+v", code, adminDetail)
+	}
 }
 
 func TestVoidedQuestionsAndAssetParkAPI(t *testing.T) {

@@ -319,7 +319,7 @@ func (st *agentStream) resolveAsset(agentID string) {
 	if err != nil {
 		return
 	}
-	a, err := st.s.DB.Asset.Query().Where(asset.AgentIDEQ(agentGUID)).First(st.ctx)
+	a, err := st.s.DB.Asset.Query().Where(asset.AgentIDEQ(agentGUID), asset.RetiredAtIsNil()).First(st.ctx)
 	if err != nil {
 		return
 	}

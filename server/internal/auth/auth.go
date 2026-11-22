@@ -55,8 +55,11 @@ func minRole(method, path string) string {
 	// 自主响应开关影响全部主机
 	case path == "/api/containments/config":
 		return "admin"
-	// 情报订阅影响全局检测
-	case strings.HasPrefix(path, "/api/intel/feeds") && method != http.MethodGet:
+	// 微步在线外部情报查询允许 analyst 发起
+	case path == "/api/intel/threatbook/lookup" && method == http.MethodPost:
+		return "analyst"
+	// 全局情报与情报订阅的写删影响全局检测与自主封禁，只有 admin 能动
+	case (path == "/api/intel" || strings.HasPrefix(path, "/api/intel/")) && method != http.MethodGet:
 		return "admin"
 	// 任务在某个组上的开关由该组管理员决定，handler 按组检查
 	case strings.HasPrefix(path, "/api/tasks/") && strings.Contains(path, "/groups/") && method == http.MethodPut:

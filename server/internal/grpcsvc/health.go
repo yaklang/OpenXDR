@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
 	"openxdr/server/pb"
 )
@@ -145,18 +146,21 @@ func (s *Server) ReportHealth(ctx context.Context, req *pb.HealthRequest) (*pb.H
 	if err != nil {
 		return nil, status.Error(codes.Internal, "状态编码失败")
 	}
-	n, err := s.DB.Asset.Update().Where(asset.AgentIDEQ(id), newerSnapshot(asset.FieldCollectorHealth, h.BootID, h.Sequence, h.ReportedUnixMs)).
+	n, err := s.DB.Asset.Update().Where(asset.AgentIDEQ(id), asset.RetiredAtIsNil(), newerSnapshot(asset.FieldCollectorHealth, h.BootID, h.Sequence, h.ReportedUnixMs)).
 		SetCollectorHealth(raw).SetLastSeen(now).Save(ctx)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "采集状态保存失败")
 	}
 	if n == 0 {
-		exists, err := s.DB.Asset.Query().Where(asset.AgentIDEQ(id)).Exist(ctx)
+		a, err := s.DB.Asset.Query().Where(asset.AgentIDEQ(id)).First(ctx)
+		if ent.IsNotFound(err) {
+			return nil, status.Error(codes.NotFound, "agent 尚未注册")
+		}
 		if err != nil {
 			return nil, status.Error(codes.Internal, "资产核对失败")
 		}
-		if !exists {
-			return nil, status.Error(codes.NotFound, "agent 尚未注册")
+		if a.RetiredAt != nil {
+			return nil, status.Error(codes.PermissionDenied, "主机已下线，需用接入令牌重新接入")
 		}
 	}
 	return &pb.HealthAck{}, nil

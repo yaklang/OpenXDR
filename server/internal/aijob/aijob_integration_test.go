@@ -62,4 +62,23 @@ func TestStartOnePerSubject(t *testing.T) {
 	if j, _ := db.AIJob.Get(ctx, old.ID); j.Status != "failed" {
 		t.Fatalf("卡死的任务应记为失败，实际 %s", j.Status)
 	}
+
+	// 返回无法反序列化为 JSON 对象的切片时，必须落库为 failed 并带错误信息，不得卡死在 running
+	var unmarshalDone sync.WaitGroup
+	unmarshalDone.Add(1)
+	badKey := aijob.Key{Kind: "explain", Subject: "e-bad-shape", Owner: "u1"}
+	badJob, ok, err := aijob.Start(ctx, db, badKey, func(context.Context) (any, error) {
+		return []string{"not-an-object"}, nil
+	}, unmarshalDone.Done)
+	if err != nil || !ok {
+		t.Fatalf("发起任务失败：ok=%v err=%v", ok, err)
+	}
+	unmarshalDone.Wait()
+	gotBad, err := db.AIJob.Get(ctx, badJob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBad.Status != "failed" || gotBad.Error == "" {
+		t.Fatalf("Unmarshal 失败时应标记为 failed 且记录错误，实际 status=%q error=%q", gotBad.Status, gotBad.Error)
+	}
 }

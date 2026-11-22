@@ -36,6 +36,9 @@ func (s *Server) ReportSSHKeys(ctx context.Context, req *pb.ReportSSHKeysRequest
 		}
 		return nil, status.Error(codes.Internal, "资产查询失败")
 	}
+	if a.RetiredAt != nil {
+		return nil, status.Error(codes.PermissionDenied, "主机已下线，需用接入令牌重新接入")
+	}
 	if err := s.DB.Asset.UpdateOneID(a.ID).SetLastSeen(time.Now()).Exec(ctx); err != nil {
 		if ctxErr := rpcContextError(ctx, err); ctxErr != nil {
 			return nil, ctxErr

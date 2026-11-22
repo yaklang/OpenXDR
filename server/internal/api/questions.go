@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"openxdr/server/ent"
+	"openxdr/server/ent/agentsession"
 	"openxdr/server/ent/finding"
 	"openxdr/server/ent/incident"
 	"openxdr/server/ent/question"
@@ -113,6 +114,47 @@ func visibleQuestion(s scope, q *ent.Question) bool {
 	return s.all || slices.ContainsFunc(q.GroupIds, func(g uuid.UUID) bool { return slices.Contains(s.groups, g) })
 }
 
+// allGroupsInScope 问题涉及的全部组是否都在用户作用域内（用于判断无具体对象引用的公共证据能否透出）
+func allGroupsInScope(s scope, groups []uuid.UUID) bool {
+	if s.all {
+		return true
+	}
+	if len(groups) == 0 {
+		return false
+	}
+	for _, g := range groups {
+		if !slices.Contains(s.groups, g) {
+			return false
+		}
+	}
+	return true
+}
+
+// filterQuestionEvidence 对非全局 admin 按可见的事件、待办与会话集合裁剪证据，防止跨组问题的证据泄露他组内容。
+func filterQuestionEvidence(
+	evidence []schema.QuestionEvidence,
+	visibleInc, visibleFind, visibleSess map[uuid.UUID]bool,
+	allGroupsVisible bool,
+) []schema.QuestionEvidence {
+	out := make([]schema.QuestionEvidence, 0, len(evidence))
+	for _, ev := range evidence {
+		if ev.Incident != nil && !visibleInc[*ev.Incident] {
+			continue
+		}
+		if ev.Finding != nil && !visibleFind[*ev.Finding] {
+			continue
+		}
+		if ev.Session != nil && !visibleSess[*ev.Session] {
+			continue
+		}
+		if ev.Incident == nil && ev.Finding == nil && ev.Session == nil && !allGroupsVisible {
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
 // registerQuestionRoutes 总控待答问题：viewer 可看（证据只在这里显示），只有平台管理员能作答；
 // 作答在同一事务里写回事实或常设规矩、落审计、把关联待办重新排队。不提供批量作答
 func registerQuestionRoutes(mux *http.ServeMux, db *ent.Client) {
@@ -181,17 +223,40 @@ func registerQuestionRoutes(mux *http.ServeMux, db *ent.Client) {
 			return
 		}
 		ctx := r.Context()
-		d := questionDetail{Evidence: q.Evidence, Incidents: []questionIncident{}, Findings: []questionFinding{}}
-		if d.Evidence == nil {
-			d.Evidence = []schema.QuestionEvidence{}
+		d := questionDetail{Evidence: []schema.QuestionEvidence{}, Incidents: []questionIncident{}, Findings: []questionFinding{}}
+
+		// 汇总详情和证据里引用的事件、待办、会话 ID，非全局 admin 按所属组统一过滤，不泄露他组标题/主机名/证据
+		incQueryIDs := append([]uuid.UUID(nil), q.IncidentIds...)
+		findQueryIDs := append([]uuid.UUID(nil), q.FindingIds...)
+		var sessQueryIDs []uuid.UUID
+		for _, ev := range q.Evidence {
+			if ev.Incident != nil && !slices.Contains(incQueryIDs, *ev.Incident) {
+				incQueryIDs = append(incQueryIDs, *ev.Incident)
+			}
+			if ev.Finding != nil && !slices.Contains(findQueryIDs, *ev.Finding) {
+				findQueryIDs = append(findQueryIDs, *ev.Finding)
+			}
+			if ev.Session != nil && !slices.Contains(sessQueryIDs, *ev.Session) {
+				sessQueryIDs = append(sessQueryIDs, *ev.Session)
+			}
 		}
-		if len(q.IncidentIds) > 0 {
-			incs, err := db.Incident.Query().Where(incident.IDIn(q.IncidentIds...)).Order(ent.Desc(incident.FieldCreatedAt)).All(ctx)
+
+		visibleInc := map[uuid.UUID]bool{}
+		if len(incQueryIDs) > 0 {
+			iq := db.Incident.Query().Where(incident.IDIn(incQueryIDs...))
+			if !s.all {
+				iq = iq.Where(s.incident()...)
+			}
+			incs, err := iq.Order(ent.Desc(incident.FieldCreatedAt)).All(ctx)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			for _, inc := range incs {
+				visibleInc[inc.ID] = true
+				if !slices.Contains(q.IncidentIds, inc.ID) {
+					continue
+				}
 				title := ""
 				if inc.Title != nil {
 					title = *inc.Title
@@ -199,23 +264,65 @@ func registerQuestionRoutes(mux *http.ServeMux, db *ent.Client) {
 				d.Incidents = append(d.Incidents, questionIncident{ID: inc.ID, Title: title, Status: inc.Status})
 			}
 		}
+
+		visibleFind := map[uuid.UUID]bool{}
 		var assets []uuid.UUID
 		var rows []*ent.Finding
-		if len(q.FindingIds) > 0 {
-			var err error
-			if rows, err = db.Finding.Query().Where(finding.IDIn(q.FindingIds...)).Order(ent.Desc(finding.FieldLastSeen)).All(ctx); err != nil {
+		if len(findQueryIDs) > 0 {
+			fq := db.Finding.Query().Where(finding.IDIn(findQueryIDs...))
+			if !s.all {
+				fq = fq.Where(finding.GroupIDIn(s.groups...))
+			}
+			allFindings, err := fq.Order(ent.Desc(finding.FieldLastSeen)).All(ctx)
+			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			for _, f := range rows {
+			for _, f := range allFindings {
+				visibleFind[f.ID] = true
+				if !slices.Contains(q.FindingIds, f.ID) {
+					continue
+				}
+				rows = append(rows, f)
 				assets = append(assets, f.AssetID)
 			}
 		}
-		names := hostnamesOf(ctx, db, append(assets, questionAssets(q)...))
+
+		if s.all {
+			if q.Evidence != nil {
+				d.Evidence = q.Evidence
+			}
+		} else {
+			visibleSess := map[uuid.UUID]bool{}
+			if len(sessQueryIDs) > 0 {
+				sessIDs, err := db.AgentSession.Query().
+					Where(agentsession.IDIn(sessQueryIDs...), agentsession.GroupIDIn(s.groups...)).
+					IDs(ctx)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				for _, sid := range sessIDs {
+					visibleSess[sid] = true
+				}
+			}
+			d.Evidence = filterQuestionEvidence(q.Evidence, visibleInc, visibleFind, visibleSess, allGroupsInScope(s, q.GroupIds))
+		}
+
+		for _, aid := range questionAssets(q) {
+			if s.has(aid) {
+				assets = append(assets, aid)
+			}
+		}
+		names := hostnamesOf(ctx, db, assets)
 		for _, f := range rows {
 			d.Findings = append(d.Findings, questionFinding{ID: f.ID, Title: f.Title, Hostname: names[f.AssetID], Status: f.Status})
 		}
 		d.questionRow = toQuestionRow(q, names)
+		if !s.all {
+			d.IncidentCount = len(d.Incidents)
+			d.FindingCount = len(d.Findings)
+		}
 		writeJSON(w, d)
 	})
 

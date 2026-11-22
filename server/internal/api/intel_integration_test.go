@@ -95,4 +95,36 @@ func TestAPIIntelCreate(t *testing.T) {
 	if r3.StatusCode != 400 {
 		t.Errorf("非法 kind 应 400，得到 %d", r3.StatusCode)
 	}
+
+	// 私网/回环 IP 与越界 severity 拒绝
+	for _, body := range []string{
+		`{"kind":"ip","value":"10.1.1.5"}`,
+		`{"kind":"ip","value":"127.0.0.1"}`,
+		`{"kind":"ip","value":"5.6.7.9","severity":6}`,
+	} {
+		r, _ := postJSON(ts, "/api/intel", body)
+		r.Body.Close()
+		if r.StatusCode != 400 {
+			t.Errorf("非法入参 %s 应 400，得到 %d", body, r.StatusCode)
+		}
+	}
+
+	// 批量导入自动跳过私网/保留 IP 与已存在条目
+	impPayload, _ := json.Marshal(map[string]string{"text": "5.6.7.8\n10.0.0.1\n127.0.0.1\n8.8.4.4\n"})
+	r4, err := postJSON(ts, "/api/intel/import", string(impPayload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	impOut, _ := io.ReadAll(r4.Body)
+	r4.Body.Close()
+	if r4.StatusCode != 200 {
+		t.Fatalf("import status = %d: %s", r4.StatusCode, impOut)
+	}
+	var res map[string]int
+	if err := json.Unmarshal(impOut, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res["imported"] != 1 || res["skipped"] != 3 {
+		t.Errorf("期望 imported=1 skipped=3，实际 %+v", res)
+	}
 }

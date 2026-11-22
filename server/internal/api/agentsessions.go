@@ -12,7 +12,10 @@ import (
 	"github.com/google/uuid"
 	"openxdr/server/ent"
 	"openxdr/server/ent/agentsession"
+	entalert "openxdr/server/ent/alert"
+	entasset "openxdr/server/ent/asset"
 	"openxdr/server/ent/finding"
+	entincident "openxdr/server/ent/incident"
 	"openxdr/server/ent/report"
 	"openxdr/server/ent/sessionmessage"
 	"openxdr/server/internal/agentchat"
@@ -210,12 +213,13 @@ func mapAgentSessions(mux *http.ServeMux, db *ent.Client, service *agentchat.Ser
 }
 
 // checkSubjects 「交给 AI」绑定的对象：incident:<id> 或 finding:<id>，最多 10 个，必须都属于会话所在组。
-// 组内角色已在调用前检查过，这里只防把别组的事件塞进本组会话。
+// 组内角色已在调用前检查过，这里与 scope.go 保持同一口径：跨组或含无归属告警的事件不得塞进本组会话。
 func checkSubjects(ctx context.Context, db *ent.Client, group uuid.UUID, subjects []string) error {
 	if len(subjects) > 10 {
 		return errors.New("一次最多交给 AI 10 条")
 	}
 	var incidents, findings []uuid.UUID
+	seenInc, seenFind := map[uuid.UUID]bool{}, map[uuid.UUID]bool{}
 	for _, s := range subjects {
 		kind, raw, _ := strings.Cut(s, ":")
 		id, err := uuid.Parse(raw)
@@ -223,20 +227,36 @@ func checkSubjects(ctx context.Context, db *ent.Client, group uuid.UUID, subject
 			return fmt.Errorf("无效的对象 %q", s)
 		}
 		if kind == "incident" {
-			incidents = append(incidents, id)
+			if !seenInc[id] {
+				seenInc[id] = true
+				incidents = append(incidents, id)
+			}
 		} else {
-			findings = append(findings, id)
+			if !seenFind[id] {
+				seenFind[id] = true
+				findings = append(findings, id)
+			}
 		}
 	}
 	if len(incidents) > 0 {
-		groups, err := incidentGroups(ctx, db, incidents)
+		assets, err := db.Asset.Query().Where(entasset.GroupIDEQ(group)).IDs(ctx)
 		if err != nil {
 			return err
 		}
-		for _, id := range incidents {
-			if g := groups[id]; g == nil || *g != group {
-				return errors.New("所选事件不都属于当前组")
-			}
+		n, err := db.Incident.Query().
+			Where(
+				entincident.IDIn(incidents...),
+				entincident.HasAlerts(),
+				entincident.Not(entincident.HasAlertsWith(
+					entalert.Or(entalert.AssetIDIsNil(), entalert.AssetIDNotIn(assets...)),
+				)),
+			).
+			Count(ctx)
+		if err != nil {
+			return err
+		}
+		if n != len(incidents) {
+			return errors.New("所选事件不都属于当前组")
 		}
 	}
 	if len(findings) > 0 {

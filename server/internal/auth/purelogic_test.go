@@ -21,6 +21,10 @@ func TestMinRoleRouteTable(t *testing.T) {
 		{"POST", "/api/settings/notify/test", "admin"},
 		{"PUT", "/api/intel/feeds", "admin"},
 		{"GET", "/api/intel/feeds", "viewer"},
+		{"POST", "/api/intel", "admin"},
+		{"POST", "/api/intel/import", "admin"},
+		{"DELETE", "/api/intel/123", "admin"},
+		{"POST", "/api/intel/threatbook/lookup", "analyst"},
 		{"PUT", "/api/containments/config", "admin"},
 		{"GET", "/api/containments/status", "viewer"},
 		{"POST", "/api/custom-rules", "admin"},
@@ -35,7 +39,6 @@ func TestMinRoleRouteTable(t *testing.T) {
 		// 其余只读走 viewer，写操作至少 analyst
 		{"GET", "/api/intel", "viewer"},
 		{"GET", "/api/events", "viewer"},
-		{"POST", "/api/intel", "analyst"},
 		{"DELETE", "/api/events/1", "analyst"},
 		// 组：读按成员身份过滤，写只有 admin
 		{"GET", "/api/groups", "viewer"},

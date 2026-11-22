@@ -1,6 +1,11 @@
 package api
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestDetectKind(t *testing.T) {
 	cases := []struct{ in, kind, value string }{
@@ -37,5 +42,79 @@ func TestIsHex(t *testing.T) {
 	// 空串无字符可否定：按实现返回 true，detectKind 靠长度限制不会走到这里
 	if !isHex("") {
 		t.Errorf("isHex 空串按实现应为 true")
+	}
+}
+
+func TestValidIntelIP(t *testing.T) {
+	accepted := []struct {
+		in   string
+		want string
+	}{
+		{"1.2.3.4", "1.2.3.4"},
+		{"5.6.7.8", "5.6.7.8"},
+		{"::ffff:8.8.8.8", "8.8.8.8"},
+		{"2001:4860:4860::8888", "2001:4860:4860::8888"},
+	}
+	for _, tc := range accepted {
+		got, ok := validIntelIP(tc.in)
+		if !ok || got != tc.want {
+			t.Errorf("validIntelIP(%q) = (%q, %v), want (%q, true)", tc.in, got, ok, tc.want)
+		}
+	}
+
+	rejected := []string{
+		"",
+		"not-an-ip",
+		"127.0.0.1",
+		"::1",
+		"::ffff:127.0.0.1",
+		"10.1.1.1",
+		"172.16.0.5",
+		"192.168.1.1",
+		"169.254.169.254",
+		"fe80::1",
+		"fc00::1",
+		"100.64.0.1",
+		"0.0.0.0",
+		"::",
+		"224.0.0.1",
+		"255.255.255.255",
+		"240.0.0.1",
+	}
+	for _, raw := range rejected {
+		if got, ok := validIntelIP(raw); ok {
+			t.Errorf("私网/回环/保留/非法 IP %q 不应放行，got %q", raw, got)
+		}
+	}
+}
+
+func TestIntelHandlerRejectsInvalidInputsAndOversizedBody(t *testing.T) {
+	mux := http.NewServeMux()
+	mapIntel(mux, nil, nil)
+
+	cases := []struct {
+		name   string
+		path   string
+		body   string
+		status int
+	}{
+		{"单条私网 IP 拒绝", "/api/intel", `{"kind":"ip","value":"10.1.1.36"}`, http.StatusBadRequest},
+		{"单条回环 IP 拒绝", "/api/intel", `{"kind":"ip","value":"127.0.0.1"}`, http.StatusBadRequest},
+		{"单条链路本地 IP 拒绝", "/api/intel", `{"kind":"ip","value":"169.254.169.254"}`, http.StatusBadRequest},
+		{"单条保留 IP 拒绝", "/api/intel", `{"kind":"ip","value":"240.0.0.1"}`, http.StatusBadRequest},
+		{"单条 severity 越界(低)", "/api/intel", `{"kind":"ip","value":"1.2.3.4","severity":-1}`, http.StatusBadRequest},
+		{"单条 severity 越界(高)", "/api/intel", `{"kind":"ip","value":"1.2.3.4","severity":6}`, http.StatusBadRequest},
+		{"导入 severity 越界", "/api/intel/import", `{"text":"1.2.3.4","severity":9}`, http.StatusBadRequest},
+		{"单条超 1 MiB 拒绝", "/api/intel", `{"kind":"domain","value":"` + strings.Repeat("a", maxIntelBodyBytes+16) + `"}`, http.StatusRequestEntityTooLarge},
+		{"导入超 10 MiB 拒绝", "/api/intel/import", `{"text":"` + strings.Repeat("a", maxIntelImportBytes+16) + `"}`, http.StatusRequestEntityTooLarge},
+	}
+
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+		mux.ServeHTTP(rec, req)
+		if rec.Code != tc.status {
+			t.Errorf("%s: status = %d, want %d (%s)", tc.name, rec.Code, tc.status, rec.Body.String())
+		}
 	}
 }

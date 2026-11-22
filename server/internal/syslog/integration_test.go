@@ -3,6 +3,7 @@
 package syslog
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"os"
@@ -106,5 +107,52 @@ func TestSyslogResolveAsset(t *testing.T) {
 	// 都对不上 → nil
 	if id3, _ := s.resolveAsset(ctx, "ghost", nil); id3 != nil {
 		t.Errorf("未知主机/IP 应返回 nil，得到 %v", id3)
+	}
+	// 已知源 IP 主机伪造其他主机名：优先按源 IP 归属，不能嫁祸 web01
+	if id4, _ := s.resolveAsset(ctx, "web01", net.ParseIP("10.9.9.9")); id4 == nil || *id4 != byIP.ID {
+		t.Errorf("已知源 IP 伪造 hostname 应归属源 IP 资产 %s，得到 %v", byIP.ID, id4)
+	}
+}
+
+// 停机取消 context 时，consume 使用独立短超时上下文执行最终 flush，确保内存缓冲中的事件落库。
+func TestSyslogConsumeFlushesOnCancel(t *testing.T) {
+	ctx, client := testdb.New(t)
+	if _, err := client.Asset.Create().SetHostname("web01").SetOs("linux").Save(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		DB:          client,
+		Rules:       loadSSHRule(t),
+		DedupWindow: time.Hour,
+		Suppress:    suppress.New(client, time.Hour),
+		Intel:       intel.New(client, time.Hour),
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	queue := make(chan incoming, 8)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.consume(runCtx, queue)
+	}()
+
+	queue <- incoming{line: `<34>Oct 11 22:14:15 web01 sshd[123]: Failed password for root from 1.2.3.4`}
+	// 等待 consume 从 queue 取走进入内存批次，尚未到 2s ticker 就立即取消 context
+	deadline := time.Now().Add(time.Second)
+	for len(queue) > 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("consume 退出超时")
+	}
+
+	if n, err := client.Event.Query().Count(ctx); err != nil || n != 1 {
+		t.Fatalf("停机最终 flush 应保住 1 条事件，实际 n=%d err=%v", n, err)
+	}
+	if n, err := client.Alert.Query().Count(ctx); err != nil || n != 1 {
+		t.Fatalf("停机最终 flush 应保住 1 条告警，实际 n=%d err=%v", n, err)
 	}
 }

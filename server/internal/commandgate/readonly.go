@@ -1,6 +1,7 @@
 package commandgate
 
 import (
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -15,10 +16,10 @@ func ReadOnly(cmd string) bool {
 	if !ok || len(segments) == 0 {
 		return false
 	}
-	// 密钥路径出现在 for 列表、变量赋值或输入重定向里，可能经变量或标准输入传给别的段：整条命令都只许看元数据
+	// 密钥路径或敏感文件名出现在 for 列表、变量赋值或输入重定向里，可能经变量或标准输入传给别的段：整条命令都只许看元数据
 	strict := false
 	for _, seg := range segments {
-		if program, _, _ := command(seg.words); secretPath.MatchString(seg.raw) && (program == "" || seg.input) {
+		if program, _, _ := command(seg.words); (program == "" || seg.input) && segmentMentionsSecret(seg, true) {
 			strict = true
 		}
 	}
@@ -30,7 +31,7 @@ func ReadOnly(cmd string) bool {
 		if program == "" {
 			continue
 		}
-		if (strict || secretPath.MatchString(seg.raw)) && !metadataOnly[program] {
+		if !metadataOnly[program] && (strict || segmentMentionsSecret(seg, false) || segmentUnsafeDynamicSecret(program, seg)) {
 			return false
 		}
 		// 容器里执行的命令按同一份清单判定；shell 会展开的段，判定看到的和容器里真跑的可能不是一回事
@@ -68,6 +69,13 @@ func argvReadOnly(words []string) bool {
 	if !ok || program == "" {
 		return false
 	}
+	if !metadataOnly[program] {
+		for _, w := range args {
+			if matchesSecretPath(w) {
+				return false
+			}
+		}
+	}
 	if inner, ok := containerExec(program, args); ok {
 		return argvReadOnly(inner)
 	}
@@ -75,17 +83,99 @@ func argvReadOnly(words []string) bool {
 	return known && (check == nil || check(args))
 }
 
-// segment 一个命令段：去掉引号后的词、原文（密钥路径按原文找，含重定向目标）、是否有输入重定向、
+// segment 一个命令段：去掉引号后的词、输入重定向目标、含未转义变量展开的词、引号外含通配符的词、
+// 原文（密钥路径按原文找，含重定向目标）、是否有输入重定向、
 // 单引号外是否出现 $ 或反斜杠（shell 会展开或转义，去引号后的词和真正传给程序的参数可能不同）
 type segment struct {
-	words   []string
-	raw     string
-	input   bool
-	dynamic bool
+	words     []string
+	inputs    []string
+	varWords  []string
+	globWords []string
+	raw       string
+	input     bool
+	dynamic   bool
 }
 
 // secretPath 与默认名单的读密钥条目同一范围，宽一点无妨：命中后只许 ls / stat 这类看元数据的命令
-var secretPath = regexp.MustCompile(`/etc/g?shadow|\bid_(?:rsa|dsa|ecdsa|ed25519)|ssh_host_\w*key`)
+var (
+	secretPath    = regexp.MustCompile(`/etc/g?shadow|\bid_(?:rsa|dsa|ecdsa|ed25519)|ssh_host_\w*key`)
+	secretKeyword = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_])(?:g?shadow|id_(?:rsa|dsa|ecdsa|ed25519)|ssh_host_\w*key)(?:$|[^a-z0-9_])`)
+)
+
+// fileReaders 会直接读文件内容输出到标准输出的程序：不许经动态变量传未知路径绕过密钥路径检查
+var fileReaders = map[string]bool{
+	"cat": true, "tac": true, "head": true, "tail": true, "grep": true, "egrep": true, "fgrep": true,
+	"zgrep": true, "zcat": true, "wc": true, "cut": true, "tr": true, "column": true, "nl": true,
+	"comm": true, "paste": true, "rev": true, "strings": true, "cmp": true, "diff": true,
+	"md5sum": true, "sha1sum": true, "sha256sum": true, "jq": true, "awk": true, "gawk": true,
+	"mawk": true, "sed": true, "sort": true, "uniq": true, "file": true,
+}
+
+func matchesSecretPath(w string) bool {
+	check := func(s string) bool {
+		if secretPath.MatchString(s) {
+			return true
+		}
+		if strings.Contains(s, "/") {
+			if cleaned := path.Clean(s); secretPath.MatchString(cleaned) {
+				return true
+			}
+		}
+		return false
+	}
+	if check(w) {
+		return true
+	}
+	if _, rhs, ok := strings.Cut(w, "="); ok && rhs != "" {
+		return check(rhs)
+	}
+	return false
+}
+
+func segmentMentionsSecret(seg segment, includeKeywords bool) bool {
+	if secretPath.MatchString(seg.raw) {
+		return true
+	}
+	for _, w := range seg.words {
+		if matchesSecretPath(w) || (includeKeywords && secretKeyword.MatchString(w)) {
+			return true
+		}
+	}
+	for _, w := range seg.inputs {
+		if matchesSecretPath(w) || (includeKeywords && secretKeyword.MatchString(w)) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeSensitiveDynamic(w string) bool {
+	lower := strings.ToLower(w)
+	if strings.Contains(lower, "/etc") || strings.Contains(lower, ".ssh") ||
+		strings.Contains(lower, "shadow") || strings.Contains(lower, "ssh_host") ||
+		strings.Contains(lower, "id_") {
+		return true
+	}
+	// 根目录通配如 /*/shadow 或 /e*/shadow
+	return strings.HasPrefix(lower, "/*") || strings.HasPrefix(lower, "/?") || strings.HasPrefix(lower, "/[")
+}
+
+func segmentUnsafeDynamicSecret(program string, seg segment) bool {
+	for _, w := range seg.varWords {
+		if looksLikeSensitiveDynamic(w) {
+			return true
+		}
+		if fileReaders[program] && !strings.HasPrefix(w, "-") {
+			return true
+		}
+	}
+	for _, w := range seg.globWords {
+		if looksLikeSensitiveDynamic(w) {
+			return true
+		}
+	}
+	return false
+}
 
 var metadataOnly = map[string]bool{"ls": true, "stat": true, "test": true, "[": true, "echo": true, "printf": true, "true": true, "false": true}
 
@@ -93,27 +183,40 @@ var metadataOnly = map[string]bool{"ls": true, "stat": true, "test": true, "[": 
 // 后台运行、子 shell 括号，或写到 /dev/null 以外的重定向，直接判为非只读。
 func split(cmd string) ([]segment, bool) {
 	var segments []segment
-	var words []string
+	var words, inputs, varWords, globWords []string
 	start, redirected, dynamic := 0, false, false
 	var word strings.Builder
-	inWord, input := false, false
+	inWord, input, wordVar, wordGlob := false, false, false, false
 	flushWord := func() {
-		// 输入重定向的文件名不算参数：done < /etc/passwd 里的 done 后面不该多出一个词
-		if inWord && !input {
-			words = append(words, word.String())
-		}
 		if inWord {
-			input = false
+			w := word.String()
+			// 输入重定向的文件名不算命令参数，但保留在 inputs 里供密钥路径检查
+			if input {
+				inputs = append(inputs, w)
+			} else {
+				words = append(words, w)
+			}
+			if wordVar {
+				varWords = append(varWords, w)
+			}
+			if wordGlob {
+				globWords = append(globWords, w)
+			}
+			input, wordVar, wordGlob = false, false, false
 		}
 		word.Reset()
 		inWord = false
 	}
 	flushSegment := func(end int) {
 		flushWord()
-		if len(words) > 0 {
-			segments = append(segments, segment{words, cmd[start:end], redirected, dynamic})
+		if len(words) > 0 || len(inputs) > 0 {
+			segments = append(segments, segment{
+				words: words, inputs: inputs, varWords: varWords, globWords: globWords,
+				raw: cmd[start:end], input: redirected, dynamic: dynamic,
+			})
 		}
-		words, redirected, dynamic = nil, false, false
+		words, inputs, varWords, globWords = nil, nil, nil, nil
+		redirected, dynamic = false, false
 		start = end + 1
 	}
 	for i := 0; i < len(cmd); i++ {
@@ -134,22 +237,39 @@ func split(cmd string) ([]segment, bool) {
 				case '`':
 					return nil, false
 				case '$':
+					dynamic = true
 					if j+1 < len(cmd) && cmd[j+1] == '(' {
 						end, ok := substitution(cmd, j)
 						if !ok {
 							return nil, false
 						}
+						word.WriteString(cmd[j : end+1])
 						j = end
+					} else {
+						wordVar = true
+						word.WriteByte('$')
 					}
 				case '\\':
-					j++
+					dynamic = true
+					if j+1 < len(cmd) {
+						next := cmd[j+1]
+						if next == '$' || next == '"' || next == '\\' || next == '`' {
+							word.WriteByte(next)
+						} else {
+							word.WriteByte('\\')
+							word.WriteByte(next)
+						}
+						j++
+					} else {
+						return nil, false
+					}
+				default:
+					word.WriteByte(cmd[j])
 				}
 			}
 			if j >= len(cmd) {
 				return nil, false
 			}
-			dynamic = dynamic || strings.ContainsAny(cmd[i+1:j], "$\\")
-			word.WriteString(cmd[i+1 : j])
 			inWord = true
 			i = j
 		case c == '\\':
@@ -219,9 +339,15 @@ func split(cmd string) ([]segment, bool) {
 				return nil, false
 			}
 			flushWord()
-			input, redirected = true, true // 输入重定向只是读文件；文件名留在段原文里，提到密钥路径照样拦
+			input, redirected = true, true // 输入重定向只是读文件；文件名留在 inputs 与段原文里，提到密钥路径照样拦
 		default:
-			dynamic = dynamic || c == '$'
+			if c == '$' {
+				dynamic = true
+				wordVar = true
+			}
+			if c == '*' || c == '?' || c == '[' {
+				wordGlob = true
+			}
 			word.WriteByte(c)
 			inWord = true
 		}
@@ -339,7 +465,7 @@ var readOnlyPrograms = map[string]func(args []string) bool{
 	"readlink": nil, "realpath": nil, "ls": nil, "stat": nil, "file": nil, "du": nil, "df": nil, "free": nil,
 	"uptime": nil, "uname": nil, "nproc": nil, "id": nil, "whoami": nil, "who": nil, "w": nil, "groups": nil,
 	"last": nil, "lastb": nil, "lastlog": nil, "getent": nil, "ps": nil, "pgrep": nil, "pidof": nil, "pstree": nil,
-	"ss": nil, "netstat": nil, "lsof": nil, "lsblk": nil, "findmnt": nil, "lscpu": nil, "lspci": nil, "lsusb": nil,
+	"ss": noArgPrefix("-K", "--kill"), "netstat": nil, "lsof": nil, "lsblk": nil, "findmnt": nil, "lscpu": nil, "lspci": nil, "lsusb": nil,
 	"lsmod": nil, "modinfo": nil, "vmstat": nil, "iostat": nil, "mpstat": nil, "getfacl": nil, "lsattr": nil,
 	"pveversion": nil, "printenv": nil, "locale": nil, "getconf": nil, "atq": nil, "ipcs": nil, "lsns": nil, "which": nil,
 	"hostid": nil, "arch": nil, "systemd-detect-virt": nil, "lslogins": nil,
@@ -358,10 +484,10 @@ var readOnlyPrograms = map[string]func(args []string) bool{
 	"awk":              awkRead,
 	"gawk":             awkRead,
 	"mawk":             awkRead,
-	"ip":               noWord("set", "add", "del", "delete", "flush", "change", "replace", "append", "prepend", "exec", "-batch", "-b", "-force"),
-	"systemctl":        subcommand(true, "status", "show", "cat", "list-units", "list-unit-files", "list-timers", "list-sockets", "list-jobs", "list-paths", "list-dependencies", "is-active", "is-enabled", "is-failed", "is-system-running"),
-	"timedatectl":      subcommand(true, "status", "show", "timesync-status", "show-timesync"),
-	"hostnamectl":      subcommand(true, "status"),
+	"ip":               ipReadOnly,
+	"systemctl":        subcommand(true, systemctlPreFlags, "status", "show", "cat", "list-units", "list-unit-files", "list-timers", "list-sockets", "list-jobs", "list-paths", "list-dependencies", "is-active", "is-enabled", "is-failed", "is-system-running"),
+	"timedatectl":      subcommand(true, []string{"--no-pager"}, "status", "show", "timesync-status", "show-timesync"),
+	"hostnamectl":      subcommand(true, []string{"--no-pager"}, "status"),
 	"docker":           dockerReadOnly,
 	"iptables":         firewallReadOnly,
 	"ip6tables":        firewallReadOnly,
@@ -372,15 +498,15 @@ var readOnlyPrograms = map[string]func(args []string) bool{
 	"nft":              nftReadOnly,
 	"dpkg":             onlyFlagPrefix("-l", "-L", "-s", "-S", "--list", "--listfiles", "--status", "--search", "--print-architecture"),
 	"dpkg-query":       nil,
-	"rpm":              firstFlagPrefix("-q"),
-	"apt":              subcommand(false, "list", "show", "policy", "search"),
-	"apt-cache":        subcommand(false, "policy", "show", "showpkg", "search", "depends", "rdepends", "madison", "pkgnames"),
-	"qm":               subcommand(false, "list", "status", "config", "pending", "listsnapshot"),
-	"pct":              subcommand(false, "list", "status", "config", "pending", "listsnapshot"),
-	"pvecm":            subcommand(false, "status", "nodes"),
-	"zpool":            subcommand(false, "status", "list", "iostat"),
-	"zfs":              subcommand(false, "list", "get"),
-	"chronyc":          subcommand(false, "tracking", "sources", "sourcestats", "activity"),
+	"rpm":              rpmQuery,
+	"apt":              subcommand(false, nil, "list", "show", "policy", "search"),
+	"apt-cache":        subcommand(false, nil, "policy", "show", "showpkg", "search", "depends", "rdepends", "madison", "pkgnames"),
+	"qm":               subcommand(false, nil, "list", "status", "config", "pending", "listsnapshot"),
+	"pct":              subcommand(false, nil, "list", "status", "config", "pending", "listsnapshot"),
+	"pvecm":            subcommand(false, nil, "status", "nodes"),
+	"zpool":            subcommand(false, nil, "status", "list", "iostat"),
+	"zfs":              subcommand(false, nil, "list", "get"),
+	"chronyc":          subcommand(false, nil, "tracking", "sources", "sourcestats", "activity"),
 	"sshd":             sshdTest,
 	"visudo":           onlyFlag("-c"),
 	"vtysh":            vtyshShow,
@@ -396,7 +522,13 @@ var readOnlyPrograms = map[string]func(args []string) bool{
 	"arcconf":    arcconfGet,
 	"swapon":     swaponShow,
 	"command":    onlyFlagPrefix("-v", "-V"), // command 不带 -v 就是执行后面的命令
-	"loginctl":   subcommand(true, "list-sessions", "list-users", "list-seats", "show-session", "show-user", "session-status", "user-status"),
+	"loginctl":   subcommand(true, []string{"--no-pager", "--no-legend", "--all", "-a", "--full", "-l"}, "list-sessions", "list-users", "list-seats", "show-session", "show-user", "session-status", "user-status"),
+}
+
+// systemctlPreFlags systemctl 在子命令前允许出现的无参全局选项，拒绝 -H/--host/-M/--root 等带值或远程选项
+var systemctlPreFlags = []string{
+	"--no-pager", "--no-legend", "--failed", "--all", "-a", "--full", "-l",
+	"--plain", "--quiet", "-q", "--system", "--user", "--utc",
 }
 
 // sshdTest sshd -T / -t 只打印或校验配置；不带它们就是起一个守护进程
@@ -457,8 +589,6 @@ func noArgPrefix(banned ...string) func([]string) bool {
 		return true
 	}
 }
-
-func noWord(banned ...string) func([]string) bool { return noArg(banned...) }
 
 func atMostOneFile(args []string) bool {
 	files := 0
@@ -568,28 +698,141 @@ func onlyFlagPrefix(allowed ...string) func([]string) bool {
 	}
 }
 
-func firstFlagPrefix(prefix string) func([]string) bool {
-	return func(args []string) bool {
-		return len(args) > 0 && strings.HasPrefix(args[0], prefix)
+// rpmQuery rpm 只允许纯查询参数，拒绝 --eval/-E/--define/-D/--pipe/--rcfile/--macros 等可执行或改配置选项。
+func rpmQuery(args []string) bool {
+	if len(args) == 0 {
+		return false
 	}
+	queryMode := false
+	longPlain := map[string]bool{
+		"--query": true, "--all": true, "--info": true, "--list": true,
+		"--file": true, "--package": true, "--whatprovides": true, "--whatrequires": true,
+		"--requires": true, "--provides": true, "--changelog": true, "--last": true,
+		"--filesbypkg": true, "--configfiles": true, "--docfiles": true, "--state": true,
+		"--dump": true, "--nosignature": true, "--nodigest": true,
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			continue
+		}
+		if a == "--qf" || a == "--queryformat" {
+			if i++; i >= len(args) || strings.Contains(args[i], "%(") {
+				return false
+			}
+			continue
+		}
+		if fmtVal, ok := strings.CutPrefix(a, "--qf="); ok {
+			if strings.Contains(fmtVal, "%(") {
+				return false
+			}
+			continue
+		}
+		if fmtVal, ok := strings.CutPrefix(a, "--queryformat="); ok {
+			if strings.Contains(fmtVal, "%(") {
+				return false
+			}
+			continue
+		}
+		if strings.HasPrefix(a, "--") {
+			if !longPlain[a] {
+				return false
+			}
+			if a == "--query" {
+				queryMode = true
+			}
+			continue
+		}
+		// 短选项组合：仅放行纯查询字母，且必须显式带有 -q（避免 -i 被当成安装）
+		if len(a) < 2 {
+			return false
+		}
+		hasQ := strings.ContainsRune(a[1:], 'q')
+		if hasQ {
+			queryMode = true
+		}
+		for _, r := range a[1:] {
+			switch r {
+			case 'q', 'a', 'l', 'f', 'p', 'c', 'd', 's', 'R', 'v', 'g', 'L':
+			case 'i':
+				// -i 只有在 -q 组合或已经进入查询模式后才是 --info，否则是安装软件包
+				if !queryMode {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+	}
+	return queryMode
 }
 
-// subcommand 第一个非选项参数必须是只读子命令；bare 为 true 时允许不带子命令（systemctl 默认 list-units）
-func subcommand(bare bool, allowed ...string) func([]string) bool {
+// subcommand 仅跳过显式声明的无参前置选项；遇到未知选项直接拒绝，防止带值全局选项把值伪装成子命令。
+// bare 为 true 时允许不带子命令（如 systemctl --failed --no-pager 默认 list-units）。
+func subcommand(bare bool, preFlags []string, allowed ...string) func([]string) bool {
 	return func(args []string) bool {
 		for _, a := range args {
 			if strings.HasPrefix(a, "-") {
+				if !slices.Contains(preFlags, a) {
+					return false
+				}
 				continue
 			}
-			for _, s := range allowed {
-				if a == s {
-					return true
-				}
-			}
-			return false
+			return slices.Contains(allowed, a)
 		}
 		return bare
 	}
+}
+
+// ipReadOnly 仅放行已知无参输出选项 + 明确只读网络对象与 show/list/get 动作，拒绝 -b/-batch/缩写写动词等绕过。
+func ipReadOnly(args []string) bool {
+	preFlags := map[string]bool{
+		"-4": true, "-6": true, "-br": true, "-brief": true, "--brief": true,
+		"-c": true, "-color": true, "--color": true, "-d": true, "-details": true, "--details": true,
+		"-h": true, "-human": true, "-human-readable": true, "--human-readable": true,
+		"-j": true, "-json": true, "--json": true, "-o": true, "-oneline": true, "--oneline": true,
+		"-p": true, "-pretty": true, "--pretty": true, "-r": true, "-resolve": true, "--resolve": true,
+		"-s": true, "-stats": true, "-statistics": true, "--statistics": true,
+		"-t": true, "-timestamp": true, "-ts": true, "-tshort": true, "-V": true, "-Version": true,
+	}
+	objects := map[string]bool{
+		"a": true, "addr": true, "address": true,
+		"l": true, "link": true,
+		"r": true, "ro": true, "route": true,
+		"n": true, "neigh": true, "neighbour": true,
+		"ru": true, "rule": true,
+		"maddr": true, "maddress": true, "mroute": true,
+		"tunnel": true, "netns": true, "vrf": true,
+	}
+	readActions := map[string]bool{
+		"show": true, "list": true, "lst": true, "ls": true, "get": true,
+	}
+	i := 0
+	for i < len(args) && strings.HasPrefix(args[i], "-") {
+		if !preFlags[args[i]] {
+			return false
+		}
+		i++
+	}
+	if i >= len(args) || !objects[args[i]] {
+		return false
+	}
+	i++
+	if i >= len(args) {
+		return true
+	}
+	// 对象后第一个词若存在，必须明确是只读动作（拒绝缩写写动作如 ip l s eth0 down / ip netns exec）
+	if !readActions[args[i]] {
+		return false
+	}
+	// 动作之后不再允许出现写动词或批处理选项
+	for _, a := range args[i+1:] {
+		switch a {
+		case "set", "add", "del", "delete", "flush", "change", "replace", "append", "prepend", "exec", "save", "restore":
+			return false
+		}
+	}
+	return true
 }
 
 func crontabList(args []string) bool {
@@ -616,8 +859,74 @@ func sysctlRead(args []string) bool {
 	return true
 }
 
-// awkScript 能执行命令、读命令输出或写文件的 awk 写法：system()、getline、协进程、print/printf 后接重定向或管道
-var awkUnsafe = regexp.MustCompile(`system|getline|\|&|print[^;}]*[>|]|fflush|close\s*\(`)
+// awkUnsafe 剥离字符串字面量与注释后再匹配，避免 print "}" > "/tmp/x" 因字符串里的 } 提前中断正则
+var (
+	awkUnsafeCore = regexp.MustCompile(`\b(?:system|getline|fflush)\b|\bclose\s*\(|\|&|>>`)
+	awkPrintRedir = regexp.MustCompile(`\bprintf?\b[^;}]*>`)
+)
+
+// stripAwkStringsAndComments 去掉双引号字符串内容、# 注释与反斜杠续行；未闭合双引号返回 false。
+func stripAwkStringsAndComments(script string) (string, bool) {
+	// 先合并反斜杠续行，避免 print "a" \ 换行 > "/tmp/x" 绕过单行匹配
+	script = strings.ReplaceAll(script, "\\\n", " ")
+	var b strings.Builder
+	b.Grow(len(script))
+	for i := 0; i < len(script); i++ {
+		switch script[i] {
+		case '"':
+			b.WriteString(`""`)
+			i++
+			closed := false
+			for ; i < len(script); i++ {
+				if script[i] == '\\' {
+					i++
+					continue
+				}
+				if script[i] == '"' {
+					closed = true
+					break
+				}
+			}
+			if !closed {
+				return "", false
+			}
+		case '#':
+			for i < len(script) && script[i] != '\n' {
+				i++
+			}
+			if i < len(script) {
+				b.WriteByte('\n')
+			}
+		default:
+			b.WriteByte(script[i])
+		}
+	}
+	return b.String(), true
+}
+
+func hasSinglePipe(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '|' {
+			if i+1 < len(s) && s[i+1] == '|' {
+				i++
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func awkScriptSafe(script string) bool {
+	stripped, ok := stripAwkStringsAndComments(script)
+	if !ok {
+		return false
+	}
+	if awkUnsafeCore.MatchString(stripped) || hasSinglePipe(stripped) || awkPrintRedir.MatchString(stripped) {
+		return false
+	}
+	return true
+}
 
 func awkRead(args []string) bool {
 	script := false
@@ -625,12 +934,14 @@ func awkRead(args []string) bool {
 		a := args[i]
 		switch {
 		case a == "-F" || a == "-v":
-			i++ // 分隔符、变量赋值是数据
+			if i++; i >= len(args) {
+				return false
+			}
 		case strings.HasPrefix(a, "-F") || strings.HasPrefix(a, "-v"):
 		case strings.HasPrefix(a, "-"):
 			return false // -f 读脚本文件、-i 原地改写、--load 加载扩展，都不认
 		case !script:
-			if awkUnsafe.MatchString(a) {
+			if !awkScriptSafe(a) {
 				return false
 			}
 			script = true
@@ -754,7 +1065,7 @@ func arcconfGet(args []string) bool {
 	return len(args) > 0 && strings.HasPrefix(strings.ToUpper(args[0]), "GET")
 }
 
-// dockerReadOnly 只接受查询子命令；stats 必须明确关闭持续采样。
+// dockerReadOnly 只接受查询子命令；拒绝任何前置全局选项（避免 -l info rm -f x 等带值选项绕过），stats 必须明确关闭持续采样。
 func dockerReadOnly(args []string) bool {
 	if len(args) == 0 {
 		return false
@@ -764,7 +1075,9 @@ func dockerReadOnly(args []string) bool {
 		return len(args) == 2 && args[1] == "df"
 	case "stats":
 		return len(args) == 2 && (args[1] == "--no-stream" || args[1] == "--no-stream=true")
+	case "ps", "images", "inspect", "logs", "version", "info", "top", "port", "diff":
+		return true
 	default:
-		return subcommand(false, "ps", "images", "inspect", "logs", "version", "info", "top", "port", "diff")(args)
+		return false
 	}
 }

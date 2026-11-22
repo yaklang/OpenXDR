@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,21 +32,44 @@ const ClassApplicationActivity = 100001
 // 单条报文长度上限，超出截断。UDP 侧同时是读缓冲大小
 const maxMessageLen = 64 * 1024
 
-// 攒批落库：满 batchSize 条或到 flushInterval 就写一次
+// 攒批落库与网络保护阈值
 const (
-	batchSize     = 500
-	flushInterval = 2 * time.Second
+	batchSize            = 500
+	flushInterval        = 2 * time.Second
+	maxTCPConns          = 256
+	tcpIdleTimeout       = 2 * time.Minute
+	shutdownFlushTimeout = 5 * time.Second
+	defaultAssetCacheTTL = 30 * time.Second
 )
 
+type assetRef struct {
+	id uuid.UUID
+	os string
+}
+
+type assetIndex struct {
+	mu     sync.RWMutex
+	byIP   map[string]assetRef
+	byHost map[string]assetRef
+	at     time.Time
+}
+
 type Server struct {
-	monitor     monitor
-	DB          *ent.Client
-	Rules       sigma.Catalog
-	Addr        string
-	DedupWindow time.Duration
-	Suppress    *suppress.Store
-	Intel       *intel.Store
-	Events      eventbus.Bus
+	monitor       monitor
+	assets        assetIndex
+	DB            *ent.Client
+	Rules         sigma.Catalog
+	Addr          string
+	DedupWindow   time.Duration
+	Suppress      *suppress.Store
+	Intel         *intel.Store
+	Events        eventbus.Bus
+	TrustedRelays []string // 允许按报文 hostname 归属的受信 syslog 转发器 IP
+
+	// 测试覆写项；零值使用默认常量
+	maxConns      int
+	idleTimeout   time.Duration
+	assetCacheTTL time.Duration
 }
 
 // 从网络收上来的一条报文，带来源地址用于归属资产
@@ -89,6 +114,27 @@ func (s *Server) listenUDP(ctx context.Context, queue chan<- incoming) {
 	}
 }
 
+func (s *Server) tcpLimit() int {
+	if s.maxConns > 0 {
+		return s.maxConns
+	}
+	return maxTCPConns
+}
+
+func (s *Server) tcpIdle() time.Duration {
+	if s.idleTimeout > 0 {
+		return s.idleTimeout
+	}
+	return tcpIdleTimeout
+}
+
+func (s *Server) cacheTTL() time.Duration {
+	if s.assetCacheTTL > 0 {
+		return s.assetCacheTTL
+	}
+	return defaultAssetCacheTTL
+}
+
 func (s *Server) listenTCP(ctx context.Context, queue chan<- incoming) {
 	ln, err := net.Listen("tcp", s.Addr)
 	if err != nil {
@@ -100,22 +146,63 @@ func (s *Server) listenTCP(ctx context.Context, queue chan<- incoming) {
 	s.listening(true, true, nil)
 	defer s.listening(true, false, nil)
 	slog.Info("Syslog TCP 启动", "addr", s.Addr)
-	go func() { <-ctx.Done(); ln.Close() }()
 
+	var (
+		mu     sync.Mutex
+		active = map[net.Conn]struct{}{}
+		closed bool
+		wg     sync.WaitGroup
+	)
+	go func() {
+		<-ctx.Done()
+		ln.Close()
+		mu.Lock()
+		closed = true
+		for c := range active {
+			c.Close()
+		}
+		mu.Unlock()
+	}()
+	defer wg.Wait()
+
+	limit := s.tcpLimit()
+	idle := s.tcpIdle()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		go func() {
-			defer conn.Close()
-			ip := addrIP(conn.RemoteAddr())
-			scanner := bufio.NewScanner(conn)
+		mu.Lock()
+		wasClosed := closed
+		if wasClosed || len(active) >= limit {
+			mu.Unlock()
+			conn.Close()
+			if !wasClosed {
+				slog.Warn("Syslog TCP 连接数达到上限，已拒绝新连接", "limit", limit, "remote", conn.RemoteAddr())
+			}
+			continue
+		}
+		active[conn] = struct{}{}
+		mu.Unlock()
+
+		wg.Add(1)
+		go func(c net.Conn) {
+			defer func() {
+				mu.Lock()
+				delete(active, c)
+				mu.Unlock()
+				c.Close()
+				wg.Done()
+			}()
+			ip := addrIP(c.RemoteAddr())
+			scanner := bufio.NewScanner(c)
 			scanner.Buffer(make([]byte, 4096), maxMessageLen)
+			_ = c.SetReadDeadline(time.Now().Add(idle))
 			for scanner.Scan() {
 				s.receive(queue, incoming{line: scanner.Text(), from: ip})
+				_ = c.SetReadDeadline(time.Now().Add(idle))
 			}
-		}()
+		}(conn)
 	}
 }
 
@@ -129,20 +216,20 @@ func (s *Server) consume(ctx context.Context, queue <-chan incoming) {
 
 	var events []*ent.EventCreate
 	var alerts []*ent.AlertCreate
-	flush := func() {
+	flush := func(fctx context.Context) {
 		if len(events) > 0 {
-			if _, err := s.DB.Event.CreateBulk(events...).Save(ctx); err != nil {
+			if _, err := s.DB.Event.CreateBulk(events...).Save(fctx); err != nil {
 				slog.Error("Syslog 事件落库失败", "err", err)
 			}
 			events = nil
 		}
 		if len(alerts) > 0 {
-			if _, err := s.DB.Alert.CreateBulk(alerts...).Save(ctx); err != nil {
+			if _, err := s.DB.Alert.CreateBulk(alerts...).Save(fctx); err != nil {
 				slog.Error("Syslog 告警落库失败", "err", err)
 			}
 			alerts = nil
 		}
-		if err := deduper.Flush(ctx, s.DB); err != nil {
+		if err := deduper.Flush(fctx, s.DB); err != nil {
 			slog.Error("Syslog 告警计数更新失败", "err", err)
 		}
 	}
@@ -150,10 +237,13 @@ func (s *Server) consume(ctx context.Context, queue <-chan incoming) {
 	for {
 		select {
 		case <-ctx.Done():
-			flush()
+			// 停机时使用独立短超时上下文，确保最后一批事件、告警与计数能落库
+			fctx, cancel := context.WithTimeout(context.Background(), shutdownFlushTimeout)
+			flush(fctx)
+			cancel()
 			return
 		case <-ticker.C:
-			flush()
+			flush(ctx)
 		case in := <-queue:
 			if s.Events != nil {
 				err := s.enqueue(ctx, in)
@@ -167,7 +257,7 @@ func (s *Server) consume(ctx context.Context, queue <-chan incoming) {
 			events = append(events, e)
 			alerts = append(alerts, a...)
 			if len(events) >= batchSize {
-				flush()
+				flush(ctx)
 			}
 		}
 	}
@@ -266,25 +356,71 @@ func (s *Server) build(ctx context.Context, in incoming, deduper *dedup.Deduper)
 	return ec, created
 }
 
-// resolveAsset 先按主机名匹配，再退回源 IP。两者都对不上就留空，
-// 关联引擎会把这类告警归到统一的未归属 incident。
-func (s *Server) resolveAsset(ctx context.Context, hostname string, from net.IP) (*uuid.UUID, string) {
-	if hostname != "" {
-		if a, err := s.DB.Asset.Query().Where(asset.HostnameEQ(hostname)).First(ctx); err == nil {
-			return &a.ID, osOf(a)
-		}
+// snapshotAssets 读取或刷新短期资产索引缓存（仅选归属所需字段，锁外查库避免阻塞）。
+func (s *Server) snapshotAssets(ctx context.Context) (map[string]assetRef, map[string]assetRef) {
+	now := time.Now()
+	s.assets.mu.RLock()
+	if !s.assets.at.IsZero() && now.Sub(s.assets.at) < s.cacheTTL() {
+		byIP, byHost := s.assets.byIP, s.assets.byHost
+		s.assets.mu.RUnlock()
+		return byIP, byHost
 	}
-	if from != nil {
-		ip := from.String()
-		assets, err := s.DB.Asset.Query().Where(asset.IPAddrsNotNil()).All(ctx)
-		if err == nil {
-			for _, a := range assets {
-				for _, addr := range a.IPAddrs {
-					if addr == ip {
-						return &a.ID, osOf(a)
-					}
+	s.assets.mu.RUnlock()
+
+	if s.DB == nil {
+		return nil, nil
+	}
+	rows, err := s.DB.Asset.Query().
+		Where(asset.RetiredAtIsNil()).
+		Select(asset.FieldID, asset.FieldHostname, asset.FieldOs, asset.FieldIPAddrs).
+		All(ctx)
+	if err != nil {
+		// 查库失败时保留上次缓存（若有），避免短暂抖动导致全部日志丢失归属
+		s.assets.mu.RLock()
+		byIP, byHost := s.assets.byIP, s.assets.byHost
+		s.assets.mu.RUnlock()
+		return byIP, byHost
+	}
+	byIP := make(map[string]assetRef, len(rows))
+	byHost := make(map[string]assetRef, len(rows))
+	for _, a := range rows {
+		ref := assetRef{id: a.ID, os: osOf(a)}
+		if a.Hostname != "" {
+			if _, exists := byHost[a.Hostname]; !exists {
+				byHost[a.Hostname] = ref
+			}
+		}
+		for _, addr := range a.IPAddrs {
+			if addr != "" {
+				if _, exists := byIP[addr]; !exists {
+					byIP[addr] = ref
 				}
 			}
+		}
+	}
+	s.assets.mu.Lock()
+	s.assets.byIP, s.assets.byHost, s.assets.at = byIP, byHost, time.Now()
+	s.assets.mu.Unlock()
+	return byIP, byHost
+}
+
+// resolveAsset 优先按源 IP 归属资产（防止已知主机伪造报文 hostname 嫁祸他机）；
+// 仅当源 IP 为受信转发器或未在资产表命中 IP 时，才按报文 hostname 匹配。两者都对不上就留空。
+func (s *Server) resolveAsset(ctx context.Context, hostname string, from net.IP) (*uuid.UUID, string) {
+	byIP, byHost := s.snapshotAssets(ctx)
+	if from != nil {
+		ip := from.String()
+		if !slices.Contains(s.TrustedRelays, ip) {
+			if ref, ok := byIP[ip]; ok {
+				id := ref.id
+				return &id, ref.os
+			}
+		}
+	}
+	if hostname != "" {
+		if ref, ok := byHost[hostname]; ok {
+			id := ref.id
+			return &id, ref.os
 		}
 	}
 	return nil, ""

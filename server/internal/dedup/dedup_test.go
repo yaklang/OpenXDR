@@ -1,6 +1,7 @@
 package dedup
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -87,3 +88,34 @@ func TestDeduperTrackOverwrites(t *testing.T) {
 }
 
 func t0() time.Time { return time.Unix(1_700_000_000, 0) }
+
+func TestDeduperFlushEvictsExpiredEntries(t *testing.T) {
+	now := t0()
+	d := New(10 * time.Minute)
+	d.now = func() time.Time { return now }
+
+	d.Track("old-fp", uuid.New(), now)
+	now = now.Add(5 * time.Minute)
+	d.Track("active-fp", uuid.New(), now)
+
+	// 推进到 11 分钟：old-fp 已过期且 pending==0，active-fp 仍在窗口内（已过 6 分钟）
+	now = t0().Add(11 * time.Minute)
+	if err := d.Flush(context.Background(), nil); err != nil {
+		t.Fatalf("无待写计数时 Flush 不应报错：%v", err)
+	}
+	if _, ok := d.seen["old-fp"]; ok {
+		t.Fatal("已超过去重窗口且无待刷盘计数的 old-fp 应被清理")
+	}
+	if _, ok := d.seen["active-fp"]; !ok {
+		t.Fatal("仍在窗口内的 active-fp 不应被过早清理")
+	}
+
+	// 再推进 5 分钟：active-fp 也过期，应被清理
+	now = t0().Add(16 * time.Minute)
+	if err := d.Flush(context.Background(), nil); err != nil {
+		t.Fatalf("Flush 失败：%v", err)
+	}
+	if len(d.seen) != 0 {
+		t.Fatalf("全部过期条目清理后 seen 应为空，实际剩余 %d", len(d.seen))
+	}
+}

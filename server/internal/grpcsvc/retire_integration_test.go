@@ -3,6 +3,8 @@
 package grpcsvc
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 
 	entcontainment "openxdr/server/ent/containment"
 	"openxdr/server/internal/assetretire"
+	"openxdr/server/internal/response"
 	"openxdr/server/internal/testdb"
 	"openxdr/server/pb"
 )
@@ -63,4 +66,49 @@ func TestRetiredHostCannotComeBack(t *testing.T) {
 	if err != nil || again.AgentId == resp.AgentId {
 		t.Fatalf("恢复后应拿新的 agent_id：%v %v", again, err)
 	}
+}
+
+// 退役资产跳过 Register 直接调用其余 gRPC RPC 时，无论是绑定证书还是通用/明文通道，均须返回 PermissionDenied。
+func TestRetiredAssetRejectedOnAllAgentRPCs(t *testing.T) {
+	ctx, client := testdb.New(t)
+	agentID := uuid.New()
+	client.Asset.Create().SetHostname("retired-host").SetAgentID(agentID).SetRetiredAt(time.Now()).SaveX(ctx)
+	srv := &Server{DB: client, Hub: response.NewHub(client, true)}
+
+	healthJSON, _ := json.Marshal(collectorHealth{
+		BootID: uuid.NewString(), Sequence: 1, ReportedUnixMs: time.Now().UnixMilli(),
+		Capabilities: map[string]capability{"process": {Path: "poll", State: "active"}},
+	})
+	checkAll := func(name string, rpcCtx context.Context) {
+		t.Helper()
+		evStream := &fakeAgentStream{
+			ctx: rpcCtx,
+			events: []*pb.AgentEvent{{
+				AgentId: agentID.String(), TsUnixNs: time.Now().UnixNano(), ClassUid: 1007,
+				ProcessGuid: uuid.NewString(), RawJson: `{"process":{"cmd_line":"id"}}`,
+			}},
+		}
+		if err := srv.ReportEvents(evStream); status.Code(err) != codes.PermissionDenied {
+			t.Errorf("%s ReportEvents 应 PermissionDenied，实际 %v", name, err)
+		}
+		cmdStream := newFakeCommandsStream(rpcCtx, []*pb.CommandResult{{AgentId: agentID.String()}})
+		if err := srv.Commands(cmdStream); status.Code(err) != codes.PermissionDenied {
+			t.Errorf("%s Commands 应 PermissionDenied，实际 %v", name, err)
+		}
+		if _, err := srv.ReportHealth(rpcCtx, &pb.HealthRequest{AgentId: agentID.String(), HealthJson: string(healthJSON)}); status.Code(err) != codes.PermissionDenied {
+			t.Errorf("%s ReportHealth 应 PermissionDenied，实际 %v", name, err)
+		}
+		if _, err := srv.ReportCommandResult(rpcCtx, &pb.CommandResult{
+			AgentId: agentID.String(), CommandId: uuid.NewString(), Status: pb.CommandResult_SUCCEEDED,
+		}); status.Code(err) != codes.PermissionDenied {
+			t.Errorf("%s ReportCommandResult 应 PermissionDenied，实际 %v", name, err)
+		}
+		if _, err := srv.ReportSSHKeys(rpcCtx, &pb.ReportSSHKeysRequest{AgentId: agentID.String()}); status.Code(err) != codes.PermissionDenied {
+			t.Errorf("%s ReportSSHKeys 应 PermissionDenied，实际 %v", name, err)
+		}
+	}
+
+	checkAll("绑定证书", ctxWithCN("host:retired-host"))
+	checkAll("通用证书", ctxWithCN("openxdr-collector"))
+	checkAll("明文连接", ctx)
 }

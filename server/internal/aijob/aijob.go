@@ -124,10 +124,8 @@ func Start(ctx context.Context, db *ent.Client, k Key, fn func(context.Context) 
 		up := db.AIJob.UpdateOneID(j.ID).SetFinishedAt(time.Now())
 		if err == nil {
 			var m map[string]any
-			if b, mErr := json.Marshal(out); mErr == nil && json.Unmarshal(b, &m) == nil {
+			if m, err = encodeResult(out); err == nil {
 				up.SetStatus("done").SetResult(m)
-			} else {
-				err = mErr
 			}
 		}
 		if err != nil {
@@ -138,6 +136,19 @@ func Start(ctx context.Context, db *ent.Client, k Key, fn func(context.Context) 
 		}
 	}()
 	return j, true, nil
+}
+
+// encodeResult 将任务返回值编码为 JSON 对象映射；非对象值或序列化失败均返回明确错误，避免任务卡在 running。
+func encodeResult(out any) (map[string]any, error) {
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // Discard 删掉某人对某对象的任务（导入确认后，结果里的凭据令牌不再需要）

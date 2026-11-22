@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
+	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
 	"openxdr/server/pb"
 )
@@ -100,15 +101,36 @@ func Interceptors() []grpc.ServerOption {
 	}
 }
 
-// verifyAgentID 校验声称的 agent_id 属于证书绑定的主机。未绑定则放行。
+// verifyAgentID 校验声称的 agent_id 属于证书绑定的主机，并统一拒绝已下线资产。
 func (s *Server) verifyAgentID(ctx context.Context, claimed uuid.UUID) error {
-	host, bound := certHostname(ctx)
-	if !bound {
+	if host, bound := certHostname(ctx); bound {
+		a, err := s.DB.Asset.Query().Where(asset.HostnameEQ(host)).First(ctx)
+		if err != nil {
+			return status.Error(codes.PermissionDenied, "agent_id 与证书绑定的主机不符")
+		}
+		if a.RetiredAt != nil {
+			return status.Error(codes.PermissionDenied, "主机已下线，需用接入令牌重新接入")
+		}
+		if a.AgentID == nil || *a.AgentID != claimed {
+			return status.Error(codes.PermissionDenied, "agent_id 与证书绑定的主机不符")
+		}
 		return nil
 	}
-	a, err := s.DB.Asset.Query().Where(asset.HostnameEQ(host)).First(ctx)
-	if err != nil || a.AgentID == nil || *a.AgentID != claimed {
-		return status.Error(codes.PermissionDenied, "agent_id 与证书绑定的主机不符")
+	if s.DB == nil {
+		return nil
+	}
+	a, err := s.DB.Asset.Query().Where(asset.AgentIDEQ(claimed)).First(ctx)
+	if ent.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		if ctxErr := rpcContextError(ctx, err); ctxErr != nil {
+			return ctxErr
+		}
+		return status.Error(codes.Internal, "资产核对失败")
+	}
+	if a.RetiredAt != nil {
+		return status.Error(codes.PermissionDenied, "主机已下线，需用接入令牌重新接入")
 	}
 	return nil
 }

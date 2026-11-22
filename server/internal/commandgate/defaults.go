@@ -14,9 +14,9 @@ import (
 	"openxdr/server/ent/predicate"
 )
 
-// cmdPos 命令位置：开头、shell 分隔符或引号之后，或 sudo/nohup/xargs 等包装之后，允许绝对路径。
+// cmdPos 命令位置：开头、shell 分隔符或引号之后，或 sudo/doas/nohup/exec/xargs/env/command/timeout/nice 等包装之后，允许绝对路径。
 // 只给与只读命令参数撞名的程序用（last reboot、getent passwd 不该挂起），其余用 \b 宽匹配。
-const cmdPos = `(?:^|[;&|(\x60'"\n]|\b(?:sudo|doas|nohup|exec|xargs)\s)\s*(?:-\S+\s+)*(?:(?:/usr)?(?:/local)?/s?bin/)?`
+const cmdPos = `(?:^|[;&|(\x60'"\n]|\b(?:sudo|doas|nohup|exec|xargs|command)\s+|\benv\s+(?:(?:-\S+|[A-Za-z_][A-Za-z0-9_]*=\S*)\s+)*|\btimeout\s+(?:-\S+\s+(?:[^-\s;&|]+\s+)?)*\d+[smhd]?\s+|\bnice\s+(?:(?:-n\s*-?\d+|-\d+)\s+)?)\s*(?:-\S+\s+)*(?:(?:/usr)?(?:/local)?/s?bin/)?`
 
 // legacyCmdPos 旧版命令位置前缀：允许任意路径，`awk ... "$3==0" /etc/passwd` 这种读文件的命令也会被当成在执行 passwd。
 // 只留着给 UpgradeDefaults 认出库里还是旧写法的默认条目

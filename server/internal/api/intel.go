@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
-	"net"
+	"errors"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -14,6 +16,67 @@ import (
 	"openxdr/server/internal/audit"
 	"openxdr/server/internal/intel"
 )
+
+const (
+	maxIntelBodyBytes   = 1 << 20
+	maxIntelImportBytes = 10 << 20
+	intelBatchChunk     = 1000
+)
+
+var (
+	// RFC 6598 共享地址与 240.0.0.0/4 保留地址不属于 IsPrivate / !IsGlobalUnicast 覆盖范围
+	intelCGNAT      = netip.MustParsePrefix("100.64.0.0/10")
+	intelReservedV4 = netip.MustParsePrefix("240.0.0.0/4")
+)
+
+// validIntelIP 校验并规范化情报 IP：拒绝非法地址及私网、回环、链路本地、CGNAT、保留地址，避免误封内网。
+func validIntelIP(raw string) (string, bool) {
+	addr, err := netip.ParseAddr(strings.TrimSpace(raw))
+	if err != nil {
+		return "", false
+	}
+	addr = addr.Unmap()
+	if !addr.IsGlobalUnicast() || addr.IsPrivate() || intelCGNAT.Contains(addr) || intelReservedV4.Contains(addr) {
+		return "", false
+	}
+	return addr.String(), true
+}
+
+func validIntelSeverity(s int16) bool { return s >= 1 && s <= 5 }
+
+func decodeIntelBody(w http.ResponseWriter, r *http.Request, limit int64, dst any) error {
+	return json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(dst)
+}
+
+func writeBodyError(w http.ResponseWriter, err error, badMsg string) {
+	var maxErr *http.MaxBytesError
+	if errors.As(err, &maxErr) {
+		http.Error(w, "请求体超过大小上限", http.StatusRequestEntityTooLarge)
+		return
+	}
+	http.Error(w, badMsg, http.StatusBadRequest)
+}
+
+// existingIntelKeys 按导入集合分批查库中已存在的 (kind, value) 键，避免整表加载。
+func existingIntelKeys(ctx context.Context, db *ent.Client, byKind map[string][]string) (map[string]bool, error) {
+	seen := make(map[string]bool)
+	for kind, vals := range byKind {
+		for start := 0; start < len(vals); start += intelBatchChunk {
+			end := min(start+intelBatchChunk, len(vals))
+			rows, err := db.Intel.Query().
+				Where(entintel.KindEQ(entintel.Kind(kind)), entintel.ValueIn(vals[start:end]...)).
+				Select(entintel.FieldKind, entintel.FieldValue).
+				All(ctx)
+			if err != nil {
+				return nil, err
+			}
+			for _, row := range rows {
+				seen[string(row.Kind)+":"+row.Value] = true
+			}
+		}
+	}
+	return seen, nil
+}
 
 type intelRow struct {
 	ID            uuid.UUID  `json:"id"`
@@ -64,7 +127,11 @@ func mapIntel(api *http.ServeMux, db *ent.Client, store *intel.Store) {
 			// 有效期天数，0 表示长期有效
 			ExpiresInDays int `json:"expiresInDays"`
 		}
-		if json.NewDecoder(r.Body).Decode(&body) != nil || strings.TrimSpace(body.Text) == "" {
+		if err := decodeIntelBody(w, r, maxIntelImportBytes, &body); err != nil {
+			writeBodyError(w, err, "text 必填")
+			return
+		}
+		if strings.TrimSpace(body.Text) == "" {
 			http.Error(w, "text 必填", http.StatusBadRequest)
 			return
 		}
@@ -74,53 +141,77 @@ func mapIntel(api *http.ServeMux, db *ent.Client, store *intel.Store) {
 		if body.Severity == 0 {
 			body.Severity = 4
 		}
+		if !validIntelSeverity(body.Severity) {
+			http.Error(w, "severity 必须在 1 到 5 之间", http.StatusBadRequest)
+			return
+		}
 		var expires *time.Time
 		if body.ExpiresInDays > 0 {
 			t := time.Now().AddDate(0, 0, body.ExpiresInDays)
 			expires = &t
 		}
 
-		// 重复条目直接跳过，反复导入同一份情报源不报错。
-		// 情报表本就整表进内存索引，查一遍现有键的代价可以忽略。
-		existing, err := db.Intel.Query().All(r.Context())
+		type candidate struct{ kind, value string }
+		var candidates []candidate
+		byKind := map[string][]string{}
+		inBatch := map[string]bool{}
+		var skipped int
+		for _, line := range strings.Split(body.Text, "\n") {
+			rawVal := strings.TrimSpace(line)
+			if rawVal == "" || strings.HasPrefix(rawVal, "#") {
+				continue
+			}
+			kind, value := detectKind(rawVal)
+			if kind == "ip" {
+				norm, ok := validIntelIP(value)
+				if !ok {
+					skipped++
+					continue
+				}
+				value = norm
+			}
+			key := kind + ":" + value
+			if inBatch[key] {
+				skipped++
+				continue
+			}
+			inBatch[key] = true
+			candidates = append(candidates, candidate{kind, value})
+			byKind[kind] = append(byKind[kind], value)
+		}
+		if len(candidates)+skipped == 0 {
+			http.Error(w, "没有可导入的条目", http.StatusBadRequest)
+			return
+		}
+
+		existing, err := existingIntelKeys(r.Context(), db, byKind)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		seen := make(map[string]bool, len(existing))
-		for _, row := range existing {
-			seen[string(row.Kind)+":"+row.Value] = true
-		}
 
 		var creates []*ent.IntelCreate
-		var imported, skipped int
-		for _, line := range strings.Split(body.Text, "\n") {
-			value := strings.TrimSpace(line)
-			if value == "" || strings.HasPrefix(value, "#") {
-				continue
-			}
-			kind, value := detectKind(value)
-			if seen[kind+":"+value] {
+		var imported int
+		for _, c := range candidates {
+			if existing[c.kind+":"+c.value] {
 				skipped++
 				continue
 			}
-			seen[kind+":"+value] = true
 			imported++
 			creates = append(creates, db.Intel.Create().
-				SetKind(entintel.Kind(kind)).
-				SetValue(value).
+				SetKind(entintel.Kind(c.kind)).
+				SetValue(c.value).
 				SetSource(body.Source).
 				SetSeverity(body.Severity).
 				SetNillableExpiresAt(expires))
 		}
-		if imported+skipped == 0 {
-			http.Error(w, "没有可导入的条目", http.StatusBadRequest)
-			return
-		}
 		if len(creates) > 0 {
-			if _, err := db.Intel.CreateBulk(creates...).Save(r.Context()); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
+			for start := 0; start < len(creates); start += intelBatchChunk {
+				end := min(start+intelBatchChunk, len(creates))
+				if _, err := db.Intel.CreateBulk(creates[start:end]...).Save(r.Context()); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
 			}
 			store.Reload(r.Context())
 		}
@@ -138,8 +229,16 @@ func mapIntel(api *http.ServeMux, db *ent.Client, store *intel.Store) {
 			// 有效期天数，0 表示长期有效
 			ExpiresInDays int `json:"expiresInDays"`
 		}
-		if json.NewDecoder(r.Body).Decode(&body) != nil || strings.TrimSpace(body.Value) == "" {
+		if err := decodeIntelBody(w, r, maxIntelBodyBytes, &body); err != nil {
+			writeBodyError(w, err, "value 必填")
+			return
+		}
+		if strings.TrimSpace(body.Value) == "" {
 			http.Error(w, "value 必填", http.StatusBadRequest)
+			return
+		}
+		if body.Severity != 0 && !validIntelSeverity(body.Severity) {
+			http.Error(w, "severity 必须在 1 到 5 之间", http.StatusBadRequest)
 			return
 		}
 		kind, value := detectKind(strings.TrimSpace(body.Value))
@@ -149,6 +248,14 @@ func mapIntel(api *http.ServeMux, db *ent.Client, store *intel.Store) {
 		if kind != "ip" && kind != "domain" && kind != "hash" {
 			http.Error(w, "kind 只能是 ip / domain / hash", http.StatusBadRequest)
 			return
+		}
+		if kind == "ip" {
+			norm, ok := validIntelIP(value)
+			if !ok {
+				http.Error(w, "IP 地址无效或属于私网/保留地址", http.StatusBadRequest)
+				return
+			}
+			value = norm
 		}
 
 		create := db.Intel.Create().
@@ -205,7 +312,7 @@ func mapIntel(api *http.ServeMux, db *ent.Client, store *intel.Store) {
 // detectKind 按取值形态识别 IOC 类型：IP 字面量 / 十六进制哈希（MD5、SHA-1、SHA-256）/
 // 其余当域名。域名与哈希统一小写，与匹配侧的归一化保持一致。
 func detectKind(v string) (string, string) {
-	if net.ParseIP(v) != nil {
+	if _, err := netip.ParseAddr(v); err == nil {
 		return "ip", v
 	}
 	lower := strings.ToLower(v)
