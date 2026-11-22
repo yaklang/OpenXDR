@@ -865,7 +865,8 @@ var (
 	awkPrintRedir = regexp.MustCompile(`\bprintf?\b[^;}]*>`)
 )
 
-// stripAwkStringsAndComments 去掉双引号字符串内容、# 注释与反斜杠续行；未闭合双引号返回 false。
+// stripAwkStringsAndComments 去掉双引号字符串、正则字面量的内容、# 注释与反斜杠续行；未闭合返回 false。
+// 正则里的引号不能当字符串开头，否则 /"/{system("x")}/"/ 会把中间的 system 当字符串剥掉
 func stripAwkStringsAndComments(script string) (string, bool) {
 	// 先合并反斜杠续行，避免 print "a" \ 换行 > "/tmp/x" 绕过单行匹配
 	script = strings.ReplaceAll(script, "\\\n", " ")
@@ -873,6 +874,17 @@ func stripAwkStringsAndComments(script string) (string, bool) {
 	b.Grow(len(script))
 	for i := 0; i < len(script); i++ {
 		switch script[i] {
+		case '/':
+			if !awkRegexStart(b.String()) {
+				b.WriteByte('/')
+				continue
+			}
+			end, ok := awkRegexEnd(script, i+1)
+			if !ok {
+				return "", false
+			}
+			b.WriteString("//")
+			i = end
 		case '"':
 			b.WriteString(`""`)
 			i++
@@ -902,6 +914,35 @@ func stripAwkStringsAndComments(script string) (string, bool) {
 		}
 	}
 	return b.String(), true
+}
+
+// awkRegexStart 前面没有操作数（开头、运算符、括号、分隔符之后）时 / 是正则开头，否则是除号
+func awkRegexStart(prev string) bool {
+	prev = strings.TrimRight(prev, " \t")
+	if prev == "" {
+		return true
+	}
+	return strings.ContainsRune("(,{};!~&|?:=<>+-*%^\n", rune(prev[len(prev)-1]))
+}
+
+// awkRegexEnd 从 start 起找正则字面量的结束 /，跳过转义与方括号里的 /
+func awkRegexEnd(script string, start int) (int, bool) {
+	inClass := false
+	for i := start; i < len(script); i++ {
+		switch c := script[i]; {
+		case c == '\\':
+			i++
+		case c == '\n':
+			return 0, false
+		case c == '[':
+			inClass = true
+		case c == ']':
+			inClass = false
+		case c == '/' && !inClass:
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 func hasSinglePipe(s string) bool {

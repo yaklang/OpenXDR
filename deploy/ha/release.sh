@@ -6,7 +6,7 @@
 #   节点为 ssh 目的地（可以是 ssh config 里的别名）。
 # 环境变量：
 #   SSH          ssh 命令，默认 ssh；需要指定配置文件时如 SSH="ssh -F ~/.ssh/openxdr"
-#   VIP          虚拟 IP，用来判断谁在对外服务，默认 10.0.0.199
+#   VIP          虚拟 IP，用来判断谁在对外服务，必填（如 VIP=10.0.0.199）
 #   HA_DIR       节点上的部署目录，默认 /opt/openxdr-ha
 #   GOPROXY      构建 server 时的 Go 代理，国内网络可设 https://goproxy.cn,direct
 #   NPM_REGISTRY 构建 web 时的 npm 源，如 https://registry.npmmirror.com
@@ -24,7 +24,7 @@ set -eu
 
 [ $# -eq 2 ] || { sed -n '2,9p' "$0"; exit 2; }
 SSH=${SSH:-ssh}
-VIP=${VIP:-10.0.0.199}
+VIP=${VIP:?设 VIP=<虚拟 IP>，用来判断哪台在对外服务}
 HA_DIR=${HA_DIR:-/opt/openxdr-ha}
 ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 TAG=$(git -C "$ROOT" rev-parse --short HEAD)
@@ -37,7 +37,11 @@ remote() { node=$1; shift; $SSH "$node" "$@"; }
 
 # 先升不持有 VIP 的节点，对外服务的那台最后动
 first=$1 second=$2
-if remote "$first" "ip -4 -o addr | grep -qw '$VIP'"; then first=$2 second=$1; fi
+if remote "$first" "ip -4 -o addr | grep -qw '$VIP'"; then
+  first=$2 second=$1
+elif ! remote "$second" "ip -4 -o addr | grep -qw '$VIP'"; then
+  echo "两个节点都不持有 VIP $VIP，确认 VIP 设对了" >&2; exit 1
+fi
 
 echo "== 构建 $TAG"
 # 离线 IP 归属库与 release.yml 同口径：下载当月 DB-IP Lite 并校验后打进镜像；下不到就停下，别悄悄发一个缺库的镜像

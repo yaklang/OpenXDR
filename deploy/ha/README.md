@@ -98,7 +98,7 @@ Witness 使用 [witness-compose.yml](witness-compose.yml) 和渲染后的
 用 [`release.sh`](release.sh) 从当前提交滚动发布：
 
 ```bash
-SSH="ssh -F <ssh 配置>" GOPROXY=https://goproxy.cn,direct deploy/ha/release.sh <节点1> <节点2>
+VIP=<虚拟 IP> SSH="ssh -F <ssh 配置>" GOPROXY=https://goproxy.cn,direct deploy/ha/release.sh <节点1> <节点2>
 ```
 
 脚本在本地构建 server / web 镜像（标签为提交短哈希），连同 `rules/`、`tasks/` 推到节点，

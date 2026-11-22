@@ -162,6 +162,9 @@ func (e *Engine) on(ctx context.Context) bool {
 }
 
 func (e *Engine) reconcile(ctx context.Context) error {
+	if err := e.settleStaleSSO(ctx); err != nil {
+		return err
+	}
 	return Reconcile(ctx, e.DB, e.now())
 }
 
@@ -407,9 +410,18 @@ func resolveLiftCommand(ctx context.Context, db *ent.Client, c *ent.Containment)
 			return prev, prev.ID, uuid.Nil, nil
 		}
 		prevFailedID = prev.ID
+	} else {
+		// 失败的解除会清空 LiftCommandID：从最近一条失败的解除指令接着派生，不从链头一跳跳走
+		last, lastErr := lastFailedLift(ctx, db, c)
+		if lastErr != nil {
+			return nil, uuid.Nil, uuid.Nil, lastErr
+		}
+		if last != nil {
+			prevFailedID = last.ID
+		}
 	}
 	candidate := liftCommandID(c.ID, prevFailedID)
-	for range 1024 {
+	for range 16 {
 		if err := ctx.Err(); err != nil {
 			return nil, uuid.Nil, uuid.Nil, err
 		}
@@ -429,7 +441,28 @@ func resolveLiftCommand(ctx context.Context, db *ent.Client, c *ent.Containment)
 		prevFailedID = cmd.ID
 		candidate = liftCommandID(c.ID, prevFailedID)
 	}
-	return nil, candidate, prevFailedID, nil
+	return nil, uuid.Nil, uuid.Nil, fmt.Errorf("处置 %s 的解除指令链过长", c.ID)
+}
+
+// lastFailedLift 本处置建立以来最近一条失败的解除指令
+func lastFailedLift(ctx context.Context, db *ent.Client, c *ent.Containment) (*ent.Command, error) {
+	cmds, err := db.Command.Query().Where(
+		entcommand.AssetID(c.AssetID),
+		entcommand.Kind(reverse[c.Kind]),
+		entcommand.Status("failed"),
+		entcommand.CreatedAtGTE(c.CreatedAt),
+	).All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var last *ent.Command
+	for _, cmd := range cmds {
+		if cmd.Status == "failed" && !cmd.CreatedAt.Before(c.CreatedAt) && matchesLiftCommand(c, cmd) &&
+			(last == nil || cmd.CreatedAt.After(last.CreatedAt)) {
+			last = cmd
+		}
+	}
+	return last, nil
 }
 
 func restoreInEffectState(c *ent.Containment) entcontainment.State {

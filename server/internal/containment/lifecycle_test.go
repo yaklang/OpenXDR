@@ -430,6 +430,8 @@ func eqContainmentCol(item *ent.Containment, col string, val any) bool {
 		return ok && item.ID == u
 	case "state":
 		return string(item.State) == fmt.Sprint(val)
+	case "kind":
+		return item.Kind == fmt.Sprint(val)
 	case "lift_command_id":
 		u, ok := toUUID(val)
 		return ok && item.LiftCommandID != nil && *item.LiftCommandID == u

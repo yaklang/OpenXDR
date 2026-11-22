@@ -40,7 +40,12 @@ func (d *Deduper) clock() time.Time {
 	return time.Now()
 }
 
+// advance 推进事件时间水位，不超过本机时钟：一条时间戳在未来的事件（syslog 报文自带的、agent 时钟跑飞的）
+// 会把水位一下推到未来，之后每次 Flush 都把所有条目当过期清掉，去重就此失效
 func (d *Deduper) advance(ts time.Time) {
+	if now := d.clock(); ts.After(now) {
+		ts = now
+	}
 	if ts.After(d.maxTs) {
 		d.maxTs = ts
 	}

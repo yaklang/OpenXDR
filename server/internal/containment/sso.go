@@ -3,6 +3,7 @@ package containment
 import (
 	"context"
 	"errors"
+	"time"
 
 	"openxdr/server/ent"
 	entcontainment "openxdr/server/ent/containment"
@@ -68,9 +69,40 @@ func (e *Engine) disableSSO(ctx context.Context, create *ent.ContainmentCreate, 
 	} else {
 		audit.System(ctx, e.DB, "containment", al.ID.String(), a.asset.Hostname+" "+a.kind+" "+a.target+"："+msg)
 	}
+	// 身份源那边已经动过了，回写不能跟着调用方的 ctx 一起被取消；写不进去的由 settleStaleSSO 兜底
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 	return e.DB.Containment.Update().
 		Where(entcontainment.IDEQ(c.ID), entcontainment.StateEQ(entcontainment.StatePending)).
-		SetState(state).SetReason(reason).Exec(ctx)
+		SetState(state).SetReason(reason).Exec(wctx)
+}
+
+// ssoPendingStale SSO 处置停在 pending 多久算回写丢了：身份源调用 30 秒超时，留足余量
+const ssoPendingStale = 5 * time.Minute
+
+// settleStaleSSO 停用结果没写回（停机、丢 leader、写库失败）的 SSO 处置按已停用处理：
+// 账号可能已在身份源停用，转 executed 才能经 LiftSSO 恢复（Enable 幂等），也不再挡住同一账号以后的处置
+func (e *Engine) settleStaleSSO(ctx context.Context) error {
+	stale, err := e.DB.Containment.Query().Where(
+		entcontainment.KindEQ(KindSSO),
+		entcontainment.StateEQ(entcontainment.StatePending),
+		entcontainment.CreatedAtLT(e.now().Add(-ssoPendingStale)),
+	).All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, c := range stale {
+		n, err := e.DB.Containment.Update().
+			Where(entcontainment.IDEQ(c.ID), entcontainment.StateEQ(entcontainment.StatePending)).
+			SetState(entcontainment.StateExecuted).SetReason(c.Reason + "；停用结果未写回，按已停用处理，可人工恢复").Save(ctx)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			audit.System(ctx, e.DB, "containment_failed", c.AlertID.String(), c.Kind+" "+c.Target+"：停用结果未写回，按已停用处理")
+		}
+	}
+	return nil
 }
 
 func ignoreConflict(err error) error {

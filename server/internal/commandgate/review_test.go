@@ -73,6 +73,14 @@ func TestHardDenied(t *testing.T) {
 		`env \rm -rf /et\c`,
 		`ip""tables -t nat -F`,
 		`sys't'emctl --now disable openxdr-agent`,
+		"env -u X reboot",
+		"timeout 1.5 reboot",
+		"setsid reboot",
+		"stdbuf -o0 reboot",
+		"ionice -c3 reboot",
+		"busybox reboot",
+		"sudo -u root reboot",
+		"nohup env -u A rm -rf /etc",
 	}
 	for _, cmd := range denied {
 		if hardDenied(cmd) == "" {
@@ -81,6 +89,11 @@ func TestHardDenied(t *testing.T) {
 	}
 	allowed := []string{
 		"last reboot | head",
+		"command -v reboot",
+		"command -V shutdown",
+		"timeout 10 grep reboot /var/log/syslog",
+		"nice -n 5 last reboot",
+		"nice -10 last reboot",
 		"systemctl status openxdr-agent",
 		"journalctl -u openxdr-agent --since -1h",
 		"grep -i shutdown /var/log/syslog | tail",

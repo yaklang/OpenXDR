@@ -9,6 +9,7 @@ func TestReadOnlyAccepts(t *testing.T) {
 		`echo '=== FAILED UNITS ==='; systemctl list-units --state=failed --no-legend; journalctl --since '-1 day' --no-pager 2>/dev/null | grep -iE 'oom|killed|segfault' | tail -20`,
 		`echo '=== LAST -X REBOOT/SHUTDOWN ==='; last -x reboot shutdown 2>/dev/null | head -12; journalctl --no-pager -q -b -1 | grep -i 'shutdown' | tail -5`,
 		`awk -F: '$3==0 || $3>=1000 {print $1, $3, $7}' /etc/passwd`,
+		`awk '/"error"/ {print $1} $2 ~ /[/]x/ {n++} END{print n/2}' /var/log/syslog`,
 		`getent passwd | awk -F: "\$3==0 || \$3>=1000 {print}"; ls -l /etc/shadow /etc/passwd`,
 		`/usr/bin/df -hT && /usr/bin/df -i && /usr/bin/free -m && /usr/bin/uptime && /usr/bin/timedatectl status`,
 		`ss -tlnp; ss -Hnt state established | grep 8081 || echo none`,
@@ -248,6 +249,11 @@ func TestReadOnlyRejects(t *testing.T) {
 		`awk 'BEGIN{print "}" | "sh"}'`,
 		"awk 'BEGIN{print \"a\" \\\n > \"/tmp/x\"}'",
 		"awk 'BEGIN{print \"a\", # }\n \"b\" > \"/tmp/x\"}'",
+		// 正则里的引号不能当字符串开头
+		`echo '"' | awk '/"/{system("touch /tmp/x")}/"/'`,
+		`awk '/"/ { print > "/tmp/x" } /"/' f`,
+		`awk '$0 ~ /"/ {system("id")} /"/' f`,
+		`awk '/[/"]/{system("id")}/"/' f`,
 		// secretPath 引号拼接、路径规范化、变量展开与通配绕过
 		`cat /etc/shad""ow`,
 		`cat /etc/shad''ow`,

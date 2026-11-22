@@ -119,3 +119,18 @@ func TestDeduperFlushEvictsExpiredEntries(t *testing.T) {
 		t.Fatalf("全部过期条目清理后 seen 应为空，实际剩余 %d", len(d.seen))
 	}
 }
+
+// 一条未来时间戳的事件不能把水位推到未来，让窗口内的条目被提前清掉
+func TestDeduperFutureTimestampDoesNotEvict(t *testing.T) {
+	now := t0()
+	d := New(10 * time.Minute)
+	d.now = func() time.Time { return now }
+	d.Track("a", uuid.New(), now)
+	d.Track("future", uuid.New(), time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC))
+	if err := d.Flush(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !d.Hit("a", now.Add(time.Minute)) {
+		t.Fatal("窗口内的条目被未来时间戳的事件提前清掉了")
+	}
+}

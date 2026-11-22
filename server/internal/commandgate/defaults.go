@@ -14,13 +14,22 @@ import (
 	"openxdr/server/ent/predicate"
 )
 
-// cmdPos 命令位置：开头、shell 分隔符或引号之后，或 sudo/doas/nohup/exec/xargs/env/command/timeout/nice 等包装之后，允许绝对路径。
+// cmdPos 命令位置：开头、shell 分隔符或引号之后，或 sudo/doas/nohup/exec/xargs/env/timeout/nice/setsid 等包装之后，允许绝对路径。
 // 只给与只读命令参数撞名的程序用（last reboot、getent passwd 不该挂起），其余用 \b 宽匹配。
-const cmdPos = `(?:^|[;&|(\x60'"\n]|\b(?:sudo|doas|nohup|exec|xargs|command)\s+|\benv\s+(?:(?:-\S+|[A-Za-z_][A-Za-z0-9_]*=\S*)\s+)*|\btimeout\s+(?:-\S+\s+(?:[^-\s;&|]+\s+)?)*\d+[smhd]?\s+|\bnice\s+(?:(?:-n\s*-?\d+|-\d+)\s+)?)\s*(?:-\S+\s+)*(?:(?:/usr)?(?:/local)?/s?bin/)?`
+// command 只认 -p（-v/-V 是查找不是执行）。
+const cmdPos = `(?:^|[;&|(\x60'"\n]|\b(?:sudo|doas|nohup|exec|xargs|env|timeout|nice|setsid|stdbuf|ionice|busybox|taskset|chrt)\s+(?:` + wrapArg + `)*|\bcommand\s+(?:-p\s+)?)\s*(?:(?:/usr)?(?:/local)?/s?bin/)?`
 
-// legacyCmdPos 旧版命令位置前缀：允许任意路径，`awk ... "$3==0" /etc/passwd` 这种读文件的命令也会被当成在执行 passwd。
-// 只留着给 UpgradeDefaults 认出库里还是旧写法的默认条目
-const legacyCmdPos = `(?:^|[;&|(\x60'"\n]|\b(?:sudo|doas|nohup|exec|xargs)\s)\s*(?:-\S+\s+)*(?:[^\s;&|'"]*/)?`
+// wrapArg 包装命令自己的参数：带值的单字母选项（-u root、-s KILL、-n 5）、其他选项、环境变量赋值、时长与优先级之类的数字。
+// 只有这几种包装选项会吃掉下一个词，-E、-10、-c3 不吃，免得 sudo -E grep reboot 被当成执行 reboot
+const wrapArg = `(?:-[aCdDeghiIkLnopPrRsStuU]\s+[^-\s;&|]\S*|-\S+|[A-Za-z_][A-Za-z0-9_]*=\S*|\d[\w.:,]*)\s+`
+
+// oldCmdPos 历次上线过的命令位置前缀，只留着给 UpgradeDefaults 认出库里还是旧写法的默认条目。
+// 最早那版允许任意路径，`awk ... "$3==0" /etc/passwd` 这种读文件的命令也会被当成在执行 passwd
+var oldCmdPos = []string{
+	`(?:^|[;&|(\x60'"\n]|\b(?:sudo|doas|nohup|exec|xargs)\s)\s*(?:-\S+\s+)*(?:[^\s;&|'"]*/)?`,
+	`(?:^|[;&|(\x60'"\n]|\b(?:sudo|doas|nohup|exec|xargs)\s)\s*(?:-\S+\s+)*(?:(?:/usr)?(?:/local)?/s?bin/)?`,
+	`(?:^|[;&|(\x60'"\n]|\b(?:sudo|doas|nohup|exec|xargs|command)\s+|\benv\s+(?:(?:-\S+|[A-Za-z_][A-Za-z0-9_]*=\S*)\s+)*|\btimeout\s+(?:-\S+\s+(?:[^-\s;&|]+\s+)?)*\d+[smhd]?\s+|\bnice\s+(?:(?:-n\s*-?\d+|-\d+)\s+)?)\s*(?:-\S+\s+)*(?:(?:/usr)?(?:/local)?/s?bin/)?`,
+}
 
 // DefaultAIDeny 新建组自带的 AI 高风险命令名单：在整条命令里非锚定搜索，任一段命中即挂起等组管理员批准，
 // 其余命令直接执行。只覆盖破坏性、改配置、停服务与读密钥的操作，只读巡检不受影响。
@@ -115,15 +124,17 @@ func SeedDefaults(ctx context.Context, db *ent.Client, groupID uuid.UUID) error 
 func UpgradeDefaults(ctx context.Context, db *ent.Client) error {
 	total := 0
 	for _, pattern := range DefaultAIDeny {
-		old := strings.Replace(pattern, cmdPos, legacyCmdPos, 1)
-		if old == pattern {
+		if !strings.Contains(pattern, cmdPos) {
 			continue
 		}
-		n, err := db.CommandPolicy.Update().Where(commandpolicy.PatternEQ(old)).SetPattern(pattern).Save(ctx)
-		if err != nil {
-			return err
+		for _, prev := range oldCmdPos {
+			old := strings.Replace(pattern, cmdPos, prev, 1)
+			n, err := db.CommandPolicy.Update().Where(commandpolicy.PatternEQ(old)).SetPattern(pattern).Save(ctx)
+			if err != nil {
+				return err
+			}
+			total += n
 		}
-		total += n
 	}
 	if total > 0 {
 		slog.Info("默认高风险名单已升级到新写法", "rows", total)
