@@ -2,7 +2,7 @@ import { TableActions } from '../components/TableActions'
 import { ExportOutlined, FilePdfOutlined, FileSearchOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Collapse, Drawer, Empty, Input, Segmented, Space, Table, Tag, Typography } from 'antd'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { downloadAgentPdf, fetchAgentReports, markAllReportsRead, markReportRead, reportHtmlUrl, type AgentReport } from '../api'
 import { useSession } from '../app/session'
@@ -69,6 +69,14 @@ export function ReportsPage() {
     enabled: !!group,
     refetchInterval: 30_000,
   })
+  const refreshTimers = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    const timers = refreshTimers.current
+    return () => {
+      for (const id of timers) clearTimeout(id)
+      timers.clear()
+    }
+  }, [])
   useEffect(() => { setPreview(null); setSearch('') }, [group?.id])
   // 看过就标已读：预览在这里标，HTML / PDF 由后端在打开时标，回来刷新列表与菜单计数
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['reports', group?.id] })
@@ -78,7 +86,13 @@ export function ReportsPage() {
   }
   const html = (r: AgentReport) => {
     window.open(reportHtmlUrl(r.id), '_blank', 'noopener')
-    if (!r.read) setTimeout(refresh, 1500)
+    if (!r.read) {
+      const id = window.setTimeout(() => {
+        refreshTimers.current.delete(id)
+        refresh()
+      }, 1500)
+      refreshTimers.current.add(id)
+    }
   }
   const pdf = async (r: AgentReport) => {
     if (downloads.has(r.id)) return

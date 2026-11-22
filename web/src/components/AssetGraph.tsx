@@ -28,8 +28,12 @@ function radius(n: MapNode) {
   return 9 + (n.criticality ?? 2) * 3
 }
 
-function laneKind(n: MapNode) {
-  return n.kind === 'internet' ? 'wan' : n.zone.kind
+const KNOWN_LANE_KINDS = new Set<string>(LANES.map(l => l.kind))
+
+function laneKind(n: MapNode): ZoneKind | 'wan' {
+  if (n.kind === 'internet') return 'wan'
+  const k = n.zone?.kind
+  return k && KNOWN_LANE_KINDS.has(k) ? k : 'internal'
 }
 
 function bounds(nodes: SimNode[]) {
@@ -69,9 +73,11 @@ function layout(graph: AssetMap) {
     x += w + 24
   }
   const laneIndex = new Map(lanes.map((l, i) => [l.kind, i]))
+  const fallbackLane: Lane = lanes[0] ?? { kind: 'internal', key: 'zoneInternal', x: 110, w: 220 }
   const nodes: SimNode[] = graph.nodes.map(node => {
-    const lane = laneIndex.get(laneKind(node))!
-    return { node, r: radius(node), lane, x: lanes[lane].x + jitter(node.id, 1) * lanes[lane].w * 0.6, y: jitter(node.id, 7) * 400 }
+    const lane = laneIndex.get(laneKind(node)) ?? 0
+    const target = lanes[lane] ?? fallbackLane
+    return { node, r: radius(node), lane, x: target.x + jitter(node.id, 1) * target.w * 0.6, y: jitter(node.id, 7) * 400 }
   })
   const byId = new Map(nodes.map(n => [n.node.id, n]))
   const links: SimLink[] = graph.edges.flatMap(edge => {
@@ -81,7 +87,7 @@ function layout(graph: AssetMap) {
   const sim = forceSimulation(nodes)
     .force('link', forceLink<SimNode, SimLink>(links).distance(120).strength(0.15))
     .force('charge', forceManyBody<SimNode>().strength(n => -90 - n.r * 14))
-    .force('x', forceX<SimNode>(n => lanes[n.lane].x).strength(0.5))
+    .force('x', forceX<SimNode>(n => (lanes[n.lane] ?? fallbackLane).x).strength(0.5))
     .force('y', forceY<SimNode>(0).strength(0.05))
     // 碰撞半径要盖住下方的主机名与角色两行字，否则标签互相压住
     .force('collide', forceCollide<SimNode>(n => Math.max(n.r + 30, n.node.kind === 'asset' ? 64 : 46)).strength(1))
@@ -89,8 +95,8 @@ function layout(graph: AssetMap) {
   for (let i = 0; i < 400; i++) sim.tick()
   // 连线会把节点拽出泳道，最后夹回去：位置即区域
   for (const n of nodes) {
-    const l = lanes[n.lane], pad = Math.min(n.r + 46, l.w / 2)
-    n.x = Math.min(l.x + l.w / 2 - pad, Math.max(l.x - l.w / 2 + pad, n.x!))
+    const l = lanes[n.lane] ?? fallbackLane, pad = Math.min(n.r + 46, l.w / 2)
+    n.x = Math.min(l.x + l.w / 2 - pad, Math.max(l.x - l.w / 2 + pad, n.x ?? l.x))
   }
   return { nodes, links, lanes, box: bounds(nodes) }
 }

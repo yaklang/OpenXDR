@@ -71,7 +71,7 @@ export function IncidentsPage() {
 
   const activeQ = q.trim().toLowerCase()
   const hasClientFilter = Boolean(activeQ || sevFilter || verdictFilter)
-  const allRows = query.data?.items ?? []
+  const allRows = useMemo(() => query.data?.items ?? [], [query.data?.items])
   const rows = useMemo(() => allRows.filter(r =>
     (!sevFilter || r.severity === sevFilter) &&
     (!verdictFilter || (verdictFilter === 'none' ? !r.aiVerdict?.verdict : r.aiVerdict?.verdict === verdictFilter)) &&

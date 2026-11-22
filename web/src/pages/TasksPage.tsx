@@ -66,26 +66,42 @@ function useNow(active: boolean) {
   return now
 }
 
-// 正在跑的会话：按 seq 增量拉消息，只留最近的步骤
+// 正在跑的会话：按 seq 增量拉消息，按 sessionId 隔离并在并发轮询时按 seq 去重合并
 function useActivities(sessionId: string | null, hosts: Record<string, string>) {
   const { t } = useI18n()
-  const [messages, setMessages] = useState<SessionMessage[]>([])
-  const last = useRef(0)
-  useEffect(() => { setMessages([]); last.current = 0 }, [sessionId])
+  const [feed, setFeed] = useState<{ sessionId: string | null; items: SessionMessage[] }>({ sessionId, items: [] })
+  const activeSession = useRef(sessionId)
+  const lastSeq = useRef(0)
+  useEffect(() => {
+    activeSession.current = sessionId
+    lastSeq.current = 0
+    setFeed({ sessionId, items: [] })
+  }, [sessionId])
   useQuery({
     queryKey: ['workerFeed', sessionId],
     enabled: !!sessionId,
     refetchInterval: 3_000,
     queryFn: async () => {
-      const rows = await fetchSessionMessages(sessionId!, last.current)
+      const targetId = sessionId!
+      const after = activeSession.current === targetId ? lastSeq.current : 0
+      const rows = await fetchSessionMessages(targetId, after)
+      // 响应返回时若已切换会话，直接丢弃避免串会话
+      if (activeSession.current !== targetId) return 0
       if (rows.length) {
-        last.current = rows[rows.length - 1].seq
-        setMessages(prev => [...prev, ...rows].slice(-200))
+        const maxSeq = rows[rows.length - 1].seq
+        if (maxSeq > lastSeq.current) lastSeq.current = maxSeq
+        setFeed(prev => {
+          const base = prev.sessionId === targetId ? prev.items : []
+          const seen = new Set(base.map(m => m.seq))
+          const fresh = rows.filter(m => !seen.has(m.seq))
+          if (!fresh.length) return prev.sessionId === targetId ? prev : { sessionId: targetId, items: base }
+          return { sessionId: targetId, items: [...base, ...fresh].slice(-200) }
+        })
       }
       return rows.length
     },
   })
-  return activitiesOf(messages, hosts, t)
+  return activitiesOf(feed.sessionId === sessionId ? feed.items : [], hosts, t)
 }
 
 // 在岗：干到第几步、正在做什么，最近几步滚动显示

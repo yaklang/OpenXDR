@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { Alert, App, Button, Card, Drawer, Flex, Form, Input, InputNumber, Modal, Popconfirm, Select, Switch, Table, Tag, Tooltip, Typography } from 'antd'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import {
   createStandingRule,
@@ -119,13 +119,20 @@ export function StandingRulesTab({
 
   const selectedGroup = Form.useWatch('groupId', form)
   const selectedTplKey = Form.useWatch('actionTemplate', form)
-  const all = rules.data ?? []
+  const all = useMemo(() => rules.data ?? [], [rules.data])
+  const scrolledRef = useRef('')
 
   useEffect(() => {
-    if (!refId || all.length === 0) return
+    if (!refId) {
+      scrolledRef.current = ''
+      return
+    }
+    if (all.length === 0 || scrolledRef.current === refId) return
     const hit = all.find(r => r.ref === refId)
     if (hit) {
-      requestAnimationFrame(() => document.querySelector(`[data-row-key="${hit.id}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }))
+      scrolledRef.current = refId
+      const selector = `[data-row-key="${CSS.escape(hit.id)}"]`
+      requestAnimationFrame(() => document.querySelector(selector)?.scrollIntoView({ block: 'center', behavior: 'smooth' }))
     }
   }, [refId, all])
 

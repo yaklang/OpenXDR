@@ -51,19 +51,24 @@ const notifyOn = () => notifySupported && localStorage.getItem('desktopNotify') 
 function useDesktopAlerts(counts: Record<string, number | undefined>) {
   const { t } = useI18n()
   const navigate = useNavigate()
-  const last = useRef(counts)
+  const incidents = counts['/incidents']
+  const approvals = counts['/approvals']
+  const last = useRef<{ incidents: number | undefined; approvals: number | undefined }>({ incidents, approvals })
   useEffect(() => {
     const prev = last.current
-    last.current = counts
+    last.current = { incidents, approvals }
     if (!notifyOn() || !document.hidden) return
-    const rose = (path: string) => prev[path] !== undefined && (counts[path] ?? 0) > prev[path]!
     const fire = (title: string, to: string) => {
       const n = new Notification(title, { icon: '/favicon.svg', tag: to })
       n.onclick = () => { window.focus(); navigate(to); n.close() }
     }
-    if (rose('/incidents')) fire(t('notifyReview', { n: counts['/incidents']! }), '/incidents')
-    if (rose('/approvals')) fire(t('notifyApprovals', { n: counts['/approvals']! }), '/approvals')
-  })
+    if (prev.incidents !== undefined && (incidents ?? 0) > prev.incidents) {
+      fire(t('notifyReview', { n: incidents! }), '/incidents')
+    }
+    if (prev.approvals !== undefined && (approvals ?? 0) > prev.approvals) {
+      fire(t('notifyApprovals', { n: approvals! }), '/approvals')
+    }
+  }, [incidents, approvals, navigate, t])
 }
 
 // 待审批数：只有组 admin 能看审批，Pi 正阻塞等着人，所以挂在顶栏

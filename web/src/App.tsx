@@ -13,8 +13,8 @@ function Home() {
   const [params] = useSearchParams()
   const incident = params.get('incident')
   const session = params.get('session')
-  if (incident) return <Navigate to={`/incidents/${incident}`} replace />
-  if (session) return <Navigate to={`/chat/${session}`} replace />
+  if (incident) return <Navigate to={`/incidents/${encodeURIComponent(incident)}`} replace />
+  if (session) return <Navigate to={`/chat/${encodeURIComponent(session)}`} replace />
   return <Navigate to="/chat" replace />
 }
 

@@ -43,16 +43,21 @@ function layout(surface: AttackSurface, hideLow: boolean) {
   const visibleRows = new Set([...rowsOf.values()].flat().map(e => `${e.assetId}>${e.proto}/${e.port}`))
   const paths = surface.paths.filter(p => visibleRows.has(`${p.assetId}>${p.service}`))
 
+  const colOf = (kind: string | undefined) => {
+    const idx = COLUMNS.findIndex(c => c.kind === kind)
+    return idx >= 0 ? idx : COLUMNS.length - 1
+  }
+
   const cards: Card[] = []
   for (const [assetId, rows] of rowsOf) {
     rows.sort((a, b) => b.score - a.score)
-    cards.push({ id: assetId, label: rows[0].hostname, rows, box: { x: 0, y: 0, w: CARD_W, h: 0, col: COLUMNS.findIndex(c => c.kind === rows[0].zone.kind) } })
+    cards.push({ id: assetId, label: rows[0].hostname, rows, box: { x: 0, y: 0, w: CARD_W, h: 0, col: colOf(rows[0].zone?.kind) } })
   }
   for (const id of new Set(paths.map(p => p.from))) {
     if (rowsOf.has(id)) continue
     const peer = peerOf.get(id)
     if (!peer) continue
-    const col = peer.kind === 'internet' ? 0 : COLUMNS.findIndex(c => c.kind === peer.zone.kind)
+    const col = peer.kind === 'internet' ? 0 : colOf(peer.zone?.kind)
     cards.push({ id, label: peer.label, peer, rows: [], box: { x: 0, y: 0, w: 0, h: PILL_H, col } })
   }
 

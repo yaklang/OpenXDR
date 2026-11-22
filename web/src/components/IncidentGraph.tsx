@@ -89,6 +89,8 @@ export function IncidentGraph({
       const k = Math.min(3, Math.max(0.3, v.k * f))
       return { k, x: cx - ((cx - v.x) * k) / v.k, y: cy - ((cy - v.y) * k) / v.k }
     })
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
   const [boxW, setBoxW] = useState(contentW)
   const fit = () => {
     const w = box.current?.clientWidth ?? contentW
@@ -100,18 +102,18 @@ export function IncidentGraph({
   }
   const overflows = contentW * fitK > boxW + 1
   useEffect(fit, [contentW, contentH, height])
-  // React 的 onWheel 是被动监听，阻止不了页面滚动，只能手挂
+  // React 的 onWheel 是被动监听，阻止不了页面滚动，只能手挂；仅挂载时绑定一次，通过 ref 读取最新缩放回调
   useEffect(() => {
     const el = box.current
     if (!el) return
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
       const r = el.getBoundingClientRect()
-      zoom(e.deltaY < 0 ? 1.1 : 1 / 1.1, e.clientX - r.left, e.clientY - r.top)
+      zoomRef.current(e.deltaY < 0 ? 1.1 : 1 / 1.1, e.clientX - r.left, e.clientY - r.top)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  })
+  }, [])
 
   return (
     <div>

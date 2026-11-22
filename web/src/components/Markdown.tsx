@@ -19,6 +19,19 @@ export function Markdown({ text }: { text: string }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          a: ({ href, children, ...props }) => {
+            const external = !!href && /^(https?:|\/\/)/i.test(href)
+            return (
+              <a
+                href={href}
+                {...props}
+                target={external ? '_blank' : props.target}
+                rel={external ? 'noopener noreferrer' : props.rel}
+              >
+                {children}
+              </a>
+            )
+          },
           table: props => <div className="markdown-table"><table {...props} /></div>,
           pre: ({ children }) => {
             const codeEl = isValidElement<{ className?: string; children?: ReactNode }>(children) ? children : null

@@ -16,7 +16,7 @@ export default defineConfig({
           if (/node_modules\/@ant-design\/icons/.test(id)) return 'icons'
           if (/node_modules\/@rc-component\/(table|select|picker|tree)/.test(id)) return 'rc-data'
           if (/node_modules\/(@rc-component|rc-)/.test(id)) return 'rc-vendor'
-          if (/node_modules\/(marked|dompurify)\//.test(id)) return 'markdown'
+          if (/node_modules\/(react-markdown|remark-gfm|micromark|mdast|unist|hast)/.test(id)) return 'markdown'
           if (/node_modules\/(motion|framer-motion|@tanstack)\//.test(id)) return 'vendor-motion'
         },
       },

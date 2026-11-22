@@ -329,8 +329,10 @@ export async function downloadReport(id: string, title: string | null): Promise<
   const a = document.createElement('a')
   a.href = url
   a.download = `${(title ?? id).replace(/[/\\?%*:|"<>]/g, '-')}.md`
+  document.body.appendChild(a)
   a.click()
-  URL.revokeObjectURL(url)
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 export interface CommandRow {
@@ -1719,7 +1721,7 @@ export async function markReportRead(id: string): Promise<void> {
 }
 
 export async function markAllReportsRead(groupId: string): Promise<void> {
-  const r = await post(`/api/agent-reports/read?groupId=${groupId}`)
+  const r = await post(`/api/agent-reports/read?groupId=${encodeURIComponent(groupId)}`)
   if (!r.ok) await fail(r)
 }
 
@@ -1732,8 +1734,10 @@ export async function downloadAgentPdf(r: AgentReport): Promise<void> {
   const a = document.createElement('a')
   a.href = url
   a.download = `${r.title.replace(/[/\\?%*:|"<>]/g, '-')}.pdf`
+  document.body.appendChild(a)
   a.click()
-  URL.revokeObjectURL(url)
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 // 预设任务：定义在仓库 YAML，界面只能启停与改周期（admin）

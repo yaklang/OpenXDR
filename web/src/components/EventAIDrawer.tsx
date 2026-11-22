@@ -81,8 +81,13 @@ export function EventAIDrawer({ event, onClose, onAsk }: { event: EventRow | nul
     refetchInterval: q => (q.state.data?.status === 'running' ? 2000 : false),
   })
   const start = useMutation({
-    mutationFn: (refresh: boolean) => startExplain(event!.id, locale, refresh),
-    onSuccess: (job: AIJob<EventExplanation>) => client.setQueryData(explainKey, job),
+    mutationFn: async (refresh: boolean): Promise<{ job: AIJob<EventExplanation>; eventId: string; locale: typeof locale }> => {
+      const eventId = event!.id
+      const loc = locale
+      const job = await startExplain(eventId, loc, refresh)
+      return { job, eventId, locale: loc }
+    },
+    onSuccess: ({ job, eventId, locale: loc }) => client.setQueryData(['event-explain', eventId, loc], job),
   })
   // 还没解读过就自动发起一次（每条日志每种语言一次）；服务端对同一条日志只会有一个在跑。
   // 抽屉在不同日志间复用，换日志时清掉上一条的发起错误

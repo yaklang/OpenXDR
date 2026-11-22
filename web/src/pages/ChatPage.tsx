@@ -237,13 +237,20 @@ function ChatWorkspace({ prompt, setPrompt, filter, setFilter }: {
     if (group && group.id !== session.group_id) navigate('/chat')
   }, [session, group, setGroupId, navigate])
 
-  // 会话跑完（含定时任务）列表里的状态标签跟着刷新
+  // 会话从运行态转入终态（含定时任务）时刷新列表与消息，避免打开历史会话重复失效缓存
+  const prevRunRef = useRef<{ id: string; status: string } | null>(null)
   useEffect(() => {
-    if (session && session.status !== 'running') {
+    if (!session) {
+      prevRunRef.current = null
+      return
+    }
+    const prev = prevRunRef.current
+    prevRunRef.current = { id: session.id, status: session.status }
+    if (prev && prev.id === session.id && prev.status === 'running' && session.status !== 'running') {
       client.invalidateQueries({ queryKey: ['sessions', session.group_id] })
       client.invalidateQueries({ queryKey: ['messages', session.id] })
     }
-  }, [session?.status, session?.group_id, client, session])
+  }, [session, client])
 
   // 从资产详情"一键排查"或模板进来时带 ?prompt=，填进输入框后从地址栏拿掉；
   // 「交给 AI」还带 send=1，会话就绪后直接发出去，人到了对话页 AI 已经在干活

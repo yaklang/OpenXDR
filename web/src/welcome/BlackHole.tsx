@@ -1,5 +1,5 @@
 // 与项目主页（pages/src/components/react-bits/black-hole.tsx）同一份着色器，欢迎页沿用主页的视觉
-import React, { useRef, useMemo, useCallback, useState } from "react";
+import React, { useRef, useMemo, useCallback } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 
@@ -148,7 +148,7 @@ interface HoleSceneProps {
   colorSpeed: number;
   backgroundColor: string;
   opacity: number;
-  pointer: [number, number];
+  pointerRef: React.RefObject<[number, number]>;
   cursorInteraction: boolean;
   cursorIntensity: number;
 }
@@ -169,13 +169,24 @@ const HoleScene: React.FC<HoleSceneProps> = ({
   colorSpeed,
   backgroundColor,
   opacity,
-  pointer,
+  pointerRef,
   cursorInteraction,
   cursorIntensity,
 }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   const { size } = useThree();
   const smoothPointer = useRef(new THREE.Vector2(0.5, 0.5));
+  const bgRgb = useMemo<[number, number, number] | null>(() => {
+    const bg = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(
+      backgroundColor,
+    );
+    if (!bg) return null;
+    return [
+      parseInt(bg[1], 16) / 255,
+      parseInt(bg[2], 16) / 255,
+      parseInt(bg[3], 16) / 255,
+    ];
+  }, [backgroundColor]);
 
   const shaderUniforms = useMemo(
     () => ({
@@ -217,22 +228,15 @@ const HoleScene: React.FC<HoleSceneProps> = ({
     mat.uniforms.uDistFade.value = distanceFade;
     mat.uniforms.uColorShift.value.set(colorShiftR, colorShiftG, colorShiftB);
     mat.uniforms.uColorRate.value = colorSpeed;
-    const bg = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(
-      backgroundColor,
-    );
-    if (bg)
-      mat.uniforms.uBg.value.set(
-        parseInt(bg[1], 16) / 255,
-        parseInt(bg[2], 16) / 255,
-        parseInt(bg[3], 16) / 255,
-      );
+    if (bgRgb) mat.uniforms.uBg.value.set(bgRgb[0], bgRgb[1], bgRgb[2]);
     mat.uniforms.uAlpha.value = opacity;
     mat.uniforms.uCursorActive.value = cursorInteraction ? 1 : 0;
     mat.uniforms.uCursorIntensity.value = cursorIntensity;
 
     const ease = 1 - Math.exp(-delta / 0.15);
-    smoothPointer.current.x += (pointer[0] - smoothPointer.current.x) * ease;
-    smoothPointer.current.y += (pointer[1] - smoothPointer.current.y) * ease;
+    const [px, py] = pointerRef.current;
+    smoothPointer.current.x += (px - smoothPointer.current.x) * ease;
+    smoothPointer.current.y += (py - smoothPointer.current.y) * ease;
     mat.uniforms.uPointer.value.set(
       smoothPointer.current.x,
       smoothPointer.current.y,
@@ -276,7 +280,7 @@ const BlackHole: React.FC<BlackHoleProps> = ({
   cursorIntensity = 1,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [pointer, setPointer] = useState<[number, number]>([0.5, 0.5]);
+  const pointerRef = useRef<[number, number]>([0.5, 0.5]);
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
@@ -285,7 +289,7 @@ const BlackHole: React.FC<BlackHoleProps> = ({
       if (!rect) return;
       const nx = (e.clientX - rect.left) / rect.width;
       const ny = 1 - (e.clientY - rect.top) / rect.height;
-      setPointer([nx, ny]);
+      pointerRef.current = [nx, ny];
     },
     [cursorInteraction],
   );
@@ -326,7 +330,7 @@ const BlackHole: React.FC<BlackHoleProps> = ({
           colorSpeed={colorSpeed}
           backgroundColor={backgroundColor}
           opacity={opacity}
-          pointer={pointer}
+          pointerRef={pointerRef}
           cursorInteraction={cursorInteraction}
           cursorIntensity={cursorIntensity}
         />
