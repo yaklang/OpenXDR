@@ -114,8 +114,10 @@ type SensorRegisterResponse struct {
 	// 分发目录里的版本与探针当前二进制不同时给出，探针下载、校验、自检后替换重启
 	UpgradeSha256   string `protobuf:"bytes,1,opt,name=upgrade_sha256,json=upgradeSha256,proto3" json:"upgrade_sha256,omitempty"`
 	UpgradePlatform string `protobuf:"bytes,2,opt,name=upgrade_platform,json=upgradePlatform,proto3" json:"upgrade_platform,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// 发布私钥对（域前缀 + 平台 + 安装包哈希）的 Ed25519 签名（64 字节）；未签名则为空
+	UpgradeSignature []byte `protobuf:"bytes,3,opt,name=upgrade_signature,json=upgradeSignature,proto3" json:"upgrade_signature,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *SensorRegisterResponse) Reset() {
@@ -160,6 +162,13 @@ func (x *SensorRegisterResponse) GetUpgradePlatform() string {
 		return x.UpgradePlatform
 	}
 	return ""
+}
+
+func (x *SensorRegisterResponse) GetUpgradeSignature() []byte {
+	if x != nil {
+		return x.UpgradeSignature
+	}
+	return nil
 }
 
 type SensorHealthRequest struct {
@@ -732,10 +741,11 @@ const file_sensor_proto_rawDesc = "" +
 	"\aversion\x18\x03 \x01(\tR\aversion\x12\x12\n" +
 	"\x04arch\x18\x04 \x01(\tR\x04arch\x12#\n" +
 	"\rbinary_sha256\x18\x05 \x01(\tR\fbinarySha256\x12\x0e\n" +
-	"\x02os\x18\x06 \x01(\tR\x02os\"j\n" +
+	"\x02os\x18\x06 \x01(\tR\x02os\"\x97\x01\n" +
 	"\x16SensorRegisterResponse\x12%\n" +
 	"\x0eupgrade_sha256\x18\x01 \x01(\tR\rupgradeSha256\x12)\n" +
-	"\x10upgrade_platform\x18\x02 \x01(\tR\x0fupgradePlatform\"R\n" +
+	"\x10upgrade_platform\x18\x02 \x01(\tR\x0fupgradePlatform\x12+\n" +
+	"\x11upgrade_signature\x18\x03 \x01(\fR\x10upgradeSignature\"R\n" +
 	"\x13SensorHealthRequest\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x1f\n" +
 	"\vhealth_json\x18\x02 \x01(\tR\n" +

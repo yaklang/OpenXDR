@@ -81,6 +81,19 @@ func TestSensorRegisterHealthUpgrade(t *testing.T) {
 	if resp.UpgradeSha256 != want || resp.UpgradePlatform != "linux-amd64" {
 		t.Fatalf("版本不同应下发升级：%+v", resp)
 	}
+	if resp.UpgradeSignature != nil {
+		t.Fatal("没放 .sig 时不应带发布签名")
+	}
+	sig := bytes.Repeat([]byte{9}, 64)
+	sigPath := filepath.Join(dir, "openxdr-sensor-linux-amd64.sig")
+	if err := os.WriteFile(sigPath, []byte(hex.EncodeToString(sig)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := srv.Register(ctxWithCN("sensor:gw01"), &pb.SensorRegisterRequest{
+		Hostname: "gw01", Version: "0.1.0", Arch: "x86_64", BinarySha256: "old",
+	}); err != nil || !bytes.Equal(r.UpgradeSignature, sig) {
+		t.Fatalf("有 .sig 时应随升级指示下发发布签名：%v %x", err, r.GetUpgradeSignature())
+	}
 	got := client.Asset.GetX(ctx, gw.ID)
 	if got.SensorVersion == nil || *got.SensorVersion != "0.1.0" || got.SensorSeen == nil || !got.LastSeen.Equal(agentSeen) {
 		t.Fatalf("应记探针版本与心跳、不刷新 agent 心跳：%+v", got)

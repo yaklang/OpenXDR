@@ -1,11 +1,17 @@
 package grpcsvc
 
 import (
+	"bytes"
+	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/proto"
 
+	"openxdr/server/internal/enroll"
 	"openxdr/server/pb"
 )
 
@@ -186,5 +192,39 @@ func TestFlowAsset(t *testing.T) {
 		if id != c.want || os != c.os {
 			t.Errorf("%s>%s：want %v %q got %v %q", c.src, c.dst, c.want, c.os, id, os)
 		}
+	}
+}
+
+// SensorRegisterResponse 含 upgrade_signature 字段的 protobuf 编解码往返与 SensorDist 签名读取。
+func TestSensorRegisterResponseSignatureRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	sig := bytes.Repeat([]byte{0x42}, 64)
+	sigPath := filepath.Join(dir, "openxdr-sensor-linux-amd64.sig")
+	if err := os.WriteFile(sigPath, []byte(hex.EncodeToString(sig)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dist := enroll.SensorDist(dir)
+	gotSig := dist.Signature("linux-amd64")
+	if !bytes.Equal(gotSig, sig) {
+		t.Fatalf("SensorDist 应读出 64 字节签名：%x", gotSig)
+	}
+
+	orig := &pb.SensorRegisterResponse{
+		UpgradeSha256:    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+		UpgradePlatform:  "linux-amd64",
+		UpgradeSignature: gotSig,
+	}
+	wire, err := proto.Marshal(orig)
+	if err != nil {
+		t.Fatalf("序列化 SensorRegisterResponse 失败：%v", err)
+	}
+	var decoded pb.SensorRegisterResponse
+	if err := proto.Unmarshal(wire, &decoded); err != nil {
+		t.Fatalf("反序列化 SensorRegisterResponse 失败：%v", err)
+	}
+	if decoded.GetUpgradeSha256() != orig.UpgradeSha256 ||
+		decoded.GetUpgradePlatform() != orig.UpgradePlatform ||
+		!bytes.Equal(decoded.GetUpgradeSignature(), orig.UpgradeSignature) {
+		t.Fatalf("编解码往返不一致：got=%+v want=%+v", &decoded, orig)
 	}
 }

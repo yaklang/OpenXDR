@@ -9,8 +9,9 @@ pub mod afpacket;
 #[cfg(any(windows, test))]
 pub mod pktmon;
 
-// AF_XDP 后端是可选特性：它依赖 XDP 重定向程序，而编译 XDP 需要 nightly
-#[cfg(feature = "xdp")]
+// AF_XDP 后端是可选特性：它依赖 XDP 重定向程序，而编译 XDP 需要 nightly；
+// afxdp.rs 自身只依赖 libc，测试构建时在 Linux 上一并编译以跑单测。
+#[cfg(all(target_os = "linux", any(feature = "xdp", test)))]
 pub mod afxdp;
 #[cfg(feature = "xdp")]
 pub mod xdp_loader;

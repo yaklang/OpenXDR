@@ -65,6 +65,7 @@ func (s *SensorServer) Register(ctx context.Context, req *pb.SensorRegisterReque
 	if platform := s.Dist.Platform(osName, req.Arch); s.AutoUpgrade && req.BinarySha256 != "" && platform != "" {
 		if want := s.Dist.SHA256(platform); want != "" && want != req.BinarySha256 {
 			resp.UpgradeSha256, resp.UpgradePlatform = want, platform
+			resp.UpgradeSignature = s.Dist.Signature(platform)
 			slog.Info("下发 sensor 升级", "host", host, "from", req.Version, "platform", platform)
 		}
 	}

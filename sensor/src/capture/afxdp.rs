@@ -7,6 +7,7 @@
 //!
 //! 收包前提是有 XDP 程序把包 redirect 到本 socket，见 ebpf/src/main.rs。
 //! 一个 socket 对应一个网卡队列，多队列网卡需要每队列一个 worker。
+#![cfg_attr(not(feature = "xdp"), allow(dead_code))]
 
 use std::io;
 use std::os::fd::RawFd;
@@ -28,6 +29,10 @@ const XDP_UMEM_PGOFF_COMPLETION_RING: libc::off_t = 0x1_8000_0000;
 
 const XDP_USE_NEED_WAKEUP: u16 = 1 << 3;
 const XDP_RING_NEED_WAKEUP: u32 = 1 << 0;
+/// NEED_WAKEUP 置位时的 poll 超时（毫秒），同时唤醒内核并让出 CPU
+const WAKEUP_POLL_TIMEOUT_MS: libc::c_int = 1000;
+/// 无包且内核未置 NEED_WAKEUP 时的短超时 poll（毫秒），消除空闲 100% CPU 忙等
+const IDLE_POLL_TIMEOUT_MS: libc::c_int = 20;
 
 #[repr(C)]
 struct XdpUmemReg {
@@ -351,15 +356,15 @@ impl AfXdp {
         self.fill.publish(addrs);
     }
 
-    /// NEED_WAKEUP 模式下内核可能在休眠，要用 poll 叫醒它继续填包。
-    fn wait(&self) -> io::Result<bool> {
+    /// 等待可读或超时：NEED_WAKEUP 置位时唤醒内核，未置位时用短超时让出 CPU 避免忙等。
+    fn wait(&self, timeout_ms: libc::c_int) -> io::Result<bool> {
         let mut pfd = libc::pollfd {
             fd: self.fd.0,
             events: libc::POLLIN,
             revents: 0,
         };
         // SAFETY: &mut pfd 指向栈上单个 pollfd，nfds 传 1 与之相符；self.fd 有效。
-        let n = unsafe { libc::poll(&mut pfd, 1, 1000) };
+        let n = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
         if n < 0 {
             let err = io::Error::last_os_error();
             if err.kind() == io::ErrorKind::Interrupted {
@@ -379,19 +384,21 @@ impl AfXdp {
 
 impl Capture for AfXdp {
     fn poll_batch(&mut self, f: &mut dyn FnMut(&[u8], u64)) -> io::Result<usize> {
-        let producer = self.rx.producer_value();
+        let mut producer = self.rx.producer_value();
         let consumer = self.rx.cached_consumer;
         if consumer == producer {
-            if self.fill.needs_wakeup() && !self.wait()? {
-                return Ok(0);
-            }
-            let producer = self.rx.producer_value();
+            let timeout = if self.fill.needs_wakeup() {
+                WAKEUP_POLL_TIMEOUT_MS
+            } else {
+                IDLE_POLL_TIMEOUT_MS
+            };
+            let _ = self.wait(timeout)?;
+            producer = self.rx.producer_value();
             if consumer == producer {
                 return Ok(0);
             }
         }
 
-        let producer = self.rx.producer_value();
         // AF_XDP 不提供硬件时间戳，用接收时刻代替
         let now_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -422,12 +429,24 @@ impl std::os::fd::AsRawFd for AfXdp {
     }
 }
 
+fn validate_mmap_offsets_len(len: libc::socklen_t) -> io::Result<()> {
+    if len as usize != size_of::<MmapOffsets>() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "内核返回的 XDP_MMAP_OFFSETS 长度为 {len} 字节，期望 {} 字节（AF_XDP 后端需要 Linux 5.4+）",
+                size_of::<MmapOffsets>()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn mmap_offsets(fd: RawFd) -> io::Result<MmapOffsets> {
     let mut offsets = MmapOffsets::default();
     let mut len = size_of::<MmapOffsets>() as libc::socklen_t;
-    // SAFETY: offsets 是栈上已初始化的 #[repr(C)] 结构，len 如实给出它的大小，内核最多写这么多。
-    // 老内核（< 5.4）返回不带 flags 的短结构时 flags 偏移保持 0，只会让 needs_wakeup 读错，
-    // 仍在映射内，不越界。
+    // SAFETY: offsets 是栈上已初始化的 #[repr(C)] 结构，len 如实给出它的大小，内核最多写这么多；
+    // 返回后严格校验 len == size_of::<MmapOffsets>()，拒绝 < 5.4 老内核的 96 字节 v1 结构，防止字段错位 UB。
     let rc = unsafe {
         libc::getsockopt(
             fd,
@@ -440,6 +459,7 @@ fn mmap_offsets(fd: RawFd) -> io::Result<MmapOffsets> {
     if rc < 0 {
         return Err(io::Error::last_os_error());
     }
+    validate_mmap_offsets_len(len)?;
     Ok(offsets)
 }
 
@@ -704,11 +724,25 @@ mod tests {
     }
 
     #[test]
-    fn poll_batch_without_new_frames_returns_zero() {
+    fn poll_batch_without_new_frames_waits_and_returns_zero() {
         let (mut umem, mut rx, mut fill) = (Mem::new((N * FRAME) as usize), rx_mem(), fill_mem());
         let mut sock = fake_socket(&mut umem, &mut rx, &mut fill);
-        // 内核未要求唤醒：不 poll，直接返回 0
+        // 内核未置 NEED_WAKEUP 时也应走短超时 poll 让出 CPU，而非 0ms 忙等
+        let start = std::time::Instant::now();
         assert_eq!(sock.poll_batch(&mut |_, _| unreachable!()).unwrap(), 0);
+        assert!(
+            start.elapsed() >= std::time::Duration::from_millis(10),
+            "无包空闲时应走短超时 poll 等待，避免 100% CPU 忙等"
+        );
         assert_eq!(fill.u32_at(OFF.producer), 0);
+    }
+
+    #[test]
+    fn mmap_offsets_rejects_pre_5_4_v1_layout() {
+        // Linux < 5.4 返回 96 字节的 xdp_mmap_offsets_v1，必须拒绝而不能按 128 字节强解释
+        let err = validate_mmap_offsets_len(96).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+        assert!(validate_mmap_offsets_len(0).is_err());
+        assert!(validate_mmap_offsets_len(size_of::<MmapOffsets>() as libc::socklen_t).is_ok());
     }
 }

@@ -118,9 +118,72 @@ pub struct Flow {
     pub tls_client: TlsClient,
 }
 
+/// 默认每 worker 未完成 TLS 服务端握手重组缓冲总上限（32 MiB），防止半截 ServerHello 洪泛 OOM
+pub const DEFAULT_MAX_TLS_HS_BYTES: usize = 32 * 1024 * 1024;
+
+/// 满表触发时间清理时暂存待导出流的数量上限，避免洪泛场景在内存里无限囤积
+const MAX_PENDING_EXPIRED: usize = 65536;
+
+/// 满表且无法清理/驱逐任何流时的全表扫描冷却间隔（100ms），避免每包全表扫描
+const FULL_REJECT_COOLDOWN_NS: u64 = 100_000_000;
+
+/// worker 级 TLS 服务端握手重组缓冲预算。每张流表独享一份，无锁。
+#[derive(Debug)]
+pub struct TlsBufBudget {
+    used: usize,
+    limit: usize,
+}
+
+impl Default for TlsBufBudget {
+    fn default() -> Self {
+        Self::new(DEFAULT_MAX_TLS_HS_BYTES)
+    }
+}
+
+impl TlsBufBudget {
+    pub fn new(limit: usize) -> Self {
+        Self { used: 0, limit }
+    }
+
+    #[cfg(test)]
+    pub fn used(&self) -> usize {
+        self.used
+    }
+
+    pub fn can_add(&self, delta: usize) -> bool {
+        self.used.saturating_add(delta) <= self.limit
+    }
+
+    pub fn add(&mut self, bytes: usize) {
+        self.used = self.used.saturating_add(bytes);
+    }
+
+    pub fn sub(&mut self, bytes: usize) {
+        self.used = self.used.saturating_sub(bytes);
+    }
+
+    pub fn update(&mut self, old_len: usize, new_len: usize) {
+        self.used = self.used.saturating_sub(old_len).saturating_add(new_len);
+    }
+
+    /// 释放单条流的重组缓冲并归还预算（替换为 Vec::new() 真正释放底层堆容量）
+    pub fn release(&mut self, buf: &mut Vec<u8>) {
+        let taken = std::mem::take(buf);
+        self.used = self.used.saturating_sub(taken.len());
+    }
+}
+
 impl Flow {
     fn finished(&self) -> bool {
         self.key.proto == IPPROTO_TCP && self.tcp_flags & (TCP_FIN | TCP_RST) != 0
+    }
+
+    /// 空/短连接流判定：TCP 纯 SYN 半开连接，或双向合计不超过 1 个包。
+    /// 满表时优先驱逐这类流，防止 SYN 洪泛或扫描包长期占满流表。
+    fn is_evictable_short(&self) -> bool {
+        let syn_only =
+            self.key.proto == IPPROTO_TCP && (self.tcp_flags & (TCP_SYN | TCP_ACK)) == TCP_SYN;
+        syn_only || self.a_to_b_packets.saturating_add(self.b_to_a_packets) <= 1
     }
 }
 
@@ -131,6 +194,9 @@ pub struct FlowTable {
     max_flows: usize,
     last_sweep_ns: u64,
     sweep_interval_ns: u64,
+    tls_budget: TlsBufBudget,
+    pending_expired: Vec<Flow>,
+    last_full_reject_ns: Option<u64>,
 }
 
 pub struct Config {
@@ -154,12 +220,15 @@ impl Default for Config {
 impl FlowTable {
     pub fn new(cfg: &Config) -> Self {
         Self {
-            flows: HashMap::with_capacity(1 << 16),
+            flows: HashMap::with_capacity((1 << 16).min(cfg.max_flows)),
             idle_timeout_ns: cfg.idle_timeout_secs * 1_000_000_000,
             max_lifetime_ns: cfg.max_lifetime_secs * 1_000_000_000,
             max_flows: cfg.max_flows,
             last_sweep_ns: 0,
             sweep_interval_ns: cfg.sweep_interval_secs * 1_000_000_000,
+            tls_budget: TlsBufBudget::default(),
+            pending_expired: Vec::new(),
+            last_full_reject_ns: None,
         }
     }
 
@@ -167,12 +236,69 @@ impl FlowTable {
         self.flows.len()
     }
 
-    /// 收一个包。返回本包所属流的可变引用和方向（true = a→b），
-    /// 供上层做协议识别；流表满时返回 None（丢弃计数由调用方统计）。
-    pub fn update<'a>(&'a mut self, pkt: &Packet, ts_ns: u64) -> Option<(&'a mut Flow, bool)> {
+    /// 满表时回收空间：先做一次按时间清理（保留待导出的合法到期流），
+    /// 若仍满再批量驱逐最老的一批空/短连接流，防止 SYN 洪泛阻断新流长达 30 秒。
+    fn reclaim_on_full(&mut self, now_ns: u64) {
+        let idle = self.idle_timeout_ns;
+        let lifetime = self.max_lifetime_ns;
+        self.last_sweep_ns = now_ns;
+        for (_, mut flow) in self.flows.extract_if(|_, flow| {
+            flow.finished()
+                || now_ns.saturating_sub(flow.last_ns) >= idle
+                || now_ns.saturating_sub(flow.start_ns) >= lifetime
+        }) {
+            self.tls_budget.release(&mut flow.tls_hs_buf);
+            if self.pending_expired.len() < MAX_PENDING_EXPIRED {
+                self.pending_expired.push(flow);
+            }
+        }
+        if self.flows.len() < self.max_flows {
+            return;
+        }
+
+        // 仍满：挑最老的一批空/短连接流驱逐，单次批量腾出槽位避免后续每包全表扫描
+        let target = (self.max_flows / 16).clamp(1, 4096);
+        let mut shorts: Vec<(FlowKey, u64)> = self
+            .flows
+            .iter()
+            .filter(|(_, f)| f.is_evictable_short())
+            .map(|(k, f)| (*k, f.last_ns))
+            .collect();
+        if shorts.len() > target {
+            shorts.select_nth_unstable_by_key(target, |&(_, last_ns)| last_ns);
+            shorts.truncate(target);
+        }
+        for (k, _) in shorts {
+            if let Some(mut flow) = self.flows.remove(&k) {
+                self.tls_budget.release(&mut flow.tls_hs_buf);
+            }
+        }
+    }
+
+    /// 收一个包。返回本包所属流的可变引用、方向（true = a→b）与本 worker 的 TLS 重组预算，
+    /// 供上层做协议识别；流表满且无法回收时返回 None（丢弃计数由调用方统计）。
+    pub fn update<'a>(
+        &'a mut self,
+        pkt: &Packet,
+        ts_ns: u64,
+    ) -> Option<(&'a mut Flow, bool, &'a mut TlsBufBudget)> {
         let (key, forward) = FlowKey::from_packet(pkt);
         if !self.flows.contains_key(&key) && self.flows.len() >= self.max_flows {
-            return None;
+            if self.max_flows == 0 {
+                return None;
+            }
+            if self
+                .last_full_reject_ns
+                .is_some_and(|t| ts_ns.saturating_sub(t) < FULL_REJECT_COOLDOWN_NS)
+            {
+                return None;
+            }
+            self.reclaim_on_full(ts_ns);
+            if self.flows.len() >= self.max_flows {
+                self.last_full_reject_ns = Some(ts_ns);
+                return None;
+            }
+            self.last_full_reject_ns = None;
         }
 
         // 方向判定：SYN 且无 ACK 的发送方是客户端；SYN+ACK 的发送方是服务端；
@@ -209,12 +335,15 @@ impl FlowTable {
             flow.b_to_a_packets += 1;
             flow.b_to_a_bytes += pkt.frame_len as u64;
         }
-        Some((flow, forward))
+        Some((flow, forward, &mut self.tls_budget))
     }
 
-    /// 导出已结束/超时的流。TCP 的 FIN/RST 流立即导出，其余按超时。
-    /// 未到扫描间隔时只处理已结束的流，避免每包遍历全表。
+    /// 导出已结束/超时的流。TCP 的 FIN/RST 流在扫描周期内导出，其余按超时。
+    /// 未到扫描间隔时不做全表遍历，但会交付满表清理时暂存的到期流。
     pub fn expire(&mut self, now_ns: u64, out: &mut Vec<Flow>) {
+        if !self.pending_expired.is_empty() {
+            out.append(&mut self.pending_expired);
+        }
         let full_sweep = now_ns.saturating_sub(self.last_sweep_ns) >= self.sweep_interval_ns;
         if !full_sweep {
             return;
@@ -223,20 +352,30 @@ impl FlowTable {
 
         let idle = self.idle_timeout_ns;
         let lifetime = self.max_lifetime_ns;
-        out.extend(
-            self.flows
-                .extract_if(|_, flow| {
-                    flow.finished()
-                        || now_ns.saturating_sub(flow.last_ns) >= idle
-                        || now_ns.saturating_sub(flow.start_ns) >= lifetime
-                })
-                .map(|(_, flow)| flow),
-        );
+        let before = self.flows.len();
+        for (_, mut flow) in self.flows.extract_if(|_, flow| {
+            flow.finished()
+                || now_ns.saturating_sub(flow.last_ns) >= idle
+                || now_ns.saturating_sub(flow.start_ns) >= lifetime
+        }) {
+            self.tls_budget.release(&mut flow.tls_hs_buf);
+            out.push(flow);
+        }
+        if self.flows.len() < before {
+            self.last_full_reject_ns = None;
+        }
     }
 
     /// 进程退出前导出全部在途流。
     pub fn drain_all(&mut self, out: &mut Vec<Flow>) {
-        out.extend(self.flows.drain().map(|(_, f)| f));
+        if !self.pending_expired.is_empty() {
+            out.append(&mut self.pending_expired);
+        }
+        for (_, mut flow) in self.flows.drain() {
+            self.tls_budget.release(&mut flow.tls_hs_buf);
+            out.push(flow);
+        }
+        self.last_full_reject_ns = None;
     }
 }
 
@@ -291,7 +430,7 @@ mod tests {
         let now = 1000;
 
         let a = pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1111, 80, TCP_SYN, 100);
-        let (_, forward) = ft.update(&a, now).unwrap();
+        let (_, forward, _) = ft.update(&a, now).unwrap();
         assert!(forward, "小端→大端的包应为 forward");
         let reverse = pkt(v4(2, 0, 0, 2), v4(1, 0, 0, 1), 80, 1111, TCP_ACK, 64);
         ft.update(&reverse, now + 1);
@@ -334,32 +473,175 @@ mod tests {
     }
 
     #[test]
-    fn flow_table_full_drops() {
+    fn flow_table_full_drops_when_all_active() {
         let cfg = Config {
             max_flows: 2,
             ..Config::default()
         };
         let mut ft = FlowTable::new(&cfg);
         let now = 0;
+        // 两条均为已完成握手的双向活跃流，不应被当短连接驱逐
         assert!(
-            ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, 0, 60), now)
-                .is_some()
+            ft.update(
+                &pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, TCP_SYN, 60),
+                now
+            )
+            .is_some()
         );
         assert!(
-            ft.update(&pkt(v4(3, 0, 0, 3), v4(4, 0, 0, 4), 1, 80, 0, 60), now)
-                .is_some()
+            ft.update(
+                &pkt(v4(2, 0, 0, 2), v4(1, 0, 0, 1), 80, 1, TCP_SYN | TCP_ACK, 60),
+                now
+            )
+            .is_some()
         );
-        // 已满，第三条被丢
         assert!(
-            ft.update(&pkt(v4(5, 0, 0, 5), v4(6, 0, 0, 6), 1, 80, 0, 60), now)
-                .is_none()
+            ft.update(
+                &pkt(v4(3, 0, 0, 3), v4(4, 0, 0, 4), 1, 80, TCP_SYN, 60),
+                now
+            )
+            .is_some()
+        );
+        assert!(
+            ft.update(
+                &pkt(v4(4, 0, 0, 4), v4(3, 0, 0, 3), 80, 1, TCP_SYN | TCP_ACK, 60),
+                now
+            )
+            .is_some()
+        );
+        // 表内全是活跃流且未到期，第三条被拒
+        assert!(
+            ft.update(
+                &pkt(v4(5, 0, 0, 5), v4(6, 0, 0, 6), 1, 80, TCP_ACK, 60),
+                now
+            )
+            .is_none()
         );
         // 已有 key 仍能更新（不新增）
         assert!(
-            ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, 0, 0), now)
+            ft.update(&pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, TCP_ACK, 0), now)
                 .is_some()
         );
         assert_eq!(ft.len(), 2);
+    }
+
+    #[test]
+    fn flow_table_full_reclaims_expired_first() {
+        let cfg = Config {
+            idle_timeout_secs: 10,
+            max_lifetime_secs: 300,
+            max_flows: 2,
+            sweep_interval_secs: 30,
+        };
+        let mut ft = FlowTable::new(&cfg);
+        // 插入两条已建连接，其中第一条在 t=1s，第二条在 t=5s
+        let p1_a = pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1, 80, TCP_SYN, 60);
+        let p1_b = pkt(v4(2, 0, 0, 2), v4(1, 0, 0, 1), 80, 1, TCP_SYN | TCP_ACK, 60);
+        let p2_a = pkt(v4(3, 0, 0, 3), v4(4, 0, 0, 4), 1, 80, TCP_SYN, 60);
+        let p2_b = pkt(v4(4, 0, 0, 4), v4(3, 0, 0, 3), 80, 1, TCP_SYN | TCP_ACK, 60);
+        let _ = ft.update(&p1_a, 1_000_000_000);
+        let _ = ft.update(&p1_b, 1_000_000_000);
+        let _ = ft.update(&p2_a, 5_000_000_000);
+        let _ = ft.update(&p2_b, 5_000_000_000);
+
+        // t=12s 时第一条已空闲超过 10s（即使未到 30s 常规扫描周期），新流到达应触发清理并成功插入
+        let p3 = pkt(v4(5, 0, 0, 5), v4(6, 0, 0, 6), 1, 443, TCP_SYN, 60);
+        assert!(ft.update(&p3, 12_000_000_000).is_some());
+        assert_eq!(ft.len(), 2);
+
+        // 被清理的到期流在下次 expire 时应能交出，不丢失
+        let mut out = Vec::new();
+        ft.expire(12_000_000_000, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].key.a_ip, v4(1, 0, 0, 1));
+    }
+
+    #[test]
+    fn flow_table_full_evicts_oldest_syn_flood() {
+        let cfg = Config {
+            idle_timeout_secs: 30,
+            max_lifetime_secs: 300,
+            max_flows: 4,
+            sweep_interval_secs: 5,
+        };
+        let mut ft = FlowTable::new(&cfg);
+        // 1 条正常双向活跃流（t=1）
+        let _ = ft.update(
+            &pkt(v4(10, 0, 0, 1), v4(10, 0, 0, 2), 1000, 443, TCP_SYN, 60),
+            1,
+        );
+        let _ = ft.update(
+            &pkt(
+                v4(10, 0, 0, 2),
+                v4(10, 0, 0, 1),
+                443,
+                1000,
+                TCP_SYN | TCP_ACK,
+                60,
+            ),
+            1,
+        );
+        // 3 条 SYN 洪泛半开流占满剩余槽位（t=2, 3, 4）
+        for i in 1u8..=3 {
+            let _ = ft.update(
+                &pkt(
+                    v4(192, 0, 2, i),
+                    v4(10, 0, 0, 2),
+                    2000 + i as u16,
+                    443,
+                    TCP_SYN,
+                    60,
+                ),
+                1 + i as u64,
+            );
+        }
+        assert_eq!(ft.len(), 4);
+
+        // t=5（远未到 30s 超时）新合法流到达：应驱逐最老的 SYN 流（t=2，192.0.2.1）并放行新流
+        let legit = pkt(v4(10, 0, 0, 9), v4(10, 0, 0, 2), 3000, 443, TCP_SYN, 60);
+        assert!(
+            ft.update(&legit, 5).is_some(),
+            "SYN 洪泛占满流表时应驱逐最老短流放行新流"
+        );
+        assert_eq!(ft.len(), 4);
+        assert!(
+            ft.flows
+                .keys()
+                .any(|k| k.a_ip == v4(10, 0, 0, 1) || k.b_ip == v4(10, 0, 0, 1)),
+            "已有双向活跃流不应被误驱逐"
+        );
+        assert!(
+            !ft.flows
+                .keys()
+                .any(|k| k.a_ip == v4(192, 0, 2, 1) || k.b_ip == v4(192, 0, 2, 1)),
+            "最老的 SYN 半开流应被优先驱逐"
+        );
+    }
+
+    #[test]
+    fn tls_budget_released_on_expire_and_drain() {
+        let cfg = Config {
+            idle_timeout_secs: 1,
+            max_lifetime_secs: 300,
+            max_flows: 4,
+            sweep_interval_secs: 0,
+        };
+        let mut ft = FlowTable::new(&cfg);
+        let (flow, _, budget) = ft
+            .update(
+                &pkt(v4(1, 0, 0, 1), v4(2, 0, 0, 2), 1000, 443, TCP_ACK, 60),
+                0,
+            )
+            .unwrap();
+        flow.tls_hs_buf = vec![0xAA; 1024];
+        budget.add(1024);
+        assert_eq!(ft.tls_budget.used(), 1024);
+
+        let mut out = Vec::new();
+        ft.expire(2_000_000_000, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(ft.tls_budget.used(), 0, "流过期后应归还 TLS 缓冲预算");
+        assert_eq!(out[0].tls_hs_buf.capacity(), 0, "导出流应释放重组缓冲容量");
     }
 
     /// 空闲超时导出。sweep_interval=0 保证每次 expire 都做全量扫描。

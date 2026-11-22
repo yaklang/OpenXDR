@@ -31,6 +31,8 @@ message SensorRegisterResponse {
   // 分发目录里的版本与探针当前二进制不同时给出，探针下载、校验、自检后替换重启
   string upgrade_sha256 = 1;
   string upgrade_platform = 2;
+  // 发布私钥对（域前缀 + 平台 + 安装包哈希）的 Ed25519 签名（64 字节）；未签名则为空
+  bytes upgrade_signature = 3;
 }
 
 message SensorHealthRequest {

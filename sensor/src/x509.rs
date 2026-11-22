@@ -43,9 +43,10 @@ fn read_tlv(buf: &[u8]) -> Option<(Tlv<'_>, &[u8])> {
         }
         (len, 2 + n)
     };
-    let body = buf.get(hdr..hdr + len)?;
-    let raw = buf.get(..hdr + len)?;
-    let rest = buf.get(hdr + len..)?;
+    let end = hdr.checked_add(len)?;
+    let body = buf.get(hdr..end)?;
+    let raw = buf.get(..end)?;
+    let rest = buf.get(end..)?;
     Some((Tlv { tag, body, raw }, rest))
 }
 
@@ -358,6 +359,10 @@ pub(crate) mod tests {
         assert!(parse_certificate(&[0x30, 0x82, 0xff, 0xff]).is_none());
         // 不定长形式在 DER 里非法
         assert!(parse_certificate(&[0x30, 0x80, 0x00, 0x00]).is_none());
+        // 4 字节极大长度在 32 位平台也不能触发 hdr + len 溢出
+        assert!(read_tlv(&[0x30, 0x84, 0xff, 0xff, 0xff, 0xff]).is_none());
+        assert!(read_tlv(&[0x30, 0x84, 0xff, 0xff, 0xff, 0xfe, 0x00]).is_none());
+        assert!(parse_certificate(&[0x30, 0x84, 0xff, 0xff, 0xff, 0xff]).is_none());
         // 翻转若干字节不应 panic
         for pos in [0usize, 5, 60, 90, SELF_DER.len() - 1] {
             let mut bad = SELF_DER.to_vec();

@@ -5,8 +5,8 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use md5::{Digest, Md5};
 
-use crate::decode::{IPPROTO_TCP, Packet};
-use crate::flow::{Flow, Metadata, TlsClient};
+use crate::decode::{IPPROTO_TCP, IPPROTO_UDP, Packet};
+use crate::flow::{Flow, Metadata, TlsBufBudget, TlsClient};
 use crate::x509;
 
 const DNS_PORT: u16 = 53;
@@ -26,60 +26,92 @@ const MAX_TLS_RECORD: usize = 16 * 1024 + 2048;
 /// 2 字节明文 + 1 字节类型 + 16 字节认证标签 = 19，装不下任何请求
 const MIN_DATA_RECORD: usize = 20;
 
-pub fn probe(flow: &mut Flow, pkt: &Packet) {
+pub fn probe(flow: &mut Flow, pkt: &Packet, from_client: bool, tls_budget: &mut TlsBufBudget) {
     if pkt.payload.is_empty() {
         return;
     }
-    // DNS 查询与应答各探一次：靠报文 QR 位区分，不依赖方向判定
+    // DNS 查询与应答各探一次：UDP 53 直接解析，TCP 53 跳过 2 字节大端长度前缀（绝不错位解析）
     if pkt.sport == DNS_PORT || pkt.dport == DNS_PORT {
-        let is_response = pkt.payload.get(2).is_some_and(|f| f & 0x80 != 0);
-        if is_response {
-            if !flow.probed_server {
-                if let Some(resp) = parse_dns_response(pkt.payload) {
-                    if flow.meta.dns_query.is_none() {
-                        flow.meta.dns_query = resp.query;
-                    }
-                    flow.meta.dns_rcode = Some(resp.rcode);
-                    flow.meta.dns_answers = resp.answers;
-                }
-                flow.probed_server = true;
+        match pkt.proto {
+            IPPROTO_UDP => {
+                probe_dns_payload(flow, pkt.payload);
+                return;
             }
-        } else if !flow.probed {
-            flow.meta.dns_query = parse_dns_question(pkt.payload);
+            IPPROTO_TCP => {
+                if let Some(dns) = tcp_dns_payload(pkt.payload)
+                    && probe_dns_payload(flow, dns)
+                {
+                    return;
+                }
+                // TCP 53 非 DNS 载荷（如复用 53 端口的 TLS/HTTP 隧道）继续往下探测
+            }
+            _ => {}
+        }
+    }
+    if from_client {
+        if !flow.probed {
+            if let Some(hello) = parse_client_hello(pkt.payload) {
+                flow.meta.tls_sni = hello.sni;
+                flow.meta.ja3 = Some(hello.ja3);
+                if flow.meta.tls_alpn.is_none() {
+                    flow.meta.tls_alpn = hello.alpn;
+                }
+            } else if let Some(http) = parse_http_request(pkt.payload) {
+                flow.meta.http_host = http.host;
+                flow.meta.http_uri = Some(http.uri);
+                flow.meta.http_user_agent = http.user_agent;
+            }
+            // 无论是否命中，首段客户端载荷探完即置 probed，避免 SSH/DB/gRPC 长流每包重复扫描
             flow.probed = true;
         }
         return;
     }
-    if !flow.probed {
-        if let Some(hello) = parse_client_hello(pkt.payload) {
-            flow.meta.tls_sni = hello.sni;
-            flow.meta.ja3 = Some(hello.ja3);
-            if flow.meta.tls_alpn.is_none() {
-                flow.meta.tls_alpn = hello.alpn;
-            }
-            flow.probed = true;
-            return;
-        }
-        if let Some(http) = parse_http_request(pkt.payload) {
-            flow.meta.http_host = http.host;
-            flow.meta.http_uri = Some(http.uri);
-            flow.meta.http_user_agent = http.user_agent;
-            flow.probed = true;
-            return;
-        }
-    }
-    // 服务端方向：TLS handshake 重组后提取 JA3S 与证书元数据。
-    // 与 ClientHello 互不干扰：handshake type 不同，同一条流两个方向各探一次
+    // 仅服务端方向进入 TLS handshake 重组，杜绝客户端包污染服务端 tls_hs_buf
     if !flow.probed_server {
-        probe_tls_server(flow, pkt.payload);
+        probe_tls_server(flow, pkt.payload, tls_budget);
+    }
+}
+
+/// TCP DNS 报文带 2 字节大端长度前缀（RFC 1035 4.2.2），长度不足 12 或未收齐不解析。
+fn tcp_dns_payload(payload: &[u8]) -> Option<&[u8]> {
+    let len = be16(payload, 0)? as usize;
+    if len < 12 {
+        return None;
+    }
+    payload.get(2..2 + len)
+}
+
+/// 解析 DNS 报文（按 QR 位区分查询/应答），返回 true 表示解析到了合法 DNS 字段。
+fn probe_dns_payload(flow: &mut Flow, payload: &[u8]) -> bool {
+    let is_response = payload.get(2).is_some_and(|f| f & 0x80 != 0);
+    if is_response {
+        if !flow.probed_server {
+            if let Some(resp) = parse_dns_response(payload) {
+                if flow.meta.dns_query.is_none() {
+                    flow.meta.dns_query = resp.query;
+                }
+                flow.meta.dns_rcode = Some(resp.rcode);
+                flow.meta.dns_answers = resp.answers;
+                flow.probed_server = true;
+                return true;
+            }
+            flow.probed_server = true;
+        }
+        false
+    } else if !flow.probed {
+        flow.meta.dns_query = parse_dns_question(payload);
+        flow.probed = true;
+        flow.meta.dns_query.is_some()
+    } else {
+        false
     }
 }
 
 /// TLS 服务端方向探测：把 handshake record 攒进 tls_hs_buf 做有界重组，
 /// 增量解析 ServerHello（JA3S、TLS1.3 判定）与 Certificate（证书元数据）。
 /// 完成条件：拿到 JA3S 且证书已见（或判定 TLS1.3 等不到证书）；
-/// 或看到应用数据 record（0x17）；或缓冲超限。完成后置 probed_server。
-fn probe_tls_server(flow: &mut Flow, payload: &[u8]) {
+/// 或看到应用数据 record（0x17）；或非 TLS 握手首包；或单流/全局缓冲超限。完成后置 probed_server。
+fn probe_tls_server(flow: &mut Flow, payload: &[u8], budget: &mut TlsBufBudget) {
     if flow.tls_hs_buf.is_empty() {
         // 缓冲为空时，0x17 应用数据说明握手窗口已过（TLS1.3、会话复用等），不等了
         if payload.first() == Some(&0x17) {
@@ -87,28 +119,58 @@ fn probe_tls_server(flow: &mut Flow, payload: &[u8]) {
             return;
         }
         // 只有以 handshake record 开头、且首个 handshake 消息是
-        // ServerHello(2)/Certificate(11) 的 payload 才启动重组——
-        // ClientHello(1) 在客户端方向，绝不能进这个缓冲
+        // ServerHello(2)/Certificate(11) 的 payload 才启动重组；
+        // 非 TLS 服务端首包（如 HTTP 响应、SSH banner、DB 协议）或已过证书阶段直接收尾
         let starts_hs =
             payload.first() == Some(&0x16) && matches!(payload.get(5), Some(&2) | Some(&11));
         if !starts_hs {
+            flow.probed_server = true;
             return;
         }
+
+        // 先就地扫描：单包完整 TLS 1.3 或 ServerHello+Certificate 零堆分配，且不受重组缓冲预算打满影响
+        let (consumed, done) = scan_server_records(payload, &mut flow.meta);
+        if done {
+            flow.probed_server = true;
+            return;
+        }
+        let tail = &payload[consumed..];
+        if tail.is_empty() {
+            return;
+        }
+        if tail.len() > MAX_TLS_HS_BUF || !budget.can_add(tail.len()) {
+            flow.probed_server = true;
+            return;
+        }
+        flow.tls_hs_buf = tail.to_vec();
+        budget.add(tail.len());
+        return;
     }
-    flow.tls_hs_buf.extend_from_slice(payload);
-    if flow.tls_hs_buf.len() > MAX_TLS_HS_BUF {
-        flow.tls_hs_buf.clear();
+
+    // 续传分段：先检查单流上限与 worker 级总预算再追加，超限时彻底释放堆容量
+    let new_total = flow.tls_hs_buf.len().saturating_add(payload.len());
+    if new_total > MAX_TLS_HS_BUF || !budget.can_add(payload.len()) {
+        budget.release(&mut flow.tls_hs_buf);
         flow.probed_server = true;
         return;
     }
 
     // 拿出缓冲再扫描，避免与 meta 的可变借用冲突；扫完只留未消费的不完整尾巴
-    let buf = std::mem::take(&mut flow.tls_hs_buf);
+    let old_len = flow.tls_hs_buf.len();
+    let mut buf = std::mem::take(&mut flow.tls_hs_buf);
+    buf.extend_from_slice(payload);
     let (consumed, done) = scan_server_records(&buf, &mut flow.meta);
     if done {
-        flow.probed_server = true; // buf 随 take 丢弃，缓冲即清空
+        budget.sub(old_len);
+        flow.probed_server = true; // buf 随作用域结束释放，tls_hs_buf 已是空 Vec::new()
     } else {
-        flow.tls_hs_buf = buf[consumed..].to_vec();
+        let tail = &buf[consumed..];
+        if tail.is_empty() {
+            budget.sub(old_len);
+        } else {
+            flow.tls_hs_buf = tail.to_vec();
+            budget.update(old_len, tail.len());
+        }
     }
 }
 
@@ -576,13 +638,18 @@ pub struct HttpRequest {
 }
 
 /// HTTP/1.x 明文请求首部。只看第一个包，跨包的请求头不做重组。
+/// 先在字节切片里按 \r\n\r\n 切出头部区域，避免二进制 POST body 导致整体 UTF-8 失败；
+/// 头部末尾被 TCP 分段截断的行容错忽略，保留已解析的 Host/URI/UA。
 fn parse_http_request(payload: &[u8]) -> Option<HttpRequest> {
-    let head_end = payload.len().min(4096);
-    let text = std::str::from_utf8(payload.get(..head_end)?).ok()?;
-    let mut lines = text.split("\r\n");
+    let window = payload.get(..payload.len().min(4096))?;
+    let header_bytes = match window.windows(4).position(|w| w == b"\r\n\r\n") {
+        Some(pos) => &window[..pos],
+        None => window,
+    };
 
-    // 请求行: METHOD SP URI SP HTTP/1.x
-    let request_line = lines.next()?;
+    // 请求行必须完整（以 \r\n 结尾）且是合法 UTF-8：METHOD SP URI SP HTTP/1.x
+    let first_eol = header_bytes.windows(2).position(|w| w == b"\r\n")?;
+    let request_line = std::str::from_utf8(&header_bytes[..first_eol]).ok()?;
     let mut parts = request_line.split(' ');
     let method = parts.next()?;
     let uri = parts.next()?;
@@ -593,11 +660,26 @@ fn parse_http_request(payload: &[u8]) -> Option<HttpRequest> {
 
     let mut host = None;
     let mut user_agent = None;
-    for line in lines {
+    let mut cursor = &header_bytes[first_eol + 2..];
+    while !cursor.is_empty() {
+        let (line, next) = match cursor.windows(2).position(|w| w == b"\r\n") {
+            Some(pos) => (&cursor[..pos], &cursor[pos + 2..]),
+            None => (cursor, &[][..]),
+        };
+        cursor = next;
         if line.is_empty() {
             break;
         }
-        let (name, value) = line.split_once(':')?;
+        let Some(colon) = line.iter().position(|&b| b == b':') else {
+            // 尾部被 TCP 分段截断或非标准头行：停止继续扫描，保留已解析字段
+            break;
+        };
+        let Ok(name) = std::str::from_utf8(&line[..colon]) else {
+            continue;
+        };
+        let Ok(value) = std::str::from_utf8(&line[colon + 1..]) else {
+            continue;
+        };
         let value = value.trim();
         if value.len() > MAX_HEADER_LEN {
             continue;
@@ -684,13 +766,28 @@ mod tests {
         Packet {
             src: IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
             dst: IpAddr::V4(Ipv4Addr::new(2, 0, 0, 2)),
-            proto: 6,
+            proto: IPPROTO_TCP,
             sport,
             dport,
             tcp_flags: 0,
             payload,
             frame_len: 100,
         }
+    }
+
+    fn udp_pkt<'a>(sport: u16, dport: u16, payload: &'a [u8]) -> Packet<'a> {
+        Packet {
+            proto: IPPROTO_UDP,
+            ..pkt(sport, dport, payload)
+        }
+    }
+
+    fn probe_client(flow: &mut Flow, pkt: &Packet) {
+        probe(flow, pkt, true, &mut TlsBufBudget::default());
+    }
+
+    fn probe_server(flow: &mut Flow, pkt: &Packet) {
+        probe(flow, pkt, false, &mut TlsBufBudget::default());
     }
 
     fn dns_query(name: &str) -> Vec<u8> {
@@ -853,13 +950,13 @@ mod tests {
     fn probe_dns_query_then_response() {
         let mut flow = default_flow();
         let q = dns_query("pwn.example");
-        probe(&mut flow, &pkt(54321, DNS_PORT, &q));
+        probe_client(&mut flow, &udp_pkt(54321, DNS_PORT, &q));
         assert_eq!(flow.meta.dns_query.as_deref(), Some("pwn.example"));
         assert!(flow.probed);
         assert!(!flow.probed_server, "查询不应占用服务端探测位");
 
         let r = dns_response("pwn.example", 0, &[(1, &[6, 6, 6, 6])]);
-        probe(&mut flow, &pkt(DNS_PORT, 54321, &r));
+        probe_server(&mut flow, &udp_pkt(DNS_PORT, 54321, &r));
         assert!(flow.probed_server);
         assert_eq!(flow.meta.dns_rcode, Some(0));
         assert_eq!(flow.meta.dns_answers, vec!["6.6.6.6"]);
@@ -872,7 +969,7 @@ mod tests {
         // 只抓到应答（漏了查询包）：域名也能从应答的 question 段补上
         let mut flow = default_flow();
         let r = dns_response("lone.example", 0, &[]);
-        probe(&mut flow, &pkt(DNS_PORT, 1234, &r));
+        probe_server(&mut flow, &udp_pkt(DNS_PORT, 1234, &r));
         assert_eq!(flow.meta.dns_query.as_deref(), Some("lone.example"));
         assert!(flow.probed_server);
         assert!(!flow.probed);
@@ -882,16 +979,50 @@ mod tests {
     fn probe_sets_dns_and_probed() {
         let mut flow = default_flow();
         let payload = dns_query("pwn.example");
-        let mut pkt = pkt(54321, DNS_PORT, &payload);
-        probe(&mut flow, &pkt);
+        let mut p = udp_pkt(54321, DNS_PORT, &payload);
+        probe_client(&mut flow, &p);
         assert_eq!(flow.meta.dns_query.as_deref(), Some("pwn.example"));
         assert!(flow.probed, "命中后应置 probed 防止重复解析");
         assert!(flow.meta.tls_sni.is_none());
 
         // probed 后不再重复解析
-        pkt.dport = 9999; // 即使换端口也不再探测
-        probe(&mut flow, &pkt);
+        p.dport = 9999; // 即使换端口也不再探测
+        probe_client(&mut flow, &p);
         assert_eq!(flow.meta.dns_query.as_deref(), Some("pwn.example"));
+    }
+
+    #[test]
+    fn probe_tcp_dns_skips_length_prefix_and_avoids_misalignment() {
+        // TCP 53 带 2 字节大端长度前缀：正常解析查询与应答
+        let mut flow = default_flow();
+        let q = dns_query("tcp.example");
+        let mut tcp_q = Vec::with_capacity(2 + q.len());
+        tcp_q.extend_from_slice(&(q.len() as u16).to_be_bytes());
+        tcp_q.extend_from_slice(&q);
+        probe_client(&mut flow, &pkt(54321, DNS_PORT, &tcp_q));
+        assert_eq!(flow.meta.dns_query.as_deref(), Some("tcp.example"));
+        assert!(flow.probed);
+
+        let r = dns_response("tcp.example", 0, &[(1, &[9, 9, 9, 9])]);
+        let mut tcp_r = Vec::with_capacity(2 + r.len());
+        tcp_r.extend_from_slice(&(r.len() as u16).to_be_bytes());
+        tcp_r.extend_from_slice(&r);
+        probe_server(&mut flow, &pkt(DNS_PORT, 54321, &tcp_r));
+        assert_eq!(flow.meta.dns_answers, vec!["9.9.9.9"]);
+        assert!(flow.probed_server);
+
+        // TCP 53 上不带长度前缀的裸报文：绝不错位解析出垃圾域名，且首包即置 probed
+        let mut raw_flow = default_flow();
+        probe_client(&mut raw_flow, &pkt(54321, DNS_PORT, &q));
+        assert!(raw_flow.meta.dns_query.is_none());
+        assert!(raw_flow.probed);
+
+        // TCP 53 复用跑 TLS 隧道：不被误当 DNS，能正常识别 SNI
+        let mut tls_flow = default_flow();
+        let ch = client_hello("tunnel.example", false);
+        probe_client(&mut tls_flow, &pkt(54321, DNS_PORT, &ch));
+        assert!(tls_flow.meta.dns_query.is_none());
+        assert_eq!(tls_flow.meta.tls_sni.as_deref(), Some("tunnel.example"));
     }
 
     /// 构造带 SNI 的 ClientHello（含一个 GREASE 密码套件和一个 GREASE 扩展）。
@@ -972,7 +1103,7 @@ mod tests {
     fn probe_detects_tls() {
         let payload = client_hello("c2.example", false);
         let mut flow = default_flow();
-        probe(&mut flow, &pkt(52000, 443, &payload));
+        probe_client(&mut flow, &pkt(52000, 443, &payload));
         assert_eq!(flow.meta.tls_sni.as_deref(), Some("c2.example"));
         assert!(!flow.meta.ja3.as_deref().unwrap_or("").is_empty());
         assert!(flow.probed);
@@ -1055,7 +1186,7 @@ mod tests {
     fn probe_tls_both_directions() {
         // 同一条流：ClientHello 与 ServerHello 各探一次
         let mut flow = default_flow();
-        probe(
+        probe_client(
             &mut flow,
             &pkt(52000, 443, &client_hello("c2.example", false)),
         );
@@ -1063,7 +1194,7 @@ mod tests {
         assert!(!flow.probed_server);
 
         // TLS1.2 的 ServerHello 之后还要等 Certificate，先不置 probed_server
-        probe(&mut flow, &pkt(443, 52000, &server_hello(0x1301, &[])));
+        probe_server(&mut flow, &pkt(443, 52000, &server_hello(0x1301, &[])));
         assert!(!flow.probed_server);
         assert_eq!(
             flow.meta.ja3s.as_deref(),
@@ -1072,7 +1203,7 @@ mod tests {
 
         // 应用数据出现 → 握手窗口已过，探测完成
         let app = [0x17, 0x03, 0x03, 0x00, 0x01, 0x00];
-        probe(&mut flow, &pkt(443, 52000, &app));
+        probe_server(&mut flow, &pkt(443, 52000, &app));
         assert!(flow.probed_server);
     }
 
@@ -1101,16 +1232,24 @@ mod tests {
     fn probe_tls_cert_cross_packet_reassembly() {
         // ServerHello 与 Certificate 各自完整，但 Certificate record 跨 3 个 TCP 段
         let mut flow = default_flow();
-        probe(&mut flow, &pkt(443, 52000, &server_hello(0x1301, &[])));
+        let mut budget = TlsBufBudget::default();
+        probe(
+            &mut flow,
+            &pkt(443, 52000, &server_hello(0x1301, &[])),
+            false,
+            &mut budget,
+        );
         assert!(flow.meta.ja3s.is_some());
         assert!(!flow.probed_server);
 
         let cert = certificate_record(SELF_DER);
         let third = cert.len() / 3;
         for chunk in [&cert[..third], &cert[third..2 * third], &cert[2 * third..]] {
-            probe(&mut flow, &pkt(443, 52000, chunk));
+            probe(&mut flow, &pkt(443, 52000, chunk), false, &mut budget);
         }
         assert!(flow.probed_server, "证书解析完成应置 probed_server");
+        assert_eq!(flow.tls_hs_buf.capacity(), 0, "完成后应释放堆容量");
+        assert_eq!(budget.used(), 0, "完成后预算应归零");
         assert_eq!(flow.meta.cert_subject.as_deref(), Some("evil.selfsigned"));
         assert_eq!(flow.meta.cert_issuer.as_deref(), Some("evil.selfsigned"));
         assert!(flow.meta.cert_self_signed);
@@ -1119,12 +1258,75 @@ mod tests {
     }
 
     #[test]
+    fn probe_client_packet_does_not_corrupt_tls_hs_buf() {
+        // 服务端 Certificate 跨段传输期间穿插客户端包，不能把客户端载荷拼进服务端 tls_hs_buf
+        let mut flow = default_flow();
+        let mut budget = TlsBufBudget::default();
+        probe(
+            &mut flow,
+            &pkt(52000, 443, &client_hello("c2.example", false)),
+            true,
+            &mut budget,
+        );
+        probe(
+            &mut flow,
+            &pkt(443, 52000, &server_hello(0x1301, &[])),
+            false,
+            &mut budget,
+        );
+        let cert = certificate_record(SELF_DER);
+        let mid = cert.len() / 2;
+        probe(
+            &mut flow,
+            &pkt(443, 52000, &cert[..mid]),
+            false,
+            &mut budget,
+        );
+        // 穿插一个客户端方向的数据包（如重传或乱序客户端包）
+        probe(
+            &mut flow,
+            &pkt(52000, 443, b"CLIENT_NOISE_MUST_NOT_POLLUTE"),
+            true,
+            &mut budget,
+        );
+        probe(
+            &mut flow,
+            &pkt(443, 52000, &cert[mid..]),
+            false,
+            &mut budget,
+        );
+        assert!(flow.probed_server);
+        assert_eq!(
+            flow.meta.cert_subject.as_deref(),
+            Some("evil.selfsigned"),
+            "穿插客户端包后证书仍应完整解析"
+        );
+        assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn probe_non_http_tls_sets_probed_immediately() {
+        // SSH/DB/gRPC 等非 HTTP/TLS 流量首包即置 probed 与 probed_server，避免长流反复扫描
+        let mut flow = default_flow();
+        probe_client(&mut flow, &pkt(52000, 22, b"SSH-2.0-OpenSSH_9.6\r\n"));
+        assert!(flow.probed, "非 HTTP/TLS 客户端首包应立即置 probed");
+        assert!(flow.meta.http_uri.is_none());
+        assert!(flow.meta.tls_sni.is_none());
+
+        probe_server(&mut flow, &pkt(22, 52000, b"SSH-2.0-OpenSSH_9.6\r\n"));
+        assert!(
+            flow.probed_server,
+            "非 TLS 服务端首包应立即置 probed_server"
+        );
+    }
+
+    #[test]
     fn probe_tls_serverhello_and_cert_same_packet() {
         // ServerHello + Certificate 两个 record 塞同一个包，批量解析
         let mut flow = default_flow();
         let mut payload = server_hello(0x1301, &[]);
         payload.extend_from_slice(&certificate_record(LEAF_DER));
-        probe(&mut flow, &pkt(443, 52000, &payload));
+        probe_server(&mut flow, &pkt(443, 52000, &payload));
         assert!(flow.probed_server);
         assert!(flow.meta.ja3s.is_some());
         assert_eq!(flow.meta.cert_subject.as_deref(), Some("leaf.example"));
@@ -1144,12 +1346,13 @@ mod tests {
                 (0x0010, &[0x00, 0x03, 0x02, b'h', b'2']),
             ],
         );
-        probe(&mut flow, &pkt(443, 52000, &sh));
+        probe_server(&mut flow, &pkt(443, 52000, &sh));
         assert!(flow.probed_server, "TLS1.3 不应等证书");
         assert!(flow.meta.ja3s.is_some());
         assert_eq!(flow.meta.tls_version.as_deref(), Some("TLS 1.3"));
         assert_eq!(flow.meta.tls_alpn.as_deref(), Some("h2"));
         assert!(flow.tls_hs_buf.is_empty());
+        assert_eq!(flow.tls_hs_buf.capacity(), 0);
         assert!(flow.meta.cert_subject.is_none());
     }
 
@@ -1179,24 +1382,56 @@ mod tests {
                 ],
             )],
         );
-        probe(&mut flow, &pkt(443, 52000, &sh12));
+        probe_server(&mut flow, &pkt(443, 52000, &sh12));
         assert_eq!(flow.meta.tls_version.as_deref(), Some("TLS 1.2"));
         assert_eq!(flow.meta.tls_alpn.as_deref(), Some("http/1.1"));
     }
 
     #[test]
     fn probe_tls_buffer_cap_stops() {
-        // 声明一个永远攒不齐的大 record，缓冲超过 16KB 上限 → 放弃等待
+        // 声明一个永远攒不齐的大 record，缓冲超过 16KB 上限 → 先判超限不追加并彻底释放堆容量
         let mut flow = default_flow();
+        let mut budget = TlsBufBudget::default();
         let mut junk = vec![0x16, 0x03, 0x03, 0x3f, 0xff, 0x0b]; // len=16383，type Certificate
         junk.extend_from_slice(&[0xAA; 8192]);
-        probe(&mut flow, &pkt(443, 52000, &junk));
+        probe(&mut flow, &pkt(443, 52000, &junk), false, &mut budget);
         assert!(!flow.probed_server);
+        assert_eq!(budget.used(), junk.len());
         // 第二段把缓冲推过上限
         let more = vec![0xBB; 9000];
-        probe(&mut flow, &pkt(443, 52000, &more));
+        probe(&mut flow, &pkt(443, 52000, &more), false, &mut budget);
         assert!(flow.probed_server, "缓冲超限应停止");
         assert!(flow.tls_hs_buf.is_empty(), "超限后缓冲应清空");
+        assert_eq!(flow.tls_hs_buf.capacity(), 0, "超限后应真正释放底层堆容量");
+        assert_eq!(budget.used(), 0, "超限后应归还预算");
+    }
+
+    #[test]
+    fn probe_tls_buffer_budget_caps_half_handshake_oom() {
+        // worker 级重组预算上限：半截 ServerHello 洪泛不能无限囤积内存
+        let mut budget = TlsBufBudget::new(10_000);
+        let mut half = vec![0x16, 0x03, 0x03, 0x3f, 0xff, 0x0b];
+        half.extend_from_slice(&[0xAA; 6000]);
+
+        let mut f1 = default_flow();
+        probe(&mut f1, &pkt(443, 50001, &half), false, &mut budget);
+        assert!(!f1.probed_server);
+        assert_eq!(budget.used(), half.len());
+
+        // 第二条半截流会超 10_000 预算 → 拒绝囤积缓冲并置 probed_server
+        let mut f2 = default_flow();
+        probe(&mut f2, &pkt(443, 50002, &half), false, &mut budget);
+        assert!(f2.probed_server);
+        assert_eq!(f2.tls_hs_buf.capacity(), 0);
+        assert_eq!(budget.used(), half.len());
+
+        // 预算紧张时单包完整 TLS 1.3 ServerHello 走零分配路径依然能正常解析
+        let mut f3 = default_flow();
+        let sh13 = server_hello_exts(0x1301, &[(0x002b, &[0x03, 0x04])]);
+        probe(&mut f3, &pkt(443, 50003, &sh13), false, &mut budget);
+        assert!(f3.probed_server);
+        assert!(f3.meta.ja3s.is_some());
+        assert_eq!(f3.meta.tls_version.as_deref(), Some("TLS 1.3"));
     }
 
     #[test]
@@ -1204,7 +1439,7 @@ mod tests {
         // 服务端第一个包就是应用数据（会话复用等）→ 直接完成，不进缓冲
         let mut flow = default_flow();
         let app = [0x17, 0x03, 0x03, 0x00, 0x10, 0x00];
-        probe(&mut flow, &pkt(443, 52000, &app));
+        probe_server(&mut flow, &pkt(443, 52000, &app));
         assert!(flow.probed_server);
         assert!(flow.tls_hs_buf.is_empty());
         assert!(flow.meta.ja3s.is_none());
@@ -1218,6 +1453,30 @@ mod tests {
         assert_eq!(h.uri, "/admin/login");
         assert_eq!(h.host.as_deref(), Some("target.example"));
         assert_eq!(h.user_agent.as_deref(), Some("curl/8.0"));
+    }
+
+    #[test]
+    fn http_request_with_binary_post_body() {
+        // POST 请求头后紧跟非法 UTF-8 二进制 body（gzip / protobuf 等）：不能因 body 导致头部解析失败
+        let mut req = Vec::new();
+        req.extend_from_slice(
+            b"POST /upload HTTP/1.1\r\nHost: api.example\r\nUser-Agent: agent/1.0\r\nContent-Type: application/octet-stream\r\n\r\n",
+        );
+        req.extend_from_slice(&[0x1f, 0x8b, 0x08, 0xff, 0xfe, 0x80, 0x00, 0xc0]);
+        let h = parse_http_request(&req).expect("含二进制 body 的 HTTP 请求应能解析出头部");
+        assert_eq!(h.uri, "/upload");
+        assert_eq!(h.host.as_deref(), Some("api.example"));
+        assert_eq!(h.user_agent.as_deref(), Some("agent/1.0"));
+    }
+
+    #[test]
+    fn http_request_with_truncated_tail_header() {
+        // 头部末尾被 TCP 分段截断（残缺头名无冒号），应容错保留已解析的 URI / Host / User-Agent
+        let req = b"GET /download?id=1 HTTP/1.1\r\nHost: cdn.example\r\nUser-Agent: Mozilla/5.0\r\nX-Truncated-Header-No-Colon";
+        let h = parse_http_request(req).expect("截断尾部头行时应保留已解析字段");
+        assert_eq!(h.uri, "/download?id=1");
+        assert_eq!(h.host.as_deref(), Some("cdn.example"));
+        assert_eq!(h.user_agent.as_deref(), Some("Mozilla/5.0"));
     }
 
     #[test]

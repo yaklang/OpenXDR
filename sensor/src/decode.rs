@@ -51,7 +51,7 @@ pub fn decode(frame: &[u8]) -> Option<Packet<'_>> {
 fn decode_ipv4(frame: &[u8], offset: usize) -> Option<Packet<'_>> {
     let ip = frame.get(offset..)?;
     let ihl = (ip.first()? & 0x0f) as usize * 4;
-    if ihl < 20 {
+    if ihl < 20 || ip.len() < ihl {
         return None;
     }
     let total_len = u16::from_be_bytes([*ip.get(2)?, *ip.get(3)?]) as usize;
@@ -67,7 +67,7 @@ fn decode_ipv4(frame: &[u8], offset: usize) -> Option<Packet<'_>> {
 
     // 总长度为 0：分段卸载（LSO / GSO）的大包，长度只在硬件分段时才填，按实际抓到的算
     let total_len = if total_len == 0 { ip.len() } else { total_len };
-    let l4_len = total_len.checked_sub(ihl)?.min(ip.len() - ihl);
+    let l4_len = total_len.checked_sub(ihl)?.min(ip.len().checked_sub(ihl)?);
     decode_l4(
         IpAddr::V4(src),
         IpAddr::V4(dst),
@@ -88,7 +88,13 @@ fn decode_ipv6(frame: &[u8], offset: usize) -> Option<Packet<'_>> {
     if next_header != IPPROTO_TCP && next_header != IPPROTO_UDP {
         return None;
     }
-    let l4_len = payload_len.min(ip.len() - 40);
+    // 载荷长度为 0：分段卸载（LSO / GSO）的大包，硬件分段前不填该字段，按实际剩余切片算
+    let avail = ip.len().checked_sub(40)?;
+    let l4_len = if payload_len == 0 {
+        avail
+    } else {
+        payload_len.min(avail)
+    };
     decode_l4(
         IpAddr::V6(Ipv6Addr::from(src)),
         IpAddr::V6(Ipv6Addr::from(dst)),
@@ -296,5 +302,37 @@ mod tests {
         assert!(decode(b"").is_none());
         assert!(decode(&[0u8; 13]).is_none()); // 不足 14 字节以太头
         assert!(decode(&[0u8; 20]).is_none()); // 以太头够但 IP/TCP 不够
+    }
+
+    #[test]
+    fn decode_ipv4_short_packet_with_large_ihl_no_underflow() {
+        // IHL=15（60 字节）、total_len=60，但实际 IP 报文只有 20..59 字节：绝不能下溢 panic
+        for ip_len in 20..60 {
+            let mut ip = vec![0u8; ip_len];
+            ip[0] = 0x4f; // IPv4, IHL=15 -> 60 字节
+            ip[2..4].copy_from_slice(&60u16.to_be_bytes()); // total_len = 60
+            ip[9] = IPPROTO_TCP;
+            let frame = eth(ETHERTYPE_IPV4, &ip);
+            assert!(
+                decode(&frame).is_none(),
+                "ip_len={ip_len} 小于 IHL=60 时应返回 None"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_ipv6_gso_zero_payload_len() {
+        // LSO/GSO 分段卸载：IPv6 payload_len 为 0，实际携带超过 64KiB 的 TCP 大包
+        let payload = vec![0xABu8; 70_000];
+        let mut frame = ipv6_tcp(45000, 443, &payload);
+        // 覆盖 IPv6 payload_len（以太头 14 字节 + IPv6 偏移 4..6）为 0
+        frame[14 + 4] = 0;
+        frame[14 + 5] = 0;
+        let pkt = decode(&frame).expect("IPv6 GSO payload_len=0 大包应正常解码");
+        assert_eq!(pkt.proto, IPPROTO_TCP);
+        assert_eq!(pkt.sport, 45000);
+        assert_eq!(pkt.dport, 443);
+        assert_eq!(pkt.payload.len(), payload.len());
+        assert_eq!(pkt.payload, payload.as_slice());
     }
 }

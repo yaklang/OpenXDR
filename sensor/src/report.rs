@@ -127,6 +127,7 @@ pub async fn run(
                                 &mut client,
                                 &resp.upgrade_platform,
                                 &resp.upgrade_sha256,
+                                &resp.upgrade_signature,
                             ),
                         )
                         .await

@@ -6,6 +6,7 @@
 
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::Capture;
 
@@ -184,6 +185,15 @@ impl AfPacket {
         unsafe { self.ring.add(index * self.block_size) as *mut BlockDescV1 }
     }
 
+    /// 块头中与内核共享的 block_status 字段。内核写完整块后按 release 语义置 TP_STATUS_USER，
+    /// 用户态用 Acquire 读、Release 清零，满足 ARM64 等弱内存序架构与 Rust 内存模型。
+    fn block_status(&self, desc: *mut BlockDescV1) -> &AtomicU32 {
+        // SAFETY: desc 来自 self.block_ptr，指向本环 mmap 内页对齐的块头，block_status 偏移 8 满足
+        // 4 字节对齐；通过 &raw mut 取字段裸指针而不构造对内核共享内存的普通引用；AtomicU32 与 u32
+        // 布局一致，返回的引用生命周期绑定在 &self 上，映射期间持续有效。
+        unsafe { AtomicU32::from_ptr(&raw mut (*desc).block_status) }
+    }
+
     /// 等待当前块就绪。返回 false 表示超时（无数据）。
     fn wait_block(&self) -> io::Result<bool> {
         let mut pfd = libc::pollfd {
@@ -215,14 +225,12 @@ impl AfPacket {
 impl Capture for AfPacket {
     fn poll_batch(&mut self, f: &mut dyn FnMut(&[u8], u64)) -> io::Result<usize> {
         let desc = self.block_ptr(self.next_block);
+        let status = self.block_status(desc);
 
         // 内核写完整块才置 TP_STATUS_USER；未就绪就 poll 等。
-        // poll 可能报可读但当前块尚未retire，限次让出，避免空转饿死上层的老化与统计。
+        // poll 可能报可读但当前块尚未 retire，限次让出，避免空转饿死上层的老化与统计。
         let mut attempts = 0;
-        // SAFETY: desc 由 block_ptr 给出，指向映射内某块的块头；mmap 页对齐且 block_size 是页大小的
-        // 倍数，块头满足对齐。块状态由内核并发改写，所以用 volatile 读。注意这里经 &(*desc)
-        // 先造了一个共享引用，严格按 Rust 内存模型应改为 &raw const 再读（已知瑕疵，本次不改逻辑）。
-        while unsafe { std::ptr::read_volatile(&(*desc).block_status) } & TP_STATUS_USER == 0 {
+        while status.load(Ordering::Acquire) & TP_STATUS_USER == 0 {
             if !self.wait_block()? {
                 return Ok(0);
             }
@@ -232,14 +240,12 @@ impl Capture for AfPacket {
             }
         }
 
-        // SAFETY: block_status 已带 TP_STATUS_USER：内核写完整块后交给用户态，在下面清零归还之前不再
-        // 写入这块，块内帧偏移、mac 偏移与 snaplen 均由内核保证落在块内，满足 walk_block 的前提。
+        // SAFETY: Acquire 读到 TP_STATUS_USER：内核写完整块后交给用户态，在下面 Release 清零归还之前
+        // 不再写入这块，块内帧偏移、mac 偏移与 snaplen 均由内核保证落在块内，满足 walk_block 的前提。
         let num_pkts = unsafe { walk_block(desc, f) };
 
-        // 归还块给内核
-        // SAFETY: 块仍属于用户态，没有并发写入；walk_block 交出的帧切片只在回调期间借用（回调签名是
-        // 高阶生命周期，无法留存），此刻已全部失效，清零后内核即可复用这块。
-        unsafe { std::ptr::write_volatile(&mut (*desc).block_status, 0) };
+        // Release 归还块给内核：确保对块内帧数据的读取全部完成后内核才可复用该块
+        status.store(0, Ordering::Release);
         self.next_block = (self.next_block + 1) % self.block_count;
         Ok(num_pkts as usize)
     }

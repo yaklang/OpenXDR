@@ -56,6 +56,14 @@ const STATS_INTERVAL: Duration = Duration::from_secs(10);
 /// 退出前推完在途会话的最长等待
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// 默认 worker 上限：每 worker 默认占用 128 MiB MAP_LOCKED 抓包环，避免 80~128 核宿主机
+/// 默认申请十余 GiB 锁页内存触发 ENOMEM；更高吞吐可通过 SENSOR_WORKERS 显式调大
+const DEFAULT_MAX_WORKERS: u16 = 8;
+
+fn default_workers(cpus: usize) -> u16 {
+    cpus.clamp(1, DEFAULT_MAX_WORKERS as usize) as u16
+}
+
 fn main() {
     #[cfg(windows)]
     enroll::load_env_file();
@@ -102,8 +110,9 @@ async fn sensor() -> anyhow::Result<i32> {
         1
     } else {
         env_or("SENSOR_WORKERS", || {
-            std::thread::available_parallelism().map_or(1, |n| n.get() as u16)
+            default_workers(std::thread::available_parallelism().map_or(1, |n| n.get()))
         })
+        .max(1)
     };
 
     // FANOUT 组 ID 用 pid，避免同机多实例串台；最低位置 1 保证非 0
@@ -240,14 +249,51 @@ fn open_capture(
     Ok(Box::new(socket))
 }
 
+fn now_unix_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+}
+
+/// 计算本轮流表老化用的时钟基准：收到包时以包时间戳单调推进，网卡静默无包时用系统墙钟推进，
+/// 确保 FIN/RST 与空闲超时会话在无新包到来时也能按时导出。
+fn advance_clock(last_ts_ns: u64, batch_packets: u64, system_now_ns: u64) -> u64 {
+    if batch_packets == 0 {
+        last_ts_ns.max(system_now_ns)
+    } else {
+        last_ts_ns
+    }
+}
+
 fn worker(
+    id: u16,
+    cap: Box<dyn Capture + Send>,
+    running: Arc<AtomicBool>,
+    tx: async_channel::Sender<pb::FlowRecord>,
+    stats: &Stats,
+) -> anyhow::Result<()> {
+    worker_with_clock(
+        id,
+        cap,
+        running,
+        tx,
+        stats,
+        &flow::Config::default(),
+        now_unix_ns,
+    )
+}
+
+fn worker_with_clock(
     id: u16,
     mut cap: Box<dyn Capture + Send>,
     running: Arc<AtomicBool>,
     tx: async_channel::Sender<pb::FlowRecord>,
     stats: &Stats,
+    flow_cfg: &flow::Config,
+    mut clock_ns: impl FnMut() -> u64,
 ) -> anyhow::Result<()> {
-    let mut table = FlowTable::new(&flow::Config::default());
+    let mut table = FlowTable::new(flow_cfg);
     let mut expired = Vec::new();
     let mut last_ts_ns = 0u64;
     let mut queue_drops = 0u64;
@@ -260,18 +306,22 @@ fn worker(
         let mut batch_packets = 0u64;
         cap.poll_batch(&mut |frame, ts_ns| {
             batch_packets += 1;
-            last_ts_ns = ts_ns;
+            last_ts_ns = last_ts_ns.max(ts_ns);
             let Some(pkt) = decode::decode(frame) else {
                 return;
             };
-            if let Some((flow, forward)) = table.update(&pkt, ts_ns) {
-                proto_id::probe(flow, &pkt);
-                proto_id::track_tls_client(flow, &pkt, forward == flow.client_is_a);
+            if let Some((flow, forward, tls_budget)) = table.update(&pkt, ts_ns) {
+                let from_client = forward == flow.client_is_a;
+                proto_id::probe(flow, &pkt, from_client, tls_budget);
+                proto_id::track_tls_client(flow, &pkt, from_client);
             }
         })?;
         packets += batch_packets;
         stats.packets.fetch_add(batch_packets, Ordering::Relaxed);
 
+        if batch_packets == 0 {
+            last_ts_ns = advance_clock(last_ts_ns, 0, clock_ns());
+        }
         table.expire(last_ts_ns, &mut expired);
         for f in expired.drain(..) {
             exported += 1;
@@ -315,4 +365,134 @@ fn env_or<T: std::str::FromStr>(key: &str, default: impl FnOnce() -> T) -> T {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    fn ipv4_tcp_frame(sport: u16, dport: u16, tcp_flags: u8) -> Vec<u8> {
+        let mut frame = vec![0u8; 12];
+        frame.extend_from_slice(&0x0800u16.to_be_bytes());
+        let mut ip = vec![
+            0x45,
+            0,
+            0,
+            40, // IPv4, IHL=5, total=40
+            0,
+            0,
+            0,
+            0, // id + frag
+            64,
+            decode::IPPROTO_TCP,
+            0,
+            0, // ttl, proto, checksum
+            10,
+            0,
+            0,
+            1, // src
+            10,
+            0,
+            0,
+            2, // dst
+        ];
+        ip.extend_from_slice(&sport.to_be_bytes());
+        ip.extend_from_slice(&dport.to_be_bytes());
+        ip.extend_from_slice(&[0; 8]); // seq + ack
+        ip.push(5 << 4); // data offset 20
+        ip.push(tcp_flags);
+        ip.extend_from_slice(&[0; 6]);
+        frame.extend_from_slice(&ip);
+        frame
+    }
+
+    struct ScriptedCapture {
+        batches: VecDeque<Vec<(Vec<u8>, u64)>>,
+        running: Arc<AtomicBool>,
+    }
+
+    impl Capture for ScriptedCapture {
+        fn poll_batch(&mut self, f: &mut dyn FnMut(&[u8], u64)) -> std::io::Result<usize> {
+            let Some(batch) = self.batches.pop_front() else {
+                self.running.store(false, Ordering::Relaxed);
+                return Ok(0);
+            };
+            let n = batch.len();
+            for (frame, ts) in batch {
+                f(&frame, ts);
+            }
+            Ok(n)
+        }
+
+        fn dropped(&self) -> u64 {
+            0
+        }
+    }
+
+    #[test]
+    fn default_workers_caps_high_core_hosts() {
+        assert_eq!(default_workers(0), 1);
+        assert_eq!(default_workers(1), 1);
+        assert_eq!(default_workers(4), 4);
+        assert_eq!(default_workers(8), 8);
+        assert_eq!(default_workers(80), DEFAULT_MAX_WORKERS);
+        assert_eq!(default_workers(128), DEFAULT_MAX_WORKERS);
+    }
+
+    #[test]
+    fn advance_clock_uses_system_time_on_idle_and_is_monotonic() {
+        assert_eq!(advance_clock(100, 1, 500), 100, "收到包时沿用包时间戳");
+        assert_eq!(advance_clock(100, 0, 500), 500, "静默时用系统时钟推进");
+        assert_eq!(
+            advance_clock(1000, 0, 500),
+            1000,
+            "系统时钟回拨时单调不倒退"
+        );
+    }
+
+    #[test]
+    fn worker_expires_flows_during_traffic_silence() {
+        let running = Arc::new(AtomicBool::new(true));
+        let t0 = 1_000_000_000_000u64;
+        // 第 1 批交一条 FIN 流和一条普通活跃流，此后连续两轮空批次模拟网卡静默
+        let cap = ScriptedCapture {
+            batches: VecDeque::from([
+                vec![
+                    (ipv4_tcp_frame(10001, 443, decode::TCP_FIN), t0),
+                    (ipv4_tcp_frame(10002, 443, decode::TCP_SYN), t0),
+                ],
+                vec![], // t0 + 6s：过扫描间隔，FIN 流应导出
+                vec![], // t0 + 40s：过空闲超时，普通流也应导出
+            ]),
+            running: running.clone(),
+        };
+        let (tx, rx) = async_channel::bounded(16);
+        let stats = Stats::default();
+        let cfg = flow::Config {
+            idle_timeout_secs: 30,
+            max_lifetime_secs: 300,
+            max_flows: 100,
+            sweep_interval_secs: 5,
+        };
+        let mut clocks =
+            VecDeque::from([t0 + 6_000_000_000, t0 + 40_000_000_000, t0 + 41_000_000_000]);
+        worker_with_clock(0, Box::new(cap), running, tx, &stats, &cfg, || {
+            clocks.pop_front().unwrap_or(t0 + 41_000_000_000)
+        })
+        .unwrap();
+
+        let mut records = Vec::new();
+        while let Ok(r) = rx.try_recv() {
+            records.push(r);
+        }
+        assert_eq!(records.len(), 2, "静默期间 FIN 与空闲超时流都应导出");
+        // stats.flows 仅在循环内 expire 导出时累加，drain_all 不加 stats.flows，
+        // 断言 == 2 直接证明两条流都是在静默期由 expire() 导出的，而不是退出时 drain_all 导出的！
+        assert_eq!(
+            stats.flows.load(Ordering::Relaxed),
+            2,
+            "两条流都必须在静默期由 expire() 驱动导出"
+        );
+    }
 }

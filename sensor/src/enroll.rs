@@ -30,10 +30,13 @@ pub fn request(dir: &Path) -> Result<String, Box<dyn std::error::Error>> {
         &dir.join("sensor.key.pending"),
         key.serialize_pem().as_bytes(),
     )?;
-    Ok(
-        serde_json::json!({ "hostname": host, "os": "linux", "csr": csr, "kind": "sensor" })
-            .to_string(),
-    )
+    Ok(serde_json::json!({
+        "hostname": host,
+        "os": std::env::consts::OS,
+        "csr": csr,
+        "kind": "sensor"
+    })
+    .to_string())
 }
 
 #[derive(Deserialize)]
@@ -162,6 +165,7 @@ mod tests {
             std::env::temp_dir().join(format!("openxdr-sensor-enroll-{}", uuid::Uuid::new_v4()));
         let req: serde_json::Value = serde_json::from_str(&request(&dir).unwrap()).unwrap();
         assert_eq!(req["hostname"], hostname());
+        assert_eq!(req["os"], std::env::consts::OS);
         assert_eq!(req["kind"], "sensor");
         assert!(req["csr"].as_str().unwrap().contains("CERTIFICATE REQUEST"));
         // 同机 agent 的文件不受影响
