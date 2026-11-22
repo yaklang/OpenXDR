@@ -5,8 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/google/uuid"
-
 	"openxdr/server/ent"
 	entcontainment "openxdr/server/ent/containment"
 	"openxdr/server/ent/predicate"
@@ -37,9 +35,12 @@ func Lift(ctx context.Context, db *ent.Client, hub *response.Hub, c *ent.Contain
 	if !Liftable(curr) {
 		return nil, ErrNotLiftable
 	}
+	if curr.Kind == KindSSO {
+		return nil, errors.New("SSO 账号恢复须经身份源接口（LiftSSO），不能经 agent 下发")
+	}
 	reason := buildManualLiftReason(curr.Reason, actor, why)
 
-	existingCmd, cmdID, prevFailedID, err := resolveLiftCommand(ctx, db, curr)
+	existingCmd, cmdID, _, err := resolveLiftCommand(ctx, db, curr)
 	if err != nil {
 		return nil, err
 	}
@@ -60,15 +61,11 @@ func Lift(ctx context.Context, db *ent.Client, hub *response.Hub, c *ent.Contain
 		Where(
 			entcontainment.IDEQ(curr.ID),
 			entcontainment.StateIn(entcontainment.StateActive, entcontainment.StateExecuted),
+			sameLiftCommandPredicate(curr),
 		).
 		SetLiftCommandID(cmdID).
 		SetLiftedBy(actor).
 		SetReason(reason)
-	if prevFailedID == uuid.Nil {
-		reserve.Where(entcontainment.LiftCommandIDIsNil())
-	} else {
-		reserve.Where(entcontainment.LiftCommandIDEQ(prevFailedID))
-	}
 	n, err := reserve.Save(ctx)
 	if err != nil {
 		return nil, err
@@ -100,10 +97,10 @@ func Lift(ctx context.Context, db *ent.Client, hub *response.Hub, c *ent.Contain
 			rollback := db.Containment.Update().
 				Where(entcontainment.IDEQ(curr.ID), entcontainment.LiftCommandIDEQ(cmdID)).
 				ClearLiftedBy().SetReason(curr.Reason)
-			if prevFailedID == uuid.Nil {
+			if curr.LiftCommandID == nil {
 				rollback.ClearLiftCommandID()
 			} else {
-				rollback.SetLiftCommandID(prevFailedID)
+				rollback.SetLiftCommandID(*curr.LiftCommandID)
 			}
 			_ = rollback.Exec(ctx)
 		}
@@ -120,7 +117,7 @@ func Lift(ctx context.Context, db *ent.Client, hub *response.Hub, c *ent.Contain
 		if cmd.Status == "failed" {
 			_ = db.Containment.Update().
 				Where(entcontainment.IDEQ(curr.ID), entcontainment.LiftCommandIDEQ(cmd.ID)).
-				ClearLiftedBy().Exec(ctx)
+				ClearLiftedBy().ClearLiftCommandID().Exec(ctx)
 		}
 		return nil, errors.New("恢复指令下发失败：" + detail)
 	}

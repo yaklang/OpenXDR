@@ -20,14 +20,18 @@ import (
 	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
+	"openxdr/server/internal/modelroute"
 	"openxdr/server/internal/questions"
 	"openxdr/server/internal/triage"
 )
 
 type Reviewer struct {
-	DB       *ent.Client
-	Endpoint func() (baseURL, apiKey, model string)
-	OnUsage  func(model string, input, output int)
+	DB                *ent.Client
+	Endpoint          func() (baseURL, apiKey, model string)
+	FallbackModels    func() string
+	FallbackEndpoints func() []modelroute.Endpoint
+	Timeout           time.Duration
+	OnUsage           func(model string, input, output int)
 }
 
 type proof struct {
@@ -203,7 +207,13 @@ func (r *Reviewer) Review(ctx context.Context, session *ent.AgentSession, f *ent
 		return false, "", errors.New("未知的结案口径")
 	}
 	material, _ := json.Marshal(facts)
-	llm := triage.NewLLM(base, model, key, time.Minute)
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = time.Minute
+	}
+	llm := triage.NewLLM(base, model, key, timeout)
+	llm.FallbackModels = r.FallbackModels
+	llm.FallbackEndpoints = r.FallbackEndpoints
 	llm.NoThinking = true
 	llm.MaxTokens = 1536
 	llm.OnUsage = r.OnUsage

@@ -2,7 +2,10 @@ package response
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -276,5 +279,151 @@ func TestIssueRejectsExec(t *testing.T) {
 	}
 	if _, err := h.IssueExec(context.Background(), Request{Kind: "kill_process"}); err == nil {
 		t.Fatal("IssueExec 只应接受 exec")
+	}
+}
+
+type blockingRouter struct {
+	mu           sync.Mutex
+	blockTarget  uuid.UUID
+	entered      chan struct{}
+	release      chan struct{}
+	syncEvict    bool
+	activeSubs   atomic.Int64
+	detachedSubs atomic.Int64
+}
+
+func (r *blockingRouter) Attach(id uuid.UUID, deliver func(*pb.Command) error) func() {
+	r.activeSubs.Add(1)
+	if id == r.blockTarget && r.entered != nil {
+		close(r.entered)
+		<-r.release
+	}
+	if r.syncEvict {
+		_ = deliver(nil)
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.activeSubs.Add(-1)
+			r.detachedSubs.Add(1)
+		})
+	}
+}
+
+func (r *blockingRouter) Deliver(context.Context, uuid.UUID, *pb.Command) error { return nil }
+func (r *blockingRouter) Online(context.Context, uuid.UUID) bool                { return false }
+func (r *blockingRouter) Close()                                                {}
+
+// 验证 Attach/Detach 不持全局 h.mu 做 Router I/O：一个 agent 卡在 NATS I/O 时，其它 agent 的 Online/Attach/Detach/enqueue 均不阻塞，
+// 且 Router.Attach 内部同步回调 evict 时不自死锁且自动清理过期订阅。
+func TestHubAttachDetachDoNotHoldGlobalLock(t *testing.T) {
+	agentA := uuid.New()
+	agentB := uuid.New()
+	// 选一个不同分片的 agentB，验证完全无阻塞
+	for agentB[0]%64 == agentA[0]%64 {
+		agentB = uuid.New()
+	}
+
+	br := &blockingRouter{
+		blockTarget: agentA,
+		entered:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	h := NewHub(nil, true)
+	h.Router = br
+
+	attachDone := make(chan chan *pb.Command, 1)
+	go func() {
+		attachDone <- h.Attach(agentA)
+	}()
+
+	select {
+	case <-br.entered:
+	case <-time.After(time.Second):
+		t.Fatal("agentA 未进入 Router.Attach")
+	}
+
+	// agentA 正阻塞在 Router.Attach 中，验证 agentB 的全部操作不阻塞
+	otherDone := make(chan struct{})
+	go func() {
+		defer close(otherDone)
+		chB := h.Attach(agentB)
+		if !h.Online(agentB) {
+			t.Error("agentB 应在线")
+		}
+		if ok, err := h.enqueue(agentB, chB, &pb.Command{Id: "cmd-b"}); !ok || err != nil {
+			t.Errorf("agentB 入队失败: ok=%v err=%v", ok, err)
+		}
+		h.Detach(agentB, chB)
+		if h.Online(agentB) {
+			t.Error("agentB Detach 后不应在线")
+		}
+	}()
+	select {
+	case <-otherDone:
+	case <-time.After(time.Second):
+		close(br.release)
+		t.Fatal("agentA 的 Router I/O 阻塞了其它 agent 的 Hub 操作")
+	}
+
+	close(br.release)
+	chA := <-attachDone
+	h.Detach(agentA, chA)
+	if got := br.activeSubs.Load(); got != 0 {
+		t.Fatalf("全部 Detach 后存在路由订阅泄漏: active=%d", got)
+	}
+
+	// 同步 evict 回调不死锁且立即清理已建订阅
+	syncRouter := &blockingRouter{syncEvict: true}
+	h2 := NewHub(nil, true)
+	h2.Router = syncRouter
+	chSync := h2.Attach(uuid.New())
+	select {
+	case _, ok := <-chSync:
+		if ok {
+			t.Fatal("同步 evict 后通道应已关闭")
+		}
+	default:
+		t.Fatal("同步 evict 后通道应立即关闭")
+	}
+	if got := syncRouter.activeSubs.Load(); got != 0 {
+		t.Fatalf("同步 evict 后订阅应被立即退订，残留=%d", got)
+	}
+}
+
+// 并发混合执行 Attach / Online / Detach / enqueue，在 -race 下验证无竞态、无死锁、无订阅泄漏。
+func TestHubConcurrentAttachOnlineDetachRace(t *testing.T) {
+	br := &blockingRouter{}
+	h := NewHub(nil, true)
+	h.Router = br
+
+	agents := []uuid.UUID{uuid.New(), uuid.New(), uuid.New(), uuid.New()}
+	var wg sync.WaitGroup
+	for _, id := range agents {
+		for range 4 {
+			wg.Add(1)
+			go func(agentID uuid.UUID) {
+				defer wg.Done()
+				for range 50 {
+					ch := h.Attach(agentID)
+					_ = h.Online(agentID)
+					_, _ = h.enqueue(agentID, ch, &pb.Command{Id: "race"})
+					h.Detach(agentID, ch)
+				}
+			}(id)
+		}
+	}
+	wg.Wait()
+	// 最终清理所有残留连接并验证无订阅泄漏
+	for _, id := range agents {
+		h.mu.RLock()
+		ch := h.conns[id]
+		h.mu.RUnlock()
+		if ch != nil {
+			h.Detach(id, ch)
+		}
+	}
+	if got := br.activeSubs.Load(); got != 0 {
+		t.Fatalf("并发压测后存在路由订阅泄漏: active=%d", got)
 	}
 }

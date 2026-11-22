@@ -17,6 +17,7 @@ import (
 	"openxdr/server/ent/sessionmessage"
 	"openxdr/server/internal/commandgate"
 	"openxdr/server/internal/findings"
+	"openxdr/server/internal/modelroute"
 	"openxdr/server/internal/questions"
 	"openxdr/server/internal/triage"
 )
@@ -25,6 +26,12 @@ type Reviewer struct {
 	DB *ent.Client
 	// Endpoint 推理端点与密钥；模型用会话自己的
 	Endpoint func() (baseURL, apiKey string)
+	// FallbackModels 逗号分隔的主端点备用模型
+	FallbackModels func() string
+	// FallbackEndpoints 外部备用服务商端点（绑定地址、密钥与模型）
+	FallbackEndpoints func() []modelroute.Endpoint
+	// Timeout 单次推理请求超时；非正值默认 60 秒
+	Timeout time.Duration
 	// OnUsage 记用量，供用量概览
 	OnUsage func(model string, input, output int)
 }
@@ -57,14 +64,56 @@ func (r *Reviewer) Review(ctx context.Context, req commandgate.Request) (bool, s
 	if err != nil {
 		return false, "", err
 	}
-	base, key := r.Endpoint()
-	llm := triage.NewLLM(base, session.Model, key, time.Minute)
-	llm.NoThinking, llm.MaxTokens, llm.OnUsage = true, 512, r.OnUsage
+	llm := r.buildLLM(session.Model)
 	reply, err := llm.Chat(ctx, []triage.Message{{Role: "system", Content: prompt}, {Role: "user", Content: material}}, nil)
 	if err != nil {
 		return false, "", err
 	}
 	return Verdict(reply.Content)
+}
+
+func (r *Reviewer) timeout() time.Duration {
+	if r.Timeout > 0 {
+		return r.Timeout
+	}
+	return time.Minute
+}
+
+// buildLLM 构造命令审计用的 LLM 客户端：若会话使用的是某个外部回退端点的模型，
+// 直接路由到该端点的地址与密钥，避免拿主端点去调备用模型导致必败，同时绝不跨服务复用密钥。
+func (r *Reviewer) buildLLM(sessionModel string) *triage.LLM {
+	primaryBase, primaryKey := r.Endpoint()
+	base, key := primaryBase, primaryKey
+	var routes []modelroute.Endpoint
+	if r.FallbackEndpoints != nil {
+		routes = r.FallbackEndpoints()
+	}
+	matchedBackup := false
+	for _, ep := range routes {
+		if ep.Model == sessionModel && ep.BaseURL != "" && (ep.BaseURL != primaryBase || ep.APIKey != primaryKey) {
+			base, key = ep.BaseURL, ep.APIKey
+			matchedBackup = true
+			break
+		}
+	}
+	llm := triage.NewLLM(base, sessionModel, key, r.timeout())
+	llm.NoThinking, llm.MaxTokens, llm.OnUsage = true, 512, r.OnUsage
+	if !matchedBackup {
+		llm.FallbackModels = r.FallbackModels
+		llm.FallbackEndpoints = r.FallbackEndpoints
+		return llm
+	}
+	var extras []modelroute.Endpoint
+	if r.FallbackModels != nil && primaryBase != "" {
+		for _, m := range strings.Split(r.FallbackModels(), ",") {
+			if m = strings.TrimSpace(m); m != "" {
+				extras = append(extras, modelroute.Endpoint{BaseURL: primaryBase, APIKey: primaryKey, Model: m})
+			}
+		}
+	}
+	extras = append(extras, routes...)
+	llm.FallbackEndpoints = func() []modelroute.Endpoint { return extras }
+	return llm
 }
 
 // material 待审材料：命令、目标主机、会话标题、最初与本轮的用户请求，以及执行前模型最后的说明

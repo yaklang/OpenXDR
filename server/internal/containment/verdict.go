@@ -369,36 +369,45 @@ func (e *Engine) Approve(ctx context.Context, c *ent.Containment, actor string) 
 	if skip != "" {
 		return end(entcontainment.StateSkipped, a.why+"；"+skip)
 	}
-	busy, err := e.DB.Containment.Query().Where(entcontainment.KeyEQ(c.Key), entcontainment.IDNEQ(c.ID),
-		entcontainment.StateIn(entcontainment.StatePending, entcontainment.StateActive)).Exist(ctx)
-	if err != nil {
+	var finished *ent.Containment
+	var pending *ent.Containment
+	if err := e.withFuseLock(ctx, func() error {
+		busy, err := e.DB.Containment.Query().Where(entcontainment.KeyEQ(c.Key), entcontainment.IDNEQ(c.ID),
+			entcontainment.StateIn(entcontainment.StatePending, entcontainment.StateActive)).Exist(ctx)
+		if err != nil {
+			return err
+		}
+		if busy {
+			finished, err = end(entcontainment.StateDeclined, a.why+"；同一处置已在生效，不重复下发")
+			return err
+		}
+		held, err := e.fuse(ctx, a)
+		if err != nil {
+			return err
+		}
+		if held != "" {
+			finished, err = end(entcontainment.StateHeld, a.why+"；"+held)
+			return err
+		}
+		upd := e.DB.Containment.Update().Where(entcontainment.IDEQ(c.ID), entcontainment.StateEQ(entcontainment.StateProposed)).
+			SetState(entcontainment.StatePending).SetCommandID(cmdID).SetReason(a.why).SetDecidedBy(actor).ClearExpiresAt()
+		if _, lease := leases[a.kind]; lease {
+			upd.SetExpiresAt(e.now().Add(e.TTL))
+		}
+		n, err := upd.Save(ctx)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrNotProposed
+		}
+		pending, err = e.DB.Containment.Get(ctx, c.ID)
+		return err
+	}); err != nil {
 		return nil, err
 	}
-	if busy {
-		return end(entcontainment.StateDeclined, a.why+"；同一处置已在生效，不重复下发")
-	}
-	held, err := e.fuse(ctx, a)
-	if err != nil {
-		return nil, err
-	}
-	if held != "" {
-		return end(entcontainment.StateHeld, a.why+"；"+held)
-	}
-	upd := e.DB.Containment.Update().Where(entcontainment.IDEQ(c.ID), entcontainment.StateEQ(entcontainment.StateProposed)).
-		SetState(entcontainment.StatePending).SetCommandID(cmdID).SetReason(a.why).SetDecidedBy(actor).ClearExpiresAt()
-	if _, lease := leases[a.kind]; lease {
-		upd.SetExpiresAt(e.now().Add(e.TTL))
-	}
-	n, err := upd.Save(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if n == 0 {
-		return nil, ErrNotProposed
-	}
-	pending, err := e.DB.Containment.Get(ctx, c.ID)
-	if err != nil {
-		return nil, err
+	if finished != nil {
+		return finished, nil
 	}
 	if err := e.dispatch(ctx, pending, a, req, c.AlertID); err != nil {
 		return nil, err

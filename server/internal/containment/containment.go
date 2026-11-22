@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,6 +31,7 @@ import (
 	entcontainment "openxdr/server/ent/containment"
 	"openxdr/server/ent/predicate"
 	"openxdr/server/internal/audit"
+	"openxdr/server/internal/cluster"
 	"openxdr/server/internal/response"
 	"openxdr/server/internal/triage"
 )
@@ -68,6 +70,21 @@ type Engine struct {
 	EdgeHosts []string
 	// 已处理过的结论：事件 → 研判时刻，只在单活循环里读写
 	verdictSeen map[uuid.UUID]time.Time
+	// 误报自动解除失败后的退避时刻：处置 ID → 下次可重试时刻，只在单活循环里读写
+	clearedBackoff map[uuid.UUID]time.Time
+	// fuseMu 进程内串行化熔断计数与状态预占，配合 SQL 咨询锁防止并发审批或快慢路径突破熔断上限
+	fuseMu sync.Mutex
+}
+
+// withFuseLock 串行化熔断计数检查与 pending 状态预占：进程内用互斥锁，配置了数据库句柄时叠加集群咨询锁。
+// 临界区内只做数据库读写，严禁包含 Hub.Issue 或外部 HTTP 调用。
+func (e *Engine) withFuseLock(ctx context.Context, fn func() error) error {
+	e.fuseMu.Lock()
+	defer e.fuseMu.Unlock()
+	if e.SQL != nil {
+		return cluster.WithLock(ctx, e.SQL, "containment-fuse", fn)
+	}
+	return fn()
 }
 
 // lookback 每轮回看多久内有新证据的告警。处置是幂等的，回看长一点只为单活切换期间不漏
@@ -306,18 +323,18 @@ func Reconcile(ctx context.Context, db *ent.Client, now time.Time) error {
 				restored := restoreInEffectState(c)
 				reason := appendReasonOnce(c.Reason, "解除失败，保持生效")
 				needExpiryBump := restored == entcontainment.StateActive && c.ExpiresAt != nil && !c.ExpiresAt.After(now)
-				if restored != c.State || c.EndedAt != nil || c.LiftedBy != nil || reason != c.Reason || needExpiryBump {
-					upd := db.Containment.Update().Where(
-						entcontainment.IDEQ(c.ID),
-						entcontainment.StateEQ(c.State),
-						entcontainment.LiftCommandIDEQ(liftCmdID),
-					).SetState(restored).ClearEndedAt().ClearLiftedBy().SetReason(reason)
-					if needExpiryBump {
-						upd.SetExpiresAt(now.Add(liftRetry))
-					}
-					if err := upd.Exec(ctx); err != nil {
-						return err
-					}
+				// 清除已失败的 LiftCommandID，确保本次退避到期后由 expire() 接手重发新指令，
+				// 不再被下一轮 Reconcile 重复命中并无限推后 ExpiresAt 形成活锁。
+				upd := db.Containment.Update().Where(
+					entcontainment.IDEQ(c.ID),
+					entcontainment.StateEQ(c.State),
+					entcontainment.LiftCommandIDEQ(liftCmdID),
+				).SetState(restored).ClearEndedAt().ClearLiftedBy().ClearLiftCommandID().SetReason(reason)
+				if needExpiryBump {
+					upd.SetExpiresAt(now.Add(liftRetry))
+				}
+				if err := upd.Exec(ctx); err != nil {
+					return err
 				}
 			case "unsupported":
 				restored := restoreInEffectState(c)
@@ -392,7 +409,10 @@ func resolveLiftCommand(ctx context.Context, db *ent.Client, c *ent.Containment)
 		prevFailedID = prev.ID
 	}
 	candidate := liftCommandID(c.ID, prevFailedID)
-	for range 16 {
+	for range 1024 {
+		if err := ctx.Err(); err != nil {
+			return nil, uuid.Nil, uuid.Nil, err
+		}
 		cmd, getErr := db.Command.Get(ctx, candidate)
 		if ent.IsNotFound(getErr) {
 			return nil, candidate, prevFailedID, nil
@@ -606,32 +626,47 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a
 		}
 		return nil
 	}
-	if held, err := e.fuse(ctx, a); err != nil || held != "" {
+	// 在熔断锁内完成配额检查与 pending 预占，再在锁外下发指令：若落库失败绝不调用 Hub.Issue，
+	// 若下发后进程中断，原记录已绑定 cmdID 且处于 pending，不会重放新建指令。
+	var c *ent.Containment
+	var heldReason string
+	if err := e.withFuseLock(ctx, func() error {
+		held, err := e.fuse(ctx, a)
 		if err != nil {
 			return err
 		}
-		if err := create.SetState(entcontainment.StateHeld).SetReason(held).Exec(ctx); err != nil {
+		if held != "" {
+			if err := create.SetState(entcontainment.StateHeld).SetReason(held).Exec(ctx); err != nil {
+				if ent.IsConstraintError(err) {
+					return nil
+				}
+				return err
+			}
+			heldReason = held
+			return nil
+		}
+		create.SetState(entcontainment.StatePending).SetCommandID(cmdID).SetReason(a.why)
+		if _, lease := leases[a.kind]; lease {
+			create.SetExpiresAt(expires)
+		}
+		saved, err := create.Save(ctx)
+		if err != nil {
 			if ent.IsConstraintError(err) {
 				return nil
 			}
 			return err
 		}
-		audit.System(ctx, e.DB, "containment_held", al.ID.String(), a.asset.Hostname+" "+a.kind+" "+a.target+"："+held)
+		c = saved
+		return nil
+	}); err != nil {
+		return err
+	}
+	if heldReason != "" {
+		audit.System(ctx, e.DB, "containment_held", al.ID.String(), a.asset.Hostname+" "+a.kind+" "+a.target+"："+heldReason)
 		return nil
 	}
-
-	// 先将待确认记录与确定性 CommandID 持久化，再下发指令：若落库失败绝不调用 Hub.Issue，
-	// 若下发后进程中断，原记录已绑定 cmdID 且处于 pending，不会重放新建指令。
-	create.SetState(entcontainment.StatePending).SetCommandID(cmdID).SetReason(a.why)
-	if _, lease := leases[a.kind]; lease {
-		create.SetExpiresAt(expires)
-	}
-	c, err := create.Save(ctx)
-	if err != nil {
-		if ent.IsConstraintError(err) {
-			return nil
-		}
-		return err
+	if c == nil {
+		return nil
 	}
 
 	return e.dispatch(ctx, c, a, req, al.ID)
@@ -847,14 +882,9 @@ func (e *Engine) expire(ctx context.Context) error {
 		}
 
 		reserve := e.DB.Containment.Update().
-			Where(entcontainment.IDEQ(c.ID), entcontainment.StateEQ(entcontainment.StateActive)).
+			Where(entcontainment.IDEQ(c.ID), entcontainment.StateEQ(entcontainment.StateActive), sameLiftCommandPredicate(c)).
 			SetLiftCommandID(cmdID).
 			SetReason(reason)
-		if prevFailedID == uuid.Nil {
-			reserve.Where(entcontainment.LiftCommandIDIsNil())
-		} else {
-			reserve.Where(entcontainment.LiftCommandIDEQ(prevFailedID))
-		}
 		n, err := reserve.Save(ctx)
 		if err != nil {
 			return err
@@ -873,14 +903,14 @@ func (e *Engine) expire(ctx context.Context) error {
 			upd := e.DB.Containment.Update().
 				Where(entcontainment.IDEQ(c.ID), entcontainment.StateEQ(entcontainment.StateActive), entcontainment.LiftCommandIDEQ(cmdID)).
 				SetExpiresAt(now.Add(liftRetry)).SetReason(reason)
+			clearLift := cmd != nil && cmd.Status == "failed"
 			if cmd == nil {
 				if _, lookupErr := e.DB.Command.Get(ctx, cmdID); ent.IsNotFound(lookupErr) {
-					if prevFailedID == uuid.Nil {
-						upd.ClearLiftCommandID()
-					} else {
-						upd.SetLiftCommandID(prevFailedID)
-					}
+					clearLift = true
 				}
+			}
+			if clearLift {
+				upd.ClearLiftCommandID()
 			}
 			if err := upd.Exec(ctx); err != nil {
 				return err

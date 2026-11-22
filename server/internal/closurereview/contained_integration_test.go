@@ -179,3 +179,57 @@ func TestContainedEffectiveCoreTier(t *testing.T) {
 		}
 	}
 }
+
+// 验证结案后主机产生 >1001 条无关正常事件绝不误重开，只有出现匹配实体的新事件或新告警才重开；
+// 且超过 7 天前结案的历史事件不在复核窗口内。
+func TestReopenContainedIgnoresUnrelatedFloodAndWindow(t *testing.T) {
+	f, _ := setupContained(t)
+	ok, err := f.r.Review(f.ctx, f.inc.ID)
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	// 制造 1005 条无关正常遥测事件
+	builders := make([]*ent.EventCreate, 0, 1005)
+	now := time.Now().UTC()
+	for i := range 1005 {
+		builders = append(builders, f.db.Event.Create().
+			SetTs(now.Add(time.Duration(i)*time.Millisecond)).
+			SetSource("agent").
+			SetClassUID(1007).
+			SetAssetID(f.asset.ID).
+			SetRaw(json.RawMessage(`{"process":{"cmd_line":"/usr/bin/true --healthcheck","file":{"path":"/usr/bin/true"}}}`)))
+	}
+	if _, err := f.db.Event.CreateBulk(builders...).Save(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	runReopen := func(at time.Time) {
+		tx, err := f.db.Tx(f.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reopenContainedAt(f.ctx, tx, at); err != nil {
+			tx.Rollback()
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runReopen(now.Add(2 * time.Second))
+	if got := f.db.Incident.GetX(f.ctx, f.inc.ID).Status; got != "closed" {
+		t.Fatalf("结案后出现 >1001 条无关正常事件不应重开，实际状态=%s", got)
+	}
+
+	// 超过 7 天窗口后即使有匹配实体事件也不再全量扫表重开
+	f.db.Event.Create().SetTs(now.Add(3 * time.Second)).SetSource("agent").SetClassUID(1007).SetAssetID(f.asset.ID).SetRaw(f.ev.Raw).ExecX(f.ctx)
+	runReopen(now.Add(reopenWindow + time.Hour))
+	if got := f.db.Incident.GetX(f.ctx, f.inc.ID).Status; got != "closed" {
+		t.Fatalf("超过 7 天窗口的历史结案不应被扫描重开，实际状态=%s", got)
+	}
+
+	// 窗口内出现匹配实体的新事件，必须重开
+	runReopen(now.Add(5 * time.Second))
+	if got := f.db.Incident.GetX(f.ctx, f.inc.ID).Status; got != "open" {
+		t.Fatalf("窗口内出现匹配实体的新事件必须重开，实际状态=%s", got)
+	}
+}

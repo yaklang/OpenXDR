@@ -24,6 +24,9 @@ const (
 // parentLockWait 退役时反复尝试拿父表排他锁的总时长，见 lockParent。
 var parentLockWait = 30 * time.Second
 
+// parentLockRetry 拿父表排他锁冲突后的重试间隔。
+var parentLockRetry = 100 * time.Millisecond
+
 // Today 返回 UTC 当天零点。分区边界一律按 UTC 日。
 func Today() time.Time { return dayStart(time.Now()) }
 
@@ -255,15 +258,19 @@ func retireDay(ctx context.Context, db *sql.DB, set partitionSet, day time.Time)
 
 // lockParent 不排队地拿父表排他锁（DETACH 需要它）。排队等锁时，后来的读写都被堵在它后面，
 // 而任何一条比 lock_timeout 长的读（检索、研判、后台扫描）都会让它超时——生产上与同周期的后台扫描每轮相撞，
-// 退役一直失败。改为在 SAVEPOINT 里 NOWAIT 反复试，碰上没有冲突持锁的瞬间就拿到，最多试 parentLockWait。
+// 退役一直失败。改为在单一 SAVEPOINT 里 NOWAIT 反复试（冲突时 ROLLBACK TO 重用同一保存点，避免 >64 次重试溢出 pg_subtrans），
+// 碰上没有冲突持锁的瞬间就拿到，最多试 parentLockWait。
 func lockParent(ctx context.Context, tx *sql.Tx) error {
 	deadline := time.Now().Add(parentLockWait)
+	if _, err := tx.ExecContext(ctx, `SAVEPOINT lock_parent`); err != nil {
+		return err
+	}
 	for {
-		if _, err := tx.ExecContext(ctx, `SAVEPOINT lock_parent`); err != nil {
-			return err
-		}
 		_, err := tx.ExecContext(ctx, `LOCK TABLE `+Parent+` IN ACCESS EXCLUSIVE MODE NOWAIT`)
 		if err == nil {
+			if _, relErr := tx.ExecContext(ctx, `RELEASE SAVEPOINT lock_parent`); relErr != nil {
+				return relErr
+			}
 			return nil
 		}
 		var pgErr *pgconn.PgError
@@ -279,7 +286,7 @@ func lockParent(ctx context.Context, tx *sql.Tx) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(parentLockRetry):
 		}
 	}
 }

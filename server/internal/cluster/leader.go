@@ -8,6 +8,17 @@ import (
 	"time"
 )
 
+// unlockTimeout 释放 advisory lock 的超时上限，避免数据库网络半开时无限阻塞停机或切主。
+var unlockTimeout = 5 * time.Second
+
+func unlock(conn *sql.Conn, name string) {
+	ctx, cancel := context.WithTimeout(context.Background(), unlockTimeout)
+	defer cancel()
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, "openxdr:"+name); err != nil {
+		slog.Warn("释放集群锁失败或超时", "task", name, "err", err)
+	}
+}
+
 // WithLock 串行执行短事务型集群操作，例如 schema 迁移和管理员初始化。
 func WithLock(ctx context.Context, db *sql.DB, name string, fn func() error) error {
 	conn, err := db.Conn(ctx)
@@ -18,9 +29,7 @@ func WithLock(ctx context.Context, db *sql.DB, name string, fn func() error) err
 	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtextextended($1, 0))`, "openxdr:"+name); err != nil {
 		return err
 	}
-	defer func() {
-		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, "openxdr:"+name)
-	}()
+	defer unlock(conn, name)
 	return fn()
 }
 
@@ -67,7 +76,7 @@ func RunLeader(ctx context.Context, db *sql.DB, name string, run func(context.Co
 		ticker.Stop()
 		cancel()
 		<-done
-		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, "openxdr:"+name)
+		unlock(conn, name)
 		_ = conn.Close()
 		wait(ctx, time.Second)
 	}

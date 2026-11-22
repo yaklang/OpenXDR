@@ -14,6 +14,7 @@ import (
 	"openxdr/server/ent"
 	"openxdr/server/internal/clockskew"
 	"openxdr/server/internal/findings"
+	"openxdr/server/internal/modelroute"
 )
 
 func TestFindingReviewGroundedProofs(t *testing.T) {
@@ -115,5 +116,56 @@ func TestFindingReviewerRealModelAndIndependentContext(t *testing.T) {
 	c.Status = "succeeded"
 	if ok, _, err := reviewer.Review(context.Background(), session, f, []*ent.Command{c}, findings.Resolution{}); err == nil || ok {
 		t.Fatal("empty model accepted")
+	}
+}
+
+func TestFindingReviewerFallbackEndpointsAndTimeout(t *testing.T) {
+	now := time.Now()
+	asset := uuid.New()
+	id := uuid.New()
+	cmd, out := "df -P /", "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 100000 60000 40000 60% /\n"
+	code := int32(0)
+	c := &ent.Command{ID: id, AssetID: asset, Kind: "exec", Status: "succeeded", Cmd: &cmd, Stdout: &out, ExitCode: &code, CreatedAt: now, CompletedAt: &now}
+	f := &ent.Finding{ID: uuid.New(), AssetID: asset, Key: "disk-full", Title: "根分区满", Detail: "根分区 96%"}
+	session := &ent.AgentSession{CreatedAt: now, Model: "primary"}
+
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "upstream 503", http.StatusServiceUnavailable)
+	}))
+	defer primary.Close()
+
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer backup-key" {
+			t.Errorf("备用端点密钥错误: %q", r.Header.Get("Authorization"))
+		}
+		reply := fmt.Sprintf(`{"approve":true,"reason":"根分区使用率已降为60%%","proofs":[{"command_id":"%s","quote":"/dev/root 100000 60000 40000 60%% /"}]}`, id)
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": reply}, "finish_reason": "stop"}}})
+	}))
+	defer backup.Close()
+
+	reviewer := &Reviewer{
+		Endpoint: func() (string, string, string) { return primary.URL, "primary-key", "primary-model" },
+		FallbackEndpoints: func() []modelroute.Endpoint {
+			return []modelroute.Endpoint{{BaseURL: backup.URL, APIKey: "backup-key", Model: "backup-model"}}
+		},
+		Timeout: 5 * time.Second,
+	}
+	ok, _, err := reviewer.Review(context.Background(), session, f, []*ent.Command{c}, findings.Resolution{})
+	if err != nil || !ok {
+		t.Fatalf("主端点 503 后应回退备用端点并通过: ok=%v err=%v", ok, err)
+	}
+
+	// 可配置 Timeout 生效
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer slow.Close()
+	slowReviewer := &Reviewer{
+		Endpoint: func() (string, string, string) { return slow.URL, "", "slow-model" },
+		Timeout:  50 * time.Millisecond,
+	}
+	if ok, _, err := slowReviewer.Review(context.Background(), session, f, []*ent.Command{c}, findings.Resolution{}); err == nil || ok {
+		t.Fatal("超时配置未生效")
 	}
 }

@@ -36,6 +36,9 @@ func NewNATSRouter(url, instance string) (*NATSRouter, error) {
 	return &NATSRouter{nc: nc, retry: natsretry.Default}, nil
 }
 
+// natsFlushTimeout 路由注册后等待 NATS 服务端确认订阅的超时上限，防止半开连接无限阻塞。
+const natsFlushTimeout = 5 * time.Second
+
 func (r *NATSRouter) Attach(agentID uuid.UUID, deliver func(*pb.Command) error) func() {
 	id := agentID.String()
 	token := uuid.NewString()
@@ -79,7 +82,7 @@ func (r *NATSRouter) Attach(agentID uuid.UUID, deliver func(*pb.Command) error) 
 		return func() {}
 	}
 	_ = r.nc.Publish(evictSubject, []byte(token))
-	_ = r.nc.Flush()
+	_ = r.nc.FlushTimeout(natsFlushTimeout)
 	return func() {
 		_ = sub.Unsubscribe()
 		_ = presence.Unsubscribe()

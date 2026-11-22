@@ -492,3 +492,37 @@ func TestAuditP0StaleManualLiftCannotReplaceNewAttempt(t *testing.T) {
 		t.Fatalf("旧快照覆盖新的解除指令关联: got=%v want=%s", stored.LiftCommandID, newID)
 	}
 }
+
+// 验证到期解除失败后不会陷入 Reconcile 与 expire 之间的 5 分钟永久活锁：
+// 首次失败经 Reconcile 清空失败 LiftCommandID 并退避 5 分钟，5 分钟后 Tick 必须发出新的解除指令并最终转 expired。
+func TestAuditP0ExpiryLiftFailureRetriesAfterBackoff(t *testing.T) {
+	f := auditP0Setup(t)
+	a, c := f.activeLease(t, true)
+	f.tick(t)
+	c = f.db.Containment.GetX(f.ctx, c.ID)
+	if c.LiftCommandID == nil {
+		t.Fatal("首次到期未下发解除指令")
+	}
+	firstID := *c.LiftCommandID
+	f.receipt(t, a, firstID, pb.CommandResult_FAILED, "防火墙规则移除失败")
+	f.tick(t)
+	c = f.db.Containment.GetX(f.ctx, c.ID)
+	if c.State != entcontainment.StateActive || c.LiftCommandID != nil {
+		t.Fatalf("解除失败对账后应保持 active 且清空失败的 LiftCommandID: state=%s lift=%v", c.State, c.LiftCommandID)
+	}
+
+	// 推进 5 分钟退避期满后再次 Tick：必须重发新的解除指令而不是再次推后 ExpiresAt
+	f.now = f.now.Add(liftRetry)
+	f.tick(t)
+	c = f.db.Containment.GetX(f.ctx, c.ID)
+	if c.LiftCommandID == nil || *c.LiftCommandID == firstID {
+		t.Fatalf("退避期满后未下发新解除指令（存在活锁）: lift=%v first=%v", c.LiftCommandID, firstID)
+	}
+	secondID := *c.LiftCommandID
+	f.receipt(t, a, secondID, pb.CommandResult_SUCCEEDED, "解除成功")
+	f.tick(t)
+	c = f.db.Containment.GetX(f.ctx, c.ID)
+	if c.State != entcontainment.StateExpired || c.EndedAt == nil {
+		t.Fatalf("重试解除成功后应推进为 expired: state=%s ended=%v", c.State, c.EndedAt)
+	}
+}

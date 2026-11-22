@@ -51,6 +51,9 @@ type Hub struct {
 	mu          sync.RWMutex
 	conns       map[uuid.UUID]chan *pb.Command // agent_id -> 指令通道
 	routeDetach map[uuid.UUID]func()
+	// attachMu 按 agent 分片串行化同一 agent 的重连与路由注册，避免 NATS 网络 I/O 占用全局 h.mu，
+	// 同时防止旧连接的 Router.Attach 乱序晚于新连接完成并误发 evict 挤掉新连接。
+	attachMu [64]sync.Mutex
 }
 
 func NewHub(db *ent.Client, enabled bool) *Hub {
@@ -77,20 +80,35 @@ func (h *Hub) Online(agentID uuid.UUID) bool {
 	return h.Router.Online(ctx, agentID)
 }
 
-// Attach 认领一个 agent 的指令通道。
+// Attach 认领一个 agent 的指令通道。所有 Router 网络 I/O 均在 h.mu 锁外执行，避免阻塞其它 agent。
 func (h *Hub) Attach(agentID uuid.UUID) chan *pb.Command {
 	ch := make(chan *pb.Command, pendingPerAgent)
+	mu := &h.attachMu[agentID[0]%uint8(len(h.attachMu))]
+	mu.Lock()
+	defer mu.Unlock()
+
 	h.mu.Lock()
+	if h.conns == nil {
+		h.conns = map[uuid.UUID]chan *pb.Command{}
+	}
+	if h.routeDetach == nil {
+		h.routeDetach = map[uuid.UUID]func(){}
+	}
 	// 同一 agent 重连时挤掉旧连接，避免指令发给已经断开的那条
 	if old, ok := h.conns[agentID]; ok {
 		close(old)
 	}
-	if detach := h.routeDetach[agentID]; detach != nil {
-		detach()
-	}
+	oldDetach := h.routeDetach[agentID]
+	delete(h.routeDetach, agentID)
 	h.conns[agentID] = ch
-	if h.Router != nil {
-		h.routeDetach[agentID] = h.Router.Attach(agentID, func(cmd *pb.Command) error {
+	router := h.Router
+	h.mu.Unlock()
+
+	if oldDetach != nil {
+		oldDetach()
+	}
+	if router != nil {
+		newDetach := router.Attach(agentID, func(cmd *pb.Command) error {
 			if cmd == nil {
 				h.evict(agentID, ch)
 				return nil
@@ -98,8 +116,16 @@ func (h *Hub) Attach(agentID uuid.UUID) chan *pb.Command {
 			_, err := h.enqueue(agentID, ch, cmd)
 			return err
 		})
+		h.mu.Lock()
+		if h.conns[agentID] == ch {
+			h.routeDetach[agentID] = newDetach
+			newDetach = nil
+		}
+		h.mu.Unlock()
+		if newDetach != nil {
+			newDetach()
+		}
 	}
-	h.mu.Unlock()
 	return ch
 }
 
@@ -119,17 +145,19 @@ func (h *Hub) evict(agentID uuid.UUID, ch chan *pb.Command) {
 	}
 }
 
-// Detach 连接结束时摘除通道，只摘自己那条。
+// Detach 连接结束时摘除通道，只摘自己那条；路由退订在 h.mu 锁外执行。
 func (h *Hub) Detach(agentID uuid.UUID, ch chan *pb.Command) {
 	h.mu.Lock()
+	var detach func()
 	if cur, ok := h.conns[agentID]; ok && cur == ch {
 		delete(h.conns, agentID)
-		if detach := h.routeDetach[agentID]; detach != nil {
-			detach()
-			delete(h.routeDetach, agentID)
-		}
+		detach = h.routeDetach[agentID]
+		delete(h.routeDetach, agentID)
 	}
 	h.mu.Unlock()
+	if detach != nil {
+		detach()
+	}
 }
 
 // Issue 下发一条非 exec 指令。exec 必须经 commandgate 的来源、组权限、名单与

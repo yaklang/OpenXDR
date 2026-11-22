@@ -140,7 +140,11 @@ func main() {
 		})
 	}
 	suppressionReviewer := startSuppressionReview(ctx, db, client, suppressions, rules, conf)
+	reviewTimeout := time.Duration(max(1, getenvInt("AI_TIMEOUT_SECONDS", 120))) * time.Second
 	closureReviewer := closurereview.New(client, func() (string, string) { c := conf(); return c.BaseURL, c.APIKey }, func() string { return conf().Model }, aiconf.Recorder(client, "closure_review"))
+	closureReviewer.FallbackModels = func() string { return conf().FallbackModels }
+	closureReviewer.FallbackEndpoints = func() []modelroute.Endpoint { return conf().Routes(false) }
+	closureReviewer.Timeout = reviewTimeout
 	closureReviewer.Rules = rules.Rules
 	closureReviewer.Suppress = suppressions
 	startAnalytics(ctx, db, client, rules, suppressions, suppressionReviewer, closureReviewer.Review)
@@ -192,7 +196,14 @@ func main() {
 	}
 	grpcServer, dists := startGRPC(db, client, rules, dedupWindow, hub, suppressions, intelStore, events, sshKeysSvc)
 	triageEngine.EndpointEvidence = chat.CollectEndpointEvidence
-	chat.ReviewFinding = (&findingreview.Reviewer{DB: client, Endpoint: chat.Endpoint, OnUsage: aiconf.Recorder(client, "finding_review")}).Review
+	chat.ReviewFinding = (&findingreview.Reviewer{
+		DB:                client,
+		Endpoint:          chat.Endpoint,
+		FallbackModels:    func() string { return conf().FallbackModels },
+		FallbackEndpoints: func() []modelroute.Endpoint { return conf().Routes(true) },
+		Timeout:           reviewTimeout,
+		OnUsage:           aiconf.Recorder(client, "finding_review"),
+	}).Review
 	repair := &repairpolicy.Store{DB: client}
 	chat.AuthorizeFindingRepair = repair.Authorize
 	chat.RevalidateFindingRepair = repair.Revalidate
@@ -297,6 +308,15 @@ func openStore(ctx context.Context, dsn string) (*sql.DB, *ent.Client) {
 		slog.Error("数据库连接失败", "err", err)
 		os.Exit(1)
 	}
+	// 默认连接池留出 30+ 单活任务租约与业务并发余量，避免默认 2 条空闲连接导致高频建连抖动。
+	maxOpen := max(1, getenvInt("DB_MAX_OPEN_CONNS", 80))
+	maxIdle := max(0, getenvInt("DB_MAX_IDLE_CONNS", 40))
+	if maxIdle > maxOpen {
+		maxIdle = maxOpen
+	}
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxIdle)
+	db.SetConnMaxLifetime(envDuration("DB_CONN_MAX_LIFETIME", 30*time.Minute))
 	client := ent.NewClient(ent.Driver(entsql.OpenDB(dialect.Postgres, db)))
 	if err := cluster.WithLock(ctx, db, "schema", func() error { return migrateSchema(ctx, db, client) }); err != nil {
 		slog.Error("集群处理状态初始化失败", "err", err)
@@ -915,9 +935,15 @@ func startChat(ctx context.Context, db *sql.DB, client *ent.Client, rules sigma.
 		GroupDailyTokens: getenvInt("PI_GROUP_DAILY_TOKENS", 0), MaxTurns: getenvInt("PI_MAX_TURNS", 500),
 		// 长会话折叠较早的工具结果与思考过程再发给模型，库里与界面仍是原文
 		FoldAbove: getenvInt("PI_HISTORY_FOLD_KB", 64) * 1024}
-	// AI 发起的待批准命令由 AI 审计员当场评审（同一个推理端点、会话自己的模型），不再阻塞等人
-	reviewer := &commandreview.Reviewer{DB: client, OnUsage: aiconf.Recorder(client, "review"),
-		Endpoint: func() (string, string) { c := conf(); return c.BaseURL, c.APIKey }}
+	// AI 发起的待批准命令由 AI 审计员当场评审（会话模型自动匹配回退端点），不再阻塞等人
+	reviewer := &commandreview.Reviewer{
+		DB:                client,
+		OnUsage:           aiconf.Recorder(client, "review"),
+		Endpoint:          func() (string, string) { c := conf(); return c.BaseURL, c.APIKey },
+		FallbackModels:    func() string { return conf().FallbackModels },
+		FallbackEndpoints: func() []modelroute.Endpoint { return conf().Routes(true) },
+		Timeout:           time.Duration(max(1, getenvInt("AI_TIMEOUT_SECONDS", 120))) * time.Second,
+	}
 	chat.Gate.Reviewer = reviewer.Review
 	// 抑制草案同样当场评审，审计员把结论和理由交回给提议的会话
 	chat.ReviewSuppression = suppressionReviewer.Review
@@ -1199,6 +1225,19 @@ func getenvInt(key string, def int) int {
 		return v
 	}
 	return def
+}
+
+func envDuration(key string, def time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		slog.Warn("环境变量时长无效，使用默认值", "key", key, "value", raw, "default", def)
+		return def
+	}
+	return d
 }
 
 // startIntegrationDelivery 有 HOST_CREDENTIAL_KEY 才能解开签名密钥、投递出站消息；

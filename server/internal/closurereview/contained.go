@@ -51,9 +51,14 @@ type containedEvidence struct {
 	QuietHours int                `json:"quiet_hours"`
 }
 
+// manuallyHeld 人工锁定、人工指定负责人或人工接管（非系统自动升级）的事件禁止任何自动结案路径接手。
+func manuallyHeld(inc *ent.Incident) bool {
+	return inc.Work != nil && (inc.Work.ManualLock || inc.Work.ManualOwner != "" || (inc.Work.Owner == "human" && inc.Work.Stage != "escalated"))
+}
+
 // systemReviewable 无提案路径的共同前提：已研判、无人接管或锁定、研判后没有新证据、当前没有研判在跑。
 func systemReviewable(inc *ent.Incident) bool {
-	if inc.Status != "triaged" || inc.TriagedAt == nil || inc.TriagedAt.Before(inc.CreatedAt) || (inc.Work != nil && (inc.Work.ManualLock || inc.Work.ManualOwner != "" || inc.Work.Owner == "human" && inc.Work.Stage != "escalated")) {
+	if inc.Status != "triaged" || inc.TriagedAt == nil || inc.TriagedAt.Before(inc.CreatedAt) || manuallyHeld(inc) {
 		return false
 	}
 	for _, at := range []*time.Time{inc.EvidenceAt, inc.UrgentAt} {
