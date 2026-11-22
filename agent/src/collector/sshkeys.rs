@@ -97,7 +97,7 @@ impl State {
     }
 
     pub fn update(&self, snap: Snapshot) {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let next_seq = guard.latest.as_ref().map_or(1, |(seq, _)| seq + 1);
         guard.latest = Some((next_seq, snap));
         drop(guard);
@@ -105,7 +105,7 @@ impl State {
     }
 
     fn latest_after(&self, sent_seq: u64) -> Option<(u64, Snapshot)> {
-        let guard = self.inner.lock().unwrap();
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match guard.latest.as_ref() {
             Some((seq, snap)) if *seq > sent_seq => Some((*seq, snap.clone())),
             _ => None,
@@ -113,20 +113,20 @@ impl State {
     }
 
     fn pending_retry_wait(&self) -> Option<Duration> {
-        let guard = self.inner.lock().unwrap();
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard
             .retry_not_before
             .and_then(|until| until.checked_duration_since(Instant::now()))
     }
 
     fn record_success(&self) {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.failures = 0;
         guard.retry_not_before = None;
     }
 
     fn record_failure(&self) -> (u32, Duration) {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.failures = guard.failures.saturating_add(1);
         let backoff = retry_backoff(guard.failures);
         guard.retry_not_before = Some(Instant::now() + backoff);

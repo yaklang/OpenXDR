@@ -52,17 +52,38 @@ pub async fn run(agent_id: String, tx: EventSink) {
                 .collect::<Vec<_>>()
                 .join(" ");
             let exe = proc.exe().map(|p| p.to_string_lossy().into_owned());
+            let pid_u32 = pid.as_u32();
+            let ppid = proc.parent().map(|p| p.as_u32());
+            let name = proc.name().to_string_lossy().into_owned();
+            // 避免在 Tokio worker 线程同步读大文件或 sleep 等 sshd 日志
+            #[cfg(target_os = "linux")]
+            let resolved_exe = super::resolve_launch_exe(pid_u32, exe.as_deref(), &name);
+            #[cfg(not(target_os = "linux"))]
+            let resolved_exe: Option<String> = None;
+            let eff_exe = resolved_exe.as_deref().or(exe.as_deref());
+            let exe_sha256 = match eff_exe {
+                Some(p) => super::hash::exe_sha256_async(p).await,
+                None => None,
+            };
+            #[cfg(target_os = "linux")]
+            let login =
+                super::LoginProbe::from_of(super::sshsession::of_async(pid_u32, ppid).await);
+            #[cfg(not(target_os = "linux"))]
+            let login = super::LoginProbe::Unprobed;
+
             let events = emit_process(
                 &agent_id,
                 &mut registry,
                 ACTIVITY_LAUNCH,
                 ProcessInfo {
-                    pid: pid.as_u32(),
-                    name: &proc.name().to_string_lossy(),
-                    exe: exe.as_deref(),
+                    pid: pid_u32,
+                    name: &name,
+                    exe: eff_exe,
                     cmd_line: Some(&cmd_line),
-                    ppid: proc.parent().map(|p| p.as_u32()),
+                    ppid,
                     username: proc.user_id().map(|u| u.to_string()).unwrap_or_default(),
+                    exe_sha256: Some(exe_sha256),
+                    login,
                     ..Default::default()
                 },
             );
@@ -76,12 +97,18 @@ pub async fn run(agent_id: String, tx: EventSink) {
 
         // 消失的 pid 即进程退出。进程已退场，名字与路径从启动时的登记补上
         for pid in gone {
+            let pid_u32 = pid.as_u32();
+            let exe_sha256 = match registry.known(pid_u32).and_then(|k| k.exe) {
+                Some(p) => super::hash::exe_sha256_async(&p).await,
+                None => None,
+            };
             let events = emit_process(
                 &agent_id,
                 &mut registry,
                 ACTIVITY_TERMINATE,
                 ProcessInfo {
-                    pid: pid.as_u32(),
+                    pid: pid_u32,
+                    exe_sha256: Some(exe_sha256),
                     ..Default::default()
                 },
             );

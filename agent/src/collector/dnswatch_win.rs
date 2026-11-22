@@ -143,15 +143,18 @@ fn first_in_window(
 ) -> bool {
     let now = Instant::now();
     let mut reported = reported.lock().unwrap_or_else(|e| e.into_inner());
-    if reported.len() >= MAX_TRACKED {
-        reported.retain(|_, t| now.duration_since(*t) < REPORT_WINDOW);
-    }
     let key = (pid, query.name.clone(), query.qtype);
     if reported
         .get(&key)
         .is_some_and(|t| now.duration_since(*t) < REPORT_WINDOW)
     {
         return false;
+    }
+    if reported.len() >= MAX_TRACKED {
+        reported.retain(|_, t| now.duration_since(*t) < REPORT_WINDOW);
+        if reported.len() >= MAX_TRACKED {
+            reported.clear();
+        }
     }
     reported.insert(key, now);
     true
@@ -387,5 +390,15 @@ mod tests {
         assert!(first_in_window(&reported, 2, &q), "不同进程各报一次");
         let aaaa = Query::new("example.com", 28, 0, 0, "").unwrap();
         assert!(first_in_window(&reported, 1, &aaaa), "不同类型各报一次");
+    }
+
+    #[test]
+    fn reported_table_stays_bounded_under_dns_storm() {
+        let reported = Mutex::default();
+        let q = Query::new("storm.example", 1, 0, 0, "").unwrap();
+        for pid in 1..=(MAX_TRACKED * 2 + 100) as u32 {
+            assert!(first_in_window(&reported, pid, &q));
+            assert!(reported.lock().unwrap().len() <= MAX_TRACKED);
+        }
     }
 }

@@ -175,31 +175,77 @@ pub fn accepted(pid: u32, login: Login) {
     );
 }
 
-/// 进程采集调用：新进程属于哪次 SSH 登录。外层 None 表示读不到这个进程（已退场），
-/// 调用方可以退回父进程的归属；Some(None) 表示读到了、但不属于任何认得的登录
-pub fn of(pid: u32, ppid: Option<u32>) -> Option<Option<Bound>> {
-    let session = read_session(pid)?;
-    if session == UNSET {
-        return Some(None);
-    }
-    let should_wait = {
-        let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(b) = st.of(session, &read_proc, Instant::now()) {
-            return Some(Some(b));
-        }
-        st.mark_checked(session) && has_sshd_ancestor(pid, ppid)
+enum Lookup {
+    /// 进程已退场读不到 sessionid，调用方可退回父进程继承
+    Gone,
+    /// 已得到确定结论（命中某次登录，或确认不属于认得的登录）
+    Done(Option<Bound>),
+    /// 首次见到该会话且有 sshd 祖先，值得短暂等待 journald 日志落地
+    Wait(u32),
+}
+
+fn lookup_fast(pid: u32, ppid: Option<u32>) -> Lookup {
+    let Some(session) = read_session(pid) else {
+        return Lookup::Gone;
     };
-    if !should_wait {
-        return Some(None);
+    if session == UNSET {
+        return Lookup::Done(None);
     }
-    for _ in 0..JOURNAL_WAIT_STEPS {
-        std::thread::sleep(JOURNAL_WAIT_STEP);
+    let first_seen = {
         let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(b) = st.of(session, &read_proc, Instant::now()) {
-            return Some(Some(b));
+            return Lookup::Done(Some(b));
+        }
+        st.mark_checked(session)
+    };
+    // 释放状态锁后再遍历 /proc 祖先链，避免持锁阻塞其他线程
+    if first_seen && has_sshd_ancestor(pid, ppid) {
+        Lookup::Wait(session)
+    } else {
+        Lookup::Done(None)
+    }
+}
+
+fn poll_session(session: u32) -> Option<Bound> {
+    let mut st = state().lock().unwrap_or_else(|e| e.into_inner());
+    st.of(session, &read_proc, Instant::now())
+}
+
+/// 进程采集调用（同步版，供独立 OS 线程如 netlink / fswatch 在不持 ProcessRegistry 锁时调用）：
+/// 外层 None 表示读不到这个进程（已退场），调用方可以退回父进程的归属；
+/// Some(None) 表示读到了、但不属于任何认得的登录
+pub fn of(pid: u32, ppid: Option<u32>) -> Option<Option<Bound>> {
+    match lookup_fast(pid, ppid) {
+        Lookup::Gone => None,
+        Lookup::Done(b) => Some(b),
+        Lookup::Wait(session) => {
+            for _ in 0..JOURNAL_WAIT_STEPS {
+                std::thread::sleep(JOURNAL_WAIT_STEP);
+                if let Some(b) = poll_session(session) {
+                    return Some(Some(b));
+                }
+            }
+            Some(None)
         }
     }
-    Some(None)
+}
+
+/// 进程采集调用（异步版，供 Tokio 异步采集任务如 eBPF / poll 在不持 ProcessRegistry 锁时调用）：
+/// 等待 journald 日志时使用 tokio::time::sleep，绝不阻塞 Tokio worker 线程
+pub async fn of_async(pid: u32, ppid: Option<u32>) -> Option<Option<Bound>> {
+    match lookup_fast(pid, ppid) {
+        Lookup::Gone => None,
+        Lookup::Done(b) => Some(b),
+        Lookup::Wait(session) => {
+            for _ in 0..JOURNAL_WAIT_STEPS {
+                tokio::time::sleep(JOURNAL_WAIT_STEP).await;
+                if let Some(b) = poll_session(session) {
+                    return Some(Some(b));
+                }
+            }
+            Some(None)
+        }
+    }
 }
 
 fn read_session(pid: u32) -> Option<u32> {

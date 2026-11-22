@@ -337,6 +337,30 @@ pub const ACTIVITY_TERMINATE: u32 = 2;
 #[cfg(all(target_os = "linux", any(feature = "ebpf", test)))]
 pub const ACTIVITY_OTHER: u32 = 99;
 
+/// 在 ProcessRegistry 锁外预先完成的 SSH 登录会话探测结果。
+/// 默认 `Unprobed` 时仍由 `process_event` 内部兜底探测（兼容旧测试路径）。
+#[derive(Default)]
+pub enum LoginProbe {
+    #[default]
+    Unprobed,
+    /// 进程已退场，允许沿父进程继承登录归属
+    #[cfg(target_os = "linux")]
+    Gone,
+    /// 已拿到明确结果（归属某次 SSH 登录，或明确不属于认得的登录）
+    #[cfg(target_os = "linux")]
+    Resolved(Option<Arc<serde_json::Value>>),
+}
+
+impl LoginProbe {
+    #[cfg(target_os = "linux")]
+    pub fn from_of(res: Option<Option<Arc<serde_json::Value>>>) -> Self {
+        match res {
+            None => Self::Gone,
+            Some(bound) => Self::Resolved(bound),
+        }
+    }
+}
+
 /// 一个进程的采集结果。用具名字段而非位置参数：
 /// exe 与 cmd_line 同为 Option<&str> 且相邻，位置传参很容易传反。
 #[derive(Default)]
@@ -349,6 +373,16 @@ pub struct ProcessInfo<'a> {
     pub username: String,
     /// 退出码，仅退出事件（Terminate）可能拿到
     pub exit_code: Option<u32>,
+    /// 锁外预计算的可执行文件 SHA-256；None 表示尚未预计算，由 process_event 兜底计算
+    pub exe_sha256: Option<Option<String>>,
+    /// 锁外预探测的 SSH 登录归属；Unprobed 表示尚未预探测
+    pub login: LoginProbe,
+}
+
+/// 在加锁前解析经 fd 执行时的真实可执行路径（Linux），避免锁外算哈希与锁内路径不一致
+#[cfg(target_os = "linux")]
+pub(super) fn resolve_launch_exe(pid: u32, exe: Option<&str>, name: &str) -> Option<String> {
+    exe.and_then(|e| execfacts::real_exe(pid, e, name))
 }
 
 /// 用 /proc 快照预登记现有进程，之后派生的子进程才能找到父。
@@ -451,17 +485,22 @@ fn command_env(_pid: u32) -> Option<Arc<str>> {
     None
 }
 
-/// 新进程所属的 SSH 登录：按它自己的审计会话号认；进程已退场读不到时沿父进程继承。
-/// 读到了会话号但认不出，就是不属于认得的登录——不能再从父进程继承
+/// 新进程所属的 SSH 登录：优先使用调用方在锁外预探测的结果，避免持 ProcessRegistry 锁等待 journald；
+/// 未预探测时按审计会话号现查。读到了会话号但认不出，就是不属于认得的登录——不能再从父进程继承
 #[cfg(target_os = "linux")]
 fn login_of(
     registry: &ProcessRegistry,
     pid: u32,
     ppid: Option<u32>,
+    probe: LoginProbe,
 ) -> Option<Arc<serde_json::Value>> {
-    match sshsession::of(pid, ppid) {
-        Some(bound) => bound,
-        None => registry.login_of(ppid?),
+    match probe {
+        LoginProbe::Resolved(bound) => bound,
+        LoginProbe::Gone => registry.login_of(ppid?),
+        LoginProbe::Unprobed => match sshsession::of(pid, ppid) {
+            Some(bound) => bound,
+            None => registry.login_of(ppid?),
+        },
     }
 }
 
@@ -471,6 +510,7 @@ fn login_of(
     _registry: &ProcessRegistry,
     _pid: u32,
     _ppid: Option<u32>,
+    _probe: LoginProbe,
 ) -> Option<Arc<serde_json::Value>> {
     None
 }
@@ -759,6 +799,8 @@ fn process_event(
         ppid,
         username,
         exit_code,
+        exe_sha256,
+        login: login_probe,
     } = info;
     // 经 fd 执行的程序换成真实目标，规则看到的 Image 才说得清执行了什么
     #[cfg(target_os = "linux")]
@@ -796,7 +838,7 @@ fn process_event(
         } else {
             let name = full_name(name, exe);
             let command = command_of(registry, pid, ppid);
-            let login = login_of(registry, pid, ppid);
+            let login = login_of(registry, pid, ppid, login_probe);
             parent = ppid.and_then(|p| registry.known(p));
             // 健康检查的认定要看这个 pid 之前的登记（原地 exec），登记新进程之前取
             let container = container_or_inherited(registry, pid, ppid)
@@ -817,13 +859,17 @@ fn process_event(
                 login,
             )
         };
+    let sha256 = match exe_sha256 {
+        Some(precomputed) => precomputed,
+        None => exe.and_then(hash::exe_sha256),
+    };
     let mut raw = serde_json::json!({
         "activity_id": activity,
         "process": {
             "pid": pid,
             "uid": guid.to_string(),
             "name": name,
-            "file": { "path": exe, "sha256": exe.and_then(hash::exe_sha256) },
+            "file": { "path": exe, "sha256": sha256 },
             "cmd_line": cmd_line,
             "exit_code": exit_code,
             "parent_process": {
@@ -1299,6 +1345,27 @@ mod tests {
         .unwrap();
         let v: Value = serde_json::from_str(&evt.raw_json).unwrap();
         assert!(v.get("login_session").is_none());
+
+        // 锁外预探测结果（LoginProbe::Resolved 与 exe_sha256）应直接复用，不重新阻塞探测
+        let pre_login = Arc::new(login.to_json(Some(99)));
+        let evt = process_event(
+            "a",
+            &mut reg,
+            ACTIVITY_LAUNCH,
+            ProcessInfo {
+                pid: gone - 2,
+                name: "sh",
+                exe: Some("/nonexistent/precomputed"),
+                ppid: Some(2),
+                exe_sha256: Some(Some("deadbeef".into())),
+                login: LoginProbe::Resolved(Some(pre_login)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&evt.raw_json).unwrap();
+        assert_eq!(v["login_session"]["uid"], "99");
+        assert_eq!(v["process"]["file"]["sha256"], "deadbeef");
     }
 
     /// 指令打标：agent 直接拉起的进程看环境变量，后代沿血缘继承；别的进程设了同名变量也不算

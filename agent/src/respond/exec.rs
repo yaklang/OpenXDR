@@ -14,6 +14,8 @@ use super::{Outcome, Output};
 use crate::pb::{Command, command_result::Status};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+/// 单条命令允许的最长执行时间（1 小时），防误传极大 timeout_ms 导致子进程永久挂起
+const MAX_TIMEOUT: Duration = Duration::from_secs(3600);
 /// stdout / stderr 各自的保留上限。超出部分照样读掉丢弃，否则刷屏的命令会写满管道卡住
 const OUTPUT_LIMIT: usize = 64 * 1024;
 
@@ -62,11 +64,11 @@ pub async fn run(cmd: &Command) -> Outcome {
     }
 }
 
-/// 平台给 0 表示没指定，用默认超时。
+/// 平台给 0 表示没指定，用默认超时；非零值封顶 MAX_TIMEOUT（1 小时）
 fn timeout_of(ms: u32) -> Duration {
     match ms {
         0 => DEFAULT_TIMEOUT,
-        ms => Duration::from_millis(ms.into()),
+        ms => Duration::from_millis(ms.into()).min(MAX_TIMEOUT),
     }
 }
 
@@ -159,12 +161,14 @@ mod tests {
     }
 
     #[test]
-    fn zero_timeout_falls_back_to_default() {
+    fn zero_timeout_falls_back_to_default_and_caps_at_max() {
         assert_eq!(timeout_of(0), DEFAULT_TIMEOUT);
         assert_eq!(timeout_of(1), Duration::from_millis(1));
         assert_eq!(timeout_of(1500), Duration::from_millis(1500));
-        // u32 上限也不溢出，约 49.7 天
-        assert_eq!(timeout_of(u32::MAX), Duration::from_millis(u32::MAX.into()));
+        assert_eq!(timeout_of(3_600_000), MAX_TIMEOUT);
+        // 超出 1 小时上限（含 u32::MAX 约 49.7 天）一律封顶 1 小时，防永久挂起
+        assert_eq!(timeout_of(3_600_001), MAX_TIMEOUT);
+        assert_eq!(timeout_of(u32::MAX), MAX_TIMEOUT);
     }
 
     #[tokio::test]

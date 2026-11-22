@@ -258,8 +258,8 @@ struct LoginRecord {
     sub_status: String,
 }
 
-/// 取 <Data Name='X'>value</Data> 的值。wevtapi 渲染用单引号属性。
-fn xml_data<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
+/// 取 <Data Name='X'>value</Data> 的值并做 XML 实体反转义。wevtapi 渲染用单引号属性。
+fn xml_data<'a>(xml: &'a str, name: &str) -> Option<std::borrow::Cow<'a, str>> {
     let single = format!("Name='{name}'>");
     let double = format!("Name=\"{name}\">");
     let tag = if xml.contains(&single) {
@@ -268,7 +268,50 @@ fn xml_data<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
         double
     };
     let rest = &xml[xml.find(&tag)? + tag.len()..];
-    Some(&rest[..rest.find("</Data>")?])
+    let raw = &rest[..rest.find("</Data>")?];
+    Some(unescape_xml(raw))
+}
+
+/// 单趟反转义 XML 命名实体（&amp; &lt; &gt; &quot; &apos;）与数字字符引用（&#...; / &#x...;），
+/// 避免多次 replace 导致 `&amp;lt;` 被错误二次展开。
+fn unescape_xml(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains('&') {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp + 1..];
+        if let Some(semi) = after.find(';') {
+            let entity = &after[..semi];
+            let decoded = match entity {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                _ if entity.starts_with("#x") || entity.starts_with("#X") => {
+                    u32::from_str_radix(&entity[2..], 16)
+                        .ok()
+                        .and_then(char::from_u32)
+                }
+                _ if entity.starts_with('#') => {
+                    entity[1..].parse::<u32>().ok().and_then(char::from_u32)
+                }
+                _ => None,
+            };
+            if let Some(ch) = decoded {
+                out.push(ch);
+                rest = &after[semi + 1..];
+                continue;
+            }
+        }
+        out.push('&');
+        rest = after;
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
 }
 
 /// 从 System 段提取 EventID（标签可能带 Qualifiers 属性，不能按定长标签切）。
@@ -324,30 +367,30 @@ fn parse_security_xml(xml: &str) -> Option<LoginRecord> {
         _ => return None,
     };
     let user = xml_data(xml, "TargetUserName").unwrap_or_default();
-    if is_machine_or_service(user) {
+    if is_machine_or_service(&user) {
         return None;
     }
     let logon_type = xml_data(xml, "LogonType").unwrap_or_default();
     // Type 0/5 是系统与服务自身的会话，成功了也不是认证行为
-    if !failure && matches!(logon_type, "0" | "5") {
+    if !failure && matches!(logon_type.as_ref(), "0" | "5") {
         return None;
     }
     Some(LoginRecord {
-        user: user.to_string(),
+        user: user.into_owned(),
         sid: xml_data(xml, "TargetUserSid")
             .unwrap_or_default()
-            .to_string(),
+            .into_owned(),
         domain: xml_data(xml, "TargetDomainName")
             .unwrap_or_default()
-            .to_string(),
+            .into_owned(),
         logon_id: xml_data(xml, "TargetLogonId")
             .unwrap_or_default()
-            .to_string(),
-        ip: xml_data(xml, "IpAddress").unwrap_or_default().to_string(),
-        logon_type: logon_type.to_string(),
+            .into_owned(),
+        ip: xml_data(xml, "IpAddress").unwrap_or_default().into_owned(),
+        logon_type: logon_type.into_owned(),
         failure,
-        status: xml_data(xml, "Status").unwrap_or_default().to_string(),
-        sub_status: xml_data(xml, "SubStatus").unwrap_or_default().to_string(),
+        status: xml_data(xml, "Status").unwrap_or_default().into_owned(),
+        sub_status: xml_data(xml, "SubStatus").unwrap_or_default().into_owned(),
     })
 }
 
@@ -412,17 +455,17 @@ fn login_event(agent_id: &str, rec: &LoginRecord) -> AgentEvent {
 /// actor 是操作者，user 是被增删的账号。
 fn account_mgmt_event(xml: &str, agent_id: &str, activity: u32) -> Option<AgentEvent> {
     let target = xml_data(xml, "TargetUserName").unwrap_or_default();
-    if is_machine_or_service(target) {
+    if is_machine_or_service(&target) {
         return None;
     }
     let raw = serde_json::json!({
         "activity_id": activity,
         "status_id": 1,
-        "user": { "name": target },
-        "actor_user": xml_data(xml, "SubjectUserName").unwrap_or_default(),
-        "target_domain": xml_data(xml, "TargetDomainName").unwrap_or_default(),
+        "user": { "name": target.as_ref() },
+        "actor_user": xml_data(xml, "SubjectUserName").unwrap_or_default().as_ref(),
+        "target_domain": xml_data(xml, "TargetDomainName").unwrap_or_default().as_ref(),
     });
-    Some(auth_event(agent_id, target, raw))
+    Some(auth_event(agent_id, &target, raw))
 }
 
 /// 4732（成员加入本地组）：组名进 raw，是否管理员组交给规则判定，
@@ -433,13 +476,17 @@ fn group_add_event(xml: &str, agent_id: &str) -> Option<AgentEvent> {
         return None;
     }
     // MemberName 常是 '-' 或未解析的 SID，留空也不挡事件——组变更本身即信号
-    let member = if member == "-" { "" } else { member };
+    let member = if member.as_ref() == "-" {
+        ""
+    } else {
+        member.as_ref()
+    };
     let raw = serde_json::json!({
         "activity_id": ACTIVITY_GROUP_MEMBER_ADDED,
         "status_id": 1,
         "user": { "name": member },
-        "actor_user": xml_data(xml, "SubjectUserName").unwrap_or_default(),
-        "group_name": xml_data(xml, "TargetUserName").unwrap_or_default(),
+        "actor_user": xml_data(xml, "SubjectUserName").unwrap_or_default().as_ref(),
+        "group_name": xml_data(xml, "TargetUserName").unwrap_or_default().as_ref(),
     });
     Some(auth_event(agent_id, member, raw))
 }
@@ -451,29 +498,29 @@ fn log_cleared_event(xml: &str, agent_id: &str) -> AgentEvent {
     let raw = serde_json::json!({
         "activity_id": ACTIVITY_LOG_CLEARED,
         "status_id": 1,
-        "user": { "name": user },
+        "user": { "name": user.as_ref() },
         "log_cleared": true,
     });
-    auth_event(agent_id, user, raw)
+    auth_event(agent_id, &user, raw)
 }
 
 /// 4648（显式凭据登录）：runas / net use 带口令时使用目标账号的凭据。
 /// 该事件有噪声（计划任务、服务也会触发），级别与研判交给规则侧。
 fn explicit_cred_event(xml: &str, agent_id: &str) -> Option<AgentEvent> {
     let target = xml_data(xml, "TargetUserName").unwrap_or_default();
-    if is_machine_or_service(target) {
+    if is_machine_or_service(&target) {
         return None;
     }
     let raw = serde_json::json!({
         "activity_id": ACTIVITY_EXPLICIT_CREDENTIAL,
         "status_id": 1,
-        "user": { "name": target },
-        "actor_user": xml_data(xml, "SubjectUserName").unwrap_or_default(),
-        "src_endpoint": { "ip": xml_data(xml, "IpAddress").unwrap_or_default() },
-        "target_server": xml_data(xml, "TargetServerName").unwrap_or_default(),
-        "process_name": xml_data(xml, "ProcessName").unwrap_or_default(),
+        "user": { "name": target.as_ref() },
+        "actor_user": xml_data(xml, "SubjectUserName").unwrap_or_default().as_ref(),
+        "src_endpoint": { "ip": xml_data(xml, "IpAddress").unwrap_or_default().as_ref() },
+        "target_server": xml_data(xml, "TargetServerName").unwrap_or_default().as_ref(),
+        "process_name": xml_data(xml, "ProcessName").unwrap_or_default().as_ref(),
     });
-    Some(auth_event(agent_id, target, raw))
+    Some(auth_event(agent_id, &target, raw))
 }
 
 /// 4719（审计策略变更）：关掉审计类别是擦除痕迹的前奏。
@@ -482,17 +529,19 @@ fn audit_policy_event(xml: &str, agent_id: &str) -> AgentEvent {
     let raw = serde_json::json!({
         "activity_id": ACTIVITY_AUDIT_POLICY_CHANGE,
         "status_id": 1,
-        "user": { "name": user },
+        "user": { "name": user.as_ref() },
         // 新旧系统字段名不同（Category / CategoryId），取到哪个用哪个
         "policy_category": xml_data(xml, "Category")
             .or_else(|| xml_data(xml, "CategoryId"))
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .as_ref(),
         "policy_subcategory": xml_data(xml, "Subcategory")
             .or_else(|| xml_data(xml, "SubcategoryId"))
-            .unwrap_or_default(),
-        "policy_changes": xml_data(xml, "AuditPolicyChanges").unwrap_or_default(),
+            .unwrap_or_default()
+            .as_ref(),
+        "policy_changes": xml_data(xml, "AuditPolicyChanges").unwrap_or_default().as_ref(),
     });
-    auth_event(agent_id, user, raw)
+    auth_event(agent_id, &user, raw)
 }
 
 /// 4104（PowerShell 脚本块）：归一化成 1007 进程事件，脚本体放 cmd_line，
@@ -518,7 +567,7 @@ fn parse_script_block(xml: &str, agent_id: &str) -> Option<AgentEvent> {
         "process": {
             "pid": execution_pid(xml).unwrap_or_default(),
             "name": "powershell.exe",
-            "cmd_line": text,
+            "cmd_line": text.as_ref(),
         },
     });
     if total > 1 {
@@ -529,7 +578,7 @@ fn parse_script_block(xml: &str, agent_id: &str) -> Option<AgentEvent> {
     if let Some(path) = xml_data(xml, "Path")
         && !path.is_empty()
     {
-        raw["script_path"] = path.into();
+        raw["script_path"] = path.into_owned().into();
     }
     Some(AgentEvent {
         agent_id: agent_id.to_string(),
@@ -891,6 +940,19 @@ mod tests {
         assert!(
             parse_script_block(other, "agent-t").is_none(),
             "非 4104 应跳过"
+        );
+    }
+
+    #[test]
+    fn unescapes_xml_entities_in_powershell_script_block() {
+        let escaped =
+            "&amp; { $x = &quot;a&lt;b&gt;c&quot;; Write-Host &apos;hi&#39; &#x26; &amp;lt; }";
+        let ev =
+            parse_script_block(&script_block_xml(4212, 1, 1, escaped), "agent-t").expect("应解析");
+        let v: Value = serde_json::from_str(&ev.raw_json).unwrap();
+        assert_eq!(
+            v["process"]["cmd_line"],
+            "& { $x = \"a<b>c\"; Write-Host 'hi' & &lt; }"
         );
     }
 }

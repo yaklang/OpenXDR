@@ -42,17 +42,22 @@ impl ConnSampler {
 
     fn first(&mut self, key: (IpAddr, u16, u32)) -> bool {
         let now = Instant::now();
+        if self
+            .seen
+            .get(&key)
+            .is_some_and(|t| now.duration_since(*t) < SAMPLE_WINDOW)
+        {
+            return false;
+        }
         if self.seen.len() >= MAX_TRACKED {
             self.seen
                 .retain(|_, t| now.duration_since(*t) < SAMPLE_WINDOW);
-        }
-        match self.seen.get(&key) {
-            Some(t) if now.duration_since(*t) < SAMPLE_WINDOW => false,
-            _ => {
-                self.seen.insert(key, now);
-                true
+            if self.seen.len() >= MAX_TRACKED {
+                self.seen.clear();
             }
         }
+        self.seen.insert(key, now);
+        true
     }
 }
 
@@ -151,6 +156,20 @@ mod tests {
         assert!(!s.should_report(dst, 443), "窗口内重复目标应压掉");
         assert!(s.should_report(dst, 8080), "不同端口是不同目标");
         assert!(s.should_report("10.0.0.10".parse().unwrap(), 443));
+    }
+
+    #[test]
+    fn sampler_stays_bounded_under_port_scan_storm() {
+        let mut s = ConnSampler::default();
+        let dst: IpAddr = "10.0.0.9".parse().unwrap();
+        for port in 1..=(MAX_TRACKED * 2 + 100) {
+            assert!(s.should_report(dst, port as u16));
+            assert!(
+                s.seen.len() <= MAX_TRACKED,
+                "扫描风暴下容量不得超出上限：{}",
+                s.seen.len()
+            );
+        }
     }
 
     #[test]

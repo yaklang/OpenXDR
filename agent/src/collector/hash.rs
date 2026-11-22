@@ -24,20 +24,40 @@ static CACHE: LazyLock<Mutex<HashMap<CacheKey, String>>> =
 
 /// 计算可执行文件的 SHA-256（十六进制小写）。文件不可读或过大时返回 None。
 pub fn exe_sha256(path: &str) -> Option<String> {
+    let key = cache_key(path)?;
+    if let Some(hit) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return Some(hit.clone());
+    }
+    compute_and_cache(key)
+}
+
+/// 异步计算可执行文件的 SHA-256：命中内存缓存直接返回，未命中时把文件读取卸载到 blocking 线程池，
+/// 避免在 Tokio worker 线程或持锁期间同步读取大文件。
+pub async fn exe_sha256_async(path: &str) -> Option<String> {
+    let key = cache_key(path)?;
+    if let Some(hit) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return Some(hit.clone());
+    }
+    tokio::task::spawn_blocking(move || compute_and_cache(key))
+        .await
+        .ok()
+        .flatten()
+}
+
+fn cache_key(path: &str) -> Option<CacheKey> {
     let meta = fs::metadata(path).ok()?;
     if !meta.is_file() || meta.len() > MAX_FILE_SIZE {
         return None;
     }
-    let key = (path.to_string(), meta.modified().ok()?, meta.len());
-    if let Some(hit) = CACHE.lock().unwrap().get(&key) {
-        return Some(hit.clone());
-    }
+    Some((path.to_string(), meta.modified().ok()?, meta.len()))
+}
 
+fn compute_and_cache(key: CacheKey) -> Option<String> {
     let mut hasher = Sha256::new();
-    io::copy(&mut File::open(path).ok()?, &mut hasher).ok()?;
+    io::copy(&mut File::open(&key.0).ok()?, &mut hasher).ok()?;
     let digest = format!("{:x}", hasher.finalize());
 
-    let mut cache = CACHE.lock().unwrap();
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if cache.len() >= MAX_ENTRIES {
         cache.clear();
     }
@@ -68,5 +88,20 @@ mod tests {
     #[test]
     fn missing_file_is_none() {
         assert!(exe_sha256("/nonexistent/openxdr").is_none());
+    }
+
+    #[tokio::test]
+    async fn async_hash_matches_sync_and_uses_cache() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("openxdr_hash_async_{}.bin", uuid::Uuid::new_v4()));
+        File::create(&path).unwrap().write_all(b"abc").unwrap();
+        let got = exe_sha256_async(path.to_str().unwrap()).await.unwrap();
+        assert_eq!(
+            got,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        // 第二次命中内存缓存直接返回
+        assert_eq!(exe_sha256_async(path.to_str().unwrap()).await.unwrap(), got);
+        let _ = fs::remove_file(&path);
     }
 }

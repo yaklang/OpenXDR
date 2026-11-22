@@ -8,8 +8,10 @@
 //! 增、改、删都上报：清理持久化痕迹与写入痕迹同样是攻击信号。
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::os::windows::process::CommandExt;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::process::Stdio;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::pb::AgentEvent;
 
@@ -716,24 +718,26 @@ fn unescape_xml(s: &str) -> String {
         .replace("&amp;", "&")
 }
 
+/// 单次 WMI PowerShell 查询超时，防止 WMI 服务卡死拖垮整个 persistwatch 线程
+const WMI_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// WMI 永久事件订阅快照：伪路径 -> 实例属性（规范化 JSON 串）。
 /// 没有引 wmi crate（重依赖），30 秒一次走 powershell 子进程拿 JSON 再解析，
-/// 对这个频率来说足够。查询失败（权限/WMI 服务异常）返回 None，本轮静默跳过，
+/// 对这个频率来说足够。查询失败（权限/WMI 服务异常/超时）返回 None，本轮静默跳过，
 /// 不影响其他快照；查询成功但没有实例是合法的空快照（输出为空，退出码 0）。
 fn wmi_snapshot() -> Option<HashMap<String, String>> {
     let mut snap = HashMap::new();
     for class in WMI_CLASSES {
-        let out = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                &wmi_query(class),
-            ])
-            // agent 作为服务运行没有控制台，禁止子进程弹窗
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .ok()?;
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &wmi_query(class),
+        ])
+        // agent 作为服务运行没有控制台，禁止子进程弹窗
+        .creation_flags(CREATE_NO_WINDOW);
+        let out = run_with_timeout(&mut cmd, WMI_TIMEOUT)?;
         if !out.status.success() {
             return None;
         }
@@ -743,6 +747,60 @@ fn wmi_snapshot() -> Option<HashMap<String, String>> {
         }
     }
     Some(snap)
+}
+
+/// 带超时的子进程执行：独立线程排空 stdout/stderr 防管道写满死锁，超时强杀子进程并返回 None
+fn run_with_timeout(
+    cmd: &mut std::process::Command,
+    timeout: Duration,
+) -> Option<std::process::Output> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let out_pipe = child.stdout.take();
+    let err_pipe = child.stderr.take();
+    let out_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut r) = out_pipe {
+            let _ = r.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut r) = err_pipe {
+            let _ = r.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let stdout = out_reader.join().unwrap_or_default();
+    let stderr = err_reader.join().unwrap_or_default();
+    status.map(|status| std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 /// agent 作为服务运行没有控制台，powershell 子进程不应尝试创建窗口。

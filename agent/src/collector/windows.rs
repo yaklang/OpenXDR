@@ -72,25 +72,29 @@ fn start(
             let image = to_win32_path(&raw_image);
             let name = image.rsplit('\\').next().unwrap_or(&image).to_string();
 
-            let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
             if event_id == EVENT_PROCESS_START {
                 let ppid: Option<u32> = parser.try_parse("ParentProcessID").ok();
-                // 事件里没有命令行和用户名，现场从进程句柄补
+                // 跨进程读句柄与算文件哈希全部在 ProcessRegistry 锁外完成
                 let (cmd_line, username) = inspect::describe(pid);
-                let events = emit_process(
-                    &cb_agent_id,
-                    &mut reg,
-                    ACTIVITY_LAUNCH,
-                    ProcessInfo {
-                        pid,
-                        name: &name,
-                        exe: Some(&image),
-                        cmd_line: cmd_line.as_deref(),
-                        ppid,
-                        username,
-                        ..Default::default()
-                    },
-                );
+                let exe_sha256 = super::hash::exe_sha256(&image);
+                let events = {
+                    let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
+                    emit_process(
+                        &cb_agent_id,
+                        &mut reg,
+                        ACTIVITY_LAUNCH,
+                        ProcessInfo {
+                            pid,
+                            name: &name,
+                            exe: Some(&image),
+                            cmd_line: cmd_line.as_deref(),
+                            ppid,
+                            username,
+                            exe_sha256: Some(exe_sha256),
+                            ..Default::default()
+                        },
+                    )
+                };
                 for event in events {
                     cb_tx.send(event);
                 }
@@ -98,18 +102,24 @@ fn start(
                 // Stop：进程已退出，句柄多半开不到，命令行和用户名留空；
                 // ExitCode 直接在 ETW Stop 事件载荷里，GUID 走注册表复用启动时的映射
                 let exit_code: Option<u32> = parser.try_parse("ExitCode").ok();
-                for event in emit_process(
-                    &cb_agent_id,
-                    &mut reg,
-                    ACTIVITY_TERMINATE,
-                    ProcessInfo {
-                        pid,
-                        name: &name,
-                        exe: Some(&image),
-                        exit_code,
-                        ..Default::default()
-                    },
-                ) {
+                let exe_sha256 = super::hash::exe_sha256(&image);
+                let events = {
+                    let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
+                    emit_process(
+                        &cb_agent_id,
+                        &mut reg,
+                        ACTIVITY_TERMINATE,
+                        ProcessInfo {
+                            pid,
+                            name: &name,
+                            exe: Some(&image),
+                            exit_code,
+                            exe_sha256: Some(exe_sha256),
+                            ..Default::default()
+                        },
+                    )
+                };
+                for event in events {
                     cb_tx.send(event);
                 }
             }
@@ -267,15 +277,17 @@ pub(super) mod inspect {
                 &mut len,
             )
         };
-        if status != 0 {
+        if status != 0 || (len as usize) < std::mem::size_of::<UNICODE_STRING>() {
             return None;
         }
-        // SAFETY: status 为 0 表示系统已在 buf 开头写好 UNICODE_STRING 头（len 至少容纳它），
+        // SAFETY: status 为 0 且 len 至少容纳 UNICODE_STRING 头，
         // buf 8 字节对齐，满足 UNICODE_STRING 的对齐；引用只在 buf 存活的本函数内使用。
         let us = unsafe { &*buf.as_ptr().cast::<UNICODE_STRING>() };
-        // SAFETY: ProcessCommandLineInformation 返回的 Buffer 指向同一块 buf 中紧跟头部的字符串本体，
-        // Length 是字节数且已由系统保证落在 len 之内，按 u16 读 Length / 2 个不越界；
-        // buf 在 chars 使用期间存活且未被改动。依赖系统总给出非空 Buffer（长度为 0 时也指向 buf 内）。
+        if us.Buffer.is_null() || us.Length == 0 {
+            return None;
+        }
+        // SAFETY: 上面已校验 us.Buffer 非空且 us.Length > 0；ProcessCommandLineInformation 返回的 Buffer
+        // 指向同一块 buf 中紧跟头部的字符串本体，按 u16 读 Length / 2 个不越界，buf 在期间存活未被改动。
         let chars = unsafe { std::slice::from_raw_parts(us.Buffer, (us.Length / 2) as usize) };
         Some(String::from_utf16_lossy(chars))
     }

@@ -14,8 +14,9 @@ use super::inventory::{Owner, Proto};
 use super::inventory_linux::Scanner;
 use super::netwatch::{self, ConnInfo, ConnSampler};
 use super::{
-    ACTIVITY_LAUNCH, ACTIVITY_TERMINATE, EventSink, ProcessInfo, ProcessRegistry, container,
-    emit_process, netlink, poll, seeded_registry, stdio_socket_event, stdiosock,
+    ACTIVITY_LAUNCH, ACTIVITY_TERMINATE, EventSink, LoginProbe, ProcessInfo, ProcessRegistry,
+    container, emit_process, hash, netlink, poll, resolve_launch_exe, seeded_registry, sshsession,
+    stdio_socket_event, stdiosock,
 };
 use crate::pb::AgentEvent;
 
@@ -309,10 +310,7 @@ fn start_process(
                     let Some(ev) = decode::<ExecEvent>(b) else {
                         continue;
                     };
-                    let events = {
-                        let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
-                        to_agent_event(&agent_id, &mut reg, &ev)
-                    };
+                    let events = to_agent_event_async(&agent_id, &registry, &ev).await;
                     for event in events {
                         if !tx.send(event) {
                             return;
@@ -340,10 +338,7 @@ fn start_process(
                     let Some(ev) = decode::<ExitEvent>(b) else {
                         continue;
                     };
-                    let events = {
-                        let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
-                        to_exit_event(&agent_id, &mut reg, &ev)
-                    };
+                    let events = to_exit_event_async(&agent_id, &registry, &ev).await;
                     for event in events {
                         if !tx.send(event) {
                             return;
@@ -585,6 +580,9 @@ fn to_conn_event(agent_id: &str, state: &ConnState, ev: &ConnEvent) -> Option<Ag
         let mut owners = lock(&state.dns_owners);
         if owners.len() >= 4096 {
             owners.retain(|_, (_, t)| t.elapsed() < OWNER_TTL);
+            if owners.len() >= 4096 {
+                owners.clear();
+            }
         }
         owners.insert(ev.sport, (ev.pid, Instant::now()));
         return None;
@@ -846,6 +844,80 @@ fn untruncate(kernel: String, proc_line: Option<String>) -> String {
     }
 }
 
+/// 异步处理 eBPF exec 事件：sshsession 探测（可能等 journald）和 exe_sha256（可能读大文件）
+/// 全部在 ProcessRegistry 锁外异步完成，既不阻塞 Tokio worker 也不拉长锁持有时间
+async fn to_agent_event_async(
+    agent_id: &str,
+    registry: &Shared<ProcessRegistry>,
+    ev: &ExecEvent,
+) -> Vec<AgentEvent> {
+    let name = cstr(&ev.comm).into_owned();
+    let exe = cstr(&ev.filename).into_owned();
+    let cmd_line = match ev.cmd_line() {
+        Some(line) if ev.argv_truncated != 0 => {
+            Some(untruncate(line, super::container::cmd_line(ev.pid)))
+        }
+        line => line.or_else(|| super::container::cmd_line(ev.pid)),
+    };
+    let ppid = (ev.ppid != 0)
+        .then_some(ev.ppid)
+        .or_else(|| super::container::ppid(ev.pid));
+    let username =
+        super::execfacts::username("/etc/passwd", ev.uid).unwrap_or_else(|| ev.uid.to_string());
+    let resolved_exe = resolve_launch_exe(ev.pid, Some(&exe), &name);
+    let eff_exe = resolved_exe.as_deref().unwrap_or(&exe);
+    let exe_sha256 = hash::exe_sha256_async(eff_exe).await;
+    let login = LoginProbe::from_of(sshsession::of_async(ev.pid, ppid).await);
+
+    let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
+    emit_process(
+        agent_id,
+        &mut reg,
+        ACTIVITY_LAUNCH,
+        ProcessInfo {
+            pid: ev.pid,
+            name: &name,
+            exe: Some(eff_exe),
+            cmd_line: cmd_line.as_deref(),
+            ppid,
+            username,
+            exe_sha256: Some(exe_sha256),
+            login,
+            ..Default::default()
+        },
+    )
+}
+
+/// 异步处理 eBPF exit 事件：先短锁取回 exe 路径，在锁外异步算哈希，再短锁更新注册表
+async fn to_exit_event_async(
+    agent_id: &str,
+    registry: &Shared<ProcessRegistry>,
+    ev: &ExitEvent,
+) -> Vec<AgentEvent> {
+    let known_exe = registry
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .known(ev.pid)
+        .and_then(|k| k.exe);
+    let exe_sha256 = match known_exe.as_deref() {
+        Some(p) => hash::exe_sha256_async(p).await,
+        None => None,
+    };
+    let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
+    emit_process(
+        agent_id,
+        &mut reg,
+        ACTIVITY_TERMINATE,
+        ProcessInfo {
+            pid: ev.pid,
+            exit_code: (ev.has_code != 0).then_some(ev.code as u32),
+            exe_sha256: Some(exe_sha256),
+            ..Default::default()
+        },
+    )
+}
+
+#[cfg(test)]
 fn to_agent_event(
     agent_id: &str,
     registry: &mut ProcessRegistry,
@@ -886,6 +958,7 @@ fn to_agent_event(
 
 /// 退出事件只有 pid 与退出码（tracepoint 触发时进程已在退出途中），
 /// 名字、路径、GUID 与容器走注册表复用启动时的登记。
+#[cfg(test)]
 fn to_exit_event(
     agent_id: &str,
     registry: &mut ProcessRegistry,

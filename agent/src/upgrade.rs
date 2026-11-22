@@ -24,6 +24,9 @@ const RELEASE_PUBKEY: Option<&str> = option_env!("OPENXDR_RELEASE_PUBKEY");
 /// 发布签名的域前缀，与 server/cmd/signrelease 一致
 const RELEASE_CONTEXT: &[u8] = b"openxdr-agent-release-v1\0";
 
+/// 自动升级安装包大小上限（256 MiB），防止异常或恶意超大流耗尽内存
+const MAX_PACKAGE_BYTES: usize = 256 * 1024 * 1024;
+
 /// 当前二进制的哈希，进程生命周期内不变，算一次即可。算不出来返回空串，server 就不会要求升级。
 pub fn self_sha256() -> &'static str {
     static SHA: OnceLock<String> = OnceLock::new();
@@ -66,20 +69,35 @@ async fn download(
     platform: &str,
     sha256: &str,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let mut stream = client
+    let stream = client
         .download_agent(pb::DownloadRequest {
             platform: platform.into(),
             sha256: sha256.into(),
         })
         .await?
         .into_inner();
-    let mut data = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        data.extend(chunk?.data);
-    }
+    let data = collect_chunks(stream, MAX_PACKAGE_BYTES).await?;
     let got = sha256_hex(data.as_slice())?;
     if got != sha256 {
         return Err(format!("下载的安装包哈希不符：{got}").into());
+    }
+    Ok(data)
+}
+
+async fn collect_chunks<S>(
+    mut stream: S,
+    max_bytes: usize,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>>
+where
+    S: tokio_stream::Stream<Item = Result<pb::AgentChunk, tonic::Status>> + Unpin,
+{
+    let mut data = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk?.data;
+        if data.len().saturating_add(bytes.len()) > max_bytes {
+            return Err(format!("安装包大小超过上限（{max_bytes} 字节），中止下载").into());
+        }
+        data.extend_from_slice(&bytes);
     }
     Ok(data)
 }
@@ -177,22 +195,23 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     s.into()
 }
 
-#[cfg(unix)]
 fn write_executable(path: &Path, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o755)
-        .open(path)?;
-    f.write_all(data)
-}
-
-#[cfg(not(unix))]
-fn write_executable(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    std::fs::write(path, data)
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o755).custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut f = opts.open(path)?;
+    f.write_all(data)?;
+    f.sync_all()
 }
 
 #[cfg(test)]
@@ -309,5 +328,56 @@ mod tests {
             with_suffix(Path::new("/usr/local/bin/openxdr-agent"), ".prev"),
             PathBuf::from("/usr/local/bin/openxdr-agent.prev")
         );
+    }
+
+    #[tokio::test]
+    async fn download_aborts_when_package_exceeds_limit() {
+        let chunks = vec![
+            Ok(pb::AgentChunk { data: vec![1u8; 6] }),
+            Ok(pb::AgentChunk { data: vec![2u8; 5] }),
+        ];
+        let err = collect_chunks(tokio_stream::iter(chunks), 10)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("超过上限"), "{err}");
+
+        let ok_chunks = vec![
+            Ok(pb::AgentChunk { data: vec![1u8; 4] }),
+            Ok(pb::AgentChunk { data: vec![2u8; 6] }),
+        ];
+        let got = collect_chunks(tokio_stream::iter(ok_chunks), 10)
+            .await
+            .unwrap();
+        assert_eq!(got.len(), 10);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_executable_replaces_stale_symlink_without_following() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("openxdr-write-exe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let victim = dir.join("victim");
+        std::fs::write(&victim, b"untouched").unwrap();
+        let new_path = dir.join("agent.new");
+        std::os::unix::fs::symlink(&victim, &new_path).unwrap();
+
+        write_executable(&new_path, b"#!/bin/sh\necho hi\n").unwrap();
+        assert_eq!(
+            std::fs::read(&victim).unwrap(),
+            b"untouched",
+            "不得跟随旧符号链接改写目标"
+        );
+        assert!(
+            !std::fs::symlink_metadata(&new_path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::metadata(&new_path).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

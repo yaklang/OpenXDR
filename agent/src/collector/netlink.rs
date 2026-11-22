@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 
 use super::liveness::{Stop, Worker};
 use super::{
-    ACTIVITY_LAUNCH, ACTIVITY_TERMINATE, EventSink, ProcessInfo, ProcessRegistry, emit_process,
-    username_of,
+    ACTIVITY_LAUNCH, ACTIVITY_TERMINATE, EventSink, LoginProbe, ProcessInfo, ProcessRegistry,
+    emit_process, hash, resolve_launch_exe, sshsession, username_of,
 };
 
 const NETLINK_CONNECTOR: libc::c_int = 11;
@@ -131,6 +131,29 @@ fn pump(
                 forks.remove(&event.pid);
             }
             let Some(d) = describe(&event) else { continue };
+            // 阻塞操作（sshsession 探测可能等待 journald、exe_sha256 同步读文件）全部在 ProcessRegistry 锁外完成
+            let (resolved_exe, exe_sha256, login, username) = if d.activity == ACTIVITY_LAUNCH {
+                let resolved = resolve_launch_exe(d.pid, d.exe.as_deref(), &d.name);
+                let eff_exe = resolved.as_deref().or(d.exe.as_deref());
+                let sha = eff_exe.and_then(hash::exe_sha256);
+                let login = LoginProbe::from_of(sshsession::of(d.pid, d.ppid));
+                let user = username_of(d.pid);
+                (resolved, Some(sha), login, user)
+            } else {
+                let fallback_exe = if d.exe.is_none() {
+                    registry
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .known(d.pid)
+                        .and_then(|k| k.exe)
+                } else {
+                    None
+                };
+                let eff_exe = d.exe.as_deref().or(fallback_exe.as_deref());
+                let sha = eff_exe.and_then(hash::exe_sha256);
+                (None, Some(sha), LoginProbe::Unprobed, username_of(d.pid))
+            };
+            let exe = resolved_exe.as_deref().or(d.exe.as_deref());
             let mut registry = registry.lock().unwrap_or_else(|e| e.into_inner());
             // 若父进程是未调用 execve 的中间子 shell，顺着 fork 表向上找到已登记祖先
             let ppid = resolve_fork_ppid(d.ppid, &forks, &registry);
@@ -141,11 +164,13 @@ fn pump(
                 ProcessInfo {
                     pid: d.pid,
                     name: &d.name,
-                    exe: d.exe.as_deref(),
+                    exe,
                     cmd_line: d.cmd_line.as_deref(),
                     ppid,
-                    username: username_of(d.pid),
+                    username,
                     exit_code: d.exit_code,
+                    exe_sha256,
+                    login,
                 },
             );
             drop(registry);
@@ -191,51 +216,63 @@ fn parse_events(buf: &[u8]) -> Vec<ProcEvent> {
     let mut events = Vec::new();
     let mut offset = 0;
 
-    while offset + PROC_EVENT_OFFSET <= buf.len() {
+    while offset + NLMSG_HDR_LEN <= buf.len() {
         let msg = &buf[offset..];
         let len = u32::from_ne_bytes(msg[0..4].try_into().unwrap()) as usize;
-        if len < PROC_EVENT_OFFSET || offset + len > buf.len() {
+        if len < NLMSG_HDR_LEN || offset + len > buf.len() {
             break;
         }
 
-        let what = u32::from_ne_bytes(
-            msg[PROC_EVENT_OFFSET..PROC_EVENT_OFFSET + 4]
-                .try_into()
-                .unwrap(),
-        );
-        let data = &msg[EVENT_DATA_OFFSET..];
-        match what {
-            // exec: process_pid, process_tgid
-            PROC_EVENT_EXEC if data.len() >= 8 => events.push(ProcEvent {
-                what,
-                pid: u32::from_ne_bytes(data[0..4].try_into().unwrap()),
-                ppid: None,
-                exit_code: None,
-            }),
-            // fork: parent_pid, parent_tgid, child_pid, child_tgid。只记主线程（child_pid == child_tgid）的进程级 fork
-            PROC_EVENT_FORK if data.len() >= 16 && data[8..12] == data[12..16] => {
-                events.push(ProcEvent {
-                    what,
-                    pid: u32::from_ne_bytes(data[12..16].try_into().unwrap()),
-                    ppid: Some(u32::from_ne_bytes(data[4..8].try_into().unwrap())),
-                    exit_code: None,
-                })
-            }
-            // exit: process_pid, process_tgid, exit_code, exit_signal。
-            // 每个线程退出都会来一条，只有主线程（pid == tgid）退出才是进程退出
-            PROC_EVENT_EXIT if data.len() >= 16 && data[0..4] == data[4..8] => {
-                events.push(ProcEvent {
+        if len >= EVENT_DATA_OFFSET {
+            let what = u32::from_ne_bytes(
+                msg[PROC_EVENT_OFFSET..PROC_EVENT_OFFSET + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            // 按单条消息长度截断，绝不越界读入下一条合包消息
+            let data = &msg[EVENT_DATA_OFFSET..len];
+            match what {
+                // exec: process_pid, process_tgid
+                PROC_EVENT_EXEC if data.len() >= 8 => events.push(ProcEvent {
                     what,
                     pid: u32::from_ne_bytes(data[0..4].try_into().unwrap()),
                     ppid: None,
-                    exit_code: Some(u32::from_ne_bytes(data[8..12].try_into().unwrap())),
-                })
+                    exit_code: None,
+                }),
+                // fork: parent_pid, parent_tgid, child_pid, child_tgid。只记主线程（child_pid == child_tgid）的进程级 fork
+                PROC_EVENT_FORK if data.len() >= 16 && data[8..12] == data[12..16] => {
+                    events.push(ProcEvent {
+                        what,
+                        pid: u32::from_ne_bytes(data[12..16].try_into().unwrap()),
+                        ppid: Some(u32::from_ne_bytes(data[4..8].try_into().unwrap())),
+                        exit_code: None,
+                    })
+                }
+                // exit: process_pid, process_tgid, exit_code, exit_signal。
+                // 每个线程退出都会来一条，只有主线程（pid == tgid）退出才是进程退出
+                PROC_EVENT_EXIT if data.len() >= 16 && data[0..4] == data[4..8] => {
+                    events.push(ProcEvent {
+                        what,
+                        pid: u32::from_ne_bytes(data[0..4].try_into().unwrap()),
+                        ppid: None,
+                        exit_code: Some(u32::from_ne_bytes(data[8..12].try_into().unwrap())),
+                    })
+                }
+                _ => {}
             }
-            _ => {}
         }
 
         // netlink 消息按 4 字节对齐
-        offset += (len + 3) & !3;
+        let Some(aligned) = len.checked_add(3).map(|v| v & !3) else {
+            break;
+        };
+        if aligned == 0 {
+            break;
+        }
+        let Some(next) = offset.checked_add(aligned) else {
+            break;
+        };
+        offset = next;
     }
     events
 }
@@ -453,6 +490,41 @@ mod tests {
         let data = 1234u32.to_ne_bytes(); // 只有 process_pid
         let events = parse_events(&build_msg(PROC_EVENT_EXIT, &data));
         assert!(events.is_empty());
+    }
+
+    /// 36 字节（如 NLMSG_ERROR）、48 字节短消息与多消息合包不得 panic，也不得越界读入下一条消息
+    #[test]
+    fn parse_short_messages_and_coalesced_batch_without_panic() {
+        // 36 字节 NLMSG_ERROR 样式短消息
+        let mut short36 = vec![0u8; 36];
+        short36[0..4].copy_from_slice(&36u32.to_ne_bytes());
+        assert!(parse_events(&short36).is_empty());
+
+        // 48 字节短消息（大于 PROC_EVENT_OFFSET=36 但小于 EVENT_DATA_OFFSET=52）
+        let mut short48 = vec![0u8; 48];
+        short48[0..4].copy_from_slice(&48u32.to_ne_bytes());
+        short48[PROC_EVENT_OFFSET..PROC_EVENT_OFFSET + 4]
+            .copy_from_slice(&PROC_EVENT_EXEC.to_ne_bytes());
+        assert!(parse_events(&short48).is_empty());
+
+        // 合包：36 字节短消息 + 48 字节短消息 + 截断的 exec（仅 4 字节数据）+ 合法 exec
+        let mut trunc_exec = build_msg(PROC_EVENT_EXEC, &999u32.to_ne_bytes());
+        // 确认即使后面紧跟合法消息，trunc_exec 也不会越界借用下一条消息字节凑够 8 字节
+        let mut good_data = Vec::new();
+        good_data.extend_from_slice(&777u32.to_ne_bytes());
+        good_data.extend_from_slice(&777u32.to_ne_bytes());
+        let good_exec = build_msg(PROC_EVENT_EXEC, &good_data);
+
+        let mut batch = Vec::new();
+        batch.extend_from_slice(&short36);
+        batch.extend_from_slice(&short48);
+        batch.append(&mut trunc_exec);
+        batch.extend_from_slice(&good_exec);
+
+        let events = parse_events(&batch);
+        assert_eq!(events.len(), 1, "只应解析出末尾那条完整的 exec");
+        assert_eq!(events[0].what, PROC_EVENT_EXEC);
+        assert_eq!(events[0].pid, 777);
     }
 
     /// describe 把 exit 事件标成 Terminate，/proc 读不到时字段留空但事件不丢。

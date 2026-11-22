@@ -3,6 +3,7 @@
 //!
 //! 独立表意味着解除隔离只需删掉这张表，不会碰到主机原有的防火墙规则。
 
+use std::net::{IpAddr, SocketAddr};
 use std::process::Command as Proc;
 
 use super::Outcome;
@@ -17,7 +18,10 @@ pub fn isolate(cmd: &Command) -> Outcome {
         return Outcome::failed("拒绝执行：未指定放行地址，隔离后将无法接收解除指令");
     }
 
-    let script = build_ruleset(&cmd.allow_endpoints);
+    let script = match build_ruleset(&cmd.allow_endpoints) {
+        Ok(s) => s,
+        Err(e) => return Outcome::failed(format!("拒绝执行：{e}")),
+    };
     match apply(&script) {
         Ok(()) => Outcome::ok(format!(
             "已隔离本机，放行 {}",
@@ -38,14 +42,21 @@ pub fn unisolate(_cmd: &Command) -> Outcome {
     }
 }
 
-/// 生成完整规则集。每次隔离都先删后建，保证规则是确定的而不是叠加的。
 /// 本机当前是否处于隔离：隔离表还在
 pub fn active() -> bool {
     run_nft(&["list", "table", "inet", TABLE]).is_ok()
 }
 
-fn build_ruleset(allow: &[String]) -> String {
+/// 生成完整规则集。在同一 nft 事务里先建再删再建，避免旧表已删但新规则失败导致失陷主机解封。
+fn build_ruleset(allow: &[String]) -> Result<String, String> {
+    let mut parsed = Vec::with_capacity(allow.len());
+    for ep in allow {
+        parsed.push(parse_endpoint(ep)?);
+    }
+
     let mut s = String::new();
+    s.push_str(&format!("add table inet {TABLE}\n"));
+    s.push_str(&format!("delete table inet {TABLE}\n"));
     s.push_str(&format!("add table inet {TABLE}\n"));
     s.push_str(&format!(
         "add chain inet {TABLE} input {{ type filter hook input priority -100 ; policy drop ; }}\n"
@@ -53,16 +64,24 @@ fn build_ruleset(allow: &[String]) -> String {
     s.push_str(&format!(
         "add chain inet {TABLE} output {{ type filter hook output priority -100 ; policy drop ; }}\n"
     ));
-    for chain in ["input", "output"] {
-        s.push_str(&format!("add rule inet {TABLE} {chain} iif lo accept\n"));
-        s.push_str(&format!("add rule inet {TABLE} {chain} oif lo accept\n"));
+    s.push_str(&format!(
+        "add chain inet {TABLE} forward {{ type filter hook forward priority -100 ; policy drop ; }}\n"
+    ));
+    s.push_str(&format!("add rule inet {TABLE} input iif lo accept\n"));
+    s.push_str(&format!("add rule inet {TABLE} output oif lo accept\n"));
+    for chain in ["input", "output", "forward"] {
         s.push_str(&format!(
             "add rule inet {TABLE} {chain} ct state established,related accept\n"
         ));
     }
-    for ep in allow {
-        let (host, port) = split_endpoint(ep);
-        let family = if host.contains(':') { "ip6" } else { "ip" };
+    // IPv6 放行必要 NDP 报文，防止邻居缓存过期后连控制面一起自锁
+    for chain in ["input", "output"] {
+        s.push_str(&format!(
+            "add rule inet {TABLE} {chain} icmpv6 type {{ nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert }} accept\n"
+        ));
+    }
+    for (host, port) in parsed {
+        let family = if host.is_ipv6() { "ip6" } else { "ip" };
         let port_clause = port.map_or(String::new(), |p| format!(" tcp dport {p}"));
         s.push_str(&format!(
             "add rule inet {TABLE} output {family} daddr {host}{port_clause} accept\n"
@@ -72,25 +91,28 @@ fn build_ruleset(allow: &[String]) -> String {
             "add rule inet {TABLE} input {family} saddr {host}{sport_clause} accept\n"
         ));
     }
-    s
+    Ok(s)
 }
 
-/// 拆 "host:port"。IPv6 要求写成 [addr]:port，否则无法与地址里的冒号区分。
-fn split_endpoint(ep: &str) -> (&str, Option<&str>) {
-    if let Some(rest) = ep.strip_prefix('[')
-        && let Some((host, tail)) = rest.split_once(']')
-    {
-        return (host, tail.strip_prefix(':'));
+/// 严格解析放行地址：只接受合法 `IpAddr` 或带非零端口的 `SocketAddr`（IPv6 带端口须写成 `[addr]:port`）
+fn parse_endpoint(ep: &str) -> Result<(IpAddr, Option<u16>), String> {
+    let trimmed = ep.trim();
+    if trimmed.is_empty() {
+        return Err("放行地址为空".into());
     }
-    match ep.rsplit_once(':') {
-        Some((host, port)) if !host.contains(':') => (host, Some(port)),
-        _ => (ep, None),
+    if let Ok(sa) = trimmed.parse::<SocketAddr>() {
+        if sa.port() == 0 {
+            return Err(format!("放行地址端口不能为 0：{ep}"));
+        }
+        return Ok((sa.ip(), Some(sa.port())));
     }
+    if let Ok(ip) = trimmed.parse::<IpAddr>() {
+        return Ok((ip, None));
+    }
+    Err(format!("放行地址无效（须为合法 IP 或 IP:端口）：{ep}"))
 }
 
 fn apply(script: &str) -> Result<(), String> {
-    // 先删旧表：隔离必须是幂等的，重复下发不应叠加出半套规则
-    let _ = run_nft(&["delete", "table", "inet", TABLE]);
     nft_script(script)
 }
 
@@ -136,24 +158,41 @@ mod tests {
 
     fn rules(allow: &[&str]) -> String {
         let v: Vec<String> = allow.iter().map(|s| s.to_string()).collect();
-        build_ruleset(&v)
+        build_ruleset(&v).unwrap()
     }
 
     #[test]
-    fn ruleset_has_drop_by_default_and_keeps_control_plane() {
+    fn ruleset_has_atomic_rebuild_forward_ndp_and_drop_by_default() {
         let s = rules(&["1.2.3.4:443"]);
-        // 独立表 + 双向 drop，不动主机原有规则
-        assert!(s.contains(&format!("add table inet {TABLE}")));
-        assert_eq!(
-            s.matches(&format!("add table inet {TABLE}")).count(),
-            1,
-            "规则应确定而非叠加"
+        // 原子重建：同一事务内 add -> delete -> add，避免先删表后加载失败导致失陷主机解封
+        let add = format!("add table inet {TABLE}\n");
+        let del = format!("delete table inet {TABLE}\n");
+        assert!(
+            s.starts_with(&format!("{add}{del}{add}")),
+            "应以原子重建序列开头：{s}"
         );
-        assert!(s.contains("policy drop"));
+        assert_eq!(
+            s.matches("policy drop").count(),
+            3,
+            "input/output/forward 三链均默认丢弃"
+        );
+        assert!(s.contains(
+            "add chain inet openxdr_isolation forward { type filter hook forward priority -100 ; policy drop ; }"
+        ));
+        assert!(s.contains(
+            "add rule inet openxdr_isolation forward ct state established,related accept"
+        ));
         // 回环与已建立连接必须放行，否则会把自己锁死在门外
         assert!(s.contains("iif lo accept"));
         assert!(s.contains("oif lo accept"));
         assert!(s.contains("ct state established,related accept"));
+        // IPv6 NDP 放行，防邻居缓存过期自锁
+        assert!(s.contains(
+            "add rule inet openxdr_isolation input icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept"
+        ));
+        assert!(s.contains(
+            "add rule inet openxdr_isolation output icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept"
+        ));
     }
 
     #[test]
@@ -165,7 +204,7 @@ mod tests {
 
     #[test]
     fn ruleset_ipv6_and_portless() {
-        let s = rules(&["[2001:db8::5]:8443", "10.0.0.9"]);
+        let s = rules(&["[2001:0db8::5]:8443", "10.0.0.9"]);
         assert!(s.contains("output ip6 daddr 2001:db8::5 tcp dport 8443 accept"));
         assert!(s.contains("input ip6 saddr 2001:db8::5 tcp sport 8443 accept"));
         // 无端口：不带端口子句，整段地址放行
@@ -174,22 +213,51 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_split_ipv4_port() {
-        assert_eq!(split_endpoint("1.2.3.4:443"), ("1.2.3.4", Some("443")));
-        assert_eq!(split_endpoint("10.0.0.9"), ("10.0.0.9", None));
+    fn rejects_invalid_or_injected_endpoints() {
+        for bad in [
+            "",
+            "   ",
+            "1.2.3.4:0",
+            "1.2.3.4:99999",
+            "1.2.3.4:abc",
+            "1.2.3.4; flush ruleset",
+            "1.2.3.4\nflush ruleset",
+            "example.com:443",
+            "[1.2.3.4",
+            "1.2.3.4]",
+            "[2001:db8::1]",
+            "[2001:db8::1]:0",
+        ] {
+            let v = vec!["10.0.0.1:443".to_string(), bad.to_string()];
+            assert!(build_ruleset(&v).is_err(), "{bad:?} 应拒绝");
+        }
+        // isolate 整条指令应直接失败
+        let cmd = Command {
+            allow_endpoints: vec!["1.2.3.4; flush ruleset".into()],
+            ..Default::default()
+        };
+        let r = isolate(&cmd);
+        assert_eq!(r.status, crate::pb::command_result::Status::Failed);
+        assert!(r.detail.contains("拒绝执行"), "{}", r.detail);
     }
 
     #[test]
-    fn endpoint_split_ipv6_bracket() {
+    fn endpoint_parse_valid() {
         assert_eq!(
-            split_endpoint("[2001:db8::1]:8443"),
-            ("2001:db8::1", Some("8443"))
+            parse_endpoint("1.2.3.4:443").unwrap(),
+            ("1.2.3.4".parse().unwrap(), Some(443))
         );
-        // 裸 IPv6 不写端口：整体当 host，不拆开地址里的冒号
-        assert_eq!(split_endpoint("2001:db8::1"), ("2001:db8::1", None));
-        assert_eq!(split_endpoint("2001:db8::1:53"), ("2001:db8::1:53", None));
-        // 畸形方括号：整体当 host，不 panic
-        assert_eq!(split_endpoint("[1.2.3.4"), ("[1.2.3.4", None));
-        assert_eq!(split_endpoint("1.2.3.4]"), ("1.2.3.4]", None));
+        assert_eq!(
+            parse_endpoint("10.0.0.9").unwrap(),
+            ("10.0.0.9".parse().unwrap(), None)
+        );
+        assert_eq!(
+            parse_endpoint("[2001:db8::1]:8443").unwrap(),
+            ("2001:db8::1".parse().unwrap(), Some(8443))
+        );
+        assert_eq!(
+            parse_endpoint("2001:db8::1").unwrap(),
+            ("2001:db8::1".parse().unwrap(), None)
+        );
     }
 }

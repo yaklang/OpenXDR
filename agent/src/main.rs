@@ -360,6 +360,16 @@ fn register_request() -> pb::RegisterRequest {
     }
 }
 
+/// 同时并发执行的 Exec 指令上限，防命令风暴耗尽进程与文件描述符
+const MAX_CONCURRENT_EXEC: usize = 8;
+
+/// 当前系统时间的 Unix 秒数；时钟回退到 Unix 纪元之前时直接报错，绝不回退成 0 放行过期指令
+fn unix_secs(now: std::time::SystemTime) -> Result<i64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .map_err(|_| "本机系统时钟早于 Unix 纪元，拒绝验签".to_string())
+}
+
 /// 常驻指令通道：先发一条带 agent_id 的空结果认领连接，
 /// 之后逐条执行 server 推来的指令并回执。
 /// 指令通道断开时自己重连，不牵动事件补传。断开多半是 server 重启：重连前重报一次注册，
@@ -372,6 +382,7 @@ async fn command_loop(
     queue: delivery::Queue,
     signer: Option<Vec<u8>>,
 ) {
+    let exec_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_EXEC));
     let receiving = async {
         loop {
             command_stream(
@@ -379,6 +390,7 @@ async fn command_loop(
                 agent_id.clone(),
                 queue.clone(),
                 signer.as_deref(),
+                exec_slots.clone(),
             )
             .await;
             eprintln!("指令通道断开，5 秒后重连");
@@ -438,6 +450,7 @@ async fn command_stream(
     agent_id: String,
     queue: delivery::Queue,
     signer: Option<&[u8]>,
+    exec_slots: std::sync::Arc<tokio::sync::Semaphore>,
 ) {
     let (tx, rx) = tokio::sync::mpsc::channel(32);
     // 认领消息：只带 agent_id，command_id 为空
@@ -461,13 +474,13 @@ async fn command_stream(
     };
 
     while let Ok(Some(sealed)) = inbound.message().await {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs() as i64);
-        let cmd = match respond::signed::open(&sealed, signer, &agent_id, now) {
-            Ok(cmd) => cmd,
+        let verified = unix_secs(std::time::SystemTime::now()).and_then(|now| {
+            respond::signed::open(&sealed, signer, &agent_id, now).map(|o| (o, now))
+        });
+        let (opened, now) = match verified {
+            Ok(v) => v,
             Err(detail) => {
-                // 不占执行回执：伪造的指令不配消耗真实指令的 ID
+                // 不占执行回执：伪造的指令或时钟异常不配消耗真实指令的 ID
                 eprintln!("拒绝指令 {}: {detail}", sealed.id);
                 let _ = tx
                     .send(pb::CommandResult {
@@ -481,15 +494,47 @@ async fn command_stream(
                 continue;
             }
         };
-        // exec 可能跑很久，并发执行；结束进程与隔离保持顺序，先隔离后解除不能颠倒
+        let respond::signed::Opened {
+            command: cmd,
+            expires_unix,
+        } = opened;
+        // exec 可能跑很久，并发执行（受并发上限保护）；结束进程与隔离保持顺序，先隔离后解除不能颠倒
         if cmd.kind() == pb::CommandKind::Exec {
-            tokio::spawn(run_command(
-                agent_id.clone(),
-                cmd,
-                queue.clone(),
-                tx.clone(),
-            ));
-        } else if !run_command(agent_id.clone(), cmd, queue.clone(), tx.clone()).await {
+            match exec_slots.clone().try_acquire_owned() {
+                Ok(permit) => {
+                    let agent_id = agent_id.clone();
+                    let queue = queue.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let _permit = permit;
+                        run_command(agent_id, cmd, expires_unix, now, queue, tx).await;
+                    });
+                }
+                Err(_) => {
+                    let detail =
+                        format!("并发命令执行数已达上限（{MAX_CONCURRENT_EXEC}），拒绝执行");
+                    eprintln!("拒绝指令 {}: {detail}", cmd.id);
+                    let _ = tx
+                        .send(pb::CommandResult {
+                            agent_id: agent_id.clone(),
+                            command_id: cmd.id,
+                            status: pb::command_result::Status::Failed as i32,
+                            detail,
+                            ..Default::default()
+                        })
+                        .await;
+                }
+            }
+        } else if !run_command(
+            agent_id.clone(),
+            cmd,
+            expires_unix,
+            now,
+            queue.clone(),
+            tx.clone(),
+        )
+        .await
+        {
             return;
         }
     }
@@ -500,12 +545,18 @@ async fn command_stream(
 async fn run_command(
     agent_id: String,
     cmd: pb::Command,
+    expires_unix: i64,
+    now_unix: i64,
     queue: delivery::Queue,
     stream: tokio::sync::mpsc::Sender<pb::CommandResult>,
 ) -> bool {
     let id = agent_id.clone();
     let command = cmd.id.clone();
-    match delivery::access(&queue, move |s| s.receipts.reserve(&id, &command)).await {
+    match delivery::access(&queue, move |s| {
+        s.receipts.reserve(&id, &command, expires_unix, now_unix)
+    })
+    .await
+    {
         Ok(true) => (),
         Ok(false) => {
             eprintln!("指令已有执行记录，不重复执行: {}", cmd.id);
@@ -669,11 +720,15 @@ mod command_tests {
             health::Health::new(),
         );
         // 未指定动作会产生明确失败回执，不触碰系统；重复投递也不能覆盖首次结果。
+        let now = unix_secs(std::time::SystemTime::now()).unwrap();
+        let exp = now + 3600;
         let (stream, mut streamed) = tokio::sync::mpsc::channel(4);
         assert!(
             run_command(
                 agent.clone(),
                 command.clone(),
+                exp,
+                now,
                 queue.clone(),
                 stream.clone()
             )
@@ -683,6 +738,8 @@ mod command_tests {
             run_command(
                 agent.clone(),
                 command.clone(),
+                exp,
+                now,
                 queue.clone(),
                 stream.clone()
             )
@@ -721,12 +778,26 @@ mod command_tests {
             assert!(received.iter().all(|r| r == &received[0]));
         }
 
+        // 回执已 ACK 删除但在 expires_unix 内重放同一指令，必须拒绝不重执行
+        assert!(
+            run_command(
+                agent.clone(),
+                command.clone(),
+                exp,
+                now,
+                queue.clone(),
+                stream.clone()
+            )
+            .await
+        );
+        assert!(streamed.try_recv().is_err(), "ACK 后重放不得再次执行");
+
         // 旧 server 没有独立回执接口：结果已走指令流，本地记录确认掉，不无限重传
         let old = pb::Command {
             id: uuid::Uuid::new_v4().to_string(),
             ..Default::default()
         };
-        assert!(run_command(agent.clone(), old, queue.clone(), stream).await);
+        assert!(run_command(agent.clone(), old, exp, now, queue.clone(), stream).await);
         mode.store(0, std::sync::atomic::Ordering::SeqCst);
         receipts::upload_once(&mut client, &queue, &agent)
             .await
@@ -834,6 +905,31 @@ mod command_tests {
         tasks.iter().for_each(|t| t.abort());
         std::fs::remove_dir_all(dir).unwrap();
         assert!(ended.is_ok(), "有待升级时指令通道断开应结束会话");
+    }
+
+    #[test]
+    fn clock_before_unix_epoch_is_rejected_not_zero() {
+        let before = std::time::UNIX_EPOCH - Duration::from_secs(1);
+        assert!(unix_secs(before).is_err());
+        assert!(unix_secs(std::time::SystemTime::now()).unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn exec_concurrency_is_capped_by_semaphore() {
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_EXEC));
+        let mut held = Vec::new();
+        for _ in 0..MAX_CONCURRENT_EXEC {
+            held.push(sem.clone().try_acquire_owned().expect("上限内应获准"));
+        }
+        assert!(
+            sem.clone().try_acquire_owned().is_err(),
+            "超过 {MAX_CONCURRENT_EXEC} 个并发 Exec 应拒绝"
+        );
+        held.pop();
+        assert!(
+            sem.try_acquire_owned().is_ok(),
+            "释放一个槽位后应恢复可获取"
+        );
     }
 }
 

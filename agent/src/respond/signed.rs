@@ -11,12 +11,25 @@ use crate::pb::{Command, SignedCommand};
 /// 签名域前缀，与 server 侧一致
 const CONTEXT: &[u8] = b"openxdr-command-v1\0";
 
+/// 指令信封允许的最大有效期跨度：server 实际签发 1 小时，这里给 24 小时余量容忍时钟偏差，
+/// 同时挡住异常超长 TTL 的签发或重放窗口膨胀
+pub const MAX_TTL_SECS: i64 = 24 * 3600;
+
+/// 验签解封后的指令与其信封过期时刻（供本地防重放记录使用）
+pub struct Opened {
+    pub command: Command,
+    pub expires_unix: i64,
+}
+
 pub fn open(
     cmd: &Command,
     signer: Option<&[u8]>,
     agent_id: &str,
     now_unix: i64,
-) -> Result<Command, String> {
+) -> Result<Opened, String> {
+    if now_unix <= 0 {
+        return Err("本机系统时钟异常，拒绝验签".into());
+    }
     let signer = signer.ok_or("本机未固定指令签名公钥（server 未配置签名或版本过旧）")?;
     let message = [CONTEXT, &cmd.envelope].concat();
     UnparsedPublicKey::new(&ED25519, signer)
@@ -33,7 +46,19 @@ pub fn open(
             envelope.expires_unix
         ));
     }
-    envelope.command.ok_or_else(|| "签名信封里没有指令".into())
+    let ttl = envelope.expires_unix.saturating_sub(now_unix);
+    if ttl > MAX_TTL_SECS {
+        return Err(format!(
+            "指令有效期过长（{ttl} 秒，上限 {MAX_TTL_SECS} 秒）"
+        ));
+    }
+    let command = envelope
+        .command
+        .ok_or_else(|| "签名信封里没有指令".to_string())?;
+    Ok(Opened {
+        command,
+        expires_unix: envelope.expires_unix,
+    })
 }
 
 #[cfg(test)]
@@ -75,10 +100,11 @@ mod tests {
     fn executes_only_the_signed_inner_command() {
         let key = key();
         let public = key.public_key().as_ref();
-        let inner = open(&sealed(&key, "a1", 100), Some(public), "a1", 50).unwrap();
-        assert_eq!(inner.id, "inner");
-        assert_eq!(inner.kind(), CommandKind::BlockNetwork);
-        assert!(inner.cmd.is_empty());
+        let opened = open(&sealed(&key, "a1", 100), Some(public), "a1", 50).unwrap();
+        assert_eq!(opened.expires_unix, 100);
+        assert_eq!(opened.command.id, "inner");
+        assert_eq!(opened.command.kind(), CommandKind::BlockNetwork);
+        assert!(opened.command.cmd.is_empty());
     }
 
     #[test]
@@ -99,6 +125,36 @@ mod tests {
             ..Default::default()
         };
         assert!(open(&unsigned, Some(public), "a1", 50).is_err());
+    }
+
+    #[test]
+    fn rejects_excessive_ttl_and_invalid_clock() {
+        let key = key();
+        let public = key.public_key().as_ref();
+        let now = 1_700_000_000i64;
+        // 刚好 24 小时允许
+        assert!(
+            open(
+                &sealed(&key, "a1", now + MAX_TTL_SECS),
+                Some(public),
+                "a1",
+                now
+            )
+            .is_ok()
+        );
+        // 超出 24 小时上限拒绝
+        let err = open(
+            &sealed(&key, "a1", now + MAX_TTL_SECS + 1),
+            Some(public),
+            "a1",
+            now,
+        )
+        .err()
+        .expect("超长 TTL 应被拒绝");
+        assert!(err.contains("有效期过长"), "{err}");
+        // 时钟为 0 或负值直接拒绝，绝不放行已过期指令
+        assert!(open(&sealed(&key, "a1", 100), Some(public), "a1", 0).is_err());
+        assert!(open(&sealed(&key, "a1", 100), Some(public), "a1", -10).is_err());
     }
 
     /// 与 server 侧 TestSignatureVector 同一组向量：全零种子对 "vector" 的签名

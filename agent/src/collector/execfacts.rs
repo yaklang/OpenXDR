@@ -15,8 +15,12 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// 控制终端：/proc/<pid>/stat 第 7 列 tty_nr。没有终端（守护进程、cron、管道里的脚本）是 0，返回 None
 pub fn tty(pid: u32) -> Option<String> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // 进程名在括号里，可能含空格：从最后一个右括号之后开始数列
-    let rest = &stat[stat.rfind(')')? + 2..];
+    tty_from_stat(&stat)
+}
+
+fn tty_from_stat(stat: &str) -> Option<String> {
+    // 进程名在括号里，可能含空格：从最后一个右括号之后开始数列，避免切片下标越界
+    let (_, rest) = stat.rsplit_once(')')?;
     tty_name(rest.split_whitespace().nth(4)?.parse().ok()?)
 }
 
@@ -175,12 +179,25 @@ mod tests {
     #[test]
     fn own_tty_matches_stat() {
         // 测试进程自己有没有终端取决于运行环境，只验证读得出来且与 stat 一致
-        let nr: u32 = {
-            let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
-            let rest = &stat[stat.rfind(')').unwrap() + 2..];
-            rest.split_whitespace().nth(4).unwrap().parse().unwrap()
-        };
-        assert_eq!(tty(std::process::id()), tty_name(nr));
+        let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+        assert_eq!(tty(std::process::id()), tty_from_stat(&stat));
+    }
+
+    #[test]
+    fn tty_from_stat_handles_truncated_or_malformed_stat_without_panic() {
+        // 正常带括号与空格的进程名，第 7 列（右括号后第 5 个字段）为 pts/2 = (136 << 8) | 2 = 34818
+        let normal = "42 (my ) proc) S 1 42 42 34818 -1 0";
+        assert_eq!(tty_from_stat(normal).as_deref(), Some("pts/2"));
+        // 截断在 ')' 处或 ')' 后只有 1 个字节时不得越界 panic
+        for bad in [
+            "",
+            "42 (bash)",
+            "42 (bash) ",
+            "42 (bash) S 1 2",
+            "no-parens",
+        ] {
+            assert_eq!(tty_from_stat(bad), None, "{bad:?} 应安全返回 None");
+        }
     }
 
     #[test]

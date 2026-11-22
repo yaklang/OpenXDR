@@ -12,7 +12,7 @@
 use super::Outcome;
 use crate::pb::Command;
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 const POLICY_ID: &str = "{A61AFF97-CF54-413D-875E-3E204EA34241}";
 
 pub fn block(cmd: &Command) -> Outcome {
@@ -28,12 +28,43 @@ fn run(_cmd: &Command, _block: bool) -> Outcome {
     Outcome::unsupported("当前构建不支持执行拦截；Linux 需要 execblock 特性与 BPF LSM/IMA 内核支持")
 }
 
+/// 校验 Windows 目标文件路径：必须是绝对路径，拒绝控制字符、Unicode 换行与 `..` 路径穿越段
+#[cfg(any(windows, test))]
+fn validate_target(raw: &str) -> Result<&str, String> {
+    let target = raw.trim();
+    if target.is_empty() {
+        return Err("文件路径无效".into());
+    }
+    if target
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '\u{0085}' | '\u{2028}' | '\u{2029}'))
+    {
+        return Err("文件路径包含非法控制字符或换行符".into());
+    }
+    let bytes = target.as_bytes();
+    let is_drive_abs = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    let is_unc_abs = target.strip_prefix(r"\\").is_some_and(|rest| {
+        let mut parts = rest.split(['\\', '/']).filter(|s| !s.is_empty());
+        parts.next().is_some() && parts.next().is_some()
+    });
+    if !is_drive_abs && !is_unc_abs {
+        return Err("文件路径必须是绝对路径".into());
+    }
+    if target.split(['\\', '/']).any(|seg| seg == "..") {
+        return Err("文件路径不允许包含 .. 路径段".into());
+    }
+    Ok(target)
+}
+
 #[cfg(windows)]
 fn run(cmd: &Command, block: bool) -> Outcome {
-    let target = cmd.target.trim();
-    if target.is_empty() || target.contains(['\0', '\n', '\r']) {
-        return Outcome::failed("文件路径无效");
-    }
+    let target = match validate_target(&cmd.target) {
+        Ok(t) => t,
+        Err(e) => return Outcome::failed(e),
+    };
     let state = crate::enroll::default_env_file().with_file_name("exec-block.xml");
     let script = script(target, &state.to_string_lossy(), block);
     match super::powershell(&script) {
@@ -73,18 +104,62 @@ fn outcome(target: &str, block: bool, line: &str) -> Outcome {
     }
 }
 
-/// PowerShell 单引号字符串：内部的单引号写两遍
-#[cfg(any(windows, test))]
+/// PowerShell 5.1 单引号字符串：ASCII `'` 与被 PS 5.1 词法器视作单引号的 Unicode 弯引号均双写转义
+#[cfg(test)]
 fn quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            out.push(c);
+        }
+        out.push(c);
+    }
+    out.push('\'');
+    out
 }
 
-#[cfg(windows)]
+/// 标准 Base64 编码：只输出 `[A-Za-z0-9+/=]`，绝不会触发 PowerShell 词法器的任何引号或换行解析
+#[cfg(any(windows, test))]
+fn encode_base64(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((n >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// 生成 PowerShell UTF-8 Base64 还原表达式，彻底杜绝引号逃逸
+#[cfg(any(windows, test))]
+fn ps_utf8(s: &str) -> String {
+    format!(
+        "[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{}'))",
+        encode_base64(s.as_bytes())
+    )
+}
+
+#[cfg(any(windows, test))]
 fn script(target: &str, state: &str, block: bool) -> String {
     let action = if block { "block" } else { "unblock" };
     format!(
         r#"[Console]::OutputEncoding = [Text.Encoding]::UTF8
-$Target = {target}; $State = {state}; $Action = '{action}'; $Id = '{POLICY_ID}'
+$Target = [IO.Path]::GetFullPath({target}); $State = [IO.Path]::GetFullPath({state}); $Action = '{action}'; $Id = '{POLICY_ID}'
 $Active = "$env:SystemRoot\System32\CodeIntegrity\CiPolicies\Active\$Id.cip"
 function Deny {{ @(([xml](Get-Content -LiteralPath $State)).SiPolicy.FileRules.Deny) | Where-Object {{ $_ }} }}
 if ($Action -eq 'block') {{
@@ -118,8 +193,8 @@ $r = Invoke-CimMethod -Namespace root\Microsoft\Windows\CI -ClassName PS_UpdateA
 if ($r.ReturnValue -ne 0) {{ 'REFRESH ' + $r.ReturnValue; return }}
 'OK ' + @(Deny).Count
 "#,
-        target = quote(target),
-        state = quote(state),
+        target = ps_utf8(target),
+        state = ps_utf8(state),
     )
 }
 
@@ -132,9 +207,115 @@ fn run(cmd: &Command, block: bool) -> Outcome {
 mod tests {
     use super::*;
 
+    fn decode_base64(input: &str) -> Vec<u8> {
+        let val = |b: u8| match b {
+            b'A'..=b'Z' => Some(b - b'A'),
+            b'a'..=b'z' => Some(b - b'a' + 26),
+            b'0'..=b'9' => Some(b - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        };
+        let bytes = input.as_bytes();
+        let (chunks, rem) = bytes.as_chunks::<4>();
+        assert!(rem.is_empty());
+        let mut out = Vec::new();
+        for chunk in chunks {
+            let a = val(chunk[0]).unwrap() as u32;
+            let b = val(chunk[1]).unwrap() as u32;
+            let c = if chunk[2] == b'=' {
+                0
+            } else {
+                val(chunk[2]).unwrap() as u32
+            };
+            let d = if chunk[3] == b'=' {
+                0
+            } else {
+                val(chunk[3]).unwrap() as u32
+            };
+            let n = (a << 18) | (b << 12) | (c << 6) | d;
+            out.push(((n >> 16) & 0xff) as u8);
+            if chunk[2] != b'=' {
+                out.push(((n >> 8) & 0xff) as u8);
+            }
+            if chunk[3] != b'=' {
+                out.push((n & 0xff) as u8);
+            }
+        }
+        out
+    }
+
     #[test]
-    fn single_quotes_are_doubled() {
+    fn single_quotes_and_unicode_quotes_are_doubled() {
         assert_eq!(quote(r"C:\a'b\c.exe"), r"'C:\a''b\c.exe'");
+        assert_eq!(
+            quote("C:\\a\u{2018}\u{2019}\u{201A}\u{201B}\\c.exe"),
+            "'C:\\a\u{2018}\u{2018}\u{2019}\u{2019}\u{201A}\u{201A}\u{201B}\u{201B}\\c.exe'"
+        );
+    }
+
+    #[test]
+    fn validates_windows_absolute_paths_and_rejects_traversal_and_controls() {
+        assert_eq!(
+            validate_target(r"  C:\Users\a\evil.exe  ").unwrap(),
+            r"C:\Users\a\evil.exe"
+        );
+        assert_eq!(
+            validate_target(r"D:/tools/x.exe").unwrap(),
+            r"D:/tools/x.exe"
+        );
+        assert_eq!(
+            validate_target(r"\\srv\share\x.exe").unwrap(),
+            r"\\srv\share\x.exe"
+        );
+        for bad in [
+            "",
+            "   ",
+            "relative.exe",
+            r".\evil.exe",
+            r"\rootonly.exe",
+            r"C:rel.exe",
+            r"C:\Users\..\Windows\cmd.exe",
+            "C:/Users/../Windows/cmd.exe",
+            "C:\\a\\b\n; calc.exe",
+            "C:\\a\\b\r; calc.exe",
+            "C:\\a\\b\0.exe",
+            "C:\\a\\b\u{0085}; calc.exe",
+            "C:\\a\\b\u{2028}; calc.exe",
+            "C:\\a\\b\u{2029}; calc.exe",
+        ] {
+            assert!(validate_target(bad).is_err(), "{bad:?} 应被拒绝");
+        }
+    }
+
+    #[test]
+    fn script_uses_base64_and_getfullpath_against_curly_quote_injection() {
+        // PowerShell 5.1 会把 Unicode 弯引号 ’ (\u{2019}) 当成单引号，借此闭合字面量注入命令
+        let payload = "C:\\Users\\test\\a\u{2019}; calc.exe; \u{2018}.exe";
+        let state = r"C:\ProgramData\OpenXDR\exec-block.xml";
+        assert!(validate_target(payload).is_ok());
+
+        let ps = script(payload, state, true);
+        assert!(
+            !ps.contains('\u{2019}') && !ps.contains('\u{2018}') && !ps.contains("calc.exe"),
+            "脚本中绝不能出现原始弯引号或注入载荷：{ps}"
+        );
+        assert!(
+            ps.contains("$Target = [IO.Path]::GetFullPath([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"),
+            "应通过 Base64 UTF-8 还原并用 GetFullPath 规范化"
+        );
+        assert!(
+            ps.contains("$State = [IO.Path]::GetFullPath([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('")
+        );
+
+        // 验证 Base64 编码还原后与原始 UTF-8 完全一致
+        let b64 = encode_base64(payload.as_bytes());
+        assert!(ps.contains(&b64));
+        assert_eq!(String::from_utf8(decode_base64(&b64)).unwrap(), payload);
+
+        let b64_state = encode_base64(state.as_bytes());
+        assert!(ps.contains(&b64_state));
+        assert_eq!(String::from_utf8(decode_base64(&b64_state)).unwrap(), state);
     }
 
     #[test]

@@ -33,6 +33,8 @@ const REPORT_WINDOW: Duration = Duration::from_secs(60);
 const DUP_WINDOW: Duration = Duration::from_secs(10);
 /// 各表上限，超过即清理过期项，防止查询风暴撑爆内存
 const MAX_TRACKED: usize = 8192;
+/// 周期扫描 pending 到期的最小间隔，避免每个 UDP 53 包都全表遍历（O(N²)）
+const EXPIRE_INTERVAL: Duration = Duration::from_millis(200);
 /// 应答地址最多记几个：够做情报碰撞与域名回填
 const MAX_ANSWERS: usize = 8;
 /// 客户端查询送进容器后，容器多久内转发同一域名算作替它问的
@@ -199,6 +201,16 @@ struct Pending {
 /// 送进容器的一次客户端查询：(veth, 小写域名, 类型)
 type Inbound = (String, String, u16);
 
+/// 控制哈希表容量上限：超限时先清理过期项，仍满则整表清空兜底，保证有界内存与 O(1) 均摊开销
+fn cap_map<K, V>(map: &mut HashMap<K, V>, max: usize, keep: impl Fn(&V) -> bool) {
+    if map.len() >= max {
+        map.retain(|_, v| keep(v));
+        if map.len() >= max {
+            map.clear();
+        }
+    }
+}
+
 struct State {
     agent_id: String,
     sink: EventSink,
@@ -207,6 +219,7 @@ struct State {
     done: HashMap<Key, Instant>,
     reported: HashMap<(IpAddr, String, u16), Instant>,
     inbound: HashMap<Inbound, (IpAddr, Instant)>,
+    last_expire: Instant,
     local: Vec<IpAddr>,
     local_at: Option<Instant>,
     ifnames: HashMap<i32, String>,
@@ -221,6 +234,7 @@ fn run(fd: i32, agent_id: String, sink: EventSink, resolver: Option<Resolver>) {
         done: HashMap::new(),
         reported: HashMap::new(),
         inbound: HashMap::new(),
+        last_expire: Instant::now(),
         local: Vec::new(),
         local_at: None,
         ifnames: HashMap::new(),
@@ -278,8 +292,12 @@ impl State {
             && pkttype == PACKET_OUTGOING
             && !self.is_local(client)
         {
+            let now = Instant::now();
+            cap_map(&mut self.inbound, MAX_TRACKED, |(_, t)| {
+                now.duration_since(*t) < REQUESTER_WINDOW
+            });
             let key = (iface, message.qname.to_ascii_lowercase(), message.qtype);
-            self.inbound.insert(key, (client, Instant::now()));
+            self.inbound.insert(key, (client, now));
             return;
         }
         if !from_container && !self.is_local(client) {
@@ -301,6 +319,12 @@ impl State {
             return;
         }
         let now = Instant::now();
+        if !self.pending.contains_key(&key) && self.pending.len() >= MAX_TRACKED {
+            self.expire_now(now);
+            if self.pending.len() >= MAX_TRACKED {
+                self.pending.clear();
+            }
+        }
         let entry = self.pending.entry(key).or_insert_with(|| Pending {
             server,
             message: message.clone(),
@@ -319,9 +343,20 @@ impl State {
         }
     }
 
-    /// 应答到了 1 秒的上报（等进程归属就位）；超时没等到应答的按无应答上报；过期的去重记录清掉
+    /// 节流后的周期清理：正常每 EXPIRE_INTERVAL 扫描一次 pending，不在每个包上做全表扫描
     fn expire(&mut self) {
         let now = Instant::now();
+        if now.duration_since(self.last_expire) < EXPIRE_INTERVAL
+            && self.pending.len() < MAX_TRACKED
+        {
+            return;
+        }
+        self.expire_now(now);
+    }
+
+    /// 应答到了 1 秒的上报（等进程归属就位）；超时没等到应答的按无应答上报；过期的去重记录清掉
+    fn expire_now(&mut self, now: Instant) {
+        self.last_expire = now;
         let ready: Vec<Key> = self
             .pending
             .iter()
@@ -333,26 +368,27 @@ impl State {
             .collect();
         for key in ready {
             if let Some(p) = self.pending.remove(&key) {
+                cap_map(&mut self.done, MAX_TRACKED, |t| {
+                    now.duration_since(*t) < DUP_WINDOW
+                });
                 self.done.insert(key.clone(), now);
                 let answer = p.answer.as_ref().map(|(m, _)| m);
                 let requester = self.requester(&p);
                 self.report(&key, p.server, &p.message, answer, p.container, requester);
             }
         }
-        if self.done.len() >= MAX_TRACKED {
-            self.done.retain(|_, t| now.duration_since(*t) < DUP_WINDOW);
-        }
-        if self.reported.len() >= MAX_TRACKED {
-            self.reported
-                .retain(|_, t| now.duration_since(*t) < REPORT_WINDOW);
-        }
+        cap_map(&mut self.done, MAX_TRACKED, |t| {
+            now.duration_since(*t) < DUP_WINDOW
+        });
+        cap_map(&mut self.reported, MAX_TRACKED, |t| {
+            now.duration_since(*t) < REPORT_WINDOW
+        });
         if self.pending.len() >= MAX_TRACKED {
             self.pending.clear();
         }
-        if self.inbound.len() >= MAX_TRACKED {
-            self.inbound
-                .retain(|_, (_, t)| now.duration_since(*t) < REQUESTER_WINDOW);
-        }
+        cap_map(&mut self.inbound, MAX_TRACKED, |(_, t)| {
+            now.duration_since(*t) < REQUESTER_WINDOW
+        });
     }
 
     /// 容器转发的这条查询是替谁问的：同一容器前后几秒内收到的同名同类型客户端查询
@@ -381,6 +417,9 @@ impl State {
         {
             return;
         }
+        cap_map(&mut self.reported, MAX_TRACKED, |t| {
+            now.duration_since(*t) < REPORT_WINDOW
+        });
         self.reported.insert(dedup, now);
         // 发起进程只在本机网络命名空间里按源端口找得到；容器里的查询由容器自己的进程发出，端口照样能对上
         let origin = self.resolver.as_ref().and_then(|r| r(key.port));
@@ -852,6 +891,7 @@ mod tests {
                 ("veth201i0".into(), "example.com".into(), 1),
                 (client, now),
             )]),
+            last_expire: now,
             local: Vec::new(),
             local_at: None,
             ifnames: HashMap::new(),
@@ -896,5 +936,60 @@ mod tests {
         }
         assert_eq!(f[18].k, 4096);
         assert_eq!(f[19].k, 0);
+    }
+
+    /// 模拟高并发 DNS 查询风暴：pending / reported / done / inbound 全部严格有界，不无界增长也不 O(N²)
+    #[test]
+    fn dns_storm_tables_stay_bounded() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let now = Instant::now();
+        let mut st = State {
+            agent_id: "a".into(),
+            sink: EventSink {
+                tx,
+                dropped: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                health: crate::health::Health::new(),
+                generation: 0,
+            },
+            resolver: None,
+            pending: HashMap::new(),
+            done: HashMap::new(),
+            reported: HashMap::new(),
+            inbound: HashMap::new(),
+            last_expire: now,
+            local: vec!["127.0.0.1".parse().unwrap()],
+            local_at: Some(now),
+            ifnames: HashMap::from([(1, "lo".into()), (2, "veth201i0".into())]),
+        };
+        let payload = query();
+        let make_pkt = |src: [u8; 4], sport: u16, id: u16| -> Vec<u8> {
+            let mut body = payload.clone();
+            body[0..2].copy_from_slice(&id.to_be_bytes());
+            let mut v4 = vec![
+                0x45, 0, 0, 0, 0, 0, 0x40, 0, 64, 17, 0, 0, src[0], src[1], src[2], src[3], 127, 0,
+                0, 53,
+            ];
+            let udp_len = (8 + body.len()) as u16;
+            v4.extend_from_slice(&sport.to_be_bytes());
+            v4.extend_from_slice(&53u16.to_be_bytes());
+            v4.extend_from_slice(&udp_len.to_be_bytes());
+            v4.extend_from_slice(&[0, 0]);
+            v4.extend_from_slice(&body);
+            v4
+        };
+        for i in 0..(MAX_TRACKED + 500) {
+            let pkt = make_pkt([127, 0, 0, 1], 10000 + (i % 50000) as u16, i as u16);
+            st.packet(&pkt, 1, 0);
+            assert!(st.pending.len() <= MAX_TRACKED);
+        }
+        // 验证 cap_map 在未过期风暴下也能稳定封顶
+        let mut map: HashMap<usize, Instant> = HashMap::new();
+        for i in 0..(MAX_TRACKED * 2 + 50) {
+            cap_map(&mut map, MAX_TRACKED, |t| {
+                now.duration_since(*t) < REPORT_WINDOW
+            });
+            map.insert(i, now);
+            assert!(map.len() <= MAX_TRACKED);
+        }
     }
 }
