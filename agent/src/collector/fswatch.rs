@@ -128,70 +128,110 @@ pub fn spawn(agent_id: String, sink: EventSink, dirs: &[String]) -> io::Result<u
     // 自检目录随监控目标一起挂上，活性检测改写其中的文件确认通道活着（事件按路径认出、不上报）
     let canary = super::liveness::canary_dir();
     targets.extend(canary.map(str::to_string));
-    let (worker, n) = start(&agent_id, &sink, &targets)?;
+    let (worker, n, initial_backend) = start_with_backend(&agent_id, &sink, &targets, true)?;
     match canary {
         // 静默重建走同一条路：重新 fanotify_init / inotify_init 并挂上全部目标。
-        // 新挂上的目标不补报已有文件（那是 backfill，只给运行中新出现的目录做），不会把整片目录当新建
-        Some(dir) => super::liveness::spawn(
-            sink.clone(),
-            &super::liveness::FILES,
-            move || super::liveness::probe_files(dir),
-            worker,
-            move || {
-                start(&agent_id, &sink, &targets)
-                    .map(|(w, _)| w)
-                    .map_err(|e| e.to_string())
-            },
-        ),
+        // 新挂上的目标不补报已有文件（那是 backfill，只给运行中新出现的目录做），不会把整片目录当新建；
+        // 若 fanotify 在 LXC 等容器环境下可初始化但自检连续收不到事件，第 2 次重建起自动回落 inotify。
+        Some(dir) => {
+            let mut last_backend = initial_backend;
+            let mut fanotify_silent_rebuilds: u32 = 0;
+            super::liveness::spawn(
+                sink.clone(),
+                &super::liveness::FILES,
+                move || super::liveness::probe_files(dir),
+                worker,
+                move || {
+                    let prefer_fanotify =
+                        should_prefer_fanotify_on_rebuild(last_backend, fanotify_silent_rebuilds);
+                    if last_backend == Backend::Fanotify && !prefer_fanotify {
+                        eprintln!(
+                            "文件监控: fanotify 连续自检收不到事件，自动回落 inotify 递归监控"
+                        );
+                    }
+                    let (w, _, backend) =
+                        start_with_backend(&agent_id, &sink, &targets, prefer_fanotify)
+                            .map_err(|e| e.to_string())?;
+                    if backend == Backend::Fanotify {
+                        fanotify_silent_rebuilds = fanotify_silent_rebuilds.saturating_add(1);
+                    } else {
+                        fanotify_silent_rebuilds = 0;
+                    }
+                    last_backend = backend;
+                    Ok(w)
+                },
+            )
+        }
         None => worker.detach(),
     }
     Ok(n)
 }
 
-/// 起一个监控实例：fanotify 优先，不行回落 inotify。返回实例与盯上的目录数
-fn start(agent_id: &str, sink: &EventSink, targets: &[String]) -> io::Result<(Worker, usize)> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    Fanotify,
+    Inotify,
+}
+
+/// 静默重建时是否继续优先尝试 fanotify：首次重建给瞬时故障一次机会，连续第二次静默则回落 inotify。
+fn should_prefer_fanotify_on_rebuild(last: Backend, fanotify_silent_rebuilds: u32) -> bool {
+    match last {
+        Backend::Fanotify => fanotify_silent_rebuilds == 0,
+        Backend::Inotify => false,
+    }
+}
+
+/// 起一个监控实例：prefer_fanotify 为真时优先 fanotify，不行回落 inotify。返回实例、盯上的目录数与实际后端
+fn start_with_backend(
+    agent_id: &str,
+    sink: &EventSink,
+    targets: &[String],
+    prefer_fanotify: bool,
+) -> io::Result<(Worker, usize, Backend)> {
     let (agent_id, sink) = (agent_id.to_string(), sink.clone());
-    match fa_setup(targets) {
-        Ok((st, n)) => {
-            eprintln!("文件监控: fanotify 递归盯 {n} 个目录（含进程上下文）");
-            sink.capability(
-                "files",
-                "fanotify",
-                if n > 0 { "active" } else { "degraded" },
-            );
-            let worker = Worker::spawn(move |stop| {
-                fa_run(st, &agent_id, &sink, stop);
-                // 被叫停是重建，新实例会自报状态
-                if !stop.requested() {
-                    sink.capability("files", "fanotify", "unavailable");
-                }
-            });
-            Ok((worker, n))
-        }
-        Err(e) => {
-            eprintln!("fanotify 不可用（{e}），回落 inotify 递归监控");
-            let (fd, watched, truncated_roots) = ino_init(targets)
-                .inspect_err(|_| sink.capability("files", "inotify", "unavailable"))?;
-            let n = watched.len();
-            sink.capability("files", "inotify", "degraded");
-            let targets = targets.to_vec();
-            let worker = Worker::spawn(move |stop| {
-                ino_run(
-                    fd,
-                    watched,
-                    truncated_roots,
-                    targets,
-                    &agent_id,
-                    &sink,
-                    stop,
+    if prefer_fanotify {
+        match fa_setup(targets) {
+            Ok((st, n)) => {
+                eprintln!("文件监控: fanotify 递归盯 {n} 个目录（含进程上下文）");
+                sink.capability(
+                    "files",
+                    "fanotify",
+                    if n > 0 { "active" } else { "degraded" },
                 );
-                if !stop.requested() {
-                    sink.capability("files", "inotify", "unavailable");
-                }
-            });
-            Ok((worker, n))
+                let worker = Worker::spawn(move |stop| {
+                    fa_run(st, &agent_id, &sink, stop);
+                    // 被叫停是重建，新实例会自报状态
+                    if !stop.requested() {
+                        sink.capability("files", "fanotify", "unavailable");
+                    }
+                });
+                return Ok((worker, n, Backend::Fanotify));
+            }
+            Err(e) => {
+                eprintln!("fanotify 不可用（{e}），回落 inotify 递归监控");
+            }
         }
     }
+    let (fd, watched, truncated_roots) =
+        ino_init(targets).inspect_err(|_| sink.capability("files", "inotify", "unavailable"))?;
+    let n = watched.len();
+    sink.capability("files", "inotify", "degraded");
+    let targets = targets.to_vec();
+    let worker = Worker::spawn(move |stop| {
+        ino_run(
+            fd,
+            watched,
+            truncated_roots,
+            targets,
+            &agent_id,
+            &sink,
+            stop,
+        );
+        if !stop.requested() {
+            sink.capability("files", "inotify", "unavailable");
+        }
+    });
+    Ok((worker, n, Backend::Inotify))
 }
 
 /// 内置清单 + /home 下各用户的 .ssh（无论启动时 .ssh 是否已存在均纳入目标，配合家目录父级监控即时补挂）
@@ -2079,5 +2119,16 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn silent_fanotify_rebuilds_fall_back_to_inotify() {
+        // 第 1 次静默重建仍允许再试一次 fanotify（容忍瞬时故障）
+        assert!(should_prefer_fanotify_on_rebuild(Backend::Fanotify, 0));
+        // 连续第 2 次仍静默（如 LXC 容器内 fanotify 建得起来但收不到事件），必须回落 inotify
+        assert!(!should_prefer_fanotify_on_rebuild(Backend::Fanotify, 1));
+        assert!(!should_prefer_fanotify_on_rebuild(Backend::Fanotify, 4));
+        // 已切到 inotify 后保持 inotify，不再来回震荡
+        assert!(!should_prefer_fanotify_on_rebuild(Backend::Inotify, 0));
     }
 }

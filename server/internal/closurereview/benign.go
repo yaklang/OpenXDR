@@ -439,7 +439,7 @@ func benignAlert(a *ent.Alert) bool { return alertStall(a) == nil }
 // alertStall 这条告警不能走良性结案的原因
 func alertStall(a *ent.Alert) error {
 	switch {
-	case a.EventID == nil || a.AssetID == nil || a.Edges.Asset == nil:
+	case a.AssetID == nil || a.Edges.Asset == nil:
 		return stall("告警没有关联原始事件或资产")
 	case a.Severity <= 0 || a.Severity > review.Severity:
 		return stall("含严重级告警（%s），须人工确认", a.RuleID)
@@ -449,6 +449,8 @@ func alertStall(a *ent.Alert) error {
 		return stall("含诱饵观察，须人工确认")
 	case strings.HasPrefix(a.RuleID, "xdr:") && a.RuleID != sigma.RuleNewProcess:
 		return stall("含平台合成检测（%s），须人工确认", a.RuleID)
+	case a.EventID == nil:
+		return stall("告警没有关联原始事件或资产")
 	}
 	return nil
 }

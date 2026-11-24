@@ -113,3 +113,17 @@ func TestClaimOnTruncatedFieldIsSkipped(t *testing.T) {
 		t.Fatalf("只有截断字段上的引用应判为缺引用：%q", got)
 	}
 }
+
+func TestAlertStallSyntheticWithoutEvent(t *testing.T) {
+	aid := uuid.New()
+	a := &ent.Alert{
+		RuleID:   "xdr:new-ssh-key",
+		Severity: 4,
+		AssetID:  &aid,
+		Edges:    ent.AlertEdges{Asset: &ent.Asset{ID: aid, Hostname: "gateway"}},
+	}
+	err := alertStall(a)
+	if err == nil || !strings.Contains(err.Error(), "含平台合成检测（xdr:new-ssh-key）") {
+		t.Fatalf("无原始事件的平台合成告警应给出合成检测原因而非缺事件，实际：%v", err)
+	}
+}
