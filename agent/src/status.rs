@@ -20,8 +20,14 @@ struct IsolationCache {
 #[derive(Default)]
 struct IsolationState {
     cached: Option<(Instant, bool)>,
-    /// 非空表示全局已有 1 个后台探针在运行；等待者订阅此 Notify，探针真正完成时清空并广播通知
-    in_flight: Option<Arc<tokio::sync::Notify>>,
+    /// 非空表示全局已有 1 个后台探针在运行；等待者在锁内直接克隆 watch::Receiver，
+    /// 探针完成时写入缓存、清空 in_flight 并通过 watch 发送结果，天然无丢唤醒窗口
+    in_flight: Option<tokio::sync::watch::Receiver<Option<bool>>>,
+}
+
+enum ProbeLookup {
+    Hit(bool),
+    Wait(tokio::sync::watch::Receiver<Option<bool>>),
 }
 
 impl IsolationCache {
@@ -38,69 +44,69 @@ impl IsolationCache {
             .cached
             .is_none()
     }
+
+    /// 命中未过期缓存时直接返回 `Hit`；否则复用在途探针或在全局唯一槽位启动新探针，
+    /// 返回的 `Receiver` 在锁内克隆，无论探针在调用方 `await` 之前还是之后完成都不会丢唤醒。
+    fn lookup_or_spawn<F>(&self, probe: F) -> ProbeLookup
+    where
+        F: FnOnce() -> bool + Send + 'static,
+    {
+        let (rx, tx_and_probe) = {
+            let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((at, value)) = state.cached
+                && at.elapsed() < ISOLATION_TTL
+            {
+                return ProbeLookup::Hit(value);
+            }
+            if let Some(existing_rx) = state.in_flight.clone() {
+                (existing_rx, None)
+            } else {
+                let (tx, rx) = tokio::sync::watch::channel(None);
+                state.in_flight = Some(rx.clone());
+                (rx, Some((tx, probe)))
+            }
+        };
+
+        if let Some((tx, probe_fn)) = tx_and_probe {
+            let inner = self.inner.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(probe_fn).await;
+                let value = {
+                    let mut state = inner.lock().unwrap_or_else(|e| e.into_inner());
+                    state.in_flight = None;
+                    match result {
+                        Ok(v) => {
+                            state.cached = Some((Instant::now(), v));
+                            Some(v)
+                        }
+                        Err(_) => None,
+                    }
+                };
+                // 成功则写入 Some(v) 唤醒所有等待者；若探针异常退出则直接释放 tx，等待者收到通道关闭后降级返回 false
+                if let Some(v) = value {
+                    let _ = tx.send(Some(v));
+                }
+            });
+        }
+
+        ProbeLookup::Wait(rx)
+    }
 }
 
 /// 读取隔离状态：命中未过期缓存时直接返回，不进 blocking pool；
 /// 过期或未命中时保证全局同一时刻至多 1 个后台 `spawn_blocking` 探针在运行。
 /// 调用方超时取消只放弃本次等待，不会取消也不会再重复启动新探针；
-/// 探针真正完成后由后台任务写回缓存、清除 `in_flight` 并广播通知所有等待者。
+/// 探针真正完成后由后台任务写回缓存、清除 `in_flight` 并经 watch 广播结果。
 async fn isolated_with<F>(cache: &IsolationCache, probe: F) -> bool
 where
     F: FnOnce() -> bool + Send + 'static,
 {
-    let mut probe = Some(probe);
-    loop {
-        let (notify, should_spawn) = {
-            let mut state = cache.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((at, value)) = state.cached
-                && at.elapsed() < ISOLATION_TTL
-            {
-                return value;
-            }
-            if let Some(existing) = state.in_flight.clone() {
-                (existing, false)
-            } else {
-                let notify = Arc::new(tokio::sync::Notify::new());
-                state.in_flight = Some(notify.clone());
-                (notify, true)
-            }
-        };
-
-        // 先注册并激活 notified，再 spawn 后台探针，防止探针极快完成导致丢唤醒
-        let notified = notify.notified();
-        tokio::pin!(notified);
-        notified.as_mut().enable();
-
-        if should_spawn {
-            let inner = cache.inner.clone();
-            let probe_fn = probe.take().expect("单飞探针只应启动一次");
-            tokio::spawn(async move {
-                let result = tokio::task::spawn_blocking(probe_fn).await;
-                let done = {
-                    let mut state = inner.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Ok(value) = result {
-                        state.cached = Some((Instant::now(), value));
-                    }
-                    state.in_flight.take()
-                };
-                if let Some(n) = done {
-                    n.notify_waiters();
-                }
-            });
-        }
-
-        notified.await;
-
-        // 探针已完成：若本调用方已启动过探针且探针异常退出未写入缓存，则降级返回 false 避免死循环
-        if probe.is_none() {
-            let state = cache.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((at, value)) = state.cached
-                && at.elapsed() < ISOLATION_TTL
-            {
-                return value;
-            }
-            return false;
-        }
+    match cache.lookup_or_spawn(probe) {
+        ProbeLookup::Hit(value) => value,
+        ProbeLookup::Wait(mut rx) => match rx.wait_for(|v| v.is_some()).await {
+            Ok(val) => val.unwrap_or(false),
+            Err(_) => false,
+        },
     }
 }
 
@@ -500,6 +506,56 @@ mod tests {
             calls.load(Ordering::SeqCst),
             1,
             "探针完成后应直接命中刷新结果，全程探针仅调用 1 次"
+        );
+    }
+
+    #[tokio::test]
+    async fn singleflight_waiter_does_not_lose_wakeup_when_probe_finishes_before_await() {
+        let cache = IsolationCache::default();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<bool>();
+
+        // 1. 发起者启动唯一在途探针（先阻塞在 channel 上）
+        let ProbeLookup::Wait(mut initiator_rx) =
+            cache.lookup_or_spawn(move || release_rx.recv().unwrap_or(false))
+        else {
+            panic!("首次查询缓存应未命中并进入在途等待");
+        };
+
+        // 2. 新等待者在锁内拿到 watch::Receiver，但故意先不进入 await
+        let ProbeLookup::Wait(mut late_waiter_rx) = cache.lookup_or_spawn(|| {
+            panic!("已有在途探针时不得启动第二个探针");
+        }) else {
+            panic!("在途期间新等待者应拿到共享 Receiver");
+        };
+
+        // 3. 放行探针并等待发起者确认后台任务已彻底写完缓存、发完结果并释放 Sender
+        release_tx.send(true).unwrap();
+        let init_val = tokio::time::timeout(
+            Duration::from_secs(1),
+            initiator_rx.wait_for(|v| v.is_some()),
+        )
+        .await
+        .expect("发起者不应超时")
+        .expect("探针成功时 watch 通道不应关闭失败");
+        assert_eq!(*init_val, Some(true));
+        drop(init_val);
+
+        // 确保后台任务已清空 in_flight 且写回缓存
+        assert!(!cache.is_empty(), "探针完成后应已写回缓存");
+
+        // 4. 此时等待者才开始 await：使用 watch 后即使探针早已完成，也应立刻拿到最新值、不丢唤醒、不超时
+        let started = Instant::now();
+        let waiter_val = tokio::time::timeout(
+            Duration::from_millis(100),
+            late_waiter_rx.wait_for(|v| v.is_some()),
+        )
+        .await
+        .expect("探针在 await 之前完成时，等待者绝不能丢唤醒或超时")
+        .expect("应成功读取已发送的最新状态");
+        assert_eq!(*waiter_val, Some(true));
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "应立刻拿到结果，不应等待超时"
         );
     }
 }

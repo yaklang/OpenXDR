@@ -77,8 +77,12 @@ pub fn isolate(cmd: &Command) -> Outcome {
         Err(e) => return Outcome::failed(format!("拒绝执行：{e}")),
     };
     match apply(&script) {
-        Ok(()) => Outcome::ok(format!(
+        Ok(ApplyOutcome::Applied) => Outcome::ok(format!(
             "已隔离本机，放行 {}",
+            cmd.allow_endpoints.join(", ")
+        )),
+        Ok(ApplyOutcome::AppliedAfterTimeout) => Outcome::ok(format!(
+            "已隔离本机（提交确认超时，复核已生效），放行 {}",
             cmd.allow_endpoints.join(", ")
         )),
         Err(e) => Outcome::failed(e),
@@ -326,8 +330,64 @@ fn render(net: &Net) -> String {
     }
 }
 
-fn apply(script: &str) -> Result<(), String> {
-    nft_script(script)
+#[derive(Debug, PartialEq, Eq)]
+enum ApplyOutcome {
+    /// 规则正常提交成功
+    Applied,
+    /// 提交确认超时，但复核确认隔离表已生效（按成功上报以保留服务端自动解封租约）
+    AppliedAfterTimeout,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ScriptError {
+    /// 明确失败（未能启动、返回非零退出码、写入失败等）
+    Failed(String),
+    /// 执行或读写超时，内核规则是否已提交未知，需显式复核
+    Unknown(String),
+}
+
+impl ScriptError {
+    fn into_message(self) -> String {
+        match self {
+            Self::Failed(m) | Self::Unknown(m) => m,
+        }
+    }
+}
+
+fn apply(script: &str) -> Result<ApplyOutcome, String> {
+    apply_with(
+        script,
+        |s| nft_script_with_timeout_raw("nft", &["-f", "-"], s, NFT_SCRIPT_TIMEOUT),
+        active,
+        || {
+            let _ = run_nft(&["delete", "table", "inet", TABLE]);
+        },
+    )
+}
+
+fn apply_with<FRun, FCheck, FCleanup>(
+    script: &str,
+    run: FRun,
+    is_isolated: FCheck,
+    cleanup: FCleanup,
+) -> Result<ApplyOutcome, String>
+where
+    FRun: FnOnce(&str) -> Result<(), ScriptError>,
+    FCheck: FnOnce() -> bool,
+    FCleanup: FnOnce(),
+{
+    match run(script) {
+        Ok(()) => Ok(ApplyOutcome::Applied),
+        Err(ScriptError::Failed(e)) => Err(e),
+        Err(ScriptError::Unknown(e)) => {
+            if is_isolated() {
+                Ok(ApplyOutcome::AppliedAfterTimeout)
+            } else {
+                cleanup();
+                Err(format!("{e}（复核隔离表未生效，已尝试清理）"))
+            }
+        }
+    }
 }
 
 /// 整段规则交给 nft -f - 原子执行。容器隔离在容器的网络命名空间里也用它
@@ -341,6 +401,15 @@ fn nft_script_with_timeout(
     script: &str,
     timeout: Duration,
 ) -> Result<(), String> {
+    nft_script_with_timeout_raw(program, args, script, timeout).map_err(ScriptError::into_message)
+}
+
+fn nft_script_with_timeout_raw(
+    program: &str,
+    args: &[&str],
+    script: &str,
+    timeout: Duration,
+) -> Result<(), ScriptError> {
     let mut child = Proc::new(program)
         .args(args)
         .stdin(Stdio::piped())
@@ -349,18 +418,22 @@ fn nft_script_with_timeout(
         .process_group(0)
         .spawn()
         .map_err(|e| {
-            if program == "nft" {
+            let msg = if program == "nft" {
                 format!("无法执行 nft（隔离需要 nftables 与 root 权限）: {e}")
             } else {
                 format!("无法执行 {program}: {e}")
-            }
+            };
+            ScriptError::Failed(msg)
         })?;
 
     // 后台线程并发读 stderr，避免大量错误输出撑满管道缓冲导致死锁
     let err_rx = spawn_pipe_reader(child.stderr.take(), 64 * 1024);
 
     // 后台线程写 stdin 并在写完后关闭写端，防子进程卡死不读 stdin 时主线程阻塞在 write_all
-    let mut stdin = child.stdin.take().ok_or("无法写入 nft 标准输入")?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| ScriptError::Failed("无法写入 nft 标准输入".into()))?;
     let payload = script.as_bytes().to_vec();
     let (write_tx, write_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -377,13 +450,17 @@ fn nft_script_with_timeout(
             Ok(None) => {
                 if Instant::now() >= deadline {
                     kill_process_group(&mut child);
-                    return Err(format!("执行 {program} 超时，防火墙规则状态未知"));
+                    return Err(ScriptError::Unknown(format!(
+                        "执行 {program} 超时，防火墙规则状态未知"
+                    )));
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(e) => {
                 kill_process_group(&mut child);
-                return Err(format!("等待 {program} 失败: {e}"));
+                return Err(ScriptError::Unknown(format!(
+                    "等待 {program} 失败: {e}，防火墙规则状态未知"
+                )));
             }
         }
     };
@@ -394,7 +471,9 @@ fn nft_script_with_timeout(
             Ok(buf) => buf,
             Err(_) => {
                 kill_process_group(&mut child);
-                return Err(format!("读取 {program} 错误输出超时，防火墙规则状态未知"));
+                return Err(ScriptError::Unknown(format!(
+                    "读取 {program} 错误输出超时，防火墙规则状态未知"
+                )));
             }
         }
     } else {
@@ -407,17 +486,23 @@ fn nft_script_with_timeout(
     if !status.success() {
         let msg = String::from_utf8_lossy(&stderr).trim().to_string();
         if !msg.is_empty() {
-            return Err(msg);
+            return Err(ScriptError::Failed(msg));
         }
-        return Err(format!("{program} 执行失败（退出状态 {status}）"));
+        return Err(ScriptError::Failed(format!(
+            "{program} 执行失败（退出状态 {status}）"
+        )));
     }
 
     match write_res {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(format!("写入 {program} 标准输入失败: {e}")),
+        Ok(Err(e)) => Err(ScriptError::Failed(format!(
+            "写入 {program} 标准输入失败: {e}"
+        ))),
         Err(_) => {
             kill_process_group(&mut child);
-            Err(format!("写入 {program} 标准输入超时，防火墙规则状态未知"))
+            Err(ScriptError::Unknown(format!(
+                "写入 {program} 标准输入超时，防火墙规则状态未知"
+            )))
         }
     }
 }
@@ -782,5 +867,81 @@ mod tests {
             started.elapsed() < Duration::from_secs(2),
             "后代持有 stderr 写端时也应在 deadline 内返回"
         );
+    }
+
+    #[test]
+    fn apply_timeout_rechecks_isolation_state_to_preserve_lease_or_cleanup() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        // 1. 规则已提交但确认/stderr 超时 -> 复核确认隔离表已生效 -> 返回 Ok(AppliedAfterTimeout)，
+        //    绝不报 Failed 丢租约，也不调用清理
+        let cleaned = AtomicBool::new(false);
+        let res = apply_with(
+            "add table inet openxdr_isolation\n",
+            |s| {
+                nft_script_with_timeout_raw(
+                    "sh",
+                    &["-c", "sleep 30 &"],
+                    s,
+                    Duration::from_millis(120),
+                )
+            },
+            || true,
+            || cleaned.store(true, Ordering::SeqCst),
+        );
+        assert_eq!(res, Ok(ApplyOutcome::AppliedAfterTimeout));
+        assert!(
+            !cleaned.load(Ordering::SeqCst),
+            "复核已生效时不得误删隔离表"
+        );
+
+        // 2. 应用超时且复核未生效 -> 尽力清理残留表并返回 Err
+        let cleaned = AtomicBool::new(false);
+        let err = apply_with(
+            "add table inet openxdr_isolation\n",
+            |s| {
+                nft_script_with_timeout_raw(
+                    "sh",
+                    &["-c", "sleep 30"],
+                    s,
+                    Duration::from_millis(120),
+                )
+            },
+            || false,
+            || cleaned.store(true, Ordering::SeqCst),
+        )
+        .unwrap_err();
+        assert!(
+            cleaned.load(Ordering::SeqCst),
+            "超时且复核未生效时应尝试清理隔离表"
+        );
+        assert!(
+            err.contains("超时") && err.contains("未生效"),
+            "错误信息应说明超时且复核未生效：{err}"
+        );
+
+        // 3. 明确失败（非零退出）-> 不复核不清理，直接返回 Err
+        let checked = AtomicBool::new(false);
+        let cleaned = AtomicBool::new(false);
+        let err = apply_with(
+            "bad ruleset\n",
+            |s| {
+                nft_script_with_timeout_raw(
+                    "sh",
+                    &["-c", "echo syntax error >&2; exit 1"],
+                    s,
+                    Duration::from_secs(2),
+                )
+            },
+            || {
+                checked.store(true, Ordering::SeqCst);
+                true
+            },
+            || cleaned.store(true, Ordering::SeqCst),
+        )
+        .unwrap_err();
+        assert_eq!(err, "syntax error");
+        assert!(!checked.load(Ordering::SeqCst));
+        assert!(!cleaned.load(Ordering::SeqCst));
     }
 }

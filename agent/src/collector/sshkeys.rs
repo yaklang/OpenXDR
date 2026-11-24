@@ -248,28 +248,49 @@ pub fn spawn(sink: super::EventSink, state: Arc<State>) {
         return;
     }
     tokio::spawn(async move {
-        let initial = tokio::task::spawn_blocking(collect_snapshot).await;
-        match initial {
-            Ok(snap) => {
+        let mut last_trusted: Option<SshdKeyConfig> = None;
+        let initial = tokio::task::spawn_blocking(move || {
+            let snap = collect_snapshot(&mut last_trusted);
+            (last_trusted, snap)
+        })
+        .await;
+        let mut last_trusted = match initial {
+            Ok((trusted, Some(snap))) => {
                 let count = snap.keys.len();
                 state.update(snap);
                 sink.capability("ssh-keys", "authorized-keys", "active");
                 eprintln!("SSH 钥匙盘点：初始发现 {count} 把授权钥匙");
+                trusted
+            }
+            Ok((trusted, None)) => {
+                // sshd -T 失败且尚无可信配置：暂缓上报，保持监听等待后续恢复
+                sink.capability("ssh-keys", "authorized-keys", "degraded");
+                trusted
             }
             Err(err) => {
                 sink.capability("ssh-keys", "authorized-keys", "unavailable");
                 eprintln!("SSH 钥匙初始盘点失败：{err}");
                 return;
             }
-        }
+        };
 
         let signal = change_signal();
         loop {
             signal.notified().await;
             // 吸收编辑器保存文件时的连续 create/modify/rename 事件
             tokio::time::sleep(Duration::from_millis(300)).await;
-            if let Ok(snap) = tokio::task::spawn_blocking(collect_snapshot).await {
-                state.update(snap);
+            let mut trusted_in = last_trusted.clone();
+            if let Ok((trusted_out, snap)) = tokio::task::spawn_blocking(move || {
+                let snap = collect_snapshot(&mut trusted_in);
+                (trusted_in, snap)
+            })
+            .await
+            {
+                last_trusted = trusted_out;
+                if let Some(snap) = snap {
+                    state.update(snap);
+                    sink.capability("ssh-keys", "authorized-keys", "active");
+                }
             }
         }
     });
@@ -286,15 +307,16 @@ pub fn extra_watch_dirs() -> Vec<String> {
             }
         }
     }
-    let cfg = read_sshd_config();
-    for tpl in &cfg.authorized_keys_files {
-        if !tpl.contains('%')
-            && tpl.starts_with('/')
-            && let Some(parent) = std::path::Path::new(tpl).parent()
-        {
-            let p = parent.to_string_lossy();
-            if !p.is_empty() && p != "/" {
-                dirs.push(p.into_owned());
+    if let SshdConfigOutcome::Parsed(cfg) = read_sshd_config() {
+        for tpl in &cfg.authorized_keys_files {
+            if !tpl.contains('%')
+                && tpl.starts_with('/')
+                && let Some(parent) = std::path::Path::new(tpl).parent()
+            {
+                let p = parent.to_string_lossy();
+                if !p.is_empty() && p != "/" {
+                    dirs.push(p.into_owned());
+                }
             }
         }
     }
@@ -737,8 +759,13 @@ fn clean_text(s: &str, max_chars: usize) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn collect_snapshot() -> Snapshot {
-    let cfg = read_sshd_config();
+fn collect_snapshot(last_trusted: &mut Option<SshdKeyConfig>) -> Option<Snapshot> {
+    let cfg = resolve_sshd_config(read_sshd_config(), last_trusted)?;
+    Some(collect_snapshot_with_config(cfg))
+}
+
+#[cfg(target_os = "linux")]
+fn collect_snapshot_with_config(cfg: SshdKeyConfig) -> Snapshot {
     let accounts = std::fs::read_to_string("/etc/passwd")
         .map(|s| parse_passwd_homes(&s))
         .unwrap_or_default();
@@ -1055,28 +1082,88 @@ fn read_child_stdout_checked(
 }
 
 #[cfg(target_os = "linux")]
-fn read_sshd_config() -> SshdKeyConfig {
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SshdConfigOutcome {
+    Parsed(SshdKeyConfig),
+    NotInstalled,
+    Failed,
+}
+
+/// 根据 `sshd -T` 探测结果决定本次盘点使用的配置：
+/// - `Parsed`：更新并返回最新可信配置；
+/// - `NotInstalled`（主机确实未装 sshd）：使用默认路径配置；
+/// - `Failed`（sshd 存在但执行失败/超时/输出截断）：若存在上一次可信配置则保留沿用，
+///   否则返回 `None` 暂缓本次上报，绝不回落默认路径覆盖自定义配置后上报残缺快照。
+#[cfg(target_os = "linux")]
+fn resolve_sshd_config(
+    outcome: SshdConfigOutcome,
+    last_trusted: &mut Option<SshdKeyConfig>,
+) -> Option<SshdKeyConfig> {
+    match outcome {
+        SshdConfigOutcome::Parsed(cfg) => {
+            *last_trusted = Some(cfg.clone());
+            Some(cfg)
+        }
+        SshdConfigOutcome::NotInstalled => Some(SshdKeyConfig::default()),
+        SshdConfigOutcome::Failed => {
+            if let Some(prev) = last_trusted.clone() {
+                eprintln!("sshd -T 执行失败或输出被截断，保留上一次可信配置继续盘点");
+                Some(prev)
+            } else {
+                eprintln!(
+                    "sshd -T 执行失败或输出被截断，且尚无可信配置，暂缓本次 SSH 钥匙盘点上报"
+                );
+                None
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_sshd_config() -> SshdConfigOutcome {
+    read_sshd_config_from(
+        &["/usr/sbin/sshd", "/sbin/sshd", "sshd"],
+        SSHD_TIMEOUT,
+        MAX_SSHD_OUTPUT_BYTES,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn read_sshd_config_from(
+    candidates: &[&str],
+    timeout: Duration,
+    max_bytes: usize,
+) -> SshdConfigOutcome {
     use std::process::{Command, Stdio};
 
-    let candidates = ["/usr/sbin/sshd", "/sbin/sshd", "sshd"];
+    let mut saw_binary = false;
     for bin in candidates {
-        let Ok(child) = Command::new(bin)
+        match Command::new(bin)
             .arg("-T")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .process_group(0)
             .spawn()
-        else {
-            continue;
-        };
-        if let Some(buf) =
-            read_child_stdout_with_timeout(child, SSHD_TIMEOUT, MAX_SSHD_OUTPUT_BYTES)
         {
-            return parse_sshd_t(&buf);
+            Ok(child) => {
+                saw_binary = true;
+                if let Some(buf) = read_child_stdout_with_timeout(child, timeout, max_bytes) {
+                    return SshdConfigOutcome::Parsed(parse_sshd_t(&buf));
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                // 二进制存在或无法确认为未安装（如权限不足/资源耗尽），绝不按未安装回落默认配置
+                saw_binary = true;
+            }
         }
     }
-    SshdKeyConfig::default()
+    if saw_binary {
+        SshdConfigOutcome::Failed
+    } else {
+        SshdConfigOutcome::NotInstalled
+    }
 }
 
 /// 以 `O_RDONLY | O_NONBLOCK | O_NOFOLLOW` 读取普通文件，拒绝符号链接、设备/管道及超大文件
@@ -1411,5 +1498,99 @@ authorizedkeyscommanduser nobody\n";
             req.encoded_len(),
             MAX_SNAPSHOT_BYTES
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sshd_config_distinguishes_not_installed_from_failed_and_preserves_trusted() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir =
+            std::env::temp_dir().join(format!("openxdr-sshkeys-cfg-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let make_script = |name: &str, body: &str| -> String {
+            let path = dir.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+
+        let missing = dir.join("no-such-sshd").to_string_lossy().into_owned();
+        let custom_sshd = make_script(
+            "custom-sshd",
+            "printf 'authorizedkeysfile /etc/ssh/custom_keys/%%u\\nauthorizedkeyscommand /usr/local/bin/ak %%u\\n'",
+        );
+        let truncated_sshd = make_script("truncated-sshd", "head -c 4096 /dev/zero | tr '\\0' 'a'");
+        let failing_sshd = make_script("failing-sshd", "exit 1");
+
+        // 1. 所有候选均不存在 -> NotInstalled，允许使用默认路径
+        let not_installed =
+            read_sshd_config_from(&[missing.as_str()], Duration::from_secs(2), 1024);
+        assert_eq!(not_installed, SshdConfigOutcome::NotInstalled);
+        let mut last_trusted = None;
+        assert_eq!(
+            resolve_sshd_config(not_installed, &mut last_trusted),
+            Some(SshdKeyConfig::default())
+        );
+
+        // 2. 从未取得过可信配置且 sshd -T 失败/截断 -> 必须暂缓上报（返回 None），绝不回落默认
+        let trunc_out =
+            read_sshd_config_from(&[truncated_sshd.as_str()], Duration::from_secs(2), 1024);
+        assert_eq!(trunc_out, SshdConfigOutcome::Failed);
+        let mut fresh_trusted = None;
+        assert_eq!(
+            resolve_sshd_config(trunc_out, &mut fresh_trusted),
+            None,
+            "从未成功且 sshd -T 截断时必须暂缓上报"
+        );
+        let fail_out =
+            read_sshd_config_from(&[failing_sshd.as_str()], Duration::from_secs(2), 1024);
+        assert_eq!(fail_out, SshdConfigOutcome::Failed);
+        assert_eq!(
+            resolve_sshd_config(fail_out, &mut fresh_trusted),
+            None,
+            "从未成功且 sshd -T 报错时必须暂缓上报"
+        );
+
+        // 3. 已有可信自定义配置后，sshd -T 截断或报错 -> 保留上次可信自定义配置，绝不回落默认
+        let parsed_out =
+            read_sshd_config_from(&[custom_sshd.as_str()], Duration::from_secs(2), 1024);
+        let expected_custom = SshdKeyConfig {
+            authorized_keys_files: vec!["/etc/ssh/custom_keys/%u".into()],
+            authorized_keys_command: "/usr/local/bin/ak %u".into(),
+            authorized_keys_command_user: String::new(),
+        };
+        assert_eq!(
+            parsed_out,
+            SshdConfigOutcome::Parsed(expected_custom.clone())
+        );
+
+        let mut trusted = None;
+        assert_eq!(
+            resolve_sshd_config(parsed_out, &mut trusted),
+            Some(expected_custom.clone())
+        );
+
+        let trunc_again =
+            read_sshd_config_from(&[truncated_sshd.as_str()], Duration::from_secs(2), 1024);
+        assert_eq!(trunc_again, SshdConfigOutcome::Failed);
+        assert_eq!(
+            resolve_sshd_config(trunc_again, &mut trusted),
+            Some(expected_custom.clone()),
+            "已有可信自定义配置时，sshd -T 截断必须保留上次配置"
+        );
+
+        let fail_again =
+            read_sshd_config_from(&[failing_sshd.as_str()], Duration::from_secs(2), 1024);
+        assert_eq!(fail_again, SshdConfigOutcome::Failed);
+        assert_eq!(
+            resolve_sshd_config(fail_again, &mut trusted),
+            Some(expected_custom),
+            "已有可信自定义配置时，sshd -T 报错必须保留上次配置"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
