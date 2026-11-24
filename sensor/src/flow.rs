@@ -133,6 +133,8 @@ const FULL_RECLAIM_COOLDOWN_NS: u64 = 1_000_000_000;
 pub struct TlsBufBudget {
     used: usize,
     limit: usize,
+    /// 因预算打满而放弃证书解析的次数（本次启动累计）
+    exhausted: u64,
 }
 
 impl Default for TlsBufBudget {
@@ -143,7 +145,11 @@ impl Default for TlsBufBudget {
 
 impl TlsBufBudget {
     pub fn new(limit: usize) -> Self {
-        Self { used: 0, limit }
+        Self {
+            used: 0,
+            limit,
+            exhausted: 0,
+        }
     }
 
     #[cfg(test)]
@@ -151,8 +157,15 @@ impl TlsBufBudget {
         self.used
     }
 
-    pub fn can_add(&self, delta: usize) -> bool {
-        self.used.saturating_add(delta) <= self.limit
+    /// 能否再放 delta 字节；放不下记一次打满。
+    pub fn admit(&mut self, delta: usize) -> bool {
+        let fits = self.used.saturating_add(delta) <= self.limit;
+        self.exhausted += u64::from(!fits);
+        fits
+    }
+
+    pub fn exhausted(&self) -> u64 {
+        self.exhausted
     }
 
     pub fn add(&mut self, bytes: usize) {
@@ -235,6 +248,11 @@ impl FlowTable {
 
     pub fn len(&self) -> usize {
         self.flows.len()
+    }
+
+    /// TLS 重组预算打满、放弃证书解析的累计次数
+    pub fn tls_budget_exhausted(&self) -> u64 {
+        self.tls_budget.exhausted()
     }
 
     /// 满表时回收空间：先做一次按时间清理（到期流暂存待导出，暂存满了就留在表里等下次清理，不丢），

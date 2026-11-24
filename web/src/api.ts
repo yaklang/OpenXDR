@@ -478,6 +478,8 @@ export interface SensorHealthSnapshot {
   bootId: string; sequence: number; reportedUnixMs: number; receivedAt: string
   iface: string; backend: 'afpacket' | 'afxdp'; workers: number; workersAlive: number
   packets: number; flows: number; kernelDrops: number; queueDrops: number
+  // TLS 重组预算打满、放弃证书解析的流数；为 0 或旧版探针不带
+  tlsBudgetExhausted?: number
   // 每秒包数、每分钟会话数，按上一次快照以来的增量算
   packetRate: number; flowRate: number
   capabilities: Record<string, CollectorCapability>

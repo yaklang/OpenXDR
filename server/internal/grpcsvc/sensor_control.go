@@ -96,6 +96,9 @@ type sensorHealth struct {
 	PacketRate     uint64                `json:"packetRate"`
 	FlowRate       uint64                `json:"flowRate"`
 	Capabilities   map[string]capability `json:"capabilities"`
+
+	// TLSBudgetExhausted TLS 重组预算打满、放弃证书解析的流数；为 0 或旧版探针不发
+	TLSBudgetExhausted uint64 `json:"tlsBudgetExhausted,omitempty"`
 }
 
 func parseSensorHealth(raw string, now time.Time) (sensorHealth, error) {
@@ -103,7 +106,7 @@ func parseSensorHealth(raw string, now time.Time) (sensorHealth, error) {
 	if err := decodeHealth(raw, &h); err != nil {
 		return h, err
 	}
-	for _, n := range []uint64{h.Packets, h.Flows, h.KernelDrops, h.QueueDrops, h.PacketRate, h.FlowRate} {
+	for _, n := range []uint64{h.Packets, h.Flows, h.KernelDrops, h.QueueDrops, h.TLSBudgetExhausted, h.PacketRate, h.FlowRate} {
 		if n > safeInteger {
 			return h, status.Error(codes.InvalidArgument, "抓包计数越界")
 		}

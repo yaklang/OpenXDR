@@ -156,7 +156,7 @@ fn probe_tls_server(flow: &mut Flow, payload: &[u8], budget: &mut TlsBufBudget) 
         if tail.is_empty() {
             return;
         }
-        if tail.len() > MAX_TLS_HS_BUF || !budget.can_add(tail.len()) {
+        if tail.len() > MAX_TLS_HS_BUF || !budget.admit(tail.len()) {
             flow.probed_server = true;
             return;
         }
@@ -167,7 +167,7 @@ fn probe_tls_server(flow: &mut Flow, payload: &[u8], budget: &mut TlsBufBudget) 
 
     // 续传分段：先检查单流上限与 worker 级总预算再追加，超限时彻底释放堆容量
     let new_total = flow.tls_hs_buf.len().saturating_add(payload.len());
-    if new_total > MAX_TLS_HS_BUF || !budget.can_add(payload.len()) {
+    if new_total > MAX_TLS_HS_BUF || !budget.admit(payload.len()) {
         budget.release(&mut flow.tls_hs_buf);
         flow.probed_server = true;
         return;
@@ -1464,6 +1464,7 @@ mod tests {
         probe(&mut f1, &pkt(443, 50001, &half), false, &mut budget);
         assert!(!f1.probed_server);
         assert_eq!(budget.used(), half.len());
+        assert_eq!(budget.exhausted(), 0);
 
         // 第二条半截流会超 10_000 预算 → 拒绝囤积缓冲并置 probed_server
         let mut f2 = default_flow();
@@ -1471,6 +1472,7 @@ mod tests {
         assert!(f2.probed_server);
         assert_eq!(f2.tls_hs_buf.capacity(), 0);
         assert_eq!(budget.used(), half.len());
+        assert_eq!(budget.exhausted(), 1, "预算打满要计数");
 
         // 预算紧张时单包完整 TLS 1.3 ServerHello 走零分配路径依然能正常解析
         let mut f3 = default_flow();
@@ -1479,6 +1481,7 @@ mod tests {
         assert!(f3.probed_server);
         assert!(f3.meta.ja3s.is_some());
         assert_eq!(f3.meta.tls_version.as_deref(), Some("TLS 1.3"));
+        assert_eq!(budget.exhausted(), 1, "零分配路径不占预算，不算打满");
     }
 
     #[test]

@@ -78,6 +78,7 @@ export function SensorHealth({ asset }: { asset: Asset }) {
           { key: 'flows', label: t('sensorFlowRate'), children: health.flowRate.toLocaleString() },
           { key: 'kernel', label: t('sensorKernelDrops'), children: <Typography.Text type={health.kernelDrops ? 'danger' : undefined}>{health.kernelDrops.toLocaleString()}</Typography.Text> },
           { key: 'queue', label: t('sensorQueueDrops'), children: <Typography.Text type={health.queueDrops ? 'danger' : undefined}>{health.queueDrops.toLocaleString()}</Typography.Text> },
+          { key: 'tls', label: t('sensorTlsBudgetExhausted'), children: <Typography.Text type={health.tlsBudgetExhausted ? 'warning' : undefined}>{(health.tlsBudgetExhausted ?? 0).toLocaleString()}</Typography.Text> },
         ]} />
       </div>
       <Typography.Text type="secondary">{t('sensorEvidenceHint')}</Typography.Text>

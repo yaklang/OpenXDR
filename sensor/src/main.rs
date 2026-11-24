@@ -300,6 +300,7 @@ fn worker_with_clock(
     let mut packets = 0u64;
     let mut exported = 0u64;
     let mut kernel_drops = 0u64;
+    let mut tls_budget_exhausted = 0u64;
     let mut last_stats = std::time::Instant::now();
 
     while running.load(Ordering::Relaxed) {
@@ -338,11 +339,17 @@ fn worker_with_clock(
             .kernel_drops
             .fetch_add(k.saturating_sub(kernel_drops), Ordering::Relaxed);
         kernel_drops = k;
+        let t = table.tls_budget_exhausted();
+        stats
+            .tls_budget_exhausted
+            .fetch_add(t - tls_budget_exhausted, Ordering::Relaxed);
+        tls_budget_exhausted = t;
 
         if last_stats.elapsed() >= STATS_INTERVAL {
             eprintln!(
                 "worker {id}: packets={packets} flows={} exported={exported} \
-                 kernel_drops={kernel_drops} queue_drops={queue_drops}",
+                 kernel_drops={kernel_drops} queue_drops={queue_drops} \
+                 tls_budget_exhausted={tls_budget_exhausted}",
                 table.len(),
             );
             last_stats = std::time::Instant::now();

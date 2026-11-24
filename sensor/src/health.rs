@@ -25,6 +25,8 @@ pub struct Stats {
     pub kernel_drops: AtomicU64,
     pub queue_drops: AtomicU64,
     pub workers_alive: AtomicU64,
+    /// TLS 重组预算打满、放弃证书解析的流数
+    pub tls_budget_exhausted: AtomicU64,
 }
 
 impl Stats {
@@ -72,11 +74,18 @@ struct Snapshot {
     flows: u64,
     kernel_drops: u64,
     queue_drops: u64,
+    /// 为 0 时不发：旧版 server 严格拒绝不认识的字段
+    #[serde(skip_serializing_if = "is_zero")]
+    tls_budget_exhausted: u64,
     /// 每秒包数
     packet_rate: u64,
     /// 每分钟会话数
     flow_rate: u64,
     capabilities: std::collections::BTreeMap<&'static str, Capability>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl Health {
@@ -153,6 +162,7 @@ impl Health {
             flows,
             kernel_drops: s.kernel_drops.load(Ordering::Relaxed),
             queue_drops: s.queue_drops.load(Ordering::Relaxed),
+            tls_budget_exhausted: s.tls_budget_exhausted.load(Ordering::Relaxed),
             packet_rate: dp / secs,
             flow_rate: df * 60 / secs,
             capabilities: [("capture", capture)].into(),
@@ -215,6 +225,12 @@ mod tests {
         assert_eq!(v["capabilities"]["capture"]["state"], "degraded");
         assert_eq!(v["kernelDrops"], 10);
         assert_eq!(v["queueDrops"], 50);
+        assert!(
+            v.get("tlsBudgetExhausted").is_none(),
+            "为 0 不发，兼容旧 server"
+        );
+        h.stats.tls_budget_exhausted.store(3, Ordering::Relaxed);
+        assert_eq!(snapshot(&h)["tlsBudgetExhausted"], 3);
         // 丢包停了也要保持一小时降级
         h.stats.packets.store(200_000, Ordering::Relaxed);
         assert_eq!(snapshot(&h)["capabilities"]["capture"]["state"], "degraded");
