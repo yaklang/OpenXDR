@@ -80,9 +80,11 @@ func TestReadOnlyAccepts(t *testing.T) {
 		// 绝对/显式相对路径通配与双引号 crontab 用户名
 		`ls /var/log/*.log`,
 		`grep err /var/log/*.log`,
+		`grep -e -- /var/log/*.log`,
 		`sort /var/log/*.log`,
 		`sort ./a*.log`,
 		`crontab -u "$user" -l`,
+		`pct exec 100 -- grep '*' /etc/hosts`,
 	} {
 		if !ReadOnly(cmd) {
 			t.Errorf("应判为只读：%s", cmd)
@@ -414,10 +416,12 @@ func TestReadOnlyRejects(t *testing.T) {
 		// 相对静态通配符可能匹配 - 开头文件名注入选项
 		`sort *`,
 		`grep foo *`,
+		`grep -e -- *`,
 		`sort ?foo /etc/hosts`,
 		`grep foo */*.log`,
 		`uniq /var/log/*.log`,
 		`find / -- *`,
+		`pct exec 100 -- sort *`,
 		// 未加引号未知 crontab 变量（含嵌套命令替换）
 		`crontab -u $user -l`,
 		`crontab -u $USER -l`,

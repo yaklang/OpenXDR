@@ -35,6 +35,42 @@ func TestCommandVisibility(t *testing.T) {
 	if strings.Contains(string(raw), `"action":"approve"`) || !strings.Contains(string(raw), `"action":"test"`) {
 		t.Fatal("连接测试不允许批准执行")
 	}
+	assertCardUpdateMulti(t, raw)
+	statusRaw, _ := json.Marshal(statusCard("已批准"))
+	assertCardUpdateMulti(t, statusRaw)
+}
+
+func assertCardUpdateMulti(t *testing.T, cardJSON []byte) {
+	t.Helper()
+	var parsed struct {
+		Config struct {
+			UpdateMulti *bool `json:"update_multi"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(cardJSON, &parsed); err != nil {
+		t.Fatalf("卡片 JSON 解析失败：%v (%s)", err, string(cardJSON))
+	}
+	if parsed.Config.UpdateMulti == nil || !*parsed.Config.UpdateMulti {
+		t.Fatalf("卡片必须显式声明 config.update_multi=true：%s", string(cardJSON))
+	}
+}
+
+func patchBodyHasUpdateMulti(raw []byte) bool {
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil || req.Content == "" {
+		return false
+	}
+	var card struct {
+		Config struct {
+			UpdateMulti *bool `json:"update_multi"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal([]byte(req.Content), &card); err != nil {
+		return false
+	}
+	return card.Config.UpdateMulti != nil && *card.Config.UpdateMulti
 }
 
 func TestAuthenticatedEventHeader(t *testing.T) {
@@ -328,6 +364,13 @@ func TestActionCallbackKeepsInteractiveCardUntilTerminalAndAllowsRetry(t *testin
 					t.Errorf("鉴权头不符：%q", got)
 				}
 				body, _ := io.ReadAll(r.Body)
+				if !patchBodyHasUpdateMulti(body) {
+					return &http.Response{
+						StatusCode: http.StatusBadRequest,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(strings.NewReader(`{"code":230072,"msg":"card must set update_multi true"}`)),
+					}, nil
+				}
 				patchMu.Lock()
 				patchedPaths = append(patchedPaths, r.URL.Path)
 				patchedBodies = append(patchedBodies, string(body))
@@ -459,6 +502,13 @@ func TestActionCallbackKeepsInteractiveCardUntilTerminalAndAllowsRetry(t *testin
 	if strings.Contains(body, `"tag":"button"`) || !strings.Contains(body, "已批准") {
 		t.Fatalf("终态更新的卡片应为无按钮状态卡：%s", body)
 	}
+	var patchedReq struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(body), &patchedReq); err != nil {
+		t.Fatalf("解析 PATCH 请求体失败：%v", err)
+	}
+	assertCardUpdateMulti(t, []byte(patchedReq.Content))
 
 	// 5. 落到终态后再次重放同一回调必须被拒绝
 	afterTerminal, err := svc.action(context.Background(), cfg, ev)
@@ -477,5 +527,44 @@ func TestActionCallbackKeepsInteractiveCardUntilTerminalAndAllowsRetry(t *testin
 	}
 	if rejectResp.Card == nil || rejectResp.Toast == nil || rejectResp.Toast.Type != "success" {
 		t.Fatalf("同步终态回调应返回状态卡片与成功 toast：%#v", rejectResp)
+	}
+}
+
+func TestPatchCardEnforcesUpdateMultiAndLogsError(t *testing.T) {
+	cfg := Config{AppID: "cli_test", Revision: "rev-1", Enabled: true}
+	svc := &Service{
+		HTTP: &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				body, _ := io.ReadAll(r.Body)
+				if !patchBodyHasUpdateMulti(body) {
+					return &http.Response{
+						StatusCode: http.StatusBadRequest,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(strings.NewReader(`{"code":230072,"msg":"card must set update_multi true"}`)),
+					}, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"code":0}`)),
+				}, nil
+			}),
+		},
+		token:         "test-token",
+		tokenRevision: cfg.Revision,
+		tokenUntil:    time.Now().Add(time.Hour),
+	}
+	// statusCard 携带 update_multi: true，应更新成功
+	if err := svc.patchCard(context.Background(), cfg, "om_ok", statusCard("已批准")); err != nil {
+		t.Fatalf("带 update_multi 的 statusCard 更新应成功：%v", err)
+	}
+	// 缺少 update_multi 时，mock 服务端返回 400 + 飞书错误码，patchCard 应返回含错误码和消息的错误而不崩溃
+	legacyCard := map[string]any{
+		"config":   map[string]any{"wide_screen_mode": true},
+		"elements": []any{paragraph("旧卡")},
+	}
+	err := svc.patchCard(context.Background(), cfg, "om_legacy", legacyCard)
+	if err == nil || !strings.Contains(err.Error(), "230072") || !strings.Contains(err.Error(), "update_multi") {
+		t.Fatalf("缺少 update_multi 应返回含飞书错误码与消息的错误，实际：%v", err)
 	}
 }

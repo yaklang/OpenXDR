@@ -42,7 +42,7 @@ func readOnly(cmd string, nested bool) bool {
 		}
 		// 容器里执行的命令按同一份清单判定；shell 会展开的段，判定看到的和容器里真跑的可能不是一回事
 		if inner, ok := containerExec(program, args); ok {
-			if seg.dynamic || !argvReadOnly(inner) {
+			if seg.dynamic || len(seg.globWords) > 0 || !argvReadOnly(inner) {
 				return false
 			}
 			continue
@@ -319,7 +319,7 @@ func (v shellVars) lookup(w string) ([]string, bool) {
 const maxExpandedCombos = 64
 
 // checkArgsWithVars 在把参数交给目标程序只读检查器之前，校验静态通配与动态参数展开：
-//  1. 对选项敏感的程序，禁止不在 -- 之后且不以 / 或 ./ 开头的静态通配词，防止展开出 - 开头文件名注入选项；
+//  1. 对选项敏感的程序，禁止不以 / 或 ./ 开头的静态通配词（仅保留 grep 系列过滤选项），防止展开出 - 开头文件名注入选项；
 //  2. 已知取值的单变量引用按全部可能取值展开，未加引号的仅允许单个非空、无空白、无通配符的词，任一组合不通过即拒绝；
 //  3. 无法经 vars.lookup 解析的动态词（未知环境变量、复合展开如 $a$b、命令替换等），
 //     除极少数已严格证明处于双引号安全数据位置的形态外一律拒绝，防止展开为危险选项或写子命令。
@@ -327,18 +327,13 @@ func checkArgsWithVars(program string, check func([]string) bool, args []string,
 	if len(args) != len(metas) {
 		return false
 	}
-	afterDoubleDash := false
 	hasDynamic := false
 	for i, a := range args {
 		m := metas[i]
 		if m.dynamic {
 			hasDynamic = true
 		}
-		if !m.dynamic && !m.glob && a == "--" {
-			afterDoubleDash = true
-			continue
-		}
-		if m.glob && !safeStaticGlobArg(program, a, afterDoubleDash) {
+		if m.glob && !safeStaticGlobArg(program, a) {
 			return false
 		}
 	}
@@ -389,15 +384,11 @@ func checkArgsWithVars(program string, check func([]string) bool, args []string,
 
 // safeStaticGlobArg 判定对选项敏感的程序是否允许某个静态通配参数：
 //   - uniq 会把第二个文件名当输出文件覆盖，禁止任何通配展开；
-//   - find 不支持 -- 结束谓词解析，-- 后也不放行裸通配；
-//   - 其余程序在 -- 之后、以 / 或 ./ 开头（展开结果绝不以 - 开头），
-//     或 grep 系列的 --include=/--exclude=/--exclude-dir= 过滤模式，放行。
-func safeStaticGlobArg(program, arg string, afterDoubleDash bool) bool {
+//   - 其余程序仅放行以 / 或 ./ 开头（展开结果绝不以 - 开头），
+//     或 grep 系列的 --include=/--exclude=/--exclude-dir= 过滤模式。
+func safeStaticGlobArg(program, arg string) bool {
 	if program == "uniq" {
 		return false
-	}
-	if afterDoubleDash && program != "find" {
-		return true
 	}
 	if strings.HasPrefix(arg, "/") || strings.HasPrefix(arg, "./") {
 		return true

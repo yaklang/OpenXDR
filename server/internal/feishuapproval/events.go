@@ -368,17 +368,29 @@ func (s *Service) patchCard(ctx context.Context, c Config, messageID string, car
 		return errors.New("飞书网络请求失败")
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("飞书 HTTP 状态 %d", resp.StatusCode)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return errors.New("读取飞书响应失败")
 	}
 	var result struct {
-		Code int `json:"code"`
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
 	}
-	if err = json.NewDecoder(io.LimitReader(resp.Body, 1024*1024)).Decode(&result); err != nil {
+	parseErr := json.Unmarshal(respBody, &result)
+	if resp.StatusCode != http.StatusOK {
+		if parseErr == nil && (result.Code != 0 || result.Msg != "") {
+			slog.Warn("飞书更新卡片返回错误", "message_id", messageID, "http_status", resp.StatusCode, "code", result.Code, "msg", result.Msg)
+			return fmt.Errorf("飞书更新卡片失败（HTTP %d，代码 %d：%s）", resp.StatusCode, result.Code, result.Msg)
+		}
+		slog.Warn("飞书更新卡片返回非 200 状态", "message_id", messageID, "http_status", resp.StatusCode)
+		return fmt.Errorf("飞书 HTTP 状态 %d", resp.StatusCode)
+	}
+	if parseErr != nil {
 		return errors.New("飞书响应格式无效")
 	}
 	if result.Code != 0 {
-		return fmt.Errorf("飞书更新卡片代码 %d", result.Code)
+		slog.Warn("飞书更新卡片返回业务错误", "message_id", messageID, "code", result.Code, "msg", result.Msg)
+		return fmt.Errorf("飞书更新卡片代码 %d：%s", result.Code, result.Msg)
 	}
 	return nil
 }
