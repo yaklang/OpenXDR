@@ -196,7 +196,13 @@ pub async fn report(
                 tokio::time::sleep(wait).await;
                 continue;
             }
-            let mut req = tonic::Request::new(build_report_request(&agent_id, snap));
+            let Some(body) = build_report_request(&agent_id, snap) else {
+                // 残缺快照绝不上报，避免服务端将缺失的尾部钥匙误标为 present=false；
+                // 标记该 seq 已跳过，等待后续文件变更产生完整快照后再上报。
+                sent_seq = seq;
+                continue;
+            };
+            let mut req = tonic::Request::new(body);
             req.set_timeout(REPORT_RPC_TIMEOUT);
             match tokio::time::timeout(REPORT_RPC_TIMEOUT, client.report_ssh_keys(req)).await {
                 Ok(Ok(_)) => {
@@ -892,10 +898,24 @@ fn pack_keys_within_budget(
     (kept, truncated)
 }
 
-/// 组装上报请求，并做最终体积兜底：确保 encoded_len() 始终不超过 MAX_SNAPSHOT_BYTES（3 MiB）。
+/// 强杀超时子进程组后短轮询回收僵尸的上限，防不可中断 D 状态让 wait() 无限阻塞
 #[cfg(target_os = "linux")]
-fn build_report_request(agent_id: &str, snap: Snapshot) -> ReportSshKeysRequest {
-    let mut req = ReportSshKeysRequest {
+const REAP_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// 组装上报请求。若快照已触发截断或最终编码体积超出 MAX_SNAPSHOT_BYTES（3 MiB），
+/// 返回 `None` 暂缓上报，绝不发送残缺快照导致服务端将缺失的尾部钥匙误标为 `present=false`。
+#[cfg(target_os = "linux")]
+fn build_report_request(agent_id: &str, snap: Snapshot) -> Option<ReportSshKeysRequest> {
+    if snap.truncated {
+        eprintln!(
+            "SSH 钥匙盘点快照已超 {} 字节或 {} 条上限（当前保留 {} 条），暂缓上报以避免服务端误删尾部钥匙",
+            MAX_SNAPSHOT_BYTES,
+            MAX_KEYS_TOTAL,
+            snap.keys.len()
+        );
+        return None;
+    }
+    let req = ReportSshKeysRequest {
         agent_id: agent_id.to_string(),
         observed_at_ms: snap.observed_at_ms,
         keys: snap
@@ -913,18 +933,15 @@ fn build_report_request(agent_id: &str, snap: Snapshot) -> ReportSshKeysRequest 
         authorized_keys_command: snap.authorized_keys_command,
         authorized_keys_command_user: snap.authorized_keys_command_user,
     };
-    let mut popped = 0usize;
-    while !req.keys.is_empty() && req.encoded_len() > MAX_SNAPSHOT_BYTES {
-        req.keys.pop();
-        popped += 1;
-    }
-    if popped > 0 {
+    let encoded_len = req.encoded_len();
+    if encoded_len > MAX_SNAPSHOT_BYTES {
         eprintln!(
-            "SSH 钥匙上报请求超出单帧体积预算（{} 字节），额外截断 {popped} 条以保证低于 gRPC 上限",
-            MAX_SNAPSHOT_BYTES
+            "SSH 钥匙上报请求编码体积（{} 字节）超出 {} 字节上限，暂缓上报以避免服务端误删尾部钥匙",
+            encoded_len, MAX_SNAPSHOT_BYTES
         );
+        return None;
     }
-    req
+    Some(req)
 }
 
 #[cfg(target_os = "linux")]
@@ -938,7 +955,19 @@ fn kill_process_group(child: &mut std::process::Child) {
         }
     }
     let _ = child.kill();
-    let _ = child.wait();
+    // 短轮询回收僵尸，避免子进程卡在不可中断 D 状态时 wait() 无限阻塞越过 deadline
+    let deadline = Instant::now() + REAP_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -947,12 +976,12 @@ fn read_child_stdout_with_timeout(
     timeout: Duration,
     max_bytes: usize,
 ) -> Option<String> {
-    read_child_stdout_checked(child, timeout, max_bytes).map(|(text, truncated)| {
-        if truncated {
-            eprintln!("sshd -T 输出超过 {max_bytes} 字节上限，已截断处理");
-        }
-        text
-    })
+    let (text, truncated) = read_child_stdout_checked(child, timeout, max_bytes)?;
+    if truncated {
+        eprintln!("sshd -T 输出超过 {max_bytes} 字节上限被截断，视为无效输出并忽略");
+        return None;
+    }
+    Some(text)
 }
 
 /// 带超时读取子进程 stdout：读线程经 channel 返回结果，主线程按共享 deadline 等待（绝不无限 join），
@@ -1263,6 +1292,20 @@ authorizedkeyscommanduser nobody\n";
         assert_eq!(out.len(), 1024);
         assert!(truncated, "超上限输出应明确标记截断");
 
+        // sshd -T 输出被截断时 read_child_stdout_with_timeout 必须返回 None，视为无效输出
+        let truncated_child = Command::new("sh")
+            .args(["-c", "head -c 4096 /dev/zero | tr '\\0' 'a'"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        assert!(
+            read_child_stdout_with_timeout(truncated_child, Duration::from_secs(5), 1024).is_none(),
+            "被截断的 sshd -T 输出应返回 None，不得拿残缺配置覆盖可信配置"
+        );
+
         // 超时子进程应被及时终止返回 None
         let started = std::time::Instant::now();
         let slow = Command::new("sleep")
@@ -1320,12 +1363,48 @@ authorizedkeyscommanduser nobody\n";
 
         let snap = Snapshot {
             observed_at_ms: 1_700_000_000_000,
-            keys: kept,
+            keys: kept.clone(),
             authorized_keys_command: "/usr/local/bin/fetch-keys".into(),
             authorized_keys_command_user: "nobody".into(),
             truncated,
         };
-        let req = build_report_request("agent-host-01", snap);
+        assert!(
+            build_report_request("agent-host-01", snap).is_none(),
+            "截断快照必须暂缓上报（返回 None），避免服务端将尾部钥匙误标为 present=false"
+        );
+
+        // 未标记 truncated 但实际编码体积超出 3 MiB 时同样不得上报
+        let oversized = Snapshot {
+            observed_at_ms: 1_700_000_000_000,
+            keys: (0..400)
+                .map(|i| KeyEntry {
+                    account: format!("user{i}"),
+                    path: format!("/home/user{i}/.ssh/authorized_keys"),
+                    key_type: "ssh-ed25519".into(),
+                    fingerprint: format!("SHA256:{i:043}"),
+                    comment: "c".repeat(MAX_COMMENT_CHARS),
+                    options: long_opts.clone(),
+                })
+                .collect(),
+            authorized_keys_command: "/usr/local/bin/fetch-keys".into(),
+            authorized_keys_command_user: "nobody".into(),
+            truncated: false,
+        };
+        assert!(
+            build_report_request("agent-host-01", oversized).is_none(),
+            "编码体积超过 3 MiB 上限时必须暂缓上报（返回 None）"
+        );
+
+        // 完整且在预算内的快照正常组装上报请求
+        let complete_snap = Snapshot {
+            observed_at_ms: 1_700_000_000_000,
+            keys: kept,
+            authorized_keys_command: "/usr/local/bin/fetch-keys".into(),
+            authorized_keys_command_user: "nobody".into(),
+            truncated: false,
+        };
+        let req = build_report_request("agent-host-01", complete_snap)
+            .expect("完整且在预算内的快照应正常组装上报请求");
         assert!(
             req.encoded_len() <= MAX_SNAPSHOT_BYTES,
             "单帧 protobuf 编码体积 {} 超过 3 MiB 预算 {}",

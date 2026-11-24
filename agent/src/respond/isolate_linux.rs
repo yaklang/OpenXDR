@@ -28,6 +28,10 @@ const MAX_TOTAL_ENDPOINTS: usize = 256;
 const MAX_INFLIGHT_DNS: usize = 8;
 /// `nft` 查询/删表子进程超时上限，防止内核或 nft 卡死拖垮状态探针与隔离解除
 const NFT_TIMEOUT: Duration = Duration::from_secs(3);
+/// `nft -f -` 原子规则脚本执行超时上限，防内核或 nft 卡死无限阻塞响应流
+const NFT_SCRIPT_TIMEOUT: Duration = Duration::from_secs(10);
+/// 强杀超时子进程组后短轮询回收僵尸的上限，防不可中断 D 状态让 wait() 无限阻塞
+const REAP_TIMEOUT: Duration = Duration::from_millis(500);
 /// `run_nft` 输出缓冲区保留上限
 const MAX_NFT_OUTPUT_BYTES: usize = 1024 * 1024;
 
@@ -328,27 +332,94 @@ fn apply(script: &str) -> Result<(), String> {
 
 /// 整段规则交给 nft -f - 原子执行。容器隔离在容器的网络命名空间里也用它
 pub(super) fn nft_script(script: &str) -> Result<(), String> {
-    let mut child = Proc::new("nft")
-        .arg("-f")
-        .arg("-")
-        .stdin(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+    nft_script_with_timeout("nft", &["-f", "-"], script, NFT_SCRIPT_TIMEOUT)
+}
+
+fn nft_script_with_timeout(
+    program: &str,
+    args: &[&str],
+    script: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    let mut child = Proc::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
-        .map_err(|e| format!("无法执行 nft（隔离需要 nftables 与 root 权限）: {e}"))?;
+        .map_err(|e| {
+            if program == "nft" {
+                format!("无法执行 nft（隔离需要 nftables 与 root 权限）: {e}")
+            } else {
+                format!("无法执行 {program}: {e}")
+            }
+        })?;
 
-    use std::io::Write;
-    child
-        .stdin
-        .take()
-        .ok_or("无法写入 nft 标准输入")?
-        .write_all(script.as_bytes())
-        .map_err(|e| e.to_string())?;
+    // 后台线程并发读 stderr，避免大量错误输出撑满管道缓冲导致死锁
+    let err_rx = spawn_pipe_reader(child.stderr.take(), 64 * 1024);
 
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    // 后台线程写 stdin 并在写完后关闭写端，防子进程卡死不读 stdin 时主线程阻塞在 write_all
+    let mut stdin = child.stdin.take().ok_or("无法写入 nft 标准输入")?;
+    let payload = script.as_bytes().to_vec();
+    let (write_tx, write_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::Write;
+        let res = stdin.write_all(&payload);
+        drop(stdin);
+        let _ = write_tx.send(res);
+    });
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    kill_process_group(&mut child);
+                    return Err(format!("执行 {program} 超时，防火墙规则状态未知"));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => {
+                kill_process_group(&mut child);
+                return Err(format!("等待 {program} 失败: {e}"));
+            }
+        }
+    };
+
+    let stderr = if let Some(rx) = err_rx {
+        let rem = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(rem) {
+            Ok(buf) => buf,
+            Err(_) => {
+                kill_process_group(&mut child);
+                return Err(format!("读取 {program} 错误输出超时，防火墙规则状态未知"));
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    let write_rem = deadline.saturating_duration_since(Instant::now());
+    let write_res = write_rx.recv_timeout(write_rem);
+
+    if !status.success() {
+        let msg = String::from_utf8_lossy(&stderr).trim().to_string();
+        if !msg.is_empty() {
+            return Err(msg);
+        }
+        return Err(format!("{program} 执行失败（退出状态 {status}）"));
     }
-    Ok(())
+
+    match write_res {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(format!("写入 {program} 标准输入失败: {e}")),
+        Err(_) => {
+            kill_process_group(&mut child);
+            Err(format!("写入 {program} 标准输入超时，防火墙规则状态未知"))
+        }
+    }
 }
 
 fn kill_process_group(child: &mut std::process::Child) {
@@ -361,7 +432,19 @@ fn kill_process_group(child: &mut std::process::Child) {
         }
     }
     let _ = child.kill();
-    let _ = child.wait();
+    // 短轮询回收僵尸，避免子进程卡在不可中断 D 状态时 wait() 无限阻塞越过 deadline
+    let deadline = Instant::now() + REAP_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
 }
 
 fn spawn_pipe_reader<R: Read + Send + 'static>(
@@ -640,6 +723,64 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "后代持有 stdout 时也应在超时内返回"
+        );
+    }
+
+    #[test]
+    fn nft_script_with_timeout_handles_large_stderr_and_kills_stalled_process_group() {
+        // 正常消费 stdin 并退出
+        nft_script_with_timeout(
+            "sh",
+            &["-c", "cat >/dev/null"],
+            "add table inet test\n",
+            Duration::from_secs(2),
+        )
+        .unwrap();
+
+        // 写超过 64 KiB stderr 后失败退出：并发读 stderr 防死锁，并返回错误文本
+        let err = nft_script_with_timeout(
+            "sh",
+            &["-c", "head -c 131072 /dev/zero | tr '\\0' 'e' >&2; exit 1"],
+            "bad ruleset\n",
+            Duration::from_secs(3),
+        )
+        .unwrap_err();
+        assert!(err.starts_with("eeee"), "应返回截断保留的 stderr：{err:?}");
+
+        // 子进程卡住：超时强杀进程组并返回规则状态未知提示
+        let started = Instant::now();
+        let err = nft_script_with_timeout(
+            "sh",
+            &["-c", "sleep 30"],
+            "add table inet test\n",
+            Duration::from_millis(150),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("超时") && err.contains("规则状态未知"),
+            "超时应提示规则状态未知：{err}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "卡死子进程应在 deadline 内返回"
+        );
+
+        // 父进程立刻退出但后代持有 stderr 写端：共享 deadline 强杀进程组，绝不挂死
+        let started = Instant::now();
+        let err = nft_script_with_timeout(
+            "sh",
+            &["-c", "sleep 30 &"],
+            "add table inet test\n",
+            Duration::from_millis(150),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("超时") && err.contains("规则状态未知"),
+            "后代持 stderr 超时应提示规则状态未知：{err}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "后代持有 stderr 写端时也应在 deadline 内返回"
         );
     }
 }

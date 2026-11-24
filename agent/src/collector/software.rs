@@ -78,6 +78,9 @@ struct CmdOutput {
     stdout_truncated: bool,
 }
 
+/// 强杀超时子进程组后短轮询回收僵尸的上限，防不可中断 D 状态让 wait() 无限阻塞
+const REAP_TIMEOUT: Duration = Duration::from_millis(500);
+
 fn kill_process_group(child: &mut std::process::Child) {
     let pid = child.id() as libc::pid_t;
     if pid > 0 {
@@ -88,7 +91,19 @@ fn kill_process_group(child: &mut std::process::Child) {
         }
     }
     let _ = child.kill();
-    let _ = child.wait();
+    // 短轮询回收僵尸，避免子进程陷入不可中断 D 状态时 wait() 无限阻塞越过 deadline
+    let deadline = Instant::now() + REAP_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
 }
 
 /// 带超时执行外部命令：子进程独立进程组，后台线程经 channel 排空 stdout/stderr 并与命令共享同一截止时间，

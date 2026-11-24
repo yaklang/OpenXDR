@@ -303,8 +303,18 @@ fn collect_subdirs_filtered(
     root: &str,
     max_depth: usize,
     remaining: usize,
-    mut already_watched: impl FnMut(&str) -> bool,
+    already_watched: impl FnMut(&str) -> bool,
 ) -> (Vec<String>, bool) {
+    let (out, truncated, _) = collect_subdirs_tracked(root, max_depth, remaining, already_watched);
+    (out, truncated)
+}
+
+fn collect_subdirs_tracked(
+    root: &str,
+    max_depth: usize,
+    remaining: usize,
+    mut already_watched: impl FnMut(&str) -> bool,
+) -> (Vec<String>, bool, usize) {
     let root_clean = root.trim_end_matches('/');
     let root_path = if root_clean.is_empty() {
         "/"
@@ -313,17 +323,27 @@ fn collect_subdirs_filtered(
     };
     // 先原子确认 root 本身是真实目录（拒绝软链与不存在路径）
     if open_dir_nofollow(root_path).is_err() {
-        return (Vec::new(), false);
+        return (Vec::new(), false, 0);
+    }
+
+    let root_new = !already_watched(root_path);
+    if root_new && remaining == 0 {
+        return (Vec::new(), true, 0);
     }
 
     let mut out = Vec::new();
     let mut truncated = false;
-    let mut stack = vec![(root_path.to_string(), 0usize)];
-    while let Some((dir, depth)) = stack.pop() {
+    let mut pending_new = usize::from(root_new);
+    let mut stack = vec![(root_path.to_string(), 0usize, root_new)];
+    let mut peak_stack = stack.len();
+    while let Some((dir, depth, is_new)) = stack.pop() {
+        if is_new {
+            pending_new = pending_new.saturating_sub(1);
+        }
         let Ok(dir_fd) = open_dir_nofollow(&dir) else {
             continue;
         };
-        if !already_watched(&dir) {
+        if is_new {
             if out.len() >= remaining {
                 truncated = true;
                 continue;
@@ -347,16 +367,24 @@ fn collect_subdirs_filtered(
                     } else {
                         format!("{dir}/{name}")
                     };
-                    if out.len() >= remaining && !already_watched(&child) {
-                        truncated = true;
+                    let child_new = !already_watched(&child);
+                    if child_new {
+                        // 压栈前检查已收集数与栈中待收集数，达到剩余预算立即停压，防宽目录把海量孩子压进 stack
+                        if out.len() + pending_new >= remaining {
+                            truncated = true;
+                            break;
+                        }
+                        pending_new += 1;
+                    } else if out.len() + pending_new >= remaining {
                         continue;
                     }
-                    stack.push((child, depth + 1));
+                    stack.push((child, depth + 1, child_new));
+                    peak_stack = peak_stack.max(stack.len());
                 }
             }
         }
     }
-    (out, truncated)
+    (out, truncated, peak_stack)
 }
 
 #[cfg(test)]
@@ -917,18 +945,14 @@ fn fa_mark_parent(
     }
 }
 
-/// 补标消失又出现的目标以及此前因总预算满而截断的根，返回新打上 mark 的目录。
+/// 补标消失又出现的目标、此前内核 mark 失败的子目录以及此前因总预算满而截断的根，
+/// 全盘始终受全局 `MAX_TOTAL_WATCHES` 剩余预算约束，返回新打上 mark 的目录。
 fn fa_reconcile(st: &mut FaState) -> Vec<String> {
     st.marked.retain(|path| std::path::Path::new(path).exists());
     st.parent_marked
         .retain(|path| std::path::Path::new(path).exists());
     let mut fresh = Vec::new();
     for root in st.roots.clone() {
-        let was_truncated = st.truncated_roots.contains(&root);
-        let root_marked = st.marked.contains(&root);
-        if root_marked && !was_truncated {
-            continue;
-        }
         if std::path::Path::new(&root).is_file() {
             fa_mark_file(
                 st.fd,
@@ -2032,6 +2056,28 @@ mod tests {
 
         // SAFETY: 测试独占 fd，结束前关闭
         unsafe { libc::close(fd) };
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn wide_directory_bounds_stack_memory_by_remaining_budget() {
+        let base =
+            std::env::temp_dir().join(format!("openxdr-fswatch-wide-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        // 在单层宽目录下创建 200 个兄弟子目录，但预算只给 12
+        for i in 0..200 {
+            std::fs::create_dir(base.join(format!("child_{i:03}"))).unwrap();
+        }
+
+        let (found, truncated, peak_stack) =
+            collect_subdirs_tracked(&base.to_string_lossy(), MAX_DEPTH, 12, |_| false);
+        assert!(truncated, "宽目录超预算必须标记 truncated = true");
+        assert_eq!(found.len(), 12, "返回目录数不得超过剩余预算 12");
+        assert!(
+            peak_stack <= 12,
+            "宽目录遍历栈峰值 {peak_stack} 不得超过剩余预算 12，防止把海量孩子压进 stack"
+        );
+
         let _ = std::fs::remove_dir_all(&base);
     }
 }

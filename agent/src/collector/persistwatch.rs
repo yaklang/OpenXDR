@@ -16,7 +16,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::pb::AgentEvent;
 
 use super::EventSink;
-use super::persistwatch_tasks::{reconcile_snapshot, scan_dir_snapshot};
+use super::persistwatch_tasks::{
+    MAX_TASK_ENTRIES, ScanResult, reconcile_snapshot, scan_dir_snapshot,
+};
 
 /// OCSF Registry Value Activity / File System Activity
 const CLASS_REGISTRY: u32 = 201002;
@@ -77,11 +79,16 @@ fn run(agent_id: &str, sink: &EventSink) {
     let mut reg_seen = registry_snapshot();
     let mut file_seen = startup_snapshot();
     let mut svc_seen = services_snapshot();
-    let mut task_seen = tasks_snapshot(None).map(|(snap, complete)| {
-        if !complete {
-            eprintln!("计划任务首轮基线未完整扫描（触发上限或读取失败），后续完整轮次将自动补齐");
+    let mut task_seen = tasks_snapshot(None).map(|scan| {
+        if !scan.is_complete() {
+            eprintln!(
+                "计划任务首轮基线有 {} 个目录未完整扫描（触发上限或读取失败），后续轮次将按目录粒度对账",
+                scan.incomplete_dirs.len()
+            );
         }
-        snap
+        let (baseline, _) =
+            reconcile_snapshot(None, scan.entries, &scan.incomplete_dirs, MAX_TASK_ENTRIES);
+        baseline
     });
     let mut wmi_seen = wmi_snapshot();
 
@@ -123,13 +130,19 @@ fn run(agent_id: &str, sink: &EventSink) {
             svc_seen = Some(svc_now);
         }
 
-        if let Some((task_now, complete)) = tasks_snapshot(task_seen.as_ref()) {
-            if !complete {
+        if let Some(scan) = tasks_snapshot(task_seen.as_ref()) {
+            if !scan.is_complete() {
                 eprintln!(
-                    "计划任务快照未完整扫描（触发深度/条目上限或目录读取失败），本轮保留未覆盖旧基线并跳过删除判定"
+                    "计划任务快照有 {} 个目录未完整扫描（触发深度/条目上限或读取失败），仅这些子树保留旧基线免判删除",
+                    scan.incomplete_dirs.len()
                 );
             }
-            let (next_seen, changes) = reconcile_snapshot(task_seen.as_ref(), task_now, complete);
+            let (next_seen, changes) = reconcile_snapshot(
+                task_seen.as_ref(),
+                scan.entries,
+                &scan.incomplete_dirs,
+                MAX_TASK_ENTRIES,
+            );
             for (path, task, prev, activity) in changes {
                 if !sink.send(task_event(agent_id, &path, &task, prev.as_ref(), activity)) {
                     return;
@@ -592,17 +605,14 @@ struct TaskEntry {
     actions: Option<String>,
 }
 
-/// 计划任务目录递归遍历的最大深度与最大扫描条目数（目录+文件），防止符号链接/目录联接或恶意目录树耗尽资源。
+/// 计划任务目录递归遍历的最大深度，防止符号链接/目录联接或恶意目录树耗尽资源。
 const MAX_TASK_DEPTH: usize = 8;
-const MAX_TASK_ENTRIES: usize = 4096;
 
-/// 计划任务快照：任务文件路径 -> mtime 秒、大小与动作，以及本轮是否完整扫描（`complete`）。
+/// 计划任务快照：任务文件路径 -> mtime 秒、大小与动作，以及本轮未完整覆盖的目录列表。
 /// 返回 None 表示 Tasks 根目录都读不了（权限等），本轮整体跳过；
-/// 若触及深度/条目上限或任一子目录读取失败，`complete` 为 `false`，调用方跳过删除判定并保留旧基线缺失项。
+/// 若部分子树触及深度/条目上限或读取失败，记录在 `incomplete_dirs` 中，仅这些子树免判删除。
 /// 任务文件这一轮读不到（计划任务服务正在写）时沿用上一轮的动作，不把"读不到"当成动作变化。
-fn tasks_snapshot(
-    prev: Option<&BTreeMap<String, TaskEntry>>,
-) -> Option<(BTreeMap<String, TaskEntry>, bool)> {
+fn tasks_snapshot(prev: Option<&BTreeMap<String, TaskEntry>>) -> Option<ScanResult<TaskEntry>> {
     tasks_snapshot_at(
         std::path::Path::new(TASKS_DIR),
         prev,
@@ -616,7 +626,7 @@ fn tasks_snapshot_at(
     prev: Option<&BTreeMap<String, TaskEntry>>,
     max_depth: usize,
     max_entries: usize,
-) -> Option<(BTreeMap<String, TaskEntry>, bool)> {
+) -> Option<ScanResult<TaskEntry>> {
     scan_dir_snapshot(root, max_depth, max_entries, |e, path| {
         let meta = e.metadata().ok()?;
         let mtime = meta

@@ -12,23 +12,96 @@ const MAX_CONCURRENT_STATUS: usize = 16;
 /// 单次状态查询（含获取单飞锁与隔离状态探针刷新）的总截止时间，防底层探针卡死占满并发槽位
 const STATUS_REPLY_TIMEOUT: Duration = Duration::from_secs(3);
 
-type IsolationCache = Arc<tokio::sync::Mutex<Option<(Instant, bool)>>>;
+#[derive(Clone, Default)]
+struct IsolationCache {
+    inner: Arc<std::sync::Mutex<IsolationState>>,
+}
 
-/// 读取隔离状态：命中未过期缓存时直接在异步路径返回，不进 blocking pool；
-/// 过期时借助异步互斥锁单飞刷新，同一时刻至多 1 个 spawn_blocking 任务查内核。
+#[derive(Default)]
+struct IsolationState {
+    cached: Option<(Instant, bool)>,
+    /// 非空表示全局已有 1 个后台探针在运行；等待者订阅此 Notify，探针真正完成时清空并广播通知
+    in_flight: Option<Arc<tokio::sync::Notify>>,
+}
+
+impl IsolationCache {
+    #[cfg(all(test, unix))]
+    fn seed(&self, at: Instant, value: bool) {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).cached = Some((at, value));
+    }
+
+    #[cfg(all(test, unix))]
+    fn is_empty(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .cached
+            .is_none()
+    }
+}
+
+/// 读取隔离状态：命中未过期缓存时直接返回，不进 blocking pool；
+/// 过期或未命中时保证全局同一时刻至多 1 个后台 `spawn_blocking` 探针在运行。
+/// 调用方超时取消只放弃本次等待，不会取消也不会再重复启动新探针；
+/// 探针真正完成后由后台任务写回缓存、清除 `in_flight` 并广播通知所有等待者。
 async fn isolated_with<F>(cache: &IsolationCache, probe: F) -> bool
 where
     F: FnOnce() -> bool + Send + 'static,
 {
-    let mut cached = cache.lock().await;
-    if let Some((at, value)) = *cached
-        && at.elapsed() < ISOLATION_TTL
-    {
-        return value;
+    let mut probe = Some(probe);
+    loop {
+        let (notify, should_spawn) = {
+            let mut state = cache.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((at, value)) = state.cached
+                && at.elapsed() < ISOLATION_TTL
+            {
+                return value;
+            }
+            if let Some(existing) = state.in_flight.clone() {
+                (existing, false)
+            } else {
+                let notify = Arc::new(tokio::sync::Notify::new());
+                state.in_flight = Some(notify.clone());
+                (notify, true)
+            }
+        };
+
+        // 先注册并激活 notified，再 spawn 后台探针，防止探针极快完成导致丢唤醒
+        let notified = notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        if should_spawn {
+            let inner = cache.inner.clone();
+            let probe_fn = probe.take().expect("单飞探针只应启动一次");
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(probe_fn).await;
+                let done = {
+                    let mut state = inner.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Ok(value) = result {
+                        state.cached = Some((Instant::now(), value));
+                    }
+                    state.in_flight.take()
+                };
+                if let Some(n) = done {
+                    n.notify_waiters();
+                }
+            });
+        }
+
+        notified.await;
+
+        // 探针已完成：若本调用方已启动过探针且探针异常退出未写入缓存，则降级返回 false 避免死循环
+        if probe.is_none() {
+            let state = cache.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((at, value)) = state.cached
+                && at.elapsed() < ISOLATION_TTL
+            {
+                return value;
+            }
+            return false;
+        }
     }
-    let value = tokio::task::spawn_blocking(probe).await.unwrap_or(false);
-    *cached = Some((Instant::now(), value));
-    value
 }
 
 async fn snapshot_with<F>(health: &Health, cache: &IsolationCache, probe: F) -> Status
@@ -338,7 +411,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let cache = IsolationCache::default();
-        *cache.lock().await = Some((Instant::now(), true));
+        cache.seed(Instant::now(), true);
         assert!(
             snapshot(&Health::new(), &cache).await.isolated,
             "缓存未过期就不再查内核"
@@ -371,34 +444,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reply_times_out_when_probe_stalls_and_recovers_afterwards() {
+    async fn reply_times_out_without_spawning_duplicate_probes_and_returns_latest_after_completion()
+    {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
         let health = Health::new();
         let cache = IsolationCache::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<bool>();
+        let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
 
-        // 探针阻塞远超 reply deadline：必须在 deadline 内返回 None，不挂死、不写脏缓存
-        let started = Instant::now();
-        let timed_out = reply_with(
-            health.clone(),
-            cache.clone(),
-            Duration::from_millis(80),
-            || {
-                std::thread::sleep(Duration::from_millis(300));
-                false
-            },
-        )
-        .await;
-        assert!(timed_out.is_none(), "探针卡死时应超时返回 None 释放槽位");
-        assert!(
-            started.elapsed() < Duration::from_millis(250),
-            "超时返回不应等待卡死探针结束"
+        // 探针卡住期间连续发起 5 次超时请求：每次都必须在 deadline 内返回 None，
+        // 且全过程后台探针只启动 1 次，绝不因超时取消而堆积多个 spawn_blocking。
+        for _ in 0..5 {
+            let started = Instant::now();
+            let calls = calls.clone();
+            let rx = release_rx.clone();
+            let timed_out = reply_with(
+                health.clone(),
+                cache.clone(),
+                Duration::from_millis(50),
+                move || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    rx.lock().unwrap().recv().unwrap_or(false)
+                },
+            )
+            .await;
+            assert!(timed_out.is_none(), "探针卡住时应超时返回 None 释放槽位");
+            assert!(
+                started.elapsed() < Duration::from_millis(250),
+                "超时返回不应等待卡住的探针结束"
+            );
+            assert!(cache.is_empty(), "探针未完成前不得写入错误缓存");
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "探针卡住期间连续多次超时请求，全过程探针函数只能被调用 1 次"
         );
-        assert!(cache.lock().await.is_none(), "超时后不得写入错误缓存");
 
-        // 探针恢复后应正常返回状态 JSON 并刷新缓存
-        let line = reply_with(health, cache, Duration::from_millis(500), || true)
-            .await
-            .expect("探针恢复后应正常返回状态");
+        // 放行唯一在途探针返回 true，下一次请求应立刻拿到最新结果且仍不再启动新探针
+        release_tx.send(true).unwrap();
+        let line = reply_with(health, cache, Duration::from_secs(2), {
+            let calls = calls.clone();
+            move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                false
+            }
+        })
+        .await
+        .expect("探针完成后应立即返回最新状态");
         let status: Status = serde_json::from_slice(&line).unwrap();
-        assert!(status.isolated);
+        assert!(status.isolated, "应拿到后台探针完成写入的最新结果 true");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "探针完成后应直接命中刷新结果，全程探针仅调用 1 次"
+        );
     }
 }
