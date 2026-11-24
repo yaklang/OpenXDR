@@ -143,6 +143,7 @@ async fn install(
     data: &[u8],
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let new = with_suffix(exe, ".new");
+    remove_stale(&new)?;
     write_executable(&new, data)?;
     let check = tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -186,6 +187,15 @@ fn replace(exe: &Path, new: &Path) -> std::io::Result<()> {
         return Err(error);
     }
     Ok(())
+}
+
+/// 上次升级中途被杀会留下 .new，不清掉之后每次 create_new 都失败。
+/// remove_file 只删链接本身不跟随；删完到重建之间若被人塞回文件，create_new + O_NOFOLLOW 仍会拒绝。
+fn remove_stale(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
 }
 
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
@@ -320,10 +330,16 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
+    /// install 测试并行时，一个测试 fork 自检子进程会继承另一个测试正在写的 .new 句柄，
+    /// 后者再执行就是 ETXTBSY；串行跑
+    #[cfg(unix)]
+    static INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// 自检失败的新版不能换上去，旧版原地不动；自检通过才换，旧版留作 .prev。
     #[cfg(unix)]
     #[tokio::test]
     async fn install_swaps_only_after_self_check() {
+        let _serial = INSTALL_LOCK.lock().await;
         let dir =
             std::env::temp_dir().join(format!("openxdr-sensor-upgrade-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -343,6 +359,33 @@ mod tests {
             std::fs::read_to_string(with_suffix(&exe, ".prev")).unwrap(),
             "old"
         );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// 残留的 .new（中断的上次升级）不能挡住下一次；残留是符号链接时只删链接，不碰目标。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn install_clears_stale_new() {
+        let _serial = INSTALL_LOCK.lock().await;
+        use std::os::unix::fs::symlink;
+        let dir =
+            std::env::temp_dir().join(format!("openxdr-sensor-stale-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("openxdr-sensor");
+        std::fs::write(&exe, "old").unwrap();
+        let new = with_suffix(&exe, ".new");
+        let good = b"#!/bin/sh\necho 9.9.9\n";
+
+        std::fs::write(&new, "half-written").unwrap();
+        assert_eq!(install(&exe, good).await.unwrap(), "9.9.9");
+        assert!(!new.exists());
+
+        let target = dir.join("target");
+        std::fs::write(&target, b"keep-me").unwrap();
+        symlink(&target, &new).unwrap();
+        assert_eq!(install(&exe, good).await.unwrap(), "9.9.9");
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep-me");
+        assert!(std::fs::symlink_metadata(&new).is_err());
         std::fs::remove_dir_all(dir).ok();
     }
 
