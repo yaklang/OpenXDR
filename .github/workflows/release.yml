@@ -1,6 +1,7 @@
 name: Release
 
-# 推 v* 标签即发版：编 agent / sensor（Linux amd64 + arm64、Windows）与 web 镜像并行 → 把 agent 与 sensor 安装包打进 server 镜像、推 GHCR（amd64 + arm64）→ 建 GitHub Release。
+# 推 v* 标签即发版：编 agent / sensor（Linux amd64 + arm64、Windows）、离线 IP 库与 web 镜像并行 →
+# 原生双架构（amd64 + arm64，免 QEMU）各自构建 server 镜像并按 digest 推 GHCR → 合并多架构 manifest → 建 GitHub Release。
 # Release 附件：install.sh（一行安装）、docker-compose.yml、各平台安装包与 SHA256SUMS。
 on:
   push:
@@ -156,7 +157,30 @@ jobs:
           name: binaries-arm64
           path: out
 
-  # web 镜像不依赖采集端安装包，与 binaries 并行构建
+  # 离线 IP 归属库只拉取校验一次，供 amd64 / arm64 镜像共享，确保双架构内置的库完全一致
+  ipdb:
+    name: 离线 IP 归属库
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache-dependency-path: server/go.sum
+      - name: 下载并校验 DB-IP Lite
+        # DB-IP Lite（CC BY 4.0）当月版本打进镜像，下载后做结构与类型校验；DB-IP 只保留最近两个月、不发布校验和，
+        # 没法钉固定版本的 SHA256，这里把实际打进去的哈希记进日志和镜像。下载或校验失败直接让发版失败，不发缺库的镜像
+        working-directory: server
+        run: |
+          go run ./cmd/ipdb -dir ../ipdb-out/ipdb
+          cd ../ipdb-out/ipdb && sha256sum -- *.mmdb | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipdb
+          path: ipdb-out
+
+  # web 镜像不依赖采集端安装包，且最终镜像无 RUN 步骤（无需 QEMU），与 binaries 并行构建
   image-web:
     name: 容器镜像 (web)
     runs-on: ubuntu-latest
@@ -166,7 +190,6 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v6
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -193,14 +216,23 @@ jobs:
           cache-from: type=gha,scope=release-web
           cache-to: type=gha,mode=max,scope=release-web
 
-  images:
-    name: 容器镜像 (server)
-    needs: [binaries-agent, binaries-sensor, binaries-arm64]
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  # 原生双架构各自构建 server 镜像并按 digest 推送，避免 arm64 在 QEMU 下跑 apk add chromium
+  image-server:
+    name: 容器镜像 (server ${{ matrix.arch }})
+    needs: [binaries-agent, binaries-sensor, binaries-arm64, ipdb]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
       # 三个安装包产物合进同一个 out/dist
@@ -209,34 +241,23 @@ jobs:
           pattern: binaries*
           merge-multiple: true
           path: out
-      - uses: actions/setup-go@v7
+      - uses: actions/download-artifact@v4
         with:
-          go-version: '1.26'
-          cache-dependency-path: server/go.sum
-      - name: 离线 IP 归属库
-        # DB-IP Lite（CC BY 4.0）当月版本打进镜像，下载后做结构与类型校验；DB-IP 只保留最近两个月、不发布校验和，
-        # 没法钉固定版本的 SHA256，这里把实际打进去的哈希记进日志和镜像。下载或校验失败直接让发版失败，不发缺库的镜像
-        working-directory: server
-        run: |
-          go run ./cmd/ipdb -dir ../ipdb-out/ipdb
-          cd ../ipdb-out/ipdb && sha256sum -- *.mmdb | tee SHA256SUMS
-      - uses: docker/setup-qemu-action@v3
+          name: ipdb
+          path: ipdb-out
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: 标签
-        id: tags
+      - name: 镜像仓库名
+        id: repo
         run: |
           owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
-          tag=$TAG
-          list="ghcr.io/$owner/openxdr-server:$tag"
-          # 预发布版（带 -）不动 latest
-          case $tag in *-*) ;; *) list="$list,ghcr.io/$owner/openxdr-server:latest" ;; esac
-          echo "server=$list" >> "$GITHUB_OUTPUT"
-      - name: server
+          echo "name=ghcr.io/$owner/openxdr-server" >> "$GITHUB_OUTPUT"
+      - name: server (${{ matrix.arch }})
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -245,12 +266,53 @@ jobs:
           build-contexts: |
             agents=out
             ipdb=ipdb-out
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.tags.outputs.server }}
+          platforms: linux/${{ matrix.arch }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          cache-from: type=gha,scope=release-server
-          cache-to: type=gha,mode=max,scope=release-server
+          outputs: type=image,name=${{ steps.repo.outputs.name }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=release-server-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=release-server-${{ matrix.arch }}
+      - name: 导出 digest
+        run: |
+          mkdir -p digests
+          printf '%s' "${{ steps.build.outputs.digest }}" > "digests/${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-digest-${{ matrix.arch }}
+          path: digests
+
+  images:
+    name: 合并 server 多架构镜像
+    needs: [image-server]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: server-digest-*
+          merge-multiple: true
+          path: digests
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 合并并打标签
+        run: |
+          owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          tag=$TAG
+          repo="ghcr.io/$owner/openxdr-server"
+          args=(-t "$repo:$tag")
+          # 预发布版（带 -）不动 latest
+          case $tag in *-*) ;; *) args+=(-t "$repo:latest") ;; esac
+          for f in digests/*; do
+            args+=("$repo@$(cat "$f")")
+          done
+          docker buildx imagetools create "${args[@]}"
+          docker buildx imagetools inspect "$repo:$tag"
 
   release:
     name: GitHub Release

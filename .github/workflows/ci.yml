@@ -7,6 +7,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
 
 # 同一分支的新推送取消旧运行，别让排队堆积
 concurrency:
@@ -14,8 +15,107 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 按改动路径决定需要跑哪些子系统；改 ci.yml 或手动触发时全量跑
+  changes:
+    name: 改动范围检测
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      deception: ${{ steps.filter.outputs.deception }}
+      pi_runtime: ${{ steps.filter.outputs.pi_runtime }}
+      web: ${{ steps.filter.outputs.web }}
+      pages: ${{ steps.filter.outputs.pages }}
+      agent: ${{ steps.filter.outputs.agent }}
+      sensor: ${{ steps.filter.outputs.sensor }}
+      images_server: ${{ steps.filter.outputs.images_server }}
+      images_web: ${{ steps.filter.outputs.images_web }}
+      crates: ${{ steps.matrix.outputs.crates }}
+      kernel_matrix: ${{ steps.matrix.outputs.kernel_matrix }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            server:
+              - 'server/**'
+              - 'proto/**'
+              - 'rules/**'
+              - 'tasks/**'
+              - 'temporal-rules/**'
+              - 'validation/**'
+              - 'deploy/ha/logs/**'
+              - 'deploy/pi-sandbox/**'
+              - 'integrations/dygk/**'
+              - '.github/workflows/ci.yml'
+            deception:
+              - 'integrations/dygk/**'
+              - 'server/deception/**'
+              - 'server/internal/decoy/**'
+              - 'server/go.mod'
+              - 'server/go.sum'
+              - 'docker-compose*.yml'
+              - '.github/workflows/ci.yml'
+            pi_runtime:
+              - 'server/pi-runtime/**'
+              - 'deploy/pi-sandbox/**'
+              - '.github/workflows/ci.yml'
+            web:
+              - 'web/**'
+              - '.github/workflows/ci.yml'
+            pages:
+              - 'pages/**'
+              - '.github/workflows/ci.yml'
+            agent:
+              - 'agent/**'
+              - 'proto/**'
+              - '.github/workflows/ci.yml'
+            sensor:
+              - 'sensor/**'
+              - 'proto/**'
+              - '.github/workflows/ci.yml'
+            images_server:
+              - 'server/**'
+              - 'rules/**'
+              - 'tasks/**'
+              - 'temporal-rules/**'
+              - '.dockerignore'
+              - '.github/workflows/ci.yml'
+            images_web:
+              - 'web/**'
+              - '.github/workflows/ci.yml'
+      - name: 生成采集端矩阵
+        id: matrix
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          AGENT: ${{ steps.filter.outputs.agent }}
+          SENSOR: ${{ steps.filter.outputs.sensor }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          force = os.environ.get("EVENT_NAME") == "workflow_dispatch"
+          agent = force or os.environ.get("AGENT") == "true"
+          sensor = force or os.environ.get("SENSOR") == "true"
+          crates = []
+          kernel = []
+          if agent:
+              crates.append("agent")
+              kernel.append({"crate": "agent", "feature": "ebpf,execblock"})
+          if sensor:
+              crates.append("sensor")
+              kernel.append({"crate": "sensor", "feature": "xdp"})
+          print(f"crates={json.dumps(crates)}")
+          print(f"kernel_matrix={json.dumps(kernel)}")
+          PY
+
   server:
     name: Server (Go 单元测试)
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.server == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -48,6 +148,8 @@ jobs:
 
   server-integration:
     name: Server (Go 集成测试)
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.server == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -106,6 +208,8 @@ jobs:
 
   deception-runtime:
     name: 独立欺骗引擎
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.deception == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -147,6 +251,8 @@ jobs:
 
   pi-runtime:
     name: Pi runtime (Node)
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.pi_runtime == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -166,6 +272,8 @@ jobs:
 
   web:
     name: Web (React)
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -184,6 +292,8 @@ jobs:
 
   pages:
     name: Pages (项目主页)
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.pages == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -201,12 +311,14 @@ jobs:
   # 默认构建不需要 nightly 和 bpf-linker，这一项守住"开箱即用"
   collectors:
     name: ${{ matrix.crate }} (默认特性)
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.sensor == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        crate: [agent, sensor]
+        crate: ${{ fromJSON(needs.changes.outputs.crates) }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -231,12 +343,14 @@ jobs:
   # 发版有 arm64 安装包：原生 arm runner 上编译与跑测试，守住 arm64 不回归（c_char 符号、结构体布局等）
   collectors-arm64:
     name: ${{ matrix.crate }} (arm64)
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.sensor == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        crate: [agent, sensor]
+        crate: ${{ fromJSON(needs.changes.outputs.crates) }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -258,16 +372,14 @@ jobs:
   # 内核采集是可选特性，单独一项：它需要 nightly 工具链和 bpf-linker
   kernel-collectors:
     name: ${{ matrix.crate }} (${{ matrix.feature }})
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.sensor == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - crate: agent
-            feature: ebpf,execblock
-          - crate: sensor
-            feature: xdp
+        include: ${{ fromJSON(needs.changes.outputs.kernel_matrix) }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -302,6 +414,8 @@ jobs:
   # 采集端要能交叉编译到 Windows：ETW 与 Packet Monitor 代码平时在 Linux CI 上编不到
   windows-target:
     name: Collectors (Windows 目标)
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.agent == 'true' || needs.changes.outputs.sensor == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -319,20 +433,25 @@ jobs:
             agent
             sensor
           key: windows
-      - working-directory: agent
+      - if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.agent == 'true'
+        working-directory: agent
         run: cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings
       # Windows 版 sensor（Packet Monitor 后端）
-      - working-directory: sensor
+      - if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.sensor == 'true'
+        working-directory: sensor
         run: cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings
 
   images:
     name: 容器镜像
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.images_server == 'true' || needs.changes.outputs.images_web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - uses: docker/setup-buildx-action@v3
       - name: 构建 server 镜像
+        if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.images_server == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -342,6 +461,7 @@ jobs:
           cache-from: type=gha,scope=ci-server
           cache-to: type=gha,mode=max,scope=ci-server
       - name: 构建 web 镜像
+        if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.images_web == 'true'
         uses: docker/build-push-action@v6
         with:
           context: web
