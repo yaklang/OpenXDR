@@ -11,6 +11,7 @@ permissions:
 jobs:
   native:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v7
@@ -37,6 +38,7 @@ jobs:
     # 当前上游为 UNLICENSED；确认分发授权后由仓库管理员开启发布。
     if: vars.DYGK_DISTRIBUTION_AUTHORIZED == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: write
@@ -84,3 +86,5 @@ jobs:
           secrets: |
             dygk_upstream_token=${{ secrets.DYGK_UPSTREAM_TOKEN }}
           tags: ${{ steps.image.outputs.tags }}
+          cache-from: type=gha,scope=deception
+          cache-to: type=gha,mode=max,scope=deception

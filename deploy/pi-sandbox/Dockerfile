@@ -9,7 +9,7 @@ RUN if [ -n "$APT_MIRROR" ]; then sed -i -E "s#https?://deb.debian.org#$APT_MIRR
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/openxdr-sandbox
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts --registry=$NPM_REGISTRY
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --ignore-scripts --registry=$NPM_REGISTRY
 COPY bridge.mjs model-fallback.mjs ./
 COPY skills/ ./skills/
 COPY xdr /usr/local/bin/xdr
