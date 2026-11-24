@@ -31,11 +31,22 @@ type member struct {
 	role string
 }
 
+// patroniTransport 显式禁用环境代理，防止内网 Patroni BasicAuth 凭据经 HTTP_PROXY 外泄
+var patroniTransport = func() *http.Transport {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	return tr
+}()
+
 func (p *Patroni) client() *http.Client {
 	if p.HTTP != nil {
 		return p.HTTP
 	}
-	return &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return &http.Client{
+		Timeout:       5 * time.Second,
+		Transport:     patroniTransport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 func (p *Patroni) addrs(a *ent.Asset) []string {

@@ -261,15 +261,24 @@ func (s *Service) decideContainment(ctx context.Context, id uuid.UUID, u *ent.Us
 		audit("containment_declined")
 		return "已驳回，这条处置不会执行。", nil
 	}
-	audit("containment_approved")
-	go func() {
-		run, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-		defer cancel()
-		if _, err := s.Containment.Approve(run, p, u.Username); err != nil {
-			slog.Error("飞书批准的处置下发失败", "containment", p.ID, "err", err)
-		}
-	}()
+	go s.approveContainment(ctx, p, u.Username, audit)
 	return "已批准，正在下发；结果以 OpenXDR 自主响应页的记录为准。", nil
+}
+
+// approveContainment 在后台执行处置批准，仅在批准实际生效后写入 containment_approved 审计日志。
+func (s *Service) approveContainment(ctx context.Context, p *ent.Containment, actor string, audit func(string)) {
+	run, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	res, err := s.Containment.Approve(run, p, actor)
+	if err != nil {
+		slog.Error("飞书批准的处置下发失败", "containment", p.ID, "err", err)
+		return
+	}
+	if res != nil && (res.State == entcontainment.StateHeld || res.State == entcontainment.StateDeclined || res.State == entcontainment.StateSkipped) {
+		slog.Warn("飞书批准的处置未生效", "containment", p.ID, "state", res.State)
+		return
+	}
+	audit("containment_approved")
 }
 
 // 长连接退出（如凭据错误这类不可重试的失败）后按指数退避重连，连上过则从头计时。

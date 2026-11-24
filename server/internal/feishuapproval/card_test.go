@@ -3,12 +3,16 @@ package feishuapproval
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
+	"openxdr/server/ent"
+	entcontainment "openxdr/server/ent/containment"
 )
 
 func TestCommandVisibility(t *testing.T) {
@@ -73,5 +77,53 @@ func TestOneLineCannotForgeFields(t *testing.T) {
 	got := oneLine("id\n组：生产\r\n主机：db\t\u200b")
 	if strings.ContainsAny(got, "\n\r\t\u200b") || got != "id⏎组：生产\uFFFD⏎主机：db⇥\uFFFD" {
 		t.Fatalf("控制字符未转成可见符号: %q", got)
+	}
+}
+
+type stubContainmentDecider struct {
+	approve func(ctx context.Context, c *ent.Containment, actor string) (*ent.Containment, error)
+}
+
+func (d stubContainmentDecider) Approve(ctx context.Context, c *ent.Containment, actor string) (*ent.Containment, error) {
+	return d.approve(ctx, c, actor)
+}
+
+func (d stubContainmentDecider) Decline(context.Context, *ent.Containment, string, string) (*ent.Containment, error) {
+	return nil, nil
+}
+
+func TestApproveContainmentAuditTiming(t *testing.T) {
+	cases := []struct {
+		name      string
+		res       *ent.Containment
+		err       error
+		wantAudit int
+	}{
+		{name: "批准生效写入审计", res: &ent.Containment{State: entcontainment.StatePending}, wantAudit: 1},
+		{name: "并发冲突或下发失败不写审计", err: errors.New("not proposed"), wantAudit: 0},
+		{name: "触发熔断不写审计", res: &ent.Containment{State: entcontainment.StateHeld}, wantAudit: 0},
+		{name: "重复处置被驳回不写审计", res: &ent.Containment{State: entcontainment.StateDeclined}, wantAudit: 0},
+		{name: "目标跳过不写审计", res: &ent.Containment{State: entcontainment.StateSkipped}, wantAudit: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var audits []string
+			svc := &Service{
+				Containment: stubContainmentDecider{
+					approve: func(_ context.Context, _ *ent.Containment, _ string) (*ent.Containment, error) {
+						return tc.res, tc.err
+					},
+				},
+			}
+			svc.approveContainment(context.Background(), &ent.Containment{ID: uuid.New()}, "admin", func(action string) {
+				audits = append(audits, action)
+			})
+			if len(audits) != tc.wantAudit {
+				t.Fatalf("审计记录数不符：got=%v want=%d", audits, tc.wantAudit)
+			}
+			if tc.wantAudit == 1 && audits[0] != "containment_approved" {
+				t.Fatalf("审计动作不符：got=%q", audits[0])
+			}
+		})
 	}
 }

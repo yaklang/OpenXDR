@@ -169,13 +169,8 @@ func segmentUnsafeDynamicSecret(program string, seg segment, vars shellVars) boo
 		return slices.ContainsFunc(seg.varWords, looksLikeSensitiveDynamic) || slices.ContainsFunc(seg.globWords, looksLikeSensitiveDynamic)
 	}
 	for _, w := range seg.varWords {
-		if values, ok := vars.lookup(w); ok {
-			if slices.ContainsFunc(values, valueMayReadSecret) {
-				return true
-			}
-			continue
-		}
-		if looksLikeSensitiveDynamic(w) || !strings.HasPrefix(w, "-") {
+		values, ok := vars.lookup(w)
+		if !ok || slices.ContainsFunc(values, valueMayReadSecret) {
 			return true
 		}
 	}
@@ -597,11 +592,11 @@ var readOnlyPrograms = map[string]func(args []string) bool{
 	"hostid": nil, "arch": nil, "systemd-detect-virt": nil, "lslogins": nil,
 	"curl":             curlProbe,
 	"find":             noArg("-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"),
-	"sort":             noArgPrefix("-o", "--output"),
+	"sort":             noArgPrefix("-o", "--output", "--compress-program", "--files0-from"),
 	"uniq":             atMostOneFile, // uniq 输入 输出：第二个文件名会被写
-	"date":             noArgPrefix("-s", "--set"),
-	"dmesg":            noArgPrefix("-c", "-C", "-D", "-E", "-n", "--clear", "--read-clear", "--console"),
-	"journalctl":       noArgPrefix("--vacuum", "--rotate", "--flush", "--sync", "--relinquish", "--smart-relinquish", "--setup-keys", "--update-catalog"),
+	"date":             noArgPrefix("-s", "-f", "--set", "--file"),
+	"dmesg":            noArgPrefix("-c", "-C", "-D", "-E", "-n", "--clear", "--read-clear", "--console-level", "--console-off", "--console-on"),
+	"journalctl":       noArgPrefix("--vacuum-size", "--vacuum-time", "--vacuum-files", "--rotate", "--flush", "--sync", "--relinquish-var", "--smart-relinquish-var", "--setup-keys", "--update-catalog"),
 	"sysctl":           sysctlRead,
 	"hostname":         flagsOnly,
 	"crontab":          crontabList,
@@ -673,13 +668,13 @@ func sshdTest(args []string) bool {
 	return test
 }
 
-// vtyshShow vtysh 只认成对的 -c 'show …'，配置模式和别的选项一律不认
+// vtyshShow vtysh 只认成对的单行 -c 'show …'，配置模式、内嵌换行和别的选项一律不认
 func vtyshShow(args []string) bool {
 	if len(args) == 0 || len(args)%2 != 0 {
 		return false
 	}
 	for i := 0; i < len(args); i += 2 {
-		if args[i] != "-c" || !strings.HasPrefix(strings.TrimSpace(args[i+1]), "show ") {
+		if args[i] != "-c" || strings.ContainsAny(args[i+1], "\r\n") || !strings.HasPrefix(strings.TrimSpace(args[i+1]), "show ") {
 			return false
 		}
 	}
@@ -699,15 +694,28 @@ func noArg(banned ...string) func([]string) bool {
 	}
 }
 
-// noArgPrefix 参数以这些前缀开头就不放行：-o 会写文件，-s 会改时间。短选项可能并在一起（-no 也含 -o 的效果），一并拦
+// noArgPrefix 参数命中这些短选项或长选项（含 getopt_long 唯一前缀缩写）就不放行：
+// -o 会写文件，-s 会改时间。短选项可能并在一起（-no 也含 -o 的效果），一并拦
 func noArgPrefix(banned ...string) func([]string) bool {
 	return func(args []string) bool {
 		for _, a := range args {
+			if strings.HasPrefix(a, "--") {
+				name, _, _ := strings.Cut(a, "=")
+				for _, b := range banned {
+					if strings.HasPrefix(b, "--") && (strings.HasPrefix(name, b) || longAbbrev(name, b)) {
+						return false
+					}
+				}
+				continue
+			}
 			for _, b := range banned {
+				if strings.HasPrefix(b, "--") {
+					continue
+				}
 				if strings.HasPrefix(a, b) {
 					return false
 				}
-				if len(b) == 2 && b[0] == '-' && strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.ContainsRune(a[1:], rune(b[1])) {
+				if len(b) == 2 && b[0] == '-' && strings.HasPrefix(a, "-") && strings.ContainsRune(a[1:], rune(b[1])) {
 					return false
 				}
 			}
@@ -1188,27 +1196,63 @@ func stripAwkStringsAndComments(script string) (string, bool) {
 	return b.String(), true
 }
 
-// awkRegexStart 前面没有操作数（开头、运算符、括号、分隔符之后）时 / 是正则开头，否则是除号
+var awkRegexKeywords = map[string]bool{
+	"print": true, "printf": true, "return": true, "exit": true,
+	"in": true, "do": true, "else": true, "delete": true, "getline": true, "case": true,
+}
+
+func isAwkIdentChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+}
+
+// awkRegexStart 前面没有操作数（开头、运算符、括号、分隔符或关键字之后）时 / 是正则开头，否则是除号
 func awkRegexStart(prev string) bool {
 	prev = strings.TrimRight(prev, " \t")
 	if prev == "" {
 		return true
 	}
-	return strings.ContainsRune("(,{};!~&|?:=<>+-*%^\n", rune(prev[len(prev)-1]))
+	if strings.ContainsRune("(,{};!~&|?:=<>+-*%^\n", rune(prev[len(prev)-1])) {
+		return true
+	}
+	j := len(prev)
+	for j > 0 && isAwkIdentChar(prev[j-1]) {
+		j--
+	}
+	return j < len(prev) && awkRegexKeywords[prev[j:]]
 }
 
-// awkRegexEnd 从 start 起找正则字面量的结束 /，跳过转义与方括号里的 /
+// awkRegexEnd 从 start 起找正则字面量的结束 /，跳过转义、字符类（含首字符 ] 与 POSIX 子类）里的 /
 func awkRegexEnd(script string, start int) (int, bool) {
 	inClass := false
+	classStart := -1
 	for i := start; i < len(script); i++ {
 		switch c := script[i]; {
 		case c == '\\':
+			if i+1 < len(script) && script[i+1] == '\n' {
+				return 0, false
+			}
 			i++
 		case c == '\n':
 			return 0, false
-		case c == '[':
+		case c == '[' && !inClass:
 			inClass = true
-		case c == ']':
+			classStart = i + 1
+			if i+1 < len(script) && script[i+1] == '^' {
+				i++
+				classStart = i + 1
+			}
+		case c == '[' && inClass:
+			// 方括号内的 POSIX 字符类/等价类/排序符号（[:alpha:]、[=a=]、[.ch.]）不能提前结束外层字符类
+			if i+1 < len(script) && (script[i+1] == ':' || script[i+1] == '=' || script[i+1] == '.') {
+				delim := script[i+1]
+				for j := i + 2; j+1 < len(script) && script[j] != '\n'; j++ {
+					if script[j] == delim && script[j+1] == ']' {
+						i = j + 1
+						break
+					}
+				}
+			}
+		case c == ']' && inClass && i > classStart:
 			inClass = false
 		case c == '/' && !inClass:
 			return i, true
