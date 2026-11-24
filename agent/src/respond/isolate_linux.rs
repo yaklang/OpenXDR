@@ -595,7 +595,13 @@ fn nft_script_with_timeout_raw(
     let stderr = if let Some(rx) = err_rx {
         let rem = deadline.saturating_duration_since(Instant::now());
         match rx.recv_timeout(rem) {
-            Ok((buf, _)) => buf,
+            Ok(Ok((buf, _))) => buf,
+            Ok(Err(e)) => {
+                kill_process_group(&mut child);
+                return Err(ScriptError::Unknown(format!(
+                    "读取 {program} 错误输出失败: {e}，防火墙规则状态未知"
+                )));
+            }
             Err(_) => {
                 kill_process_group(&mut child);
                 return Err(ScriptError::Unknown(format!(
@@ -659,20 +665,17 @@ fn kill_process_group(child: &mut std::process::Child) {
     }
 }
 
-fn spawn_pipe_reader<R: Read + Send + 'static>(
-    pipe: Option<R>,
-    limit: usize,
-) -> Option<std::sync::mpsc::Receiver<(Vec<u8>, bool)>> {
-    pipe.map(|mut r| {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut kept = Vec::new();
-            let mut truncated = false;
-            let mut chunk = [0u8; 4096];
-            while let Ok(n) = r.read(&mut chunk) {
-                if n == 0 {
-                    break;
-                }
+type PipeOutput = std::io::Result<(Vec<u8>, bool)>;
+
+/// 严格读取管道直至 Ok(0) EOF：对 EINTR 重试，其他 I/O 错误直接回传，绝不将半截前缀当作完整输出。
+fn read_pipe_bounded<R: Read>(mut r: R, limit: usize) -> PipeOutput {
+    let mut kept = Vec::new();
+    let mut truncated = false;
+    let mut chunk = [0u8; 4096];
+    loop {
+        match r.read(&mut chunk) {
+            Ok(0) => return Ok((kept, truncated)),
+            Ok(n) => {
                 if kept.len() < limit {
                     let take = (limit - kept.len()).min(n);
                     kept.extend_from_slice(&chunk[..take]);
@@ -683,7 +686,20 @@ fn spawn_pipe_reader<R: Read + Send + 'static>(
                     truncated = true;
                 }
             }
-            let _ = tx.send((kept, truncated));
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn spawn_pipe_reader<R: Read + Send + 'static>(
+    pipe: Option<R>,
+    limit: usize,
+) -> Option<std::sync::mpsc::Receiver<PipeOutput>> {
+    pipe.map(|r| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(read_pipe_bounded(r, limit));
         });
         rx
     })
@@ -731,7 +747,7 @@ fn run_nft_with_timeout_raw(
         }
     };
 
-    let recv = |rx: Option<std::sync::mpsc::Receiver<(Vec<u8>, bool)>>,
+    let recv = |rx: Option<std::sync::mpsc::Receiver<PipeOutput>>,
                 child: &mut std::process::Child|
      -> Result<(Vec<u8>, bool), NftExecError> {
         let Some(rx) = rx else {
@@ -739,7 +755,13 @@ fn run_nft_with_timeout_raw(
         };
         let rem = deadline.saturating_duration_since(Instant::now());
         match rx.recv_timeout(rem) {
-            Ok(pair) => Ok(pair),
+            Ok(Ok(pair)) => Ok(pair),
+            Ok(Err(e)) => {
+                kill_process_group(child);
+                Err(NftExecError::SpawnOrIo(format!(
+                    "读取 {program} 输出失败: {e}"
+                )))
+            }
             Err(_) => {
                 kill_process_group(child);
                 Err(NftExecError::Timeout(format!("读取 {program} 输出超时")))
@@ -1264,5 +1286,51 @@ mod tests {
             table_state_with("sh", truncated_list, TABLE, Duration::from_secs(2)),
             TableState::Unknown
         );
+    }
+
+    #[test]
+    fn read_pipe_bounded_propagates_io_error_and_retries_eintr() {
+        struct ScriptedReader {
+            steps: std::collections::VecDeque<std::io::Result<Vec<u8>>>,
+        }
+        impl Read for ScriptedReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                match self.steps.pop_front() {
+                    None => Ok(0),
+                    Some(Ok(data)) => {
+                        let n = data.len().min(buf.len());
+                        buf[..n].copy_from_slice(&data[..n]);
+                        Ok(n)
+                    }
+                    Some(Err(e)) => Err(e),
+                }
+            }
+        }
+
+        // 1. 先读到有效前缀，再遇到 EIO -> 必须返回 Err，绝不把前缀当作完整枚举
+        let eio_reader = ScriptedReader {
+            steps: std::collections::VecDeque::from([
+                Ok(b"table inet filter\n".to_vec()),
+                Err(std::io::Error::from_raw_os_error(libc::EIO)),
+            ]),
+        };
+        let err = read_pipe_bounded(eio_reader, 1024).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::EIO));
+
+        // 2. 遇到 EINTR 重试后继续读到目标表 -> 返回完整结果并识别 Present
+        let eintr_reader = ScriptedReader {
+            steps: std::collections::VecDeque::from([
+                Ok(b"table inet filter\n".to_vec()),
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "interrupted",
+                )),
+                Ok(format!("table inet {TABLE}\n").into_bytes()),
+            ]),
+        };
+        let (bytes, truncated) = read_pipe_bounded(eintr_reader, 1024).unwrap();
+        assert!(!truncated);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(list_tables_contains(&text, "inet", TABLE));
     }
 }
