@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -64,7 +65,7 @@ type Server struct {
 	Suppress      *suppress.Store
 	Intel         *intel.Store
 	Events        eventbus.Bus
-	TrustedRelays []string // 允许按报文 hostname 归属的受信 syslog 转发器 IP
+	TrustedRelays []netip.Prefix // 受信转发器（SYSLOG_TRUSTED_RELAYS），来自这里的报文按 hostname 归属；为空时都不受信，见 resolveAsset
 
 	// 测试覆写项；零值使用默认常量
 	maxConns      int
@@ -406,11 +407,12 @@ func (s *Server) snapshotAssets(ctx context.Context) (map[string]assetRef, map[s
 
 // resolveAsset 优先按源 IP 归属资产（防止已知主机伪造报文 hostname 嫁祸他机）；
 // 仅当源 IP 为受信转发器或未在资产表命中 IP 时，才按报文 hostname 匹配。两者都对不上就留空。
+// 没配受信转发器时，登记成资产的转发器转发来的日志都归到转发器自己；没登记的转发器不受影响（源 IP 不命中，按 hostname）
 func (s *Server) resolveAsset(ctx context.Context, hostname string, from net.IP) (*uuid.UUID, string) {
 	byIP, byHost := s.snapshotAssets(ctx)
 	if from != nil {
 		ip := from.String()
-		if !slices.Contains(s.TrustedRelays, ip) {
+		if !s.trustedRelay(from) {
 			if ref, ok := byIP[ip]; ok {
 				id := ref.id
 				return &id, ref.os
@@ -424,6 +426,36 @@ func (s *Server) resolveAsset(ctx context.Context, hostname string, from net.IP)
 		}
 	}
 	return nil, ""
+}
+
+func (s *Server) trustedRelay(from net.IP) bool {
+	addr, ok := netip.AddrFromSlice(from)
+	return ok && slices.ContainsFunc(s.TrustedRelays, func(p netip.Prefix) bool { return p.Contains(addr.Unmap()) })
+}
+
+// ParseRelays 解析 SYSLOG_TRUSTED_RELAYS：逗号分隔的 IP 或 CIDR，单个 IP 按 /32（IPv6 /128）算
+func ParseRelays(raw string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, f := range strings.Split(raw, ",") {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		if !strings.Contains(f, "/") {
+			addr, err := netip.ParseAddr(f)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, netip.PrefixFrom(addr.Unmap(), addr.Unmap().BitLen()))
+			continue
+		}
+		p, err := netip.ParsePrefix(f)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
 }
 
 func osOf(a *ent.Asset) string {

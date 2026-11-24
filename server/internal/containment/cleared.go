@@ -27,7 +27,8 @@ func (e *Engine) liftCleared(ctx context.Context) error {
 		Where(entcontainment.StateIn(entcontainment.StateActive, entcontainment.StateExecuted),
 			func(s *sql.Selector) {
 				liftCol := s.C(entcontainment.FieldLiftCommandID)
-				s.Where(sql.ExprP(`(` + liftCol + ` IS NULL OR EXISTS (SELECT 1 FROM commands cmd WHERE cmd.id = ` + liftCol + ` AND cmd.status = 'failed'))`))
+				// 解除指令失败过，或预留了 ID 却没建成单（下发在建单前失败），都可以重新解除
+				s.Where(sql.ExprP(`(` + liftCol + ` IS NULL OR NOT EXISTS (SELECT 1 FROM commands cmd WHERE cmd.id = ` + liftCol + ` AND cmd.status <> 'failed'))`))
 				s.Where(sql.ExprP(`EXISTS (SELECT 1 FROM alerts a JOIN incidents i ON i.id = COALESCE(a.incident_id, ` + s.C(entcontainment.FieldIncidentID) + `)
 WHERE a.id = ` + s.C(entcontainment.FieldAlertID) + ` AND i.status = 'false_positive' AND i.resolved_at > ` + s.C(entcontainment.FieldCreatedAt) + `)`))
 			}).

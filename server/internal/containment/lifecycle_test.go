@@ -370,13 +370,12 @@ func matchContainmentWhere(q string, args []any, item *ent.Containment, cmds map
 	if strings.Contains(where, `"lift_command_id" IS NOT NULL`) && item.LiftCommandID == nil {
 		return false
 	}
-	if strings.Contains(where, `"lift_command_id" IS NULL`) && !strings.Contains(where, "OR EXISTS") && item.LiftCommandID != nil {
+	if strings.Contains(where, `"lift_command_id" IS NULL`) && !strings.Contains(where, "OR NOT EXISTS") && item.LiftCommandID != nil {
 		return false
 	}
-	if strings.Contains(where, `OR EXISTS (SELECT 1 FROM commands cmd WHERE cmd.id =`) {
+	if strings.Contains(where, `OR NOT EXISTS (SELECT 1 FROM commands cmd WHERE cmd.id =`) {
 		if item.LiftCommandID != nil {
-			cmd := cmds[*item.LiftCommandID]
-			if cmd == nil || cmd.Status != "failed" {
+			if cmd := cmds[*item.LiftCommandID]; cmd != nil && cmd.Status != "failed" {
 				return false
 			}
 		}

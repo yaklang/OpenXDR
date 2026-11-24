@@ -372,6 +372,12 @@ func Reconcile(ctx context.Context, db *ent.Client, now time.Time) error {
 	return nil
 }
 
+// detached 下发失败后的回查与回滚：调用方的 ctx 可能已取消（这正是下发失败的原因之一），
+// 跟着它一起失败会把预留的指令 ID 留在记录上、指向一条不存在的指令
+func detached(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+}
+
 func initialContainmentID(alertID uuid.UUID, key string) uuid.UUID {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("openxdr:containment-row|"+alertID.String()+"|"+key))
 }
@@ -604,17 +610,22 @@ func (e *Engine) scoped(ctx context.Context, involved ...*ent.Asset) (string, er
 // 就不再动；否则新决定，能执行就下发。last 是告警最后一条证据的时间
 func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a action, last time.Time) error {
 	key, expires := a.key(), last.Add(e.TTL)
-	active, err := e.DB.Containment.Query().
+	// 同键在途的通常只有一条；历史并发留下多条时逐条续期，不能因为不止一条让整轮 Tick 中止
+	inFlight, err := e.DB.Containment.Query().
 		Where(entcontainment.KeyEQ(key), entcontainment.StateIn(entcontainment.StatePending, entcontainment.StateActive)).
-		Only(ctx)
-	switch {
-	case err == nil:
-		if _, lease := leases[a.kind]; lease && active.LiftCommandID == nil && (active.ExpiresAt == nil || expires.After(*active.ExpiresAt)) {
-			return active.Update().SetExpiresAt(expires).Exec(ctx)
-		}
-		return nil
-	case !ent.IsNotFound(err):
+		All(ctx)
+	if err != nil {
 		return err
+	}
+	for _, active := range inFlight {
+		if _, lease := leases[a.kind]; lease && active.LiftCommandID == nil && (active.ExpiresAt == nil || expires.After(*active.ExpiresAt)) {
+			if err := active.Update().SetExpiresAt(expires).Exec(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	if len(inFlight) > 0 {
+		return nil
 	}
 	preds := []predicate.Containment{
 		entcontainment.AlertIDEQ(al.ID),
@@ -664,6 +675,13 @@ func (e *Engine) decide(ctx context.Context, al *ent.Alert, source *ent.Asset, a
 	var c *ent.Containment
 	var heldReason string
 	if err := e.withFuseLock(ctx, func() error {
+		// 锁外查过之后，批准待审批处置（Approve）可能刚把同键的另一条推成 pending：锁内再查一次，不建重复记录
+		busy, err := e.DB.Containment.Query().
+			Where(entcontainment.KeyEQ(key), entcontainment.StateIn(entcontainment.StatePending, entcontainment.StateActive)).
+			Exist(ctx)
+		if err != nil || busy {
+			return err
+		}
 		held, err := e.fuse(ctx, a)
 		if err != nil {
 			return err
@@ -732,6 +750,8 @@ func (e *Engine) request(ctx context.Context, a action, cmdID uuid.UUID, inciden
 func (e *Engine) dispatch(ctx context.Context, c *ent.Containment, a action, req response.Request, alertID uuid.UUID) error {
 	cmdID := req.CommandID
 	cmd, issueErr := e.Hub.Issue(ctx, req)
+	wctx, cancel := detached(ctx)
+	defer cancel()
 	if (issueErr != nil && !errors.Is(issueErr, response.ErrDeliveryUnknown) && cmd == nil) ||
 		(cmd != nil && (cmd.Status == "failed" || cmd.Status == "unsupported")) {
 		detail := ""
@@ -740,7 +760,7 @@ func (e *Engine) dispatch(ctx context.Context, c *ent.Containment, a action, req
 			detail = classifyFailure(a.kind, cmd.Status, cmd.Detail)
 		} else if issueErr != nil {
 			detail = issueErr.Error()
-			if _, lookupErr := e.DB.Command.Get(ctx, cmdID); ent.IsNotFound(lookupErr) {
+			if _, lookupErr := e.DB.Command.Get(wctx, cmdID); ent.IsNotFound(lookupErr) {
 				clearCmd = true
 			}
 		}
@@ -757,7 +777,7 @@ func (e *Engine) dispatch(ctx context.Context, c *ent.Containment, a action, req
 		if clearCmd {
 			upd.ClearCommandID()
 		}
-		return upd.Exec(ctx)
+		return upd.Exec(wctx)
 	}
 	audit.System(ctx, e.DB, "containment", cmdID.String(), a.asset.Hostname+" "+a.kind+" "+a.target+"："+a.why)
 	if cmd != nil && cmd.Status == "succeeded" {
@@ -881,9 +901,7 @@ func (e *Engine) expire(ctx context.Context) error {
 			}
 			continue
 		}
-		if c.LiftCommandID != nil && *c.LiftCommandID == cmdID {
-			continue
-		}
+		// LiftCommandID 已是 cmdID 却没有这条指令：上次预留后在建单前失败或进程中断，接着用同一个 ID 下发（Hub.Issue 按 ID 幂等）
 
 		reviewed := prevFailedID != uuid.Nil
 		reason := c.Reason
@@ -933,19 +951,22 @@ func (e *Engine) expire(ctx context.Context) error {
 		if (issueErr != nil && !errors.Is(issueErr, response.ErrDeliveryUnknown) && cmd == nil) ||
 			(cmd != nil && cmd.Status == "failed") {
 			slog.Warn("自主响应解除下发失败，稍后重试", "containment", c.ID, "err", issueErr)
+			wctx, cancel := detached(ctx)
 			upd := e.DB.Containment.Update().
 				Where(entcontainment.IDEQ(c.ID), entcontainment.StateEQ(entcontainment.StateActive), entcontainment.LiftCommandIDEQ(cmdID)).
 				SetExpiresAt(now.Add(liftRetry)).SetReason(reason)
 			clearLift := cmd != nil && cmd.Status == "failed"
 			if cmd == nil {
-				if _, lookupErr := e.DB.Command.Get(ctx, cmdID); ent.IsNotFound(lookupErr) {
+				if _, lookupErr := e.DB.Command.Get(wctx, cmdID); ent.IsNotFound(lookupErr) {
 					clearLift = true
 				}
 			}
 			if clearLift {
 				upd.ClearLiftCommandID()
 			}
-			if err := upd.Exec(ctx); err != nil {
+			err := upd.Exec(wctx)
+			cancel()
+			if err != nil {
 				return err
 			}
 			continue

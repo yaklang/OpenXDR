@@ -170,6 +170,37 @@ func TestQuestionsAPI(t *testing.T) {
 	if code := get(asAdmin, "/api/questions/"+sharedQ.Question.ID.String(), &adminDetail); code != http.StatusOK || len(adminDetail.Incidents) != 2 || len(adminDetail.Findings) != 2 || len(adminDetail.Evidence) != 2 {
 		t.Fatalf("全局 admin 应看到全部关联条目：%d %+v", code, adminDetail)
 	}
+
+	// 列表同样裁剪：他组主机作主题时不透出主机名，计数只算看得见的事件与待办
+	assetQ, err := questions.Ask(ctx, client, questions.Request{Kind: "owner", SubjectKind: "asset", Subject: otherHost.ID.String(), Groups: []uuid.UUID{g.ID}, Finding: &fMine.ID}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := questions.Ask(ctx, client, questions.Request{Kind: "owner", SubjectKind: "asset", Subject: otherHost.ID.String(), Groups: []uuid.UUID{other.ID}, Finding: &fOther.ID}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	rowOf := func(rows []questionRow, id uuid.UUID) questionRow {
+		t.Helper()
+		i := slices.IndexFunc(rows, func(r questionRow) bool { return r.ID == id })
+		if i < 0 {
+			t.Fatalf("列表里没有问题 %s：%+v", id, rows)
+		}
+		return rows[i]
+	}
+	get(asAna, "/api/questions", &rows)
+	if r := rowOf(rows, assetQ.Question.ID); strings.Contains(r.SubjectLabel, "secret-other-host") || r.FindingCount != 1 {
+		t.Fatalf("列表不应透出他组主机名、计数应裁剪：%+v", r)
+	}
+	if r := rowOf(rows, sharedQ.Question.ID); r.IncidentCount != 1 || r.FindingCount != 1 {
+		t.Fatalf("列表计数应与详情一致：%+v", r)
+	}
+	get(asAdmin, "/api/questions", &rows)
+	if r := rowOf(rows, assetQ.Question.ID); r.SubjectLabel != "secret-other-host" || r.FindingCount != 2 {
+		t.Fatalf("全局 admin 看到完整主机名与计数：%+v", r)
+	}
+	if r := rowOf(rows, sharedQ.Question.ID); r.IncidentCount != 2 || r.FindingCount != 2 {
+		t.Fatalf("全局 admin 计数不裁剪：%+v", r)
+	}
 }
 
 func TestVoidedQuestionsAndAssetParkAPI(t *testing.T) {

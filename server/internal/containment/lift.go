@@ -47,15 +47,8 @@ func Lift(ctx context.Context, db *ent.Client, hub *response.Hub, c *ent.Contain
 	if existingCmd != nil {
 		return settleExistingLift(ctx, db, curr, existingCmd, actor, reason)
 	}
-	// 若当前记录已预留同一待下发 cmdID，说明另一并发调用正在下发该指令，绝不重复建单或重送。
-	if curr.LiftCommandID != nil && *curr.LiftCommandID == cmdID {
-		if curr.LiftedBy == nil || *curr.LiftedBy == "" || curr.Reason != reason {
-			_ = db.Containment.Update().
-				Where(entcontainment.IDEQ(curr.ID), entcontainment.LiftCommandIDEQ(cmdID)).
-				SetLiftedBy(actor).SetReason(reason).Exec(ctx)
-		}
-		return db.Containment.Get(ctx, curr.ID)
-	}
+	// 已预留同一 cmdID 却没有这条指令：上次在建单前失败或进程中断，也可能另一调用正在建单。
+	// 照常按同一个 ID 预留并下发：Hub.Issue 按 ID 幂等，不会重复建单或重送
 
 	reserve := db.Containment.Update().
 		Where(
@@ -93,7 +86,9 @@ func Lift(ctx context.Context, db *ent.Client, hub *response.Hub, c *ent.Contain
 		CommandID: cmdID, AssetID: curr.AssetID, Kind: kind, Target: curr.Target, IncidentID: curr.IncidentID, IssuedBy: actor,
 	})
 	if issueErr != nil && !errors.Is(issueErr, response.ErrDeliveryUnknown) && cmd == nil {
-		if _, lookupErr := db.Command.Get(ctx, cmdID); ent.IsNotFound(lookupErr) {
+		wctx, cancel := detached(ctx)
+		defer cancel()
+		if _, lookupErr := db.Command.Get(wctx, cmdID); ent.IsNotFound(lookupErr) {
 			rollback := db.Containment.Update().
 				Where(entcontainment.IDEQ(curr.ID), entcontainment.LiftCommandIDEQ(cmdID)).
 				ClearLiftedBy().SetReason(curr.Reason)
@@ -102,7 +97,7 @@ func Lift(ctx context.Context, db *ent.Client, hub *response.Hub, c *ent.Contain
 			} else {
 				rollback.SetLiftCommandID(*curr.LiftCommandID)
 			}
-			_ = rollback.Exec(ctx)
+			_ = rollback.Exec(wctx)
 		}
 		return nil, issueErr
 	}

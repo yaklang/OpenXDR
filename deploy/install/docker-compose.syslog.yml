@@ -4,6 +4,8 @@ services:
   server:
     environment:
       SYSLOG_ADDR: ":5514"
+      # 受信转发器（逗号分隔 IP/CIDR），在 .env 里设置；见 docs/deployment.md#日志接入
+      SYSLOG_TRUSTED_RELAYS: ${SYSLOG_TRUSTED_RELAYS:-}
     ports:
       - "${SYSLOG_PORT:-514}:5514/tcp"
       - "${SYSLOG_PORT:-514}:5514/udp"

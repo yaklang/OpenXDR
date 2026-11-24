@@ -84,6 +84,8 @@ services:
       WEBHOOK_MIN_SEVERITY: ${WEBHOOK_MIN_SEVERITY:-0}
       # syslog 接入：留空不启用，如 ":514"（记得同时映射端口）
       SYSLOG_ADDR: ${SYSLOG_ADDR:-}
+      # 受信 syslog 转发器（逗号分隔 IP/CIDR）：从这些地址来的报文按报文 hostname 归属资产
+      SYSLOG_TRUSTED_RELAYS: ${SYSLOG_TRUSTED_RELAYS:-}
       # 响应处置：结束进程 / 主机隔离
       RESPONSE_ENABLED: ${RESPONSE_ENABLED:-false}
       # 指令签名私钥（gencerts 生成的 command-signing.key），开了 RESPONSE_ENABLED 必须配

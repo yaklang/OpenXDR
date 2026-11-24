@@ -4,8 +4,10 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +72,28 @@ func TestAPIIntelImport(t *testing.T) {
 	}
 	if kindBy["1.2.3.4"] != "ip" || kindBy["evil.example.net"] != "domain" || kindBy["d41d8cd98f00b204e9800998ecf8427e"] != "hash" {
 		t.Errorf("类型自动识别错误: %v", kindBy)
+	}
+}
+
+// 分块导入整体一个事务：后面的块写入失败（含 NUL 的值 Postgres 不收）时，前面的块也不落库
+func TestAPIIntelImportAtomic(t *testing.T) {
+	ts, client := intelHandler(t)
+	var b strings.Builder
+	for i := range intelBatchChunk + 5 {
+		fmt.Fprintf(&b, "host-%d.evil.example\n", i)
+	}
+	b.WriteString("bad\x00value.example\n")
+	payload, _ := json.Marshal(map[string]string{"text": b.String()})
+	resp, err := postJSON(ts, "/api/intel/import", string(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 500 {
+		t.Fatalf("写入失败应返回 500，实际 %d", resp.StatusCode)
+	}
+	if n := client.Intel.Query().CountX(t.Context()); n != 0 {
+		t.Fatalf("失败的导入不应留下半截数据，实际 %d 条", n)
 	}
 }
 

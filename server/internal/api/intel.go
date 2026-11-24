@@ -190,31 +190,40 @@ func mapIntel(api *http.ServeMux, db *ent.Client, store *intel.Store) {
 			return
 		}
 
-		var creates []*ent.IntelCreate
-		var imported int
+		var fresh []candidate
 		for _, c := range candidates {
 			if existing[c.kind+":"+c.value] {
 				skipped++
 				continue
 			}
-			imported++
-			creates = append(creates, db.Intel.Create().
-				SetKind(entintel.Kind(c.kind)).
-				SetValue(c.value).
-				SetSource(body.Source).
-				SetSeverity(body.Severity).
-				SetNillableExpiresAt(expires))
+			fresh = append(fresh, c)
 		}
-		if len(creates) > 0 {
-			for start := 0; start < len(creates); start += intelBatchChunk {
-				end := min(start+intelBatchChunk, len(creates))
-				if _, err := db.Intel.CreateBulk(creates[start:end]...).Save(r.Context()); err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
+		// 分块写入放在同一事务里：某块失败就整体回滚，不留下半截导入
+		if len(fresh) > 0 {
+			err := withTx(r, db, func(tx *ent.Tx) error {
+				for start := 0; start < len(fresh); start += intelBatchChunk {
+					creates := make([]*ent.IntelCreate, 0, intelBatchChunk)
+					for _, c := range fresh[start:min(start+intelBatchChunk, len(fresh))] {
+						creates = append(creates, tx.Intel.Create().
+							SetKind(entintel.Kind(c.kind)).
+							SetValue(c.value).
+							SetSource(body.Source).
+							SetSeverity(body.Severity).
+							SetNillableExpiresAt(expires))
+					}
+					if _, err := tx.Intel.CreateBulk(creates...).Save(r.Context()); err != nil {
+						return err
+					}
 				}
+				return nil
+			})
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
 			}
 			store.Reload(r.Context())
 		}
+		imported := len(fresh)
 		audit.Log(r.Context(), db, r, "intel_imported", body.Source, "")
 		writeJSON(w, map[string]int{"imported": imported, "skipped": skipped})
 	})

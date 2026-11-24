@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -155,6 +156,48 @@ func filterQuestionEvidence(
 	return out
 }
 
+// visibleQuestionRefs 非全局 admin 能看到的、这些问题关联的事件与待办（口径同详情接口）；全局 admin 不查
+func visibleQuestionRefs(ctx context.Context, db *ent.Client, s scope, rows []*ent.Question) (map[uuid.UUID]bool, map[uuid.UUID]bool, error) {
+	inc, find := map[uuid.UUID]bool{}, map[uuid.UUID]bool{}
+	if s.all {
+		return inc, find, nil
+	}
+	var incIDs, findIDs []uuid.UUID
+	for _, q := range rows {
+		incIDs = append(incIDs, q.IncidentIds...)
+		findIDs = append(findIDs, q.FindingIds...)
+	}
+	if len(incIDs) > 0 {
+		ids, err := db.Incident.Query().Where(incident.IDIn(incIDs...)).Where(s.incident()...).IDs(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, id := range ids {
+			inc[id] = true
+		}
+	}
+	if len(findIDs) > 0 {
+		ids, err := db.Finding.Query().Where(finding.IDIn(findIDs...), finding.GroupIDIn(s.groups...)).IDs(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, id := range ids {
+			find[id] = true
+		}
+	}
+	return inc, find, nil
+}
+
+func countIn(ids []uuid.UUID, visible map[uuid.UUID]bool) int {
+	n := 0
+	for _, id := range ids {
+		if visible[id] {
+			n++
+		}
+	}
+	return n
+}
+
 // registerQuestionRoutes 总控待答问题：viewer 可看（证据只在这里显示），只有平台管理员能作答；
 // 作答在同一事务里写回事实或常设规矩、落审计、把关联待办重新排队。不提供批量作答
 func registerQuestionRoutes(mux *http.ServeMux, db *ent.Client) {
@@ -186,11 +229,27 @@ func registerQuestionRoutes(mux *http.ServeMux, db *ent.Client) {
 				visible = append(visible, q)
 			}
 		}
-		names := hostnamesOf(r.Context(), db, questionAssets(visible...))
+		// 与详情一致：主机名只给作用域内的资产，计数只算看得见的事件与待办；同批兄弟问题的标签用同一份名字
+		var assets []uuid.UUID
+		for _, aid := range questionAssets(visible...) {
+			if s.has(aid) {
+				assets = append(assets, aid)
+			}
+		}
+		names := hostnamesOf(r.Context(), db, assets)
+		visibleInc, visibleFind, err := visibleQuestionRefs(r.Context(), db, s, visible)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		out := make([]questionRow, len(visible))
 		batches := map[string][]int{}
 		for i, q := range visible {
 			out[i] = toQuestionRow(q, names)
+			if !s.all {
+				out[i].IncidentCount = countIn(q.IncidentIds, visibleInc)
+				out[i].FindingCount = countIn(q.FindingIds, visibleFind)
+			}
 			if status == "open" {
 				for _, k := range questions.BatchKeys(q) {
 					batches[k] = append(batches[k], i)

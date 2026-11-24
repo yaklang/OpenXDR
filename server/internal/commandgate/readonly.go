@@ -12,10 +12,16 @@ import (
 // 只认得出就放行，认不出一律当成非只读交给人：命令替换、sh -c、eval、xargs、find -exec、
 // awk 的 system()、写文件的重定向、不在清单里的程序都不放行；提到密钥文件时只许看元数据。
 func ReadOnly(cmd string) bool {
+	return readOnly(cmd, false)
+}
+
+// readOnly nested 表示 cmd 是命令替换里的命令：外层给变量赋的值看不到，没赋值的变量不能当空串
+func readOnly(cmd string, nested bool) bool {
 	segments, ok := split(cmd)
 	if !ok || len(segments) == 0 {
 		return false
 	}
+	vars := collectVars(cmd, segments, nested)
 	// 密钥路径或敏感文件名出现在 for 列表、变量赋值或输入重定向里，可能经变量或标准输入传给别的段：整条命令都只许看元数据
 	strict := false
 	for _, seg := range segments {
@@ -31,7 +37,7 @@ func ReadOnly(cmd string) bool {
 		if program == "" {
 			continue
 		}
-		if !metadataOnly[program] && (strict || segmentMentionsSecret(seg, false) || segmentUnsafeDynamicSecret(program, seg)) {
+		if !metadataOnly[program] && (strict || segmentMentionsSecret(seg, false) || segmentUnsafeDynamicSecret(program, seg, vars)) {
 			return false
 		}
 		// 容器里执行的命令按同一份清单判定；shell 会展开的段，判定看到的和容器里真跑的可能不是一回事
@@ -98,7 +104,7 @@ type segment struct {
 
 // secretPath 与默认名单的读密钥条目同一范围，宽一点无妨：命中后只许 ls / stat 这类看元数据的命令
 var (
-	secretPath    = regexp.MustCompile(`/etc/g?shadow|\bid_(?:rsa|dsa|ecdsa|ed25519)|ssh_host_\w*key`)
+	secretPath    = regexp.MustCompile(`/(?:etc|var/backups)/g?shadow|\bid_(?:rsa|dsa|ecdsa|ed25519)|ssh_host_\w*key`)
 	secretKeyword = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_])(?:g?shadow|id_(?:rsa|dsa|ecdsa|ed25519)|ssh_host_\w*key)(?:$|[^a-z0-9_])`)
 )
 
@@ -116,12 +122,8 @@ func matchesSecretPath(w string) bool {
 		if secretPath.MatchString(s) {
 			return true
 		}
-		if strings.Contains(s, "/") {
-			if cleaned := path.Clean(s); secretPath.MatchString(cleaned) {
-				return true
-			}
-		}
-		return false
+		// agent 的 cwd 是 /：etc/shadow、../etc/shadow 都是 /etc/shadow
+		return strings.Contains(s, "/") && secretPath.MatchString(path.Join("/", s))
 	}
 	if check(w) {
 		return true
@@ -160,21 +162,144 @@ func looksLikeSensitiveDynamic(w string) bool {
 	return strings.HasPrefix(lower, "/*") || strings.HasPrefix(lower, "/?") || strings.HasPrefix(lower, "/[")
 }
 
-func segmentUnsafeDynamicSecret(program string, seg segment) bool {
+// segmentUnsafeDynamicSecret 变量与通配展开后可能读到密钥。读内容的程序按展开结果精确判定：恰好是一个变量的词
+// 按它可能的取值判定，认不出取值的变量不收，通配词按 globMayReadSecret；其余程序（du、find 只看元数据或名字）沿用按字面猜
+func segmentUnsafeDynamicSecret(program string, seg segment, vars shellVars) bool {
+	if !fileReaders[program] {
+		return slices.ContainsFunc(seg.varWords, looksLikeSensitiveDynamic) || slices.ContainsFunc(seg.globWords, looksLikeSensitiveDynamic)
+	}
 	for _, w := range seg.varWords {
-		if looksLikeSensitiveDynamic(w) {
-			return true
+		if values, ok := vars.lookup(w); ok {
+			if slices.ContainsFunc(values, valueMayReadSecret) {
+				return true
+			}
+			continue
 		}
-		if fileReaders[program] && !strings.HasPrefix(w, "-") {
+		if looksLikeSensitiveDynamic(w) || !strings.HasPrefix(w, "-") {
 			return true
 		}
 	}
-	for _, w := range seg.globWords {
-		if looksLikeSensitiveDynamic(w) {
-			return true
+	return slices.ContainsFunc(seg.globWords, globMayReadSecret)
+}
+
+// secretSuffixes 密钥文件路径的末几级，空串表示任意名字：.ssh 目录下的任何文件都算。
+// 只比末几级，/proc/1/root/etc/shadow、容器 rootfs 里的 etc/shadow 一样认得出
+var secretSuffixes = [][]string{
+	{"etc", "shadow"}, {"etc", "shadow-"}, {"etc", "gshadow"}, {"etc", "gshadow-"},
+	{"backups", "shadow.bak"}, {"backups", "gshadow.bak"},
+	{"id_rsa"}, {"id_dsa"}, {"id_ecdsa"}, {"id_ed25519"},
+	{"ssh_host_rsa_key"}, {"ssh_host_dsa_key"}, {"ssh_host_ecdsa_key"}, {"ssh_host_ed25519_key"},
+	{".ssh", ""},
+}
+
+// globMayReadSecret 通配词展开后可能命中密钥文件：按 cwd=/ 补成绝对路径，逐个比对 secretSuffixes。
+// 判定标准是“展开结果里可能有密钥文件就不放行”：/etc/*.conf、/var/log/*.log 放行，/etc/*、/tmp/* 可能展开出 shadow、id_rsa，不放行。
+// 花括号展开（sh 是 bash 时生效）和 ~ 不做比对，一律当成可能命中
+func globMayReadSecret(w string) bool {
+	if strings.ContainsAny(w, "{~") {
+		return true
+	}
+	parts := strings.Split(path.Join("/", w), "/")
+	return slices.ContainsFunc(secretSuffixes, func(suffix []string) bool {
+		if len(parts) < len(suffix) {
+			return false
+		}
+		tail := parts[len(parts)-len(suffix):]
+		for i, name := range suffix {
+			// 模式写错的也当成可能命中
+			if ok, err := path.Match(tail[i], name); name != "" && !ok && err == nil {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// valueMayReadSecret 变量的一个取值：不加引号展开时按空白切开，每一段再当路径或通配词判定
+func valueMayReadSecret(v string) bool {
+	return matchesSecretPath(v) || slices.ContainsFunc(strings.Fields(v), func(f string) bool {
+		return matchesSecretPath(f) || globMayReadSecret(f)
+	})
+}
+
+// shellVars 命令里给变量赋过的值：for 列表、静态赋值。取值来自 read、printf -v、命令替换或别的变量的，记为认不出
+type shellVars struct {
+	values  map[string][]string
+	unknown map[string]bool
+	nested  bool
+	off     bool
+}
+
+var (
+	simpleVar   = regexp.MustCompile(`^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})$`)
+	simpleBrace = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*\}`)
+	localName   = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+)
+
+func collectVars(cmd string, segments []segment, nested bool) shellVars {
+	vars := shellVars{values: map[string][]string{}, unknown: map[string]bool{}, nested: nested}
+	// ${f:=/etc/shadow} 这类带赋值、带替换的参数展开不去理解，整条命令都不认变量取值
+	vars.off = strings.Count(cmd, "${") != len(simpleBrace.FindAllString(cmd, -1))
+	for _, seg := range segments {
+		vars.collect(seg.words)
+	}
+	return vars
+}
+
+func (v *shellVars) collect(words []string) {
+	for len(words) > 0 {
+		switch w := words[0]; {
+		case slices.Contains([]string{"!", "if", "then", "else", "elif", "do", "while", "until", "time"}, w):
+			words = words[1:]
+		case w == "for":
+			if len(words) >= 3 && words[2] == "in" {
+				v.assign(words[1], words[3:])
+			} else if len(words) >= 2 {
+				v.unknown[words[1]] = true // 不带 in 的 for 遍历位置参数
+			}
+			return
+		case assignment.MatchString(w):
+			name, value, _ := strings.Cut(w, "=")
+			v.assign(name, []string{value})
+			words = words[1:]
+		case w == "read":
+			v.unknown["REPLY"] = true
+			for _, a := range words[1:] {
+				v.unknown[a] = true
+			}
+			return
+		default:
+			// printf -v 给变量赋值，不去理解它赋了什么
+			v.off = v.off || (w == "printf" && slices.ContainsFunc(words[1:], func(a string) bool { return strings.HasPrefix(a, "-v") }))
+			return
 		}
 	}
-	return false
+}
+
+func (v *shellVars) assign(name string, values []string) {
+	for _, value := range values {
+		if strings.Contains(value, "$") {
+			v.unknown[name] = true
+		}
+	}
+	v.values[name] = append(v.values[name], values...)
+}
+
+// lookup 词恰好是一个变量时给出它可能的取值。sh -c 起的新 shell 里，小写变量没在命令里赋值就是空串
+// （环境变量按惯例大写）；大写变量、位置参数和命令替换里没赋值的变量都认不出
+func (v shellVars) lookup(w string) ([]string, bool) {
+	m := simpleVar.FindStringSubmatch(w)
+	if m == nil || v.off {
+		return nil, false
+	}
+	name := m[1] + m[2]
+	if v.unknown[name] {
+		return nil, false
+	}
+	if values, ok := v.values[name]; ok {
+		return values, true
+	}
+	return []string{""}, !v.nested && localName.MatchString(name)
 }
 
 var metadataOnly = map[string]bool{"ls": true, "stat": true, "test": true, "[": true, "echo": true, "printf": true, "true": true, "false": true}
@@ -345,7 +470,8 @@ func split(cmd string) ([]segment, bool) {
 				dynamic = true
 				wordVar = true
 			}
-			if c == '*' || c == '?' || c == '[' {
+			// 词中间的 { 在 sh 是 bash 时会做花括号展开（/e{tc,}/shadow），${f} 的花括号不算
+			if c == '*' || c == '?' || c == '[' || c == '{' && cmd[i-1] != '$' {
 				wordGlob = true
 			}
 			word.WriteByte(c)
@@ -380,7 +506,7 @@ func substitution(cmd string, i int) (int, bool) {
 		case ')':
 			if depth--; depth == 0 {
 				inner := cmd[i+2 : j]
-				return j, !strings.HasPrefix(inner, "(") && ReadOnly(inner)
+				return j, !strings.HasPrefix(inner, "(") && readOnly(inner, true)
 			}
 		}
 	}
@@ -459,13 +585,13 @@ var (
 // readOnlyPrograms 只读程序清单；值为参数检查，nil 表示任何参数都只读。不在清单里的程序一律交给人。
 var readOnlyPrograms = map[string]func(args []string) bool{
 	"echo": nil, "printf": nil, "true": nil, "false": nil, "test": nil, "[": nil, "read": nil, "sleep": nil, "seq": nil,
-	"cat": nil, "tac": nil, "head": nil, "tail": nil, "grep": nil, "egrep": nil, "fgrep": nil, "zgrep": nil, "zcat": nil,
+	"cat": nil, "tac": nil, "head": nil, "tail": nil, "grep": grepRead, "egrep": grepRead, "fgrep": grepRead, "zgrep": grepRead, "zcat": nil,
 	"wc": nil, "cut": nil, "tr": nil, "column": nil, "nl": nil, "comm": nil, "paste": nil, "rev": nil, "strings": nil,
-	"cmp": nil, "diff": nil, "md5sum": nil, "sha1sum": nil, "sha256sum": nil, "jq": nil, "basename": nil, "dirname": nil,
+	"cmp": nil, "diff": diffRead, "md5sum": nil, "sha1sum": nil, "sha256sum": nil, "jq": nil, "basename": nil, "dirname": nil,
 	"readlink": nil, "realpath": nil, "ls": nil, "stat": nil, "file": nil, "du": nil, "df": nil, "free": nil,
 	"uptime": nil, "uname": nil, "nproc": nil, "id": nil, "whoami": nil, "who": nil, "w": nil, "groups": nil,
 	"last": nil, "lastb": nil, "lastlog": nil, "getent": nil, "ps": nil, "pgrep": nil, "pidof": nil, "pstree": nil,
-	"ss": noArgPrefix("-K", "--kill"), "netstat": nil, "lsof": nil, "lsblk": nil, "findmnt": nil, "lscpu": nil, "lspci": nil, "lsusb": nil,
+	"ss": ssRead, "netstat": nil, "lsof": nil, "lsblk": nil, "findmnt": nil, "lscpu": nil, "lspci": nil, "lsusb": nil,
 	"lsmod": nil, "modinfo": nil, "vmstat": nil, "iostat": nil, "mpstat": nil, "getfacl": nil, "lsattr": nil,
 	"pveversion": nil, "printenv": nil, "locale": nil, "getconf": nil, "atq": nil, "ipcs": nil, "lsns": nil, "which": nil,
 	"hostid": nil, "arch": nil, "systemd-detect-virt": nil, "lslogins": nil,
@@ -499,7 +625,7 @@ var readOnlyPrograms = map[string]func(args []string) bool{
 	"dpkg":             onlyFlagPrefix("-l", "-L", "-s", "-S", "--list", "--listfiles", "--status", "--search", "--print-architecture"),
 	"dpkg-query":       nil,
 	"rpm":              rpmQuery,
-	"apt":              subcommand(false, nil, "list", "show", "policy", "search"),
+	"apt":              subcommand(false, []string{"-q", "-qq", "--quiet"}, "list", "show", "policy", "search"),
 	"apt-cache":        subcommand(false, nil, "policy", "show", "showpkg", "search", "depends", "rdepends", "madison", "pkgnames"),
 	"qm":               subcommand(false, nil, "list", "status", "config", "pending", "listsnapshot"),
 	"pct":              subcommand(false, nil, "list", "status", "config", "pending", "listsnapshot"),
@@ -590,6 +716,142 @@ func noArgPrefix(banned ...string) func([]string) bool {
 	}
 }
 
+// ssRead ss -K / --kill 会强制关闭套接字。getopt 接受长选项的唯一前缀，ss 里 --k 开头的只有 --kill，--k、--ki 都是它
+func ssRead(args []string) bool {
+	for _, a := range args {
+		if name, _, _ := strings.Cut(a, "="); len(name) > 2 && strings.HasPrefix("--kill", name) {
+			return false
+		}
+	}
+	return noArgPrefix("-K")(args)
+}
+
+// longAbbrev name 是这些长选项之一的缩写（getopt 接受的唯一前缀；有歧义时 getopt 报错，按命中算更稳）
+func longAbbrev(name string, long ...string) bool {
+	return len(name) > 2 && slices.ContainsFunc(long, func(l string) bool { return strings.HasPrefix(l, name) })
+}
+
+// recursiveRisky 递归读取不放行的位置：放 shadow、主机与用户私钥的地方，以及它们的上级目录（/、/etc、/home/<user> 都算）；
+// /proc（/proc/self/root 指回根目录）、/dev（设备文件）同样不放行
+var recursiveRisky = [][]string{{"etc", "shadow"}, {"etc", "gshadow"}, {"etc", "ssh"}, {"var", "backups"}, {"root"}, {"home", "*", ".ssh"}, {"proc"}, {"dev"}}
+
+// recursiveTargetSafe 递归读取的目录得是写死的路径（按 cwd=/ 解析），且和 recursiveRisky 的位置互不包含
+func recursiveTargetSafe(w string) bool {
+	clean := path.Join("/", w)
+	if w == "" || strings.ContainsAny(w, "$*?[{~") || clean == "/" {
+		return false
+	}
+	parts := strings.Split(clean[1:], "/")
+	return !slices.ContainsFunc(recursiveRisky, func(risky []string) bool {
+		for i := 0; i < len(parts) && i < len(risky); i++ {
+			if ok, _ := path.Match(risky[i], parts[i]); !ok {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// grep 的选项表，递归时按它拆出模式与文件
+var (
+	grepValuedLong = []string{"--regexp", "--file", "--max-count", "--after-context", "--before-context", "--context", "--directories",
+		"--devices", "--exclude", "--include", "--exclude-dir", "--exclude-from", "--label", "--binary-files"}
+	grepPlainLong = []string{"--recursive", "--ignore-case", "--no-ignore-case", "--invert-match", "--word-regexp", "--line-regexp",
+		"--count", "--files-with-matches", "--files-without-match", "--only-matching", "--quiet", "--silent", "--no-messages",
+		"--byte-offset", "--line-number", "--with-filename", "--no-filename", "--null", "--null-data", "--text", "--extended-regexp",
+		"--fixed-strings", "--basic-regexp", "--perl-regexp", "--initial-tab", "--color", "--colour", "--line-buffered", "--no-group-separator"}
+)
+
+// grepRead 不递归的 grep 只读命令行上的文件（密钥路径由 ReadOnly 统一拦），照旧放行。
+// 递归（-r、-d recurse 及长选项缩写）时按选项表拆出模式与文件：没给文件就读 cwd（agent 是 /），
+// 每个文件都得过 recursiveTargetSafe；-R 会跟着目录里的符号链接走（/usr/lib/ssl/private 指向 /etc），认不出的选项一律不放行
+func grepRead(args []string) bool {
+	if !slices.ContainsFunc(args, func(a string) bool {
+		name, _, _ := strings.Cut(a, "=")
+		if strings.HasPrefix(name, "--") {
+			return longAbbrev(name, "--recursive", "--dereference-recursive", "--directories")
+		}
+		return strings.HasPrefix(a, "-") && strings.ContainsAny(a, "rRd")
+	}) {
+		return true
+	}
+	var operands []string
+	explicit := false // 模式由 -e / -f 给出，位置参数全是文件
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		name, _, joined := strings.Cut(a, "=")
+		switch {
+		case a == "--":
+			operands = append(operands, args[i+1:]...)
+			i = len(args)
+		case slices.Contains(grepValuedLong, name):
+			explicit = explicit || name == "--regexp" || name == "--file"
+			if !joined {
+				i++
+			}
+		case strings.HasPrefix(a, "--"):
+			if !slices.Contains(grepPlainLong, name) || joined && name != "--color" && name != "--colour" {
+				return false
+			}
+		case strings.HasPrefix(a, "-") && a != "-":
+			pattern, next, ok := grepShort(a[1:])
+			if !ok {
+				return false
+			}
+			explicit = explicit || pattern
+			if next {
+				i++
+			}
+		default:
+			operands = append(operands, a)
+		}
+	}
+	if !explicit && len(operands) > 0 {
+		operands = operands[1:]
+	}
+	return len(operands) > 0 && !slices.ContainsFunc(operands, func(w string) bool { return !recursiveTargetSafe(w) })
+}
+
+// grepShort 拆一组短选项：pattern 表示带了 -e / -f，next 表示下一个参数是选项值；遇到认不出的字母（含 -R）ok 为 false
+func grepShort(cluster string) (pattern, next, ok bool) {
+	for j, c := range cluster {
+		if strings.ContainsRune("efmABCdD", c) {
+			return c == 'e' || c == 'f', j == len(cluster)-1, true
+		}
+		if !strings.ContainsRune("rivwxclLoqsbnHhZzaEFGPTUIy0123456789", c) {
+			return false, false, false
+		}
+	}
+	return false, false, true
+}
+
+// diffRead diff -r 把两棵目录树里不同的文件内容打出来（-N 连只在一边的文件也整个打出）：
+// 递归时每个路径参数（含 --from-file= / --to-file= 的值）都得过 recursiveTargetSafe。选项值被当成路径只会多拒，不会漏
+func diffRead(args []string) bool {
+	if !slices.ContainsFunc(args, func(a string) bool {
+		name, _, _ := strings.Cut(a, "=")
+		if strings.HasPrefix(name, "--") {
+			return longAbbrev(name, "--recursive")
+		}
+		return strings.HasPrefix(a, "-") && strings.ContainsRune(a, 'r')
+	}) {
+		return true
+	}
+	for _, a := range args {
+		name, value, joined := strings.Cut(a, "=")
+		switch {
+		case joined && longAbbrev(name, "--from-file", "--to-file"):
+			a = value
+		case strings.HasPrefix(a, "-") && a != "-":
+			continue
+		}
+		if !recursiveTargetSafe(a) {
+			return false
+		}
+	}
+	return true
+}
+
 func atMostOneFile(args []string) bool {
 	files := 0
 	for _, a := range args {
@@ -611,7 +873,14 @@ func curlProbe(args []string) bool {
 		"-o": {"/dev/null"}, "--output": {"/dev/null"}, "-D": {"-", "/dev/null"}, "--dump-header": {"-", "/dev/null"}, "-X": {"GET", "HEAD"}, "--request": {"GET", "HEAD"}}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if !strings.HasPrefix(a, "-") || plain[a] {
+		if !strings.HasPrefix(a, "-") {
+			// 只认 http(s)：file:// 读本机文件（%73hadow 这类编码、{} [] 通配 curl 自己会展开），gopher:// 之类能发任意字节
+			if lower := strings.ToLower(a); !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+				return false
+			}
+			continue
+		}
+		if plain[a] {
 			continue
 		}
 		name, value, joined := strings.Cut(a, "=")
@@ -634,7 +903,8 @@ func curlProbe(args []string) bool {
 			}
 			value = args[i]
 		}
-		if allowed != nil && !slices.Contains(allowed, value) {
+		// -H @file、-w @file 从文件读取内容
+		if strings.HasPrefix(value, "@") || allowed != nil && !slices.Contains(allowed, value) {
 			return false
 		}
 	}
@@ -804,6 +1074,7 @@ func ipReadOnly(args []string) bool {
 		"maddr": true, "maddress": true, "mroute": true,
 		"tunnel": true, "netns": true, "vrf": true,
 	}
+	addressObjects := map[string]bool{"a": true, "addr": true, "address": true}
 	readActions := map[string]bool{
 		"show": true, "list": true, "lst": true, "ls": true, "get": true,
 	}
@@ -822,7 +1093,8 @@ func ipReadOnly(args []string) bool {
 		return true
 	}
 	// 对象后第一个词若存在，必须明确是只读动作（拒绝缩写写动作如 ip l s eth0 down / ip netns exec）
-	if !readActions[args[i]] {
+	// ip address 的动词按 add、change、replace、delete、show 的顺序认缩写，s、sh、sho 都是 show；ip link 的 s 是 set，别的对象不认缩写
+	if !readActions[args[i]] && !(addressObjects[args[i-1]] && args[i] != "" && strings.HasPrefix("show", args[i])) {
 		return false
 	}
 	// 动作之后不再允许出现写动词或批处理选项

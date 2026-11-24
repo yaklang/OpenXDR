@@ -140,9 +140,11 @@ func TestResolveAssetPrefersSourceIPOverSpoofedHostname(t *testing.T) {
 	attackerID := uuid.New()
 	relayID := uuid.New()
 
-	s := &Server{
-		TrustedRelays: []string{"10.0.0.250"},
+	relays, err := ParseRelays(" 10.0.0.250 , 192.168.50.0/24,")
+	if err != nil {
+		t.Fatal(err)
 	}
+	s := &Server{TrustedRelays: relays}
 	s.assets.at = time.Now()
 	s.assets.byHost = map[string]assetRef{
 		"web01":    {id: webID, os: "linux"},
@@ -171,5 +173,43 @@ func TestResolveAssetPrefersSourceIPOverSpoofedHostname(t *testing.T) {
 	id, _ = s.resolveAsset(context.Background(), "web01", net.ParseIP("10.0.0.200"))
 	if id == nil || *id != webID {
 		t.Fatalf("未登记源 IP 应回退按 hostname 归属 web01(%s)，实际 %v", webID, id)
+	}
+
+	// CIDR 里的转发器、IPv4 映射成 IPv6 的来源同样受信
+	s.assets.byIP["192.168.50.7"] = assetRef{id: relayID, os: "linux"}
+	id, _ = s.resolveAsset(context.Background(), "web01", net.ParseIP("::ffff:192.168.50.7"))
+	if id == nil || *id != webID {
+		t.Fatalf("网段内的受信转发器应按 hostname 归属 web01(%s)，实际 %v", webID, id)
+	}
+
+	// 未配置受信转发器：转发器本身是资产时，它转发的日志归到它自己
+	s.TrustedRelays = nil
+	id, _ = s.resolveAsset(context.Background(), "web01", net.ParseIP("10.0.0.250"))
+	if id == nil || *id != relayID {
+		t.Fatalf("未配置时应按源 IP 归属转发器(%s)，实际 %v", relayID, id)
+	}
+}
+
+func TestParseRelays(t *testing.T) {
+	got, err := ParseRelays("10.0.0.1,10.1.0.0/16, ::ffff:10.2.0.1 ,2001:db8::/32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.0.1/32", "10.1.0.0/16", "10.2.0.1/32", "2001:db8::/32"}
+	if len(got) != len(want) {
+		t.Fatalf("解析结果 %v", got)
+	}
+	for i, p := range got {
+		if p.String() != want[i] {
+			t.Errorf("第 %d 项 %s，应为 %s", i, p, want[i])
+		}
+	}
+	for _, bad := range []string{"10.0.0", "10.0.0.0/33", "relay.local"} {
+		if _, err := ParseRelays(bad); err == nil {
+			t.Errorf("%q 应报错", bad)
+		}
+	}
+	if got, err := ParseRelays(""); err != nil || got != nil {
+		t.Errorf("空串应为空：%v %v", got, err)
 	}
 }

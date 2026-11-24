@@ -46,6 +46,7 @@ x-server: &server
     WEBHOOK_URL: ${WEBHOOK_URL:-}
     WEBHOOK_FORMAT: ${WEBHOOK_FORMAT:-generic}
     SYSLOG_ADDR: ""
+    SYSLOG_TRUSTED_RELAYS: ${SYSLOG_TRUSTED_RELAYS:-}
   volumes:
     - ./rules:/rules:ro
     - ./tasks:/tasks:ro

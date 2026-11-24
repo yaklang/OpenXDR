@@ -301,6 +301,10 @@ func main() {
 	serveUntilDone(ctx, httpServer, chat, scheduler, grpcServer)
 }
 
+// leaderLeases 本文件里 cluster.RunLeader 的调用数（含按配置才启动的）：拿到租约的节点每个任务长期占一条连接。
+// 增删单活任务时同步改，TestLeaderLeasesMatchMain 核对
+const leaderLeases = 35
+
 // openStore 连接数据库，在 schema 锁里建表并完成各模块的库结构迁移。
 func openStore(ctx context.Context, dsn string) (*sql.DB, *ent.Client) {
 	db, err := sql.Open("pgx", dsn)
@@ -308,8 +312,10 @@ func openStore(ctx context.Context, dsn string) (*sql.DB, *ent.Client) {
 		slog.Error("数据库连接失败", "err", err)
 		os.Exit(1)
 	}
-	// 默认连接池留出 30+ 单活任务租约与业务并发余量，避免默认 2 条空闲连接导致高频建连抖动。
-	maxOpen := max(1, getenvInt("DB_MAX_OPEN_CONNS", 80))
+	// 默认连接池 = 单活任务租约（单机或拿全租约的节点每个任务占一条）+ 事件队列分片（每片一个并发写入）+ 32 条给 API
+	// 与各任务自己的查询，默认配置下是 99。原来固定 80，扣掉 35 条租约只剩 45 条，不够 32 个分片加上业务并发。
+	// 单机 PostgreSQL 默认 max_connections=100 放得下；多节点时各节点上限之和不要超过数据库的 max_connections
+	maxOpen := max(1, getenvInt("DB_MAX_OPEN_CONNS", leaderLeases+getenvInt("QUEUE_SHARDS", 32)+32))
 	maxIdle := max(0, getenvInt("DB_MAX_IDLE_CONNS", 40))
 	if maxIdle > maxOpen {
 		maxIdle = maxOpen
@@ -818,14 +824,20 @@ func startMaintenance(ctx context.Context, db *sql.DB, client *ent.Client, hub *
 
 // startSyslog syslog 接入，与采集端共用同一事件管道。
 func startSyslog(ctx context.Context, client *ent.Client, rules sigma.Catalog, dedupWindow time.Duration, suppressions *suppress.Store, intelStore *intel.Store, events eventbus.Bus) *syslog.Server {
+	relays, err := syslog.ParseRelays(os.Getenv("SYSLOG_TRUSTED_RELAYS"))
+	if err != nil {
+		slog.Error("SYSLOG_TRUSTED_RELAYS 无效，应为逗号分隔的 IP 或 CIDR", "err", err)
+		os.Exit(1)
+	}
 	receiver := &syslog.Server{
-		DB:          client,
-		Rules:       rules,
-		Addr:        os.Getenv("SYSLOG_ADDR"),
-		DedupWindow: dedupWindow,
-		Suppress:    suppressions,
-		Intel:       intelStore,
-		Events:      events,
+		DB:            client,
+		Rules:         rules,
+		Addr:          os.Getenv("SYSLOG_ADDR"),
+		DedupWindow:   dedupWindow,
+		Suppress:      suppressions,
+		Intel:         intelStore,
+		Events:        events,
+		TrustedRelays: relays,
 	}
 	go receiver.Run(ctx)
 	return receiver

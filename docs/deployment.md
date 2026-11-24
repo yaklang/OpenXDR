@@ -238,6 +238,13 @@ echo '*.* @<server>:1514' >> /etc/rsyslog.conf && systemctl restart rsyslog
 TCP 当前使用换行分帧；不支持 TLS Syslog 与 RFC6587 octet-counting。
 仅向可信转发源开放接收端口。`@@<server>:1514` 表示 rsyslog 使用 TCP，`@` 表示 UDP。
 
+报文归属资产时先看源 IP：源 IP 是已登记资产就归它，报文里的 hostname 不作数，
+免得一台已纳管主机伪造 hostname 把日志嫁祸给别的主机；源 IP 不是已登记资产时才按 hostname 匹配。
+经集中转发器（rsyslog relay、日志网关）汇聚的日志源 IP 都是转发器：转发器本身没登记成资产时照常按 hostname 归属，
+不用配置；**转发器本身也是资产（装了 agent）时**，要把它写进 `SYSLOG_TRUSTED_RELAYS`（逗号分隔 IP/CIDR，
+在 `.env` 设置后重建 server 容器），否则它转发的所有设备日志都会算到转发器头上。只填真正的转发器：
+列进去的地址发来的报文可以自称任何 hostname。
+
 日志按主机名归属资产，主机名对不上时退回源 IP 匹配，两者都对不上则归入
 统一的未归属 incident。同一主机反复报同一条日志只留一行告警并计数。
 
@@ -435,6 +442,8 @@ server 全部通过环境变量配置，均有默认值：
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `DATABASE_URL` | `postgres://openxdr:openxdr@localhost:5432/openxdr?sslmode=disable` | 数据库连接串 |
+| `DB_MAX_OPEN_CONNS` | 35 + `QUEUE_SHARDS` + 32（默认 99） | 单个 server 节点的数据库连接上限。35 是单活任务租约数：拿到租约的节点每个任务长期占一条连接；`QUEUE_SHARDS` 是事件写入并发；余下 32 条给 API 与各任务的查询。多节点时各节点上限之和不要超过 PostgreSQL 的 `max_connections` |
+| `DB_MAX_IDLE_CONNS` | `40` | 连接池保留的空闲连接数，不超过 `DB_MAX_OPEN_CONNS` |
 | `NATS_URL` | 空（单机直连） | NATS 地址；配置后启用 JetStream 持久队列，多个地址用逗号分隔 |
 | `QUEUE_SHARDS` | `32` | 事件一致性分片数；同一资产保持有序 |
 | `QUEUE_BATCH_SIZE` | `1` | 同资产批消息最大事件数（1..64）；全部服务端升级到支持批消息的版本后可设为 64。仍保持每分片一条在途消息，整批原子提交；单个批消息不超过 256 KiB，超大单事件保持原格式。 |
@@ -465,6 +474,7 @@ server 全部通过环境变量配置，均有默认值：
 | `AI_TIMEOUT_SECONDS` | `300` | 单次模型请求超时。自部署模型推理慢（开着思考、多人共用）就调大，如 900；推理没在超时内跑完不算研判失败，稍后用同样的上下文重试 |
 | `AI_RETRIAGE_COOLDOWN_MINUTES` | `30` | 已研判的事件又并入普通新证据时，距上次研判至少隔这么久才重研判，冷却期内的新告警到期一次带上；级别升高或头一回出现情报命中、凭据窃取等高危类告警时不等。默认 30：生产上被系统例行变更反复并入的事件每几分钟来一批告警，不限流时一天能被重研判几十次、把慢模型的研判名额占满；30 分钟把它压到每小时至多两次，又不至于让真实攻击的后续动作晚太久才被重新定性（升级类本来就立即重判）。只认环境变量，控制台不可改 |
 | `SYSLOG_ADDR` | 空（不启用） | syslog 监听地址，如 `:514`。UDP 与 TCP 同时监听 |
+| `SYSLOG_TRUSTED_RELAYS` | 空 | 受信 syslog 转发器，逗号分隔的 IP 或 CIDR（如 `10.1.1.5,10.2.0.0/24`）。从这些地址来的报文按报文里的 hostname 归属资产；其余来源按源 IP 归属，源 IP 不是已登记资产时才看 hostname。格式不对 server 拒绝启动。见[日志接入](#日志接入) |
 | `SUPPRESSION_RELOAD_SECONDS` | `30` | 抑制规则重载与命中计数回写周期 |
 | `INTEL_RELOAD_SECONDS` | `30` | 威胁情报重载与命中计数回写周期 |
 | `WEBHOOK_MIN_SEVERITY` | `0` | 低于该级别的事件不推送（1 信息 ~ 5 严重），0 表示全推。控制台保存过通知配置后以控制台为准 |

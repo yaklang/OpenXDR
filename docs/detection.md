@@ -811,6 +811,7 @@ POST /api/commands → Hub.Issue 落 command 行并发往 agent 指令通道
 | `RETENTION_DAYS` | `30`（0 不清） | 原始事件保留期 |
 | `RETENTION_INTERVAL_MINUTES` | `60` | 清理周期 |
 | `SYSLOG_ADDR` | 空（不启用） | syslog UDP+TCP 监听 |
+| `SYSLOG_TRUSTED_RELAYS` | 空 | 受信 syslog 转发器（逗号分隔 IP/CIDR），来自这些地址的报文按 hostname 归属，见 [日志接入](deployment.md#日志接入) |
 | `AI_MODEL` | 空（不启用） | 研判模型名 |
 | `AI_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点 |
 | `AI_API_KEY` | 空 | Bearer key |
