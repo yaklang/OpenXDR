@@ -95,10 +95,11 @@ func argvReadOnly(words []string) bool {
 	return known && (check == nil || check(args))
 }
 
-// wordMeta 记录段内每个词的动态展开属性（与 segment.words 一一对应）。
+// wordMeta 记录段内每个词的动态展开与通配属性（与 segment.words 一一对应）。
 type wordMeta struct {
 	dynamic         bool // 词内包含未转义的变量展开（$...）或命令替换（$(...)）
-	unquotedDynamic bool // 动态展开出现在双引号之外，shell 会对展开结果做分词
+	unquotedDynamic bool // 动态展开出现在双引号之外，shell 会对展开结果做分词与路径名展开
+	glob            bool // 引号外包含通配符（* / ? / [ / {），shell 会做路径名或花括号展开
 }
 
 // segment 一个命令段：去掉引号后的词、输入重定向目标、含未转义变量展开的词、引号外含通配符的词、
@@ -317,19 +318,28 @@ func (v shellVars) lookup(w string) ([]string, bool) {
 // maxExpandedCombos 变量笛卡尔展开的组合数上限，超过一律拒绝（交给人审批）。
 const maxExpandedCombos = 64
 
-// checkArgsWithVars 在把参数交给目标程序只读检查器之前，展开所有动态参数并逐组合校验：
-//  1. 已知取值的单变量引用按全部可能取值展开（未加引号的按空白分词），任一组合不通过即拒绝；
-//  2. 无法经 vars.lookup 解析的动态词（未知环境变量、复合展开如 $a$b、命令替换等），
-//     除极少数已严格证明处于安全数据位置的形态外一律拒绝，防止展开为危险选项或写子命令。
+// checkArgsWithVars 在把参数交给目标程序只读检查器之前，校验静态通配与动态参数展开：
+//  1. 对选项敏感的程序，禁止不在 -- 之后且不以 / 或 ./ 开头的静态通配词，防止展开出 - 开头文件名注入选项；
+//  2. 已知取值的单变量引用按全部可能取值展开，未加引号的仅允许单个非空、无空白、无通配符的词，任一组合不通过即拒绝；
+//  3. 无法经 vars.lookup 解析的动态词（未知环境变量、复合展开如 $a$b、命令替换等），
+//     除极少数已严格证明处于双引号安全数据位置的形态外一律拒绝，防止展开为危险选项或写子命令。
 func checkArgsWithVars(program string, check func([]string) bool, args []string, metas []wordMeta, vars shellVars) bool {
 	if len(args) != len(metas) {
 		return false
 	}
+	afterDoubleDash := false
 	hasDynamic := false
-	for _, m := range metas {
+	for i, a := range args {
+		m := metas[i]
 		if m.dynamic {
 			hasDynamic = true
-			break
+		}
+		if !m.dynamic && !m.glob && a == "--" {
+			afterDoubleDash = true
+			continue
+		}
+		if m.glob && !safeStaticGlobArg(program, a, afterDoubleDash) {
+			return false
 		}
 	}
 	if !hasDynamic {
@@ -344,13 +354,16 @@ func checkArgsWithVars(program string, check func([]string) bool, args []string,
 		}
 		values, ok := vars.lookup(a)
 		if !ok {
-			if !safeUnknownDynamicArg(program, args, metas, i, vars.nested) {
+			if !safeUnknownDynamicArg(program, args, metas, i) {
 				return false
 			}
 			choices[i] = [][]string{{"__safe_dynamic_arg__"}}
 			continue
 		}
-		expanded := expandVarChoices(values, metas[i].unquotedDynamic)
+		expanded, ok := expandVarChoices(values, metas[i].unquotedDynamic)
+		if !ok {
+			return false
+		}
 		choices[i] = expanded
 		if len(expanded) > 1 {
 			if total > maxExpandedCombos/len(expanded) {
@@ -374,13 +387,51 @@ func checkArgsWithVars(program string, check func([]string) bool, args []string,
 	return walk(0, make([]string, 0, len(args)))
 }
 
+// safeStaticGlobArg 判定对选项敏感的程序是否允许某个静态通配参数：
+//   - uniq 会把第二个文件名当输出文件覆盖，禁止任何通配展开；
+//   - find 不支持 -- 结束谓词解析，-- 后也不放行裸通配；
+//   - 其余程序在 -- 之后、以 / 或 ./ 开头（展开结果绝不以 - 开头），
+//     或 grep 系列的 --include=/--exclude=/--exclude-dir= 过滤模式，放行。
+func safeStaticGlobArg(program, arg string, afterDoubleDash bool) bool {
+	if program == "uniq" {
+		return false
+	}
+	if afterDoubleDash && program != "find" {
+		return true
+	}
+	if strings.HasPrefix(arg, "/") || strings.HasPrefix(arg, "./") {
+		return true
+	}
+	switch program {
+	case "grep", "egrep", "fgrep", "zgrep":
+		if !strings.Contains(arg, "{") && (strings.HasPrefix(arg, "--include=") ||
+			strings.HasPrefix(arg, "--exclude=") ||
+			strings.HasPrefix(arg, "--exclude-dir=")) {
+			return true
+		}
+	}
+	return false
+}
+
 // expandVarChoices 将变量的所有已知取值转为展开后的参数切片列表并去重。
-func expandVarChoices(values []string, unquoted bool) [][]string {
+// 对未加引号的动态展开（unquoted=true），真实 shell 会做空白分词与路径名展开，
+// 空值/纯空白也会导致参数消失改变后续选项边界；因此仅允许每个取值恰好为单个非空、
+// 无空白、无通配符（*?[{）的词，否则拒绝交审批。
+func expandVarChoices(values []string, unquoted bool) ([][]string, bool) {
+	if unquoted && len(values) == 0 {
+		return nil, false
+	}
 	var out [][]string
 	for _, v := range values {
 		var parts []string
 		if unquoted {
+			if strings.ContainsAny(v, "*?[{") {
+				return nil, false
+			}
 			parts = strings.Fields(v)
+			if len(parts) != 1 {
+				return nil, false
+			}
 		} else {
 			parts = []string{v}
 		}
@@ -396,25 +447,23 @@ func expandVarChoices(values []string, unquoted bool) [][]string {
 		}
 	}
 	if len(out) == 0 {
-		return [][]string{{}}
+		return [][]string{{}}, true
 	}
-	return out
+	return out, true
 }
 
-// safeUnknownDynamicArg 判定无法静态解析的动态参数是否位于严格安全的数据位置：
+// safeUnknownDynamicArg 判定无法静态解析的动态参数是否位于严格安全的双引号数据位置：
 // - chage -l "$user"：仅含 -l 与一个双引号单变量，即使展开为 -d0 也因缺少用户名无法修改任何账户；
-// - crontab -u "$u" -l（或命令替换内小写循环变量 crontab -u $u -l）：紧跟 -u 后的用户名参数。
-func safeUnknownDynamicArg(program string, args []string, metas []wordMeta, idx int, nested bool) bool {
-	m := simpleVar.FindStringSubmatch(args[idx])
-	if m == nil {
+// - crontab -u "$u" -l：紧跟 -u 后的双引号单变量用户名参数（绝不允许未加引号的未知变量）。
+func safeUnknownDynamicArg(program string, args []string, metas []wordMeta, idx int) bool {
+	if metas[idx].unquotedDynamic || simpleVar.FindStringSubmatch(args[idx]) == nil {
 		return false
 	}
-	name := m[1] + m[2]
 	switch program {
 	case "chage":
-		return len(args) == 2 && idx == 1 && args[0] == "-l" && !metas[idx].unquotedDynamic
+		return len(args) == 2 && idx == 1 && args[0] == "-l"
 	case "crontab":
-		return idx > 0 && args[idx-1] == "-u" && (!metas[idx].unquotedDynamic || (nested && localName.MatchString(name)))
+		return idx > 0 && args[idx-1] == "-u"
 	default:
 		return false
 	}
@@ -439,7 +488,7 @@ func split(cmd string) ([]segment, bool) {
 				inputs = append(inputs, w)
 			} else {
 				words = append(words, w)
-				wordMetas = append(wordMetas, wordMeta{dynamic: wordDynamic, unquotedDynamic: wordUnquotedDynamic})
+				wordMetas = append(wordMetas, wordMeta{dynamic: wordDynamic, unquotedDynamic: wordUnquotedDynamic, glob: wordGlob})
 			}
 			if wordVar {
 				varWords = append(varWords, w)

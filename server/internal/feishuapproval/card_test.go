@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	"openxdr/server/ent"
 	entcontainment "openxdr/server/ent/containment"
 )
@@ -94,80 +98,93 @@ func (d stubContainmentDecider) Decline(context.Context, *ent.Containment, strin
 
 func TestApproveContainmentAuditAndOutcome(t *testing.T) {
 	cases := []struct {
-		name          string
-		res           *ent.Containment
-		err           error
-		stillProposed bool
-		checkErr      error
-		wantAudits    []string
-		wantOutcome   string
+		name           string
+		res            *ent.Containment
+		err            error
+		stillProposed  bool
+		checkErr       error
+		wantAudits     []string
+		wantOutcome    string
+		wantCardUpdate bool
 	}{
 		{
-			name:        "批准进入pending写入成功审计并锁卡",
-			res:         &ent.Containment{State: entcontainment.StatePending},
-			wantAudits:  []string{"containment_approved"},
-			wantOutcome: "approve",
+			name:           "批准进入pending写入成功审计并锁卡更新终态卡",
+			res:            &ent.Containment{State: entcontainment.StatePending},
+			wantAudits:     []string{"containment_approved"},
+			wantOutcome:    "approve",
+			wantCardUpdate: true,
 		},
 		{
-			name:        "批准进入active写入成功审计并锁卡",
-			res:         &ent.Containment{State: entcontainment.StateActive},
-			wantAudits:  []string{"containment_approved"},
-			wantOutcome: "approve",
+			name:           "批准进入active写入成功审计并锁卡更新终态卡",
+			res:            &ent.Containment{State: entcontainment.StateActive},
+			wantAudits:     []string{"containment_approved"},
+			wantOutcome:    "approve",
+			wantCardUpdate: true,
 		},
 		{
-			name:        "批准进入executed写入成功审计并锁卡",
-			res:         &ent.Containment{State: entcontainment.StateExecuted},
-			wantAudits:  []string{"containment_approved"},
-			wantOutcome: "approve",
+			name:           "批准进入executed写入成功审计并锁卡更新终态卡",
+			res:            &ent.Containment{State: entcontainment.StateExecuted},
+			wantAudits:     []string{"containment_approved"},
+			wantOutcome:    "approve",
+			wantCardUpdate: true,
 		},
 		{
-			name:        "下发失败返回StateFailed不写成功审计而记失败审计",
-			res:         &ent.Containment{State: entcontainment.StateFailed},
-			wantAudits:  []string{"containment_approve_failed"},
-			wantOutcome: "approve",
+			name:           "下发失败返回StateFailed不写成功审计而记失败审计并更新终态卡",
+			res:            &ent.Containment{State: entcontainment.StateFailed},
+			wantAudits:     []string{"containment_approve_failed"},
+			wantOutcome:    "approve",
+			wantCardUpdate: true,
 		},
 		{
-			name:          "瞬时失败且仍处于proposed不写审计并释放卡片锁",
-			err:           errors.New("transient db error"),
-			stillProposed: true,
-			wantOutcome:   "",
+			name:           "瞬时失败且仍处于proposed不写审计不覆盖卡片并释放卡片锁",
+			err:            errors.New("transient db error"),
+			stillProposed:  true,
+			wantOutcome:    "",
+			wantCardUpdate: false,
 		},
 		{
-			name:          "部分成功后报错不写假成功审计并锁卡",
-			err:           errors.New("edge dispatch failed"),
-			stillProposed: false,
-			wantOutcome:   "approve",
+			name:           "部分成功后报错不写假成功审计并锁卡更新终态卡",
+			err:            errors.New("edge dispatch failed"),
+			stillProposed:  false,
+			wantOutcome:    "approve",
+			wantCardUpdate: true,
 		},
 		{
-			name:        "瞬时失败且回查状态失败时不永久锁死卡片",
-			err:         errors.New("transient error"),
-			checkErr:    errors.New("db unavailable"),
-			wantOutcome: "",
+			name:           "瞬时失败且回查状态失败时不永久锁死卡片也不覆盖卡片",
+			err:            errors.New("transient error"),
+			checkErr:       errors.New("db unavailable"),
+			wantOutcome:    "",
+			wantCardUpdate: false,
 		},
 		{
-			name:        "返回仍为proposed时不写审计并释放卡片锁",
-			res:         &ent.Containment{State: entcontainment.StateProposed},
-			wantOutcome: "",
+			name:           "返回仍为proposed时不写审计不覆盖卡片并释放卡片锁",
+			res:            &ent.Containment{State: entcontainment.StateProposed},
+			wantOutcome:    "",
+			wantCardUpdate: false,
 		},
 		{
-			name:        "触发熔断不写审计并锁卡",
-			res:         &ent.Containment{State: entcontainment.StateHeld},
-			wantOutcome: "approve",
+			name:           "触发熔断不写审计并锁卡更新终态卡",
+			res:            &ent.Containment{State: entcontainment.StateHeld},
+			wantOutcome:    "approve",
+			wantCardUpdate: true,
 		},
 		{
-			name:        "重复处置被驳回不写审计并锁卡",
-			res:         &ent.Containment{State: entcontainment.StateDeclined},
-			wantOutcome: "approve",
+			name:           "重复处置被驳回不写审计并锁卡更新终态卡",
+			res:            &ent.Containment{State: entcontainment.StateDeclined},
+			wantOutcome:    "approve",
+			wantCardUpdate: true,
 		},
 		{
-			name:        "目标跳过不写审计并锁卡",
-			res:         &ent.Containment{State: entcontainment.StateSkipped},
-			wantOutcome: "approve",
+			name:           "目标跳过不写审计并锁卡更新终态卡",
+			res:            &ent.Containment{State: entcontainment.StateSkipped},
+			wantOutcome:    "approve",
+			wantCardUpdate: true,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var audits []string
+			var cardUpdates []string
 			outcome := containmentOutcomeApproving
 			svc := &Service{
 				Containment: stubContainmentDecider{
@@ -186,6 +203,9 @@ func TestApproveContainmentAuditAndOutcome(t *testing.T) {
 				setOutcome: func(_ context.Context, value string) {
 					outcome = value
 				},
+				updateCard: func(_ context.Context, text string) {
+					cardUpdates = append(cardUpdates, text)
+				},
 			})
 			if len(audits) != len(tc.wantAudits) {
 				t.Fatalf("审计记录数不符：got=%v want=%v", audits, tc.wantAudits)
@@ -197,6 +217,13 @@ func TestApproveContainmentAuditAndOutcome(t *testing.T) {
 			}
 			if outcome != tc.wantOutcome {
 				t.Fatalf("卡片 outcome 不符：got=%q want=%q", outcome, tc.wantOutcome)
+			}
+			if tc.wantCardUpdate {
+				if len(cardUpdates) != 1 || strings.TrimSpace(cardUpdates[0]) == "" {
+					t.Fatalf("终态应更新一次卡片：got=%v", cardUpdates)
+				}
+			} else if len(cardUpdates) != 0 {
+				t.Fatalf("可重试分支不应覆盖原交互卡：got=%v", cardUpdates)
 			}
 		})
 	}
@@ -235,5 +262,220 @@ func TestContainmentCardRetryAfterRestartOrConcurrentClick(t *testing.T) {
 	release()
 	if err := svc.containmentOutcomeBlocks(containmentOutcomeApproving, nonce); err != nil {
 		t.Fatalf("释放占位后应允许重试：%v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func newCallbackEvent(appID, tenant, openID, messageID, nonce, action string) *callback.CardActionTriggerEvent {
+	tenantCopy := tenant
+	return &callback.CardActionTriggerEvent{
+		EventV2Base: &larkevent.EventV2Base{
+			Header: &larkevent.EventHeader{
+				AppID:      appID,
+				TenantKey:  tenant,
+				EventType:  "card.action.trigger",
+				CreateTime: strconv.FormatInt(time.Now().UnixMicro(), 10),
+			},
+		},
+		Event: &callback.CardActionTriggerRequest{
+			Host: "im_message",
+			Operator: &callback.Operator{
+				OpenID:    openID,
+				TenantKey: &tenantCopy,
+			},
+			Context: &callback.Context{
+				OpenMessageID: messageID,
+			},
+			Action: &callback.CallBackAction{
+				Value: map[string]any{
+					"nonce":  nonce,
+					"action": action,
+				},
+			},
+		},
+	}
+}
+
+func TestActionCallbackKeepsInteractiveCardUntilTerminalAndAllowsRetry(t *testing.T) {
+	cfg := Config{AppID: "cli_test", Revision: "rev-1", Enabled: true}
+	nonce := uuid.NewString()
+	messageID := "om_card_retry_1"
+	containmentID := uuid.New()
+
+	var (
+		patchMu       sync.Mutex
+		patchedPaths  []string
+		patchedBodies []string
+		stateMu       sync.Mutex
+		outcome       string
+		attempt       int
+		firstBlocked  = make(chan struct{})
+		releaseFirst  = make(chan struct{})
+		firstDone     = make(chan struct{})
+		secondDone    = make(chan struct{})
+	)
+
+	svc := &Service{
+		HTTP: &http.Client{
+			Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodPatch {
+					t.Errorf("更新卡片应使用 PATCH，实际为 %s", r.Method)
+				}
+				if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+					t.Errorf("鉴权头不符：%q", got)
+				}
+				body, _ := io.ReadAll(r.Body)
+				patchMu.Lock()
+				patchedPaths = append(patchedPaths, r.URL.Path)
+				patchedBodies = append(patchedBodies, string(body))
+				patchMu.Unlock()
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"code":0}`)),
+				}, nil
+			}),
+		},
+		token:         "test-token",
+		tokenRevision: cfg.Revision,
+		tokenUntil:    time.Now().Add(time.Hour),
+		Containment: stubContainmentDecider{
+			approve: func(_ context.Context, _ *ent.Containment, _ string) (*ent.Containment, error) {
+				stateMu.Lock()
+				attempt++
+				cur := attempt
+				stateMu.Unlock()
+				if cur == 1 {
+					close(firstBlocked)
+					<-releaseFirst
+					return nil, errors.New("transient dispatch timeout")
+				}
+				return &ent.Containment{ID: containmentID, State: entcontainment.StatePending}, nil
+			},
+		},
+	}
+
+	prevHook := decideCardHook
+	t.Cleanup(func() { decideCardHook = prevHook })
+	decideCardHook = func(s *Service, ctx context.Context, c Config, _, _, msgID, n, act string) (decideOutcome, error) {
+		if act == "reject" {
+			return decideOutcome{text: "已驳回，这条处置不会执行。"}, nil
+		}
+		stateMu.Lock()
+		curOutcome := outcome
+		stateMu.Unlock()
+		if err := s.containmentOutcomeBlocks(curOutcome, n); err != nil {
+			return decideOutcome{}, err
+		}
+		release, ok := s.claimContainmentInFlight(n)
+		if !ok {
+			return decideOutcome{}, errors.New("这张卡片正在处理中，请稍候")
+		}
+		stateMu.Lock()
+		outcome = containmentOutcomeApproving
+		curAttempt := attempt
+		stateMu.Unlock()
+		go func(runIdx int) {
+			defer release()
+			s.approveContainment(ctx, &ent.Containment{ID: containmentID}, "admin", containmentApproveHooks{
+				stillProposed: func(context.Context) (bool, error) { return true, nil },
+				setOutcome: func(_ context.Context, value string) {
+					stateMu.Lock()
+					outcome = value
+					stateMu.Unlock()
+				},
+				updateCard: func(updCtx context.Context, text string) {
+					if err := s.patchCard(updCtx, c, msgID, statusCard(text)); err != nil {
+						t.Errorf("异步更新终态卡片失败：%v", err)
+					}
+				},
+			})
+			if runIdx == 0 {
+				close(firstDone)
+			} else {
+				close(secondDone)
+			}
+		}(curAttempt)
+		return decideOutcome{text: "审批处理中，请稍候；结果以 OpenXDR 自主响应页的记录为准。", pending: true}, nil
+	}
+
+	ev := newCallbackEvent(cfg.AppID, "tenant-1", "ou_admin", messageID, nonce, "approve")
+
+	// 1. 首次点击批准：同步回调仅返回处理中 toast，严禁返回覆盖卡片销毁按钮
+	resp, err := svc.action(context.Background(), cfg, ev)
+	if err != nil {
+		t.Fatalf("首次回调失败：%v", err)
+	}
+	if resp.Card != nil {
+		t.Fatalf("异步批准回调不应立即覆盖原交互卡：%#v", resp.Card)
+	}
+	if resp.Toast == nil || resp.Toast.Type != "info" || !strings.Contains(resp.Toast.Content, "审批处理中，请稍候") {
+		t.Fatalf("首次回调 toast 不符：%#v", resp.Toast)
+	}
+
+	// 2. 后台正在执行时并发双击同一回调应被拦截
+	<-firstBlocked
+	dupResp, err := svc.action(context.Background(), cfg, ev)
+	if err != nil {
+		t.Fatalf("并发回调出错：%v", err)
+	}
+	if dupResp.Toast == nil || dupResp.Toast.Type != "error" || dupResp.Card != nil {
+		t.Fatalf("并发点击应返回错误 toast 且不覆盖卡片：%#v", dupResp)
+	}
+
+	// 3. 首次后台瞬时失败：应解锁 outcome 且绝不异步覆盖原卡片
+	close(releaseFirst)
+	<-firstDone
+	patchMu.Lock()
+	if len(patchedPaths) != 0 {
+		t.Fatalf("瞬时失败可重试时不应更新卡片：%v", patchedPaths)
+	}
+	patchMu.Unlock()
+	stateMu.Lock()
+	if outcome != "" {
+		t.Fatalf("瞬时失败后应解锁 outcome，实际=%q", outcome)
+	}
+	stateMu.Unlock()
+
+	// 4. 故障窗口后重放同一回调：可重新提交批准，同样先保留交互卡，终态后异步 PATCH 更新为无按钮 statusCard
+	retryResp, err := svc.action(context.Background(), cfg, ev)
+	if err != nil {
+		t.Fatalf("重试回调失败：%v", err)
+	}
+	if retryResp.Card != nil || retryResp.Toast == nil || retryResp.Toast.Type != "info" {
+		t.Fatalf("重试回调应保留交互卡并返回处理中 toast：%#v", retryResp)
+	}
+	<-secondDone
+
+	patchMu.Lock()
+	if len(patchedPaths) != 1 || patchedPaths[0] != "/open-apis/im/v1/messages/"+messageID {
+		t.Fatalf("终态后应异步 PATCH 原消息卡片一次：got=%v", patchedPaths)
+	}
+	body := patchedBodies[0]
+	patchMu.Unlock()
+	if strings.Contains(body, `"tag":"button"`) || !strings.Contains(body, "已批准") {
+		t.Fatalf("终态更新的卡片应为无按钮状态卡：%s", body)
+	}
+
+	// 5. 落到终态后再次重放同一回调必须被拒绝
+	afterTerminal, err := svc.action(context.Background(), cfg, ev)
+	if err != nil {
+		t.Fatalf("终态重放回调出错：%v", err)
+	}
+	if afterTerminal.Toast == nil || afterTerminal.Toast.Type != "error" || afterTerminal.Card != nil {
+		t.Fatalf("终态后重放应返回错误 toast：%#v", afterTerminal)
+	}
+
+	// 6. 同步终态路径（驳回）仍立即返回无按钮 statusCard
+	rejectEv := newCallbackEvent(cfg.AppID, "tenant-1", "ou_admin", messageID, nonce, "reject")
+	rejectResp, err := svc.action(context.Background(), cfg, rejectEv)
+	if err != nil {
+		t.Fatalf("驳回回调出错：%v", err)
+	}
+	if rejectResp.Card == nil || rejectResp.Toast == nil || rejectResp.Toast.Type != "success" {
+		t.Fatalf("同步终态回调应返回状态卡片与成功 toast：%#v", rejectResp)
 	}
 }

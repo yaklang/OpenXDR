@@ -35,7 +35,7 @@ func TestReadOnlyAccepts(t *testing.T) {
 		// 实地巡检里被拒的只读写法：命令替换、sed 替换、swapon --show、list-jobs、which
 		`echo "===MEM==="; free -h; swapon --show 2>/dev/null`,
 		`systemctl list-units --state=failed --no-pager --no-legend; systemctl list-jobs --no-pager | head -5`,
-		`cat /etc/crontab 2>/dev/null; for u in $(cut -d: -f1 /etc/passwd); do c=$(crontab -u $u -l 2>/dev/null); [ -n "$c" ] && echo "--$u--" && echo "$c"; done`,
+		`cat /etc/crontab 2>/dev/null; for u in $(cut -d: -f1 /etc/passwd); do c=$(crontab -u "$u" -l 2>/dev/null); [ -n "$c" ] && echo "--$u--" && echo "$c"; done`,
 		`lastlog -u $(getent passwd | awk -F: '$3>=1000&&$3<65000{printf "%s,",$1}' | sed 's/,$//') 2>/dev/null | head -15`,
 		`which storcli storcli64 perccli arcconf 2>/dev/null; dmesg 2>/dev/null | grep -iE 'megasas|BBU|battery' | tail -5`,
 		`sed -n '1,20p' /etc/hosts; sed -E 's#/+#/#g' x; sed '/^#/d;/^$/d' /etc/fstab; command -v zpool`,
@@ -77,6 +77,12 @@ func TestReadOnlyAccepts(t *testing.T) {
 		`for f in /var/log/*.log; do sort "$f"; done`,
 		`ps -p $pid`,
 		`act=status; svc=nginx; systemctl $act $svc`,
+		// 绝对/显式相对路径通配与双引号 crontab 用户名
+		`ls /var/log/*.log`,
+		`grep err /var/log/*.log`,
+		`sort /var/log/*.log`,
+		`sort ./a*.log`,
+		`crontab -u "$user" -l`,
 	} {
 		if !ReadOnly(cmd) {
 			t.Errorf("应判为只读：%s", cmd)
@@ -397,6 +403,25 @@ func TestReadOnlyRejects(t *testing.T) {
 		`while read -r user; do chage -l "$user" root; done < /etc/passwd`,
 		`chage -l "$USER_OPT" root`,
 		`for a in 1 2 3 4 5 6 7 8 9; do for b in 1 2 3 4 5 6 7 8 9; do sort $a $b; done; done`,
+		// 未加引号空变量导致参数消失改变后续选项边界
+		`x=""; sort $x -o /tmp/pwn /etc/hosts`,
+		`x="   "; sort $x /etc/hosts`,
+		`u=""; crontab -u $u -l`,
+		// 未加引号变量含通配符触发 pathname expansion
+		`p="*"; sort $p /etc/hosts`,
+		`p="?o"; sort $p /etc/hosts`,
+		`p="[-o]"; grep err $p`,
+		// 相对静态通配符可能匹配 - 开头文件名注入选项
+		`sort *`,
+		`grep foo *`,
+		`sort ?foo /etc/hosts`,
+		`grep foo */*.log`,
+		`uniq /var/log/*.log`,
+		`find / -- *`,
+		// 未加引号未知 crontab 变量（含嵌套命令替换）
+		`crontab -u $user -l`,
+		`crontab -u $USER -l`,
+		`for u in $(cut -d: -f1 /etc/passwd); do c=$(crontab -u $u -l 2>/dev/null); echo "$c"; done`,
 		``,
 		`   `,
 	} {

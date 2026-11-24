@@ -1,12 +1,15 @@
 package feishuapproval
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -112,6 +115,14 @@ func (s *Service) message(ctx context.Context, c Config, e *larkim.P2MessageRece
 	return nil
 }
 
+type decideOutcome struct {
+	text    string
+	pending bool // true 表示后台异步执行中，回调仅返回 toast、保留原交互卡，待终态后异步更新卡片
+}
+
+// decideCardHook 仅供包内单元测试替换 action 到 decideCard 的桥接，默认 nil 走真实 decideCard。
+var decideCardHook func(s *Service, ctx context.Context, c Config, tenant, openID, messageID, nonce, action string) (decideOutcome, error)
+
 func (s *Service) action(ctx context.Context, c Config, e *callback.CardActionTriggerEvent) (*callback.CardActionTriggerResponse, error) {
 	diagnostic := map[string]any{"last_callback_at": time.Now().UTC(), "callback_stage": "received"}
 	if e != nil && e.EventV2Base != nil && e.EventV2Base.Header != nil {
@@ -151,76 +162,93 @@ func (s *Service) action(ctx context.Context, c Config, e *callback.CardActionTr
 	if !ok || (action != "approve" && action != "reject" && action != "test") {
 		return fail("审批操作无效")
 	}
-	result, err := s.decide(ctx, c, e.EventV2Base.Header.TenantKey, req.Operator.OpenID, req.Context.OpenMessageID, nonce, action)
+	var (
+		out decideOutcome
+		err error
+	)
+	if decideCardHook != nil {
+		out, err = decideCardHook(s, ctx, c, e.EventV2Base.Header.TenantKey, req.Operator.OpenID, req.Context.OpenMessageID, nonce, action)
+	} else {
+		out, err = s.decideCard(ctx, c, e.EventV2Base.Header.TenantKey, req.Operator.OpenID, req.Context.OpenMessageID, nonce, action)
+	}
 	if err != nil {
 		return fail("未确认审批结果：卡片可能已失效、已处理或账号无权限，请在平台核对；不要重复申请命令。")
 	}
 	s.recordDiagnostic(map[string]any{"callback_stage": "verified"})
-	return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "success", Content: result}, Card: &callback.Card{Type: "raw", Data: statusCard(result)}}, nil
+	if out.pending {
+		// 异步审批尚未落到终态：仅弹 toast 保留原交互卡，等后台进入终态后再异步更新卡片。
+		return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "info", Content: out.text}}, nil
+	}
+	return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "success", Content: out.text}, Card: &callback.Card{Type: "raw", Data: statusCard(out.text)}}, nil
 }
 
 func (s *Service) decide(ctx context.Context, c Config, tenant, openID, messageID, nonce, action string) (string, error) {
+	out, err := s.decideCard(ctx, c, tenant, openID, messageID, nonce, action)
+	return out.text, err
+}
+
+func (s *Service) decideCard(ctx context.Context, c Config, tenant, openID, messageID, nonce, action string) (decideOutcome, error) {
 	if tenant == "" || openID == "" || messageID == "" || (action != "approve" && action != "reject" && action != "test") {
-		return "", errors.New("无效回调")
+		return decideOutcome{}, errors.New("无效回调")
 	}
 	tx, err := s.SQL.BeginTx(ctx, nil)
 	if err != nil {
-		return "", err
+		return decideOutcome{}, err
 	}
 	defer tx.Rollback()
 	// 持有配置和绑定共享锁直至 Gate.Decide 完成，禁用/解绑不能与决定交错。
 	current, err := readConfig(ctx, tx, true)
 	if err != nil || !validConfig(current) || current.Revision != c.Revision {
-		return "", errors.New("配置已失效")
+		return decideOutcome{}, errors.New("配置已失效")
 	}
 	var d delivery
 	var outcome string
 	err = tx.QueryRowContext(ctx, `SELECT nonce,approval_id,containment_id,user_id,expires_at,outcome FROM feishu_approval_deliveries WHERE nonce=$1 AND app_id=$2 AND revision=$3 AND tenant=$4 AND open_id=$5 AND message_id=$6 AND expires_at>now() FOR UPDATE`, nonce, c.AppID, c.Revision, tenant, openID, messageID).Scan(&d.Nonce, &d.ApprovalID, &d.ContainmentID, &d.UserID, &d.Expires, &outcome)
 	if err != nil {
-		return "", errors.New("卡片已失效")
+		return decideOutcome{}, errors.New("卡片已失效")
 	}
 	var existing string
 	err = tx.QueryRowContext(ctx, `SELECT open_id FROM feishu_approval_bindings WHERE app_id=$1 AND user_id=$2 AND tenant=$3 AND open_id=$4 FOR SHARE`, c.AppID, d.UserID, tenant, openID).Scan(&existing)
 	if err != nil {
-		return "", errors.New("绑定已失效")
+		return decideOutcome{}, errors.New("绑定已失效")
 	}
 	u, err := s.DB.User.Get(ctx, d.UserID)
 	if err != nil {
-		return "", err
+		return decideOutcome{}, err
 	}
 	var postCommit, onRollback func()
 	nextOutcome := action
-	result := ""
+	out := decideOutcome{}
 	if d.ContainmentID != nil {
-		if result, nextOutcome, postCommit, onRollback, err = s.decideContainment(ctx, *d.ContainmentID, nonce, u, action, outcome); err != nil {
-			return "", err
+		if out, nextOutcome, postCommit, onRollback, err = s.decideContainment(ctx, c, *d.ContainmentID, messageID, nonce, u, action, outcome); err != nil {
+			return decideOutcome{}, err
 		}
 	} else if d.ApprovalID == nil {
 		if action != "test" {
-			return "", errors.New("连接测试不能批准命令")
+			return decideOutcome{}, errors.New("连接测试不能批准命令")
 		}
-		result = "私聊身份及按钮回调验证成功，没有执行主机命令。"
+		out.text = "私聊身份及按钮回调验证成功，没有执行主机命令。"
 		if outcome == "test" {
-			return result, nil
+			return out, nil
 		}
 		if err = sqlAudit(ctx, tx, u.Username, "feishu_private_test_verified", nonce); err != nil {
-			return "", err
+			return decideOutcome{}, err
 		}
 	} else {
 		if action == "test" {
-			return "", errors.New("操作不匹配")
+			return decideOutcome{}, errors.New("操作不匹配")
 		}
 		a, err := s.DB.Approval.Get(ctx, *d.ApprovalID)
 		if err != nil || !directCommand(a.Cmd) {
-			return "", errors.New("请在平台查看完整命令")
+			return decideOutcome{}, errors.New("请在平台查看完整命令")
 		}
 		// 唯一有权改变审批状态的入口；内部事务含组权限、有效期、状态 CAS 和审计。
 		if err = s.Gate.Decide(commandgate.ViaChannel(ctx, "feishu"), a.ID, u, action == "approve"); err != nil {
-			return "", err
+			return decideOutcome{}, err
 		}
-		result = "已拒绝，命令不会因本次申请执行。"
+		out.text = "已拒绝，命令不会因本次申请执行。"
 		if action == "approve" {
-			result = "已批准；是否实际执行成功，请以 OpenXDR 的命令回执为准。"
+			out.text = "已批准；是否实际执行成功，请以 OpenXDR 的命令回执为准。"
 		}
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE feishu_approval_deliveries SET outcome=$2 WHERE nonce=$1`, nonce, nextOutcome)
@@ -231,17 +259,17 @@ func (s *Service) decide(ctx context.Context, c Config, tenant, openID, messageI
 		if postCommit != nil {
 			postCommit()
 		}
-		return result, nil
+		return out, nil
 	}
 	if onRollback != nil {
 		onRollback()
-		return "", err
+		return decideOutcome{}, err
 	}
 	// 命令与处置驳回的决定已在各自的事务里提交并审计；投递状态回写失败不否认已做的决定。
 	if d.ApprovalID != nil || d.ContainmentID != nil {
-		return result, nil
+		return out, nil
 	}
-	return result, err
+	return out, err
 }
 
 const containmentOutcomeApproving = "approving"
@@ -305,42 +333,94 @@ type containmentApproveHooks struct {
 	audit         func(action string)
 	stillProposed func(ctx context.Context) (bool, error)
 	setOutcome    func(ctx context.Context, outcome string)
+	updateCard    func(ctx context.Context, text string)
+}
+
+// patchCard 调用飞书 PATCH /im/v1/messages/:message_id 异步更新卡片为终态无按钮状态卡。
+func (s *Service) patchCard(ctx context.Context, c Config, messageID string, card map[string]any) error {
+	if messageID == "" {
+		return nil
+	}
+	token, err := s.accessToken(ctx, c)
+	if err != nil {
+		return err
+	}
+	content, err := json.Marshal(card)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(map[string]string{"content": string(content)})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, "https://open.feishu.cn/open-apis/im/v1/messages/"+url.PathEscape(messageID), bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := s.HTTP
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return errors.New("飞书网络请求失败")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("飞书 HTTP 状态 %d", resp.StatusCode)
+	}
+	var result struct {
+		Code int `json:"code"`
+	}
+	if err = json.NewDecoder(io.LimitReader(resp.Body, 1024*1024)).Decode(&result); err != nil {
+		return errors.New("飞书响应格式无效")
+	}
+	if result.Code != 0 {
+		return fmt.Errorf("飞书更新卡片代码 %d", result.Code)
+	}
+	return nil
 }
 
 // decideContainment 卡片上批准或驳回待审批处置。权限按处置所在组重新核对；驳回当场完成。
-// 批准要下发指令，可能超过飞书回调的 3 秒时限，先写 approving 并在事务提交后异步执行；
-// 若后台瞬时失败或进程在 CAS 前重启且处置仍处于 proposed，则释放卡片锁允许重试。
-func (s *Service) decideContainment(ctx context.Context, id uuid.UUID, nonce string, u *ent.User, action, outcome string) (string, string, func(), func(), error) {
+// 批准要下发指令，可能超过飞书回调的 3 秒时限，先写 approving 并保留原交互卡（仅弹 toast），
+// 事务提交后在后台执行；落到终态时再异步更新卡片为无按钮状态卡，若瞬时失败且仍在 proposed 则解锁允许重试。
+func (s *Service) decideContainment(ctx context.Context, c Config, id uuid.UUID, messageID, nonce string, u *ent.User, action, outcome string) (decideOutcome, string, func(), func(), error) {
 	if action != "approve" && action != "reject" {
-		return "", "", nil, nil, errors.New("操作不匹配")
+		return decideOutcome{}, "", nil, nil, errors.New("操作不匹配")
 	}
 	if err := s.containmentOutcomeBlocks(outcome, nonce); err != nil {
-		return "", "", nil, nil, err
+		return decideOutcome{}, "", nil, nil, err
 	}
 	if s.Containment == nil {
-		return "", "", nil, nil, errors.New("平台未开启处置")
+		return decideOutcome{}, "", nil, nil, errors.New("平台未开启处置")
 	}
 	p, err := s.DB.Containment.Get(ctx, id)
 	if err != nil || p.State != entcontainment.StateProposed || p.ExpiresAt == nil || !time.Now().Before(*p.ExpiresAt) || p.GroupID == nil {
-		return "", "", nil, nil, errors.New("处置已处理或已过期")
+		return decideOutcome{}, "", nil, nil, errors.New("处置已处理或已过期")
 	}
 	if !auth.Allowed(auth.GroupRole(ctx, s.DB, u, *p.GroupID), "admin") {
-		return "", "", nil, nil, errors.New("只有组内 admin 可以审批")
+		return decideOutcome{}, "", nil, nil, errors.New("只有组内 admin 可以审批")
 	}
 	audit := func(name string) {
-		_, _ = s.SQL.ExecContext(context.WithoutCancel(ctx), `INSERT INTO audit_logs(id,ts,username,action,target,remote_addr) VALUES($1,now(),$2,$3,$4,'feishu')`,
-			uuid.New(), u.Username, name, p.ID.String())
+		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if _, auditErr := s.SQL.ExecContext(auditCtx, `INSERT INTO audit_logs(id,ts,username,action,target,remote_addr) VALUES($1,now(),$2,$3,$4,'feishu')`,
+			uuid.New(), u.Username, name, p.ID.String()); auditErr != nil {
+			slog.Warn("飞书处置审批写入审计日志失败", "containment", p.ID, "action", name, "user", u.Username, "err", auditErr)
+		}
 	}
 	if action == "reject" {
 		if _, err := s.Containment.Decline(ctx, p, u.Username, "飞书驳回"); err != nil {
-			return "", "", nil, nil, err
+			return decideOutcome{}, "", nil, nil, err
 		}
 		audit("containment_declined")
-		return "已驳回，这条处置不会执行。", "reject", nil, nil, nil
+		return decideOutcome{text: "已驳回，这条处置不会执行。"}, "reject", nil, nil, nil
 	}
 	release, ok := s.claimContainmentInFlight(nonce)
 	if !ok {
-		return "", "", nil, nil, errors.New("这张卡片正在处理中，请稍候")
+		return decideOutcome{}, "", nil, nil, errors.New("这张卡片正在处理中，请稍候")
 	}
 	hooks := containmentApproveHooks{
 		audit: audit,
@@ -352,8 +432,15 @@ func (s *Service) decideContainment(ctx context.Context, id uuid.UUID, nonce str
 			return cur.State == entcontainment.StateProposed, nil
 		},
 		setOutcome: func(updCtx context.Context, value string) {
-			_, _ = s.SQL.ExecContext(updCtx, `UPDATE feishu_approval_deliveries SET outcome=$2 WHERE nonce=$1 AND outcome=$3`,
-				nonce, value, containmentOutcomeApproving)
+			if _, updErr := s.SQL.ExecContext(updCtx, `UPDATE feishu_approval_deliveries SET outcome=$2 WHERE nonce=$1 AND outcome=$3`,
+				nonce, value, containmentOutcomeApproving); updErr != nil {
+				slog.Warn("飞书处置审批更新投递状态失败", "containment", p.ID, "outcome", value, "err", updErr)
+			}
+		},
+		updateCard: func(updCtx context.Context, text string) {
+			if patchErr := s.patchCard(updCtx, c, messageID, statusCard(text)); patchErr != nil {
+				slog.Warn("飞书处置审批更新终态卡片失败", "containment", p.ID, "message_id", messageID, "err", patchErr)
+			}
 		},
 	}
 	postCommit := func() {
@@ -362,13 +449,13 @@ func (s *Service) decideContainment(ctx context.Context, id uuid.UUID, nonce str
 			s.approveContainment(ctx, p, u.Username, hooks)
 		}()
 	}
-	return "已批准，正在下发；结果以 OpenXDR 自主响应页的记录为准。", containmentOutcomeApproving, postCommit, release, nil
+	return decideOutcome{text: "审批处理中，请稍候；结果以 OpenXDR 自主响应页的记录为准。", pending: true}, containmentOutcomeApproving, postCommit, release, nil
 }
 
-// approveContainment 在后台执行处置批准，按实际状态转移决定审计日志与卡片锁：
-// - 仅当 err == nil 且状态进入 pending/active/executed 时写 containment_approved；
-// - 下发失败返回 StateFailed 时写 containment_approve_failed，绝不写 containment_approved；
-// - 报错或仍处于 proposed 时，核对数据库状态：仍在 proposed 则释放卡片锁允许重试，已离开则锁定卡片。
+// approveContainment 在后台执行处置批准，按实际状态转移决定审计日志、卡片锁与终态卡片更新：
+// - 仅当 err == nil 且状态进入 pending/active/executed 时写 containment_approved 并更新为终态卡；
+// - 下发失败返回 StateFailed 时写 containment_approve_failed，绝不写 containment_approved，并更新为终态卡；
+// - 报错或仍处于 proposed 时，核对数据库状态：仍在 proposed 则释放卡片锁并保留原交互卡供重试，已离开则锁卡并更新终态卡。
 func (s *Service) approveContainment(ctx context.Context, p *ent.Containment, actor string, hooks containmentApproveHooks) {
 	run, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 	defer cancel()
@@ -387,6 +474,11 @@ func (s *Service) approveContainment(ctx context.Context, p *ent.Containment, ac
 		}
 		hooks.setOutcome(run, "approve")
 	}
+	finalizeCard := func(text string) {
+		if hooks.updateCard != nil {
+			hooks.updateCard(run, text)
+		}
+	}
 	isStillProposed := func() bool {
 		if hooks.stillProposed == nil {
 			return true
@@ -401,17 +493,26 @@ func (s *Service) approveContainment(ctx context.Context, p *ent.Containment, ac
 	res, err := s.Containment.Approve(run, p, actor)
 	if err != nil {
 		slog.Error("飞书批准的处置下发失败", "containment", p.ID, "err", err)
-		finalizeOutcome(isStillProposed())
+		allowRetry := isStillProposed()
+		finalizeOutcome(allowRetry)
+		if !allowRetry {
+			finalizeCard("处置状态已变更，请以 OpenXDR 自主响应页的记录为准。")
+		}
 		return
 	}
 	if containmentApprovedEffective(res) {
 		finalizeOutcome(false)
 		writeAudit("containment_approved")
+		finalizeCard("已批准，正在下发；结果以 OpenXDR 自主响应页的记录为准。")
 		return
 	}
 	if res == nil {
 		slog.Warn("飞书批准的处置结果为空", "containment", p.ID)
-		finalizeOutcome(isStillProposed())
+		allowRetry := isStillProposed()
+		finalizeOutcome(allowRetry)
+		if !allowRetry {
+			finalizeCard("处置状态已变更，请以 OpenXDR 自主响应页的记录为准。")
+		}
 		return
 	}
 	if res.State == entcontainment.StateProposed {
@@ -423,10 +524,21 @@ func (s *Service) approveContainment(ctx context.Context, p *ent.Containment, ac
 		slog.Error("飞书批准的处置下发失败", "containment", p.ID, "state", res.State)
 		finalizeOutcome(false)
 		writeAudit("containment_approve_failed")
+		finalizeCard("已批准，但处置下发失败；详情请查看 OpenXDR 自主响应页。")
 		return
 	}
 	slog.Warn("飞书批准的处置未生效", "containment", p.ID, "state", res.State)
 	finalizeOutcome(false)
+	switch res.State {
+	case entcontainment.StateHeld:
+		finalizeCard("已批准，但触发平台熔断保护，处置已挂起；详情请查看 OpenXDR 自主响应页。")
+	case entcontainment.StateDeclined:
+		finalizeCard("处置已被驳回或重复，未执行；详情请查看 OpenXDR 自主响应页。")
+	case entcontainment.StateSkipped:
+		finalizeCard("目标已跳过，未执行处置；详情请查看 OpenXDR 自主响应页。")
+	default:
+		finalizeCard("处置状态已变更，请以 OpenXDR 自主响应页的记录为准。")
+	}
 }
 
 // 长连接退出（如凭据错误这类不可重试的失败）后按指数退避重连，连上过则从头计时。
