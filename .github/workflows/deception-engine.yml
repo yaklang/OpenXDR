@@ -60,9 +60,10 @@ jobs:
           {
             echo "tags<<EOF"
             echo "ghcr.io/$owner/openxdr-deception:$REVISION"
-            if [ "$REF" = "refs/heads/master" ]; then
-              echo "ghcr.io/$owner/openxdr-deception:latest"
-            fi
+            # 安装编排默认拉 :latest；tag 发布与从 master 手动触发都要更新它
+            case "$REF" in
+              refs/tags/dygk-v*|refs/heads/master) echo "ghcr.io/$owner/openxdr-deception:latest" ;;
+            esac
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
