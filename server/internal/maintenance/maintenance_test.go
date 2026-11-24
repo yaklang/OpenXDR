@@ -1,7 +1,10 @@
 package maintenance
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -47,5 +50,40 @@ func TestStartedIn(t *testing.T) {
 	}
 	if startedIn("BOOT_ID x\nCONTAINERS a\n") != nil {
 		t.Fatal("没拉起任何容器时应为空")
+	}
+}
+
+func TestPatroniClientDisablesProxy(t *testing.T) {
+	var proxyHits atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHits.Add(1)
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer proxy.Close()
+
+	t.Setenv("HTTP_PROXY", proxy.URL)
+	t.Setenv("HTTPS_PROXY", proxy.URL)
+	t.Setenv("NO_PROXY", "")
+
+	c := (&Patroni{}).client()
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok || tr == nil {
+		t.Fatalf("Patroni 默认客户端应显式配置 *http.Transport，实际：%T", c.Transport)
+	}
+	if tr.Proxy != nil {
+		t.Fatal("Patroni 默认 Transport 必须禁用 Proxy，避免内网凭据经 HTTP_PROXY 外泄")
+	}
+	// 验证实际发出请求不经过环境代理
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	resp, err := c.Get(target.URL + "/patroni")
+	if err != nil {
+		t.Fatalf("直连目标失败：%v", err)
+	}
+	resp.Body.Close()
+	if proxyHits.Load() != 0 {
+		t.Fatalf("Patroni 请求不应经过环境代理，命中次数：%d", proxyHits.Load())
 	}
 }

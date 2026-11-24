@@ -127,7 +127,7 @@ func button(label, action, nonce, style string) map[string]any {
 	return map[string]any{"tag": "button", "text": plain(label), "type": style, "value": map[string]string{"action": action, "nonce": nonce}}
 }
 func cardBody(title string, elements []any) map[string]any {
-	return map[string]any{"config": map[string]any{"wide_screen_mode": true, "enable_forward": false}, "header": map[string]any{"title": plain(title), "template": "orange"}, "elements": elements}
+	return map[string]any{"config": map[string]any{"wide_screen_mode": true, "enable_forward": false, "update_multi": true}, "header": map[string]any{"title": plain(title), "template": "orange"}, "elements": elements}
 }
 func statusCard(text string) map[string]any {
 	return cardBody("OpenXDR 审批状态", []any{paragraph(text)})

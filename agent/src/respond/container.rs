@@ -41,17 +41,33 @@ fn run(cmd: &Command, isolate: bool) -> Outcome {
         }
         Err(e) => return Outcome::failed(e),
     };
-    let script = if isolate {
-        ruleset()
-    } else {
-        format!("delete table inet {TABLE}\n")
-    };
-    match in_netns(ns, script) {
-        Ok(()) if isolate => Outcome::ok(format!("已隔离容器 {uid}，宿主机与其他容器不受影响")),
-        Ok(()) => Outcome::ok(format!("已解除容器 {uid} 的隔离")),
-        Err(e) if !isolate && (e.contains("No such file") || e.contains("does not exist")) => {
+    if isolate {
+        return map_isolate_result(uid, in_netns_apply(ns, ruleset()));
+    }
+    match in_netns_unisolate(ns) {
+        Ok(super::isolate::UnisolateOutcome::Removed) => {
+            Outcome::ok(format!("已解除容器 {uid} 的隔离"))
+        }
+        Ok(super::isolate::UnisolateOutcome::AlreadyAbsent) => {
             Outcome::ok(format!("容器 {uid} 当前未处于隔离状态"))
         }
+        Err(e) => Outcome::failed(e),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn map_isolate_result(uid: &str, res: Result<super::isolate::ApplyOutcome, String>) -> Outcome {
+    use super::isolate::ApplyOutcome;
+    match res {
+        Ok(ApplyOutcome::Applied) => {
+            Outcome::ok(format!("已隔离容器 {uid}，宿主机与其他容器不受影响"))
+        }
+        Ok(ApplyOutcome::AppliedAfterTimeout) => Outcome::ok(format!(
+            "已隔离容器 {uid}（提交确认超时，复核已生效），宿主机与其他容器不受影响"
+        )),
+        Ok(ApplyOutcome::UncertainPreserved) => Outcome::ok(format!(
+            "容器 {uid} 隔离提交超时且复核与清理均未确认清除，保守按已生效保留自动解封租约"
+        )),
         Err(e) => Outcome::failed(e),
     }
 }
@@ -109,10 +125,12 @@ fn netns_of(uid: &str) -> Result<Option<std::fs::File>, String> {
     Ok(None)
 }
 
-/// 在临时线程里切进容器的网络命名空间执行 nft：命名空间按线程生效，子进程继承这个线程的，
-/// 线程结束即丢弃，agent 其余线程一直留在宿主机网络里
+/// 在临时线程里切进容器的网络命名空间执行隔离并带超时复核，避免状态未知时误报失败丢租约
 #[cfg(target_os = "linux")]
-fn in_netns(ns: std::fs::File, script: String) -> Result<(), String> {
+fn in_netns_apply(
+    ns: std::fs::File,
+    script: String,
+) -> Result<super::isolate::ApplyOutcome, String> {
     std::thread::spawn(move || {
         use std::os::fd::AsRawFd;
         // SAFETY: ns 在调用期间一直打开，fd 有效；CLONE_NEWNET 只切换当前这个临时线程
@@ -122,7 +140,25 @@ fn in_netns(ns: std::fs::File, script: String) -> Result<(), String> {
                 std::io::Error::last_os_error()
             ));
         }
-        super::isolate::nft_script(&script)
+        super::isolate::apply_table_script(TABLE, &script)
+    })
+    .join()
+    .map_err(|_| "容器隔离线程异常退出".to_string())?
+}
+
+/// 在临时线程里切进容器的网络命名空间执行解封：区分 nft 启动失败与表确实不存在
+#[cfg(target_os = "linux")]
+fn in_netns_unisolate(ns: std::fs::File) -> Result<super::isolate::UnisolateOutcome, String> {
+    std::thread::spawn(move || {
+        use std::os::fd::AsRawFd;
+        // SAFETY: ns 在调用期间一直打开，fd 有效；CLONE_NEWNET 只切换当前这个临时线程
+        if unsafe { libc::setns(ns.as_raw_fd(), libc::CLONE_NEWNET) } != 0 {
+            return Err(format!(
+                "进入容器网络命名空间失败：{}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        super::isolate::unisolate_table(TABLE)
     })
     .join()
     .map_err(|_| "容器隔离线程异常退出".to_string())?
@@ -131,6 +167,33 @@ fn in_netns(ns: std::fs::File, script: String) -> Result<(), String> {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn container_isolate_timeout_recheck_preserves_lease_when_uncertain() {
+        use super::super::isolate::{ApplyOutcome, ScriptError, TableState, apply_with};
+
+        // 提交超时 + 查询超时 + 清理失败 -> 必须保守回报 Succeeded 保留租约
+        let res = apply_with(
+            &ruleset(),
+            |_| Err(ScriptError::Unknown("执行 nft 超时".into())),
+            || TableState::Unknown,
+            || Err("delete timeout".into()),
+        );
+        assert_eq!(res, Ok(ApplyOutcome::UncertainPreserved));
+        let out = map_isolate_result("4f173e0d45b0", res);
+        assert_eq!(out.status, crate::pb::command_result::Status::Succeeded);
+        assert!(out.detail.contains("保留自动解封租约"), "{}", out.detail);
+
+        // 提交超时 + 复核确认不存在 -> 回报 Failed
+        let res = apply_with(
+            &ruleset(),
+            |_| Err(ScriptError::Unknown("执行 nft 超时".into())),
+            || TableState::Absent,
+            || Ok(()),
+        );
+        let out = map_isolate_result("4f173e0d45b0", res);
+        assert_eq!(out.status, crate::pb::command_result::Status::Failed);
+    }
 
     #[test]
     fn ruleset_drops_everything_but_loopback() {

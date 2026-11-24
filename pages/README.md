@@ -41,4 +41,4 @@ GitHub Actions 会自动构建并部署主页。发布完成后应验证：
 1. Pages workflow 成功；
 2. 中英文浏览器语言分别渲染对应文案与 metadata；
 3. `https://yaklang.io/OpenXDR/` 返回 200；
-4. `https://openxdr.yuzhian.com.cn/` 正常跳转到 Pages 地址。
+4. `https://openxdr.example.com/` 正常跳转到 Pages 地址。

@@ -42,14 +42,20 @@ func readOnly(cmd string, nested bool) bool {
 		}
 		// 容器里执行的命令按同一份清单判定；shell 会展开的段，判定看到的和容器里真跑的可能不是一回事
 		if inner, ok := containerExec(program, args); ok {
-			if seg.dynamic || !argvReadOnly(inner) {
+			if seg.dynamic || len(seg.globWords) > 0 || !argvReadOnly(inner) {
 				return false
 			}
 			continue
 		}
 		check, known := readOnlyPrograms[program]
-		if !known || (check != nil && !check(args)) {
+		if !known {
 			return false
+		}
+		if check != nil {
+			argMetas := seg.wordMetas[len(seg.words)-len(args):]
+			if !checkArgsWithVars(program, check, args, argMetas, vars) {
+				return false
+			}
 		}
 	}
 	return true
@@ -89,11 +95,19 @@ func argvReadOnly(words []string) bool {
 	return known && (check == nil || check(args))
 }
 
+// wordMeta 记录段内每个词的动态展开与通配属性（与 segment.words 一一对应）。
+type wordMeta struct {
+	dynamic         bool // 词内包含未转义的变量展开（$...）或命令替换（$(...)）
+	unquotedDynamic bool // 动态展开出现在双引号之外，shell 会对展开结果做分词与路径名展开
+	glob            bool // 引号外包含通配符（* / ? / [ / {），shell 会做路径名或花括号展开
+}
+
 // segment 一个命令段：去掉引号后的词、输入重定向目标、含未转义变量展开的词、引号外含通配符的词、
 // 原文（密钥路径按原文找，含重定向目标）、是否有输入重定向、
 // 单引号外是否出现 $ 或反斜杠（shell 会展开或转义，去引号后的词和真正传给程序的参数可能不同）
 type segment struct {
 	words     []string
+	wordMetas []wordMeta
 	inputs    []string
 	varWords  []string
 	globWords []string
@@ -169,13 +183,8 @@ func segmentUnsafeDynamicSecret(program string, seg segment, vars shellVars) boo
 		return slices.ContainsFunc(seg.varWords, looksLikeSensitiveDynamic) || slices.ContainsFunc(seg.globWords, looksLikeSensitiveDynamic)
 	}
 	for _, w := range seg.varWords {
-		if values, ok := vars.lookup(w); ok {
-			if slices.ContainsFunc(values, valueMayReadSecret) {
-				return true
-			}
-			continue
-		}
-		if looksLikeSensitiveDynamic(w) || !strings.HasPrefix(w, "-") {
+		values, ok := vars.lookup(w)
+		if !ok || slices.ContainsFunc(values, valueMayReadSecret) {
 			return true
 		}
 	}
@@ -243,6 +252,10 @@ func collectVars(cmd string, segments []segment, nested bool) shellVars {
 	for _, seg := range segments {
 		vars.collect(seg.words)
 	}
+	// 修改 IFS 会改变未加引号变量展开的分词规则，整条命令不再信任静态变量展开
+	if _, ok := vars.values["IFS"]; ok || vars.unknown["IFS"] {
+		vars.off = true
+	}
 	return vars
 }
 
@@ -302,6 +315,151 @@ func (v shellVars) lookup(w string) ([]string, bool) {
 	return []string{""}, !v.nested && localName.MatchString(name)
 }
 
+// maxExpandedCombos 变量笛卡尔展开的组合数上限，超过一律拒绝（交给人审批）。
+const maxExpandedCombos = 64
+
+// checkArgsWithVars 在把参数交给目标程序只读检查器之前，校验静态通配与动态参数展开：
+//  1. 对选项敏感的程序，禁止不以 / 或 ./ 开头的静态通配词（仅保留 grep 系列过滤选项），防止展开出 - 开头文件名注入选项；
+//  2. 已知取值的单变量引用按全部可能取值展开，未加引号的仅允许单个非空、无空白、无通配符的词，任一组合不通过即拒绝；
+//  3. 无法经 vars.lookup 解析的动态词（未知环境变量、复合展开如 $a$b、命令替换等），
+//     除极少数已严格证明处于双引号安全数据位置的形态外一律拒绝，防止展开为危险选项或写子命令。
+func checkArgsWithVars(program string, check func([]string) bool, args []string, metas []wordMeta, vars shellVars) bool {
+	if len(args) != len(metas) {
+		return false
+	}
+	hasDynamic := false
+	for i, a := range args {
+		m := metas[i]
+		if m.dynamic {
+			hasDynamic = true
+		}
+		if m.glob && !safeStaticGlobArg(program, a) {
+			return false
+		}
+	}
+	if !hasDynamic {
+		return check(args)
+	}
+	choices := make([][][]string, len(args))
+	total := 1
+	for i, a := range args {
+		if !metas[i].dynamic {
+			choices[i] = [][]string{{a}}
+			continue
+		}
+		values, ok := vars.lookup(a)
+		if !ok {
+			if !safeUnknownDynamicArg(program, args, metas, i) {
+				return false
+			}
+			choices[i] = [][]string{{"__safe_dynamic_arg__"}}
+			continue
+		}
+		expanded, ok := expandVarChoices(values, metas[i].unquotedDynamic)
+		if !ok {
+			return false
+		}
+		choices[i] = expanded
+		if len(expanded) > 1 {
+			if total > maxExpandedCombos/len(expanded) {
+				return false
+			}
+			total *= len(expanded)
+		}
+	}
+	var walk func(idx int, cur []string) bool
+	walk = func(idx int, cur []string) bool {
+		if idx == len(choices) {
+			return check(cur)
+		}
+		for _, piece := range choices[idx] {
+			if !walk(idx+1, append(cur, piece...)) {
+				return false
+			}
+		}
+		return true
+	}
+	return walk(0, make([]string, 0, len(args)))
+}
+
+// safeStaticGlobArg 判定对选项敏感的程序是否允许某个静态通配参数：
+//   - uniq 会把第二个文件名当输出文件覆盖，禁止任何通配展开；
+//   - 其余程序仅放行以 / 或 ./ 开头（展开结果绝不以 - 开头），
+//     或 grep 系列的 --include=/--exclude=/--exclude-dir= 过滤模式。
+func safeStaticGlobArg(program, arg string) bool {
+	if program == "uniq" {
+		return false
+	}
+	if strings.HasPrefix(arg, "/") || strings.HasPrefix(arg, "./") {
+		return true
+	}
+	switch program {
+	case "grep", "egrep", "fgrep", "zgrep":
+		if !strings.Contains(arg, "{") && (strings.HasPrefix(arg, "--include=") ||
+			strings.HasPrefix(arg, "--exclude=") ||
+			strings.HasPrefix(arg, "--exclude-dir=")) {
+			return true
+		}
+	}
+	return false
+}
+
+// expandVarChoices 将变量的所有已知取值转为展开后的参数切片列表并去重。
+// 对未加引号的动态展开（unquoted=true），真实 shell 会做空白分词与路径名展开，
+// 空值/纯空白也会导致参数消失改变后续选项边界；因此仅允许每个取值恰好为单个非空、
+// 无空白、无通配符（*?[{）的词，否则拒绝交审批。
+func expandVarChoices(values []string, unquoted bool) ([][]string, bool) {
+	if unquoted && len(values) == 0 {
+		return nil, false
+	}
+	var out [][]string
+	for _, v := range values {
+		var parts []string
+		if unquoted {
+			if strings.ContainsAny(v, "*?[{") {
+				return nil, false
+			}
+			parts = strings.Fields(v)
+			if len(parts) != 1 {
+				return nil, false
+			}
+		} else {
+			parts = []string{v}
+		}
+		dup := false
+		for _, prev := range out {
+			if slices.Equal(prev, parts) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, parts)
+		}
+	}
+	if len(out) == 0 {
+		return [][]string{{}}, true
+	}
+	return out, true
+}
+
+// safeUnknownDynamicArg 判定无法静态解析的动态参数是否位于严格安全的双引号数据位置：
+// - chage -l "$user"：仅含 -l 与一个双引号单变量，即使展开为 -d0 也因缺少用户名无法修改任何账户；
+// - crontab -u "$u" -l：紧跟 -u 后的双引号单变量用户名参数（绝不允许未加引号的未知变量）。
+func safeUnknownDynamicArg(program string, args []string, metas []wordMeta, idx int) bool {
+	if metas[idx].unquotedDynamic || simpleVar.FindStringSubmatch(args[idx]) == nil {
+		return false
+	}
+	switch program {
+	case "chage":
+		return len(args) == 2 && idx == 1 && args[0] == "-l"
+	case "crontab":
+		return idx > 0 && args[idx-1] == "-u"
+	default:
+		return false
+	}
+}
+
 var metadataOnly = map[string]bool{"ls": true, "stat": true, "test": true, "[": true, "echo": true, "printf": true, "true": true, "false": true}
 
 // split 按 shell 规则切成命令段，每段是去掉引号后的词。遇到命令替换、进程替换、heredoc、
@@ -309,9 +467,10 @@ var metadataOnly = map[string]bool{"ls": true, "stat": true, "test": true, "[": 
 func split(cmd string) ([]segment, bool) {
 	var segments []segment
 	var words, inputs, varWords, globWords []string
+	var wordMetas []wordMeta
 	start, redirected, dynamic := 0, false, false
 	var word strings.Builder
-	inWord, input, wordVar, wordGlob := false, false, false, false
+	inWord, input, wordVar, wordGlob, wordDynamic, wordUnquotedDynamic := false, false, false, false, false, false
 	flushWord := func() {
 		if inWord {
 			w := word.String()
@@ -320,6 +479,7 @@ func split(cmd string) ([]segment, bool) {
 				inputs = append(inputs, w)
 			} else {
 				words = append(words, w)
+				wordMetas = append(wordMetas, wordMeta{dynamic: wordDynamic, unquotedDynamic: wordUnquotedDynamic, glob: wordGlob})
 			}
 			if wordVar {
 				varWords = append(varWords, w)
@@ -327,7 +487,7 @@ func split(cmd string) ([]segment, bool) {
 			if wordGlob {
 				globWords = append(globWords, w)
 			}
-			input, wordVar, wordGlob = false, false, false
+			input, wordVar, wordGlob, wordDynamic, wordUnquotedDynamic = false, false, false, false, false
 		}
 		word.Reset()
 		inWord = false
@@ -336,11 +496,11 @@ func split(cmd string) ([]segment, bool) {
 		flushWord()
 		if len(words) > 0 || len(inputs) > 0 {
 			segments = append(segments, segment{
-				words: words, inputs: inputs, varWords: varWords, globWords: globWords,
+				words: words, wordMetas: wordMetas, inputs: inputs, varWords: varWords, globWords: globWords,
 				raw: cmd[start:end], input: redirected, dynamic: dynamic,
 			})
 		}
-		words, inputs, varWords, globWords = nil, nil, nil, nil
+		words, wordMetas, inputs, varWords, globWords = nil, nil, nil, nil, nil
 		redirected, dynamic = false, false
 		start = end + 1
 	}
@@ -363,6 +523,7 @@ func split(cmd string) ([]segment, bool) {
 					return nil, false
 				case '$':
 					dynamic = true
+					wordDynamic = true
 					if j+1 < len(cmd) && cmd[j+1] == '(' {
 						end, ok := substitution(cmd, j)
 						if !ok {
@@ -415,6 +576,8 @@ func split(cmd string) ([]segment, bool) {
 				return nil, false
 			}
 			dynamic = true
+			wordDynamic = true
+			wordUnquotedDynamic = true
 			word.WriteString(cmd[i : end+1])
 			inWord = true
 			i = end
@@ -469,6 +632,8 @@ func split(cmd string) ([]segment, bool) {
 			if c == '$' {
 				dynamic = true
 				wordVar = true
+				wordDynamic = true
+				wordUnquotedDynamic = true
 			}
 			// 词中间的 { 在 sh 是 bash 时会做花括号展开（/e{tc,}/shadow），${f} 的花括号不算
 			if c == '*' || c == '?' || c == '[' || c == '{' && cmd[i-1] != '$' {
@@ -597,11 +762,11 @@ var readOnlyPrograms = map[string]func(args []string) bool{
 	"hostid": nil, "arch": nil, "systemd-detect-virt": nil, "lslogins": nil,
 	"curl":             curlProbe,
 	"find":             noArg("-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"),
-	"sort":             noArgPrefix("-o", "--output"),
+	"sort":             noArgPrefix("-o", "--output", "--compress-program", "--files0-from"),
 	"uniq":             atMostOneFile, // uniq 输入 输出：第二个文件名会被写
-	"date":             noArgPrefix("-s", "--set"),
-	"dmesg":            noArgPrefix("-c", "-C", "-D", "-E", "-n", "--clear", "--read-clear", "--console"),
-	"journalctl":       noArgPrefix("--vacuum", "--rotate", "--flush", "--sync", "--relinquish", "--smart-relinquish", "--setup-keys", "--update-catalog"),
+	"date":             noArgPrefix("-s", "-f", "--set", "--file"),
+	"dmesg":            noArgPrefix("-c", "-C", "-D", "-E", "-n", "--clear", "--read-clear", "--console-level", "--console-off", "--console-on"),
+	"journalctl":       noArgPrefix("--vacuum-size", "--vacuum-time", "--vacuum-files", "--rotate", "--flush", "--sync", "--relinquish-var", "--smart-relinquish-var", "--setup-keys", "--update-catalog"),
 	"sysctl":           sysctlRead,
 	"hostname":         flagsOnly,
 	"crontab":          crontabList,
@@ -673,13 +838,13 @@ func sshdTest(args []string) bool {
 	return test
 }
 
-// vtyshShow vtysh 只认成对的 -c 'show …'，配置模式和别的选项一律不认
+// vtyshShow vtysh 只认成对的单行 -c 'show …'，配置模式、内嵌换行和别的选项一律不认
 func vtyshShow(args []string) bool {
 	if len(args) == 0 || len(args)%2 != 0 {
 		return false
 	}
 	for i := 0; i < len(args); i += 2 {
-		if args[i] != "-c" || !strings.HasPrefix(strings.TrimSpace(args[i+1]), "show ") {
+		if args[i] != "-c" || strings.ContainsAny(args[i+1], "\r\n") || !strings.HasPrefix(strings.TrimSpace(args[i+1]), "show ") {
 			return false
 		}
 	}
@@ -699,15 +864,28 @@ func noArg(banned ...string) func([]string) bool {
 	}
 }
 
-// noArgPrefix 参数以这些前缀开头就不放行：-o 会写文件，-s 会改时间。短选项可能并在一起（-no 也含 -o 的效果），一并拦
+// noArgPrefix 参数命中这些短选项或长选项（含 getopt_long 唯一前缀缩写）就不放行：
+// -o 会写文件，-s 会改时间。短选项可能并在一起（-no 也含 -o 的效果），一并拦
 func noArgPrefix(banned ...string) func([]string) bool {
 	return func(args []string) bool {
 		for _, a := range args {
+			if strings.HasPrefix(a, "--") {
+				name, _, _ := strings.Cut(a, "=")
+				for _, b := range banned {
+					if strings.HasPrefix(b, "--") && (strings.HasPrefix(name, b) || longAbbrev(name, b)) {
+						return false
+					}
+				}
+				continue
+			}
 			for _, b := range banned {
+				if strings.HasPrefix(b, "--") {
+					continue
+				}
 				if strings.HasPrefix(a, b) {
 					return false
 				}
-				if len(b) == 2 && b[0] == '-' && strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.ContainsRune(a[1:], rune(b[1])) {
+				if len(b) == 2 && b[0] == '-' && strings.HasPrefix(a, "-") && strings.ContainsRune(a[1:], rune(b[1])) {
 					return false
 				}
 			}
@@ -1188,27 +1366,63 @@ func stripAwkStringsAndComments(script string) (string, bool) {
 	return b.String(), true
 }
 
-// awkRegexStart 前面没有操作数（开头、运算符、括号、分隔符之后）时 / 是正则开头，否则是除号
+var awkRegexKeywords = map[string]bool{
+	"print": true, "printf": true, "return": true, "exit": true,
+	"in": true, "do": true, "else": true, "delete": true, "getline": true, "case": true,
+}
+
+func isAwkIdentChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+}
+
+// awkRegexStart 前面没有操作数（开头、运算符、括号、分隔符或关键字之后）时 / 是正则开头，否则是除号
 func awkRegexStart(prev string) bool {
 	prev = strings.TrimRight(prev, " \t")
 	if prev == "" {
 		return true
 	}
-	return strings.ContainsRune("(,{};!~&|?:=<>+-*%^\n", rune(prev[len(prev)-1]))
+	if strings.ContainsRune("(,{};!~&|?:=<>+-*%^\n", rune(prev[len(prev)-1])) {
+		return true
+	}
+	j := len(prev)
+	for j > 0 && isAwkIdentChar(prev[j-1]) {
+		j--
+	}
+	return j < len(prev) && awkRegexKeywords[prev[j:]]
 }
 
-// awkRegexEnd 从 start 起找正则字面量的结束 /，跳过转义与方括号里的 /
+// awkRegexEnd 从 start 起找正则字面量的结束 /，跳过转义、字符类（含首字符 ] 与 POSIX 子类）里的 /
 func awkRegexEnd(script string, start int) (int, bool) {
 	inClass := false
+	classStart := -1
 	for i := start; i < len(script); i++ {
 		switch c := script[i]; {
 		case c == '\\':
+			if i+1 < len(script) && script[i+1] == '\n' {
+				return 0, false
+			}
 			i++
 		case c == '\n':
 			return 0, false
-		case c == '[':
+		case c == '[' && !inClass:
 			inClass = true
-		case c == ']':
+			classStart = i + 1
+			if i+1 < len(script) && script[i+1] == '^' {
+				i++
+				classStart = i + 1
+			}
+		case c == '[' && inClass:
+			// 方括号内的 POSIX 字符类/等价类/排序符号（[:alpha:]、[=a=]、[.ch.]）不能提前结束外层字符类
+			if i+1 < len(script) && (script[i+1] == ':' || script[i+1] == '=' || script[i+1] == '.') {
+				delim := script[i+1]
+				for j := i + 2; j+1 < len(script) && script[j] != '\n'; j++ {
+					if script[j] == delim && script[j+1] == ']' {
+						i = j + 1
+						break
+					}
+				}
+			}
+		case c == ']' && inClass && i > classStart:
 			inClass = false
 		case c == '/' && !inClass:
 			return i, true

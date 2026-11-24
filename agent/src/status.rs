@@ -2,26 +2,119 @@
 
 use crate::health::Health;
 use crate::status_proto::{self, Status};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// 查隔离状态要起 nft 或开 WFP 会话；每个登录会话的托盘 15 秒来问一次，结果缓存 10 秒
 const ISOLATION_TTL: Duration = Duration::from_secs(10);
+/// 本机状态端点并发处理连接上限，超限时直接关闭新连接，防打满任务或阻塞线程池
+const MAX_CONCURRENT_STATUS: usize = 16;
+/// 单次状态查询（含获取单飞锁与隔离状态探针刷新）的总截止时间，防底层探针卡死占满并发槽位
+const STATUS_REPLY_TIMEOUT: Duration = Duration::from_secs(3);
 
-type IsolationCache = Arc<Mutex<Option<(Instant, bool)>>>;
+#[derive(Clone, Default)]
+struct IsolationCache {
+    inner: Arc<std::sync::Mutex<IsolationState>>,
+}
 
-fn snapshot(health: &Health, cache: &IsolationCache) -> Status {
-    let isolated = {
-        let mut cached = cache.lock().unwrap_or_else(|e| e.into_inner());
-        match *cached {
-            Some((at, value)) if at.elapsed() < ISOLATION_TTL => value,
-            _ => {
-                let value = crate::respond::host_isolated();
-                *cached = Some((Instant::now(), value));
-                value
+#[derive(Default)]
+struct IsolationState {
+    cached: Option<(Instant, bool)>,
+    /// 非空表示全局已有 1 个后台探针在运行；等待者在锁内直接克隆 watch::Receiver，
+    /// 探针完成时写入缓存、清空 in_flight 并通过 watch 发送结果，天然无丢唤醒窗口
+    in_flight: Option<tokio::sync::watch::Receiver<Option<bool>>>,
+}
+
+enum ProbeLookup {
+    Hit(bool),
+    Wait(tokio::sync::watch::Receiver<Option<bool>>),
+}
+
+impl IsolationCache {
+    #[cfg(all(test, unix))]
+    fn seed(&self, at: Instant, value: bool) {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).cached = Some((at, value));
+    }
+
+    #[cfg(all(test, unix))]
+    fn is_empty(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .cached
+            .is_none()
+    }
+
+    /// 命中未过期缓存时直接返回 `Hit`；否则复用在途探针或在全局唯一槽位启动新探针，
+    /// 返回的 `Receiver` 在锁内克隆，无论探针在调用方 `await` 之前还是之后完成都不会丢唤醒。
+    fn lookup_or_spawn<F>(&self, probe: F) -> ProbeLookup
+    where
+        F: FnOnce() -> bool + Send + 'static,
+    {
+        let (rx, tx_and_probe) = {
+            let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((at, value)) = state.cached
+                && at.elapsed() < ISOLATION_TTL
+            {
+                return ProbeLookup::Hit(value);
             }
+            if let Some(existing_rx) = state.in_flight.clone() {
+                (existing_rx, None)
+            } else {
+                let (tx, rx) = tokio::sync::watch::channel(None);
+                state.in_flight = Some(rx.clone());
+                (rx, Some((tx, probe)))
+            }
+        };
+
+        if let Some((tx, probe_fn)) = tx_and_probe {
+            let inner = self.inner.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(probe_fn).await;
+                let value = {
+                    let mut state = inner.lock().unwrap_or_else(|e| e.into_inner());
+                    state.in_flight = None;
+                    match result {
+                        Ok(v) => {
+                            state.cached = Some((Instant::now(), v));
+                            Some(v)
+                        }
+                        Err(_) => None,
+                    }
+                };
+                // 成功则写入 Some(v) 唤醒所有等待者；若探针异常退出则直接释放 tx，等待者收到通道关闭后降级返回 false
+                if let Some(v) = value {
+                    let _ = tx.send(Some(v));
+                }
+            });
         }
-    };
+
+        ProbeLookup::Wait(rx)
+    }
+}
+
+/// 读取隔离状态：命中未过期缓存时直接返回，不进 blocking pool；
+/// 过期或未命中时保证全局同一时刻至多 1 个后台 `spawn_blocking` 探针在运行。
+/// 调用方超时取消只放弃本次等待，不会取消也不会再重复启动新探针；
+/// 探针真正完成后由后台任务写回缓存、清除 `in_flight` 并经 watch 广播结果。
+async fn isolated_with<F>(cache: &IsolationCache, probe: F) -> bool
+where
+    F: FnOnce() -> bool + Send + 'static,
+{
+    match cache.lookup_or_spawn(probe) {
+        ProbeLookup::Hit(value) => value,
+        ProbeLookup::Wait(mut rx) => match rx.wait_for(|v| v.is_some()).await {
+            Ok(val) => val.unwrap_or(false),
+            Err(_) => false,
+        },
+    }
+}
+
+async fn snapshot_with<F>(health: &Health, cache: &IsolationCache, probe: F) -> Status
+where
+    F: FnOnce() -> bool + Send + 'static,
+{
+    let isolated = isolated_with(cache, probe).await;
     Status {
         version: env!("CARGO_PKG_VERSION").into(),
         last_contact_unix_ms: health.last_contact_ms(),
@@ -30,14 +123,38 @@ fn snapshot(health: &Health, cache: &IsolationCache) -> Status {
     }
 }
 
-/// 一次连接的回复：一行 JSON。查隔离会起进程或开 WFP 会话，放到阻塞线程上
-async fn reply(health: Arc<Health>, cache: IsolationCache) -> Option<Vec<u8>> {
-    let status = tokio::task::spawn_blocking(move || snapshot(&health, &cache))
+#[cfg(all(test, unix))]
+async fn snapshot(health: &Health, cache: &IsolationCache) -> Status {
+    snapshot_with(health, cache, crate::respond::host_isolated).await
+}
+
+/// 一次连接的回复：一行 JSON。缓存命中全程纯异步；仅缓存过期时单飞进阻塞线程，
+/// 整个等待（含排队等锁与探针执行）受 timeout 约束，超时返回 None 直接关闭连接释放槽位。
+async fn reply_with<F>(
+    health: Arc<Health>,
+    cache: IsolationCache,
+    timeout: Duration,
+    probe: F,
+) -> Option<Vec<u8>>
+where
+    F: FnOnce() -> bool + Send + 'static,
+{
+    let status = tokio::time::timeout(timeout, snapshot_with(&health, &cache, probe))
         .await
         .ok()?;
     let mut line = serde_json::to_vec(&status).ok()?;
     line.push(b'\n');
     Some(line)
+}
+
+async fn reply(health: Arc<Health>, cache: IsolationCache) -> Option<Vec<u8>> {
+    reply_with(
+        health,
+        cache,
+        STATUS_REPLY_TIMEOUT,
+        crate::respond::host_isolated,
+    )
+    .await
 }
 
 /// 开本机状态端点。起不来（非 root 调试、端点被占）只是没有托盘与状态命令可用，采集照常
@@ -61,6 +178,7 @@ async fn listen(health: Arc<Health>, path: &str) -> std::io::Result<()> {
     // 只读、只有有限信息：托盘跑在普通用户的会话里，本机任何用户都得连得上
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))?;
     let cache = IsolationCache::default();
+    let permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STATUS));
     loop {
         let mut stream = match listener.accept().await {
             Ok((stream, _)) => stream,
@@ -71,8 +189,14 @@ async fn listen(health: Arc<Health>, path: &str) -> std::io::Result<()> {
                 continue;
             }
         };
+        let Ok(permit) = permits.clone().try_acquire_owned() else {
+            // 超过并发上限时直接丢弃新连接，避免本机恶意并发打满任务或阻塞线程池
+            drop(stream);
+            continue;
+        };
         let (health, cache) = (health.clone(), cache.clone());
         tokio::spawn(async move {
+            let _permit = permit;
             if let Some(line) = reply(health, cache).await {
                 let _ = tokio::time::timeout(Duration::from_secs(2), stream.write_all(&line)).await;
             }
@@ -97,6 +221,7 @@ async fn listen(health: Arc<Health>) -> std::io::Result<()> {
     };
     let mut server = options(true).create(status_proto::PIPE)?;
     let cache = IsolationCache::default();
+    let permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STATUS));
     loop {
         if let Err(e) = server.connect().await {
             eprintln!("本机状态端点等待连接失败：{e}");
@@ -105,8 +230,13 @@ async fn listen(health: Arc<Health>) -> std::io::Result<()> {
             continue;
         }
         let mut client = std::mem::replace(&mut server, options(false).create(status_proto::PIPE)?);
+        let Ok(permit) = permits.clone().try_acquire_owned() else {
+            drop(client);
+            continue;
+        };
         let (health, cache) = (health.clone(), cache.clone());
         tokio::spawn(async move {
+            let _permit = permit;
             if let Some(line) = reply(health, cache).await {
                 let _ = tokio::time::timeout(Duration::from_secs(2), client.write_all(&line)).await;
             }
@@ -235,10 +365,10 @@ pub fn provision() {}
 mod tests {
     use super::*;
 
-    #[test]
-    fn snapshot_reports_contact_and_collection() {
+    #[tokio::test]
+    async fn snapshot_reports_contact_and_collection() {
         let health = Health::new();
-        let s = snapshot(&health, &IsolationCache::default());
+        let s = snapshot(&health, &IsolationCache::default()).await;
         assert_eq!(s.last_contact_unix_ms, 0);
         assert_eq!(s.collection, status_proto::Collection::Starting);
         let generation = health.begin(&[("process", true)]);
@@ -282,13 +412,150 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn isolation_check_is_cached() {
+    #[tokio::test]
+    async fn isolation_check_is_cached_and_singleflight() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
         let cache = IsolationCache::default();
-        *cache.lock().unwrap() = Some((Instant::now(), true));
+        cache.seed(Instant::now(), true);
         assert!(
-            snapshot(&Health::new(), &cache).isolated,
+            snapshot(&Health::new(), &cache).await.isolated,
             "缓存未过期就不再查内核"
+        );
+
+        // 并发缓存未命中时只允许单飞刷新一次，避免惊群占满 blocking pool
+        let fresh_cache = IsolationCache::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let c = fresh_cache.clone();
+            let calls = calls.clone();
+            tasks.push(tokio::spawn(async move {
+                isolated_with(&c, move || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(30));
+                    true
+                })
+                .await
+            }));
+        }
+        for t in tasks {
+            assert!(t.await.unwrap());
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "并发过期刷新应单飞执行一次"
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_times_out_without_spawning_duplicate_probes_and_returns_latest_after_completion()
+    {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let health = Health::new();
+        let cache = IsolationCache::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<bool>();
+        let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+
+        // 探针卡住期间连续发起 5 次超时请求：每次都必须在 deadline 内返回 None，
+        // 且全过程后台探针只启动 1 次，绝不因超时取消而堆积多个 spawn_blocking。
+        for _ in 0..5 {
+            let started = Instant::now();
+            let calls = calls.clone();
+            let rx = release_rx.clone();
+            let timed_out = reply_with(
+                health.clone(),
+                cache.clone(),
+                Duration::from_millis(50),
+                move || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    rx.lock().unwrap().recv().unwrap_or(false)
+                },
+            )
+            .await;
+            assert!(timed_out.is_none(), "探针卡住时应超时返回 None 释放槽位");
+            assert!(
+                started.elapsed() < Duration::from_millis(250),
+                "超时返回不应等待卡住的探针结束"
+            );
+            assert!(cache.is_empty(), "探针未完成前不得写入错误缓存");
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "探针卡住期间连续多次超时请求，全过程探针函数只能被调用 1 次"
+        );
+
+        // 放行唯一在途探针返回 true，下一次请求应立刻拿到最新结果且仍不再启动新探针
+        release_tx.send(true).unwrap();
+        let line = reply_with(health, cache, Duration::from_secs(2), {
+            let calls = calls.clone();
+            move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                false
+            }
+        })
+        .await
+        .expect("探针完成后应立即返回最新状态");
+        let status: Status = serde_json::from_slice(&line).unwrap();
+        assert!(status.isolated, "应拿到后台探针完成写入的最新结果 true");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "探针完成后应直接命中刷新结果，全程探针仅调用 1 次"
+        );
+    }
+
+    #[tokio::test]
+    async fn singleflight_waiter_does_not_lose_wakeup_when_probe_finishes_before_await() {
+        let cache = IsolationCache::default();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<bool>();
+
+        // 1. 发起者启动唯一在途探针（先阻塞在 channel 上）
+        let ProbeLookup::Wait(mut initiator_rx) =
+            cache.lookup_or_spawn(move || release_rx.recv().unwrap_or(false))
+        else {
+            panic!("首次查询缓存应未命中并进入在途等待");
+        };
+
+        // 2. 新等待者在锁内拿到 watch::Receiver，但故意先不进入 await
+        let ProbeLookup::Wait(mut late_waiter_rx) = cache.lookup_or_spawn(|| {
+            panic!("已有在途探针时不得启动第二个探针");
+        }) else {
+            panic!("在途期间新等待者应拿到共享 Receiver");
+        };
+
+        // 3. 放行探针并等待发起者确认后台任务已彻底写完缓存、发完结果并释放 Sender
+        release_tx.send(true).unwrap();
+        let init_val = tokio::time::timeout(
+            Duration::from_secs(1),
+            initiator_rx.wait_for(|v| v.is_some()),
+        )
+        .await
+        .expect("发起者不应超时")
+        .expect("探针成功时 watch 通道不应关闭失败");
+        assert_eq!(*init_val, Some(true));
+        drop(init_val);
+
+        // 确保后台任务已清空 in_flight 且写回缓存
+        assert!(!cache.is_empty(), "探针完成后应已写回缓存");
+
+        // 4. 此时等待者才开始 await：使用 watch 后即使探针早已完成，也应立刻拿到最新值、不丢唤醒、不超时
+        let started = Instant::now();
+        let waiter_val = tokio::time::timeout(
+            Duration::from_millis(100),
+            late_waiter_rx.wait_for(|v| v.is_some()),
+        )
+        .await
+        .expect("探针在 await 之前完成时，等待者绝不能丢唤醒或超时")
+        .expect("应成功读取已发送的最新状态");
+        assert_eq!(*waiter_val, Some(true));
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "应立刻拿到结果，不应等待超时"
         );
     }
 }

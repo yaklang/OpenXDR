@@ -6,7 +6,9 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::process::Command;
+use std::io::Read;
+use std::os::unix::process::CommandExt;
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
@@ -20,6 +22,12 @@ const CLASS_SOFTWARE_INVENTORY: u32 = 5020;
 const POLL: Duration = Duration::from_secs(30 * 60);
 const HEARTBEAT: Duration = Duration::from_secs(24 * 3600);
 const MAX_PACKAGES: usize = 20_000;
+/// package_of 路径→所属包缓存上限，满时清空，防短命路径长期累积导致内存增长
+const MAX_PACKAGE_CACHE: usize = 8192;
+/// dpkg-query / rpm 外部命令超时上限，防锁库或卡死拖垮采集线程
+const CMD_TIMEOUT: Duration = Duration::from_secs(30);
+/// 外部包查询命令 stdout/stderr 最大保留字节数
+const MAX_CMD_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
 
 /// 一个已装的二进制包：名称、版本、源码包名、源码版本
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -62,29 +70,179 @@ pub fn spawn(agent_id: String, sink: EventSink) {
 /// 发行版 ID 与版本（/etc/os-release），漏洞库按发行版版本分生态
 pub type Os = (String, String);
 
+#[derive(Debug)]
+struct CmdOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    stdout_truncated: bool,
+}
+
+/// 强杀超时子进程组后短轮询回收僵尸的上限，防不可中断 D 状态让 wait() 无限阻塞
+const REAP_TIMEOUT: Duration = Duration::from_millis(500);
+
+fn kill_process_group(child: &mut std::process::Child) {
+    let pid = child.id() as libc::pid_t;
+    if pid > 0 {
+        // SAFETY: 子进程已通过 process_group(0) 独立成组（pgid == pid），
+        // 向负 pgid 发 SIGKILL 杀整棵进程树，防后代继承管道写端导致挂死。
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    // 短轮询回收僵尸，避免子进程陷入不可中断 D 状态时 wait() 无限阻塞越过 deadline
+    let deadline = Instant::now() + REAP_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+/// 带超时执行外部命令：子进程独立进程组，后台线程经 channel 排空 stdout/stderr 并与命令共享同一截止时间，
+/// 绝不无期限 join；超时或异常时杀整棵进程树并回收子进程。
+fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> std::io::Result<CmdOutput> {
+    run_with_limits(program, args, timeout, MAX_CMD_OUTPUT_BYTES, 64 * 1024)
+}
+
+fn run_with_limits(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+    max_stdout: usize,
+    max_stderr: usize,
+) -> std::io::Result<CmdOutput> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()?;
+
+    fn drain_pipe<R: Read + Send + 'static>(
+        pipe: Option<R>,
+        limit: usize,
+    ) -> Option<std::sync::mpsc::Receiver<(Vec<u8>, bool)>> {
+        pipe.map(|mut r| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut kept = Vec::new();
+                let mut truncated = false;
+                let mut chunk = [0u8; 8192];
+                while let Ok(n) = r.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    if kept.len() < limit {
+                        let take = (limit - kept.len()).min(n);
+                        kept.extend_from_slice(&chunk[..take]);
+                        if take < n {
+                            truncated = true;
+                        }
+                    } else {
+                        truncated = true;
+                    }
+                }
+                let _ = tx.send((kept, truncated));
+            });
+            rx
+        })
+    }
+
+    let out_rx = drain_pipe(child.stdout.take(), max_stdout);
+    let err_rx = drain_pipe(child.stderr.take(), max_stderr);
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    kill_process_group(&mut child);
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("{program} 执行超时"),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => {
+                kill_process_group(&mut child);
+                return Err(e);
+            }
+        }
+    };
+
+    let recv = |rx: Option<std::sync::mpsc::Receiver<(Vec<u8>, bool)>>,
+                child: &mut std::process::Child|
+     -> std::io::Result<(Vec<u8>, bool)> {
+        let Some(rx) = rx else {
+            return Ok((Vec::new(), false));
+        };
+        let rem = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(rem) {
+            Ok(pair) => Ok(pair),
+            Err(_) => {
+                kill_process_group(child);
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("{program} 管道读取超时"),
+                ))
+            }
+        }
+    };
+
+    let (stdout, stdout_truncated) = recv(out_rx, &mut child)?;
+    let (stderr, _) = recv(err_rx, &mut child)?;
+    Ok(CmdOutput {
+        status,
+        stdout,
+        stderr,
+        stdout_truncated,
+    })
+}
+
 fn snapshot() -> Result<(Os, &'static str, Vec<Package>), String> {
     let release = std::fs::read_to_string("/etc/os-release")
         .map_err(|e| format!("读不到 /etc/os-release：{e}"))?;
-    let out = Command::new("dpkg-query")
-        .args(["-W", "-f=${Package}\\t${Version}\\t${source:Package}\\t${source:Version}\\t${db:Status-Abbrev}\\n"])
-        .output();
+    let out = run_with_timeout(
+        "dpkg-query",
+        &[
+            "-W",
+            "-f=${Package}\\t${Version}\\t${source:Package}\\t${source:Version}\\t${db:Status-Abbrev}\\n",
+        ],
+        CMD_TIMEOUT,
+    );
     let (manager, out) = match out {
         Ok(out) => ("dpkg", out),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
             "rpm",
-            Command::new("rpm")
-                .args([
+            run_with_timeout(
+                "rpm",
+                &[
                     "-qa",
                     "--qf",
                     "%{NAME}\t%{EPOCHNUM}:%{VERSION}-%{RELEASE}\t%{SOURCERPM}\t%{ARCH}\n",
-                ])
-                .output()
-                .map_err(|e| format!("没有可用的软件包查询器：{e}"))?,
+                ],
+                CMD_TIMEOUT,
+            )
+            .map_err(|e| format!("没有可用的软件包查询器：{e}"))?,
         ),
         Err(e) => return Err(format!("查询 dpkg 失败：{e}")),
     };
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    if out.stdout_truncated {
+        return Err(format!("{manager} 输出超过上限被截断，拒绝使用残缺清单"));
     }
     let text = String::from_utf8_lossy(&out.stdout);
     let packages = if manager == "rpm" {
@@ -186,26 +344,29 @@ pub fn package_of(path: &str) -> Option<String> {
     if let Some(hit) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(path) {
         return hit.clone();
     }
-    let found = match Command::new("dpkg-query").args(["-S", "--", path]).output() {
+    let found = match run_with_timeout("dpkg-query", &["-S", "--", path], CMD_TIMEOUT) {
         Ok(out) if out.status.success() => owner_package(&String::from_utf8_lossy(&out.stdout)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Command::new("rpm")
-            .args(["-qf", "--qf", "%{NAME}\n", "--", path])
-            .output()
-            .ok()
-            .filter(|out| out.status.success())
-            .and_then(|out| {
-                String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .next()
-                    .filter(|name| !name.is_empty() && !name.chars().any(char::is_whitespace))
-                    .map(str::to_string)
-            }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => run_with_timeout(
+            "rpm",
+            &["-qf", "--qf", "%{NAME}\n", "--", path],
+            CMD_TIMEOUT,
+        )
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .filter(|name| !name.is_empty() && !name.chars().any(char::is_whitespace))
+                .map(str::to_string)
+        }),
         _ => None,
     };
-    cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(path.to_string(), found.clone());
+    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if map.len() >= MAX_PACKAGE_CACHE {
+        map.clear();
+    }
+    map.insert(path.to_string(), found.clone());
     found
 }
 
@@ -322,5 +483,42 @@ mod tests {
     fn reads_os_release() {
         let text = "PRETTY_NAME=\"Debian GNU/Linux 13 (trixie)\"\nVERSION_ID=\"13\"\nID=debian\n";
         assert_eq!(os_release(text), ("debian".into(), "13".into()));
+    }
+
+    #[test]
+    fn run_with_timeout_kills_stalled_command() {
+        let started = Instant::now();
+        let err = run_with_timeout("sleep", &["30"], Duration::from_millis(150)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn run_with_timeout_does_not_hang_when_descendant_holds_stdout() {
+        // 父 shell 立刻退出，但后台后代 sleep 仍继承 stdout 写端，验证在 deadline 内返回且不挂死
+        let started = Instant::now();
+        let err =
+            run_with_timeout("sh", &["-c", "sleep 30 &"], Duration::from_millis(200)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "后代持有 stdout 写端时应在 deadline 内返回，实际耗时 {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn run_with_limits_marks_truncated_output() {
+        let out = run_with_limits(
+            "sh",
+            &["-c", "head -c 4096 /dev/zero | tr '\\0' 'a'"],
+            Duration::from_secs(5),
+            128,
+            1024,
+        )
+        .unwrap();
+        assert!(out.status.success());
+        assert_eq!(out.stdout.len(), 128);
+        assert!(out.stdout_truncated, "超上限输出应明确标记截断");
     }
 }

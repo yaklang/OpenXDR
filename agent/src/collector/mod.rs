@@ -100,6 +100,10 @@ mod fswatch_win;
 #[cfg(target_os = "windows")]
 mod persistwatch;
 
+// 计划任务快照扫描与截断合并逻辑与平台无关，单测在各平台都能跑
+#[cfg(any(target_os = "windows", test))]
+mod persistwatch_tasks;
+
 #[cfg(target_os = "windows")]
 mod windows;
 

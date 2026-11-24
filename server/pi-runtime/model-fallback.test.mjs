@@ -28,6 +28,12 @@ test('认证失败、坏请求、网络错误以及流中断不重放', async ()
     if (status === 200) await assert.rejects(response.text());
     assert.equal(calls, 1);
   }
+  const cause = Object.assign(new TypeError('fetch failed'), { code: 'UND_ERR_HEADERS_TIMEOUT' });
+  const route = modelFallback({ model: 'a', api_base: 'http://local/v1', fallback_models: 'b' }, async () => { throw cause; });
+  await assert.rejects(
+    route.fetch('http://local/v1/chat/completions', { body: '{"model":"a"}' }),
+    err => err.message === '连接推理服务失败' && err.cause === cause,
+  );
 });
 
 test('全部失败与取消不会返回成功，沙箱与本机策略保持一致', async () => {

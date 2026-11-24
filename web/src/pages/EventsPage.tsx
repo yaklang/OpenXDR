@@ -33,6 +33,8 @@ export function EventsPage() {
   const { t } = useI18n()
   // 筛选条件放在 URL 里：刷新不丢，链接发给别人能看到同一份结果
   const [params, setParams] = useSearchParams()
+  const rawClassUid = Number(params.get('classUid'))
+  const rawHours = Number(params.get('hours'))
   const filter = {
     srcIp: params.get('srcIp') ?? '',
     dstIp: params.get('dstIp') ?? '',
@@ -45,8 +47,8 @@ export function EventsPage() {
     cursor: params.get('cursor') ?? '',
     username: params.get('username') ?? '',
     source: params.get('source') ?? '',
-    classUid: Number(params.get('classUid') ?? 0),
-    hours: Number(params.get('hours') ?? 24),
+    classUid: Number.isSafeInteger(rawClassUid) && rawClassUid > 0 ? rawClassUid : 0,
+    hours: Number.isSafeInteger(rawHours) && rawHours > 0 ? rawHours : 24,
     assetId: params.get('assetId') ?? '',
     from: params.get('from') ?? '',
     to: params.get('to') ?? '',
@@ -120,11 +122,16 @@ export function EventsPage() {
             <Input.Search allowClear aria-label={t('thUser')} placeholder={t('eventUsernameFilter')}
               key={filter.username} defaultValue={filter.username} style={{ width: 180 }}
               onSearch={username => setFilter({ username })} />
-            {filter.from ? (
-              <Tag closable color="blue" onClose={() => setFilter({ from: '', to: '' })} style={{ padding: '4px 8px' }}>
-                {fmtTime(filter.from)} ~ {filter.to ? fmtTime(filter.to).slice(11) : t('now')}
-              </Tag>
-            ) : <Select
+            {filter.from ? (() => {
+              const fromText = fmtTime(filter.from)
+              const toText = filter.to ? fmtTime(filter.to) : ''
+              const toLabel = toText ? (toText.slice(0, 10) === fromText.slice(0, 10) ? toText.slice(11) : toText) : t('now')
+              return (
+                <Tag closable color="blue" onClose={() => setFilter({ from: '', to: '' })} style={{ padding: '4px 8px' }}>
+                  {fromText} ~ {toLabel}
+                </Tag>
+              )
+            })() : <Select
               aria-label={t('thTime')}
               style={{ width: 140 }}
               value={filter.hours}

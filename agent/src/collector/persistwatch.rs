@@ -7,7 +7,7 @@
 //! 且注册表通知本身也不告诉你改了什么，终归要 diff。
 //! 增、改、删都上报：清理持久化痕迹与写入痕迹同样是攻击信号。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::process::Stdio;
@@ -16,6 +16,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::pb::AgentEvent;
 
 use super::EventSink;
+use super::persistwatch_tasks::{
+    MAX_TASK_ENTRIES, ScanResult, reconcile_snapshot, scan_dir_snapshot,
+};
 
 /// OCSF Registry Value Activity / File System Activity
 const CLASS_REGISTRY: u32 = 201002;
@@ -76,7 +79,17 @@ fn run(agent_id: &str, sink: &EventSink) {
     let mut reg_seen = registry_snapshot();
     let mut file_seen = startup_snapshot();
     let mut svc_seen = services_snapshot();
-    let mut task_seen = tasks_snapshot(None);
+    let mut task_seen = tasks_snapshot(None).map(|scan| {
+        if !scan.is_complete() {
+            eprintln!(
+                "计划任务首轮基线有 {} 个目录未完整扫描（触发上限或读取失败），后续轮次将按目录粒度对账",
+                scan.incomplete_dirs.len()
+            );
+        }
+        let (baseline, _) =
+            reconcile_snapshot(None, scan.entries, &scan.incomplete_dirs, MAX_TASK_ENTRIES);
+        baseline
+    });
     let mut wmi_seen = wmi_snapshot();
 
     while !sink.is_closed() {
@@ -117,16 +130,25 @@ fn run(agent_id: &str, sink: &EventSink) {
             svc_seen = Some(svc_now);
         }
 
-        if let Some(task_now) = tasks_snapshot(task_seen.as_ref()) {
-            if let Some(seen) = &task_seen {
-                for (path, task, activity) in diff(seen, &task_now) {
-                    let prev = seen.get(path).filter(|_| activity == 3);
-                    if !sink.send(task_event(agent_id, path, task, prev, activity)) {
-                        return;
-                    }
+        if let Some(scan) = tasks_snapshot(task_seen.as_ref()) {
+            if !scan.is_complete() {
+                eprintln!(
+                    "计划任务快照有 {} 个目录未完整扫描（触发深度/条目上限或读取失败），仅这些子树保留旧基线免判删除",
+                    scan.incomplete_dirs.len()
+                );
+            }
+            let (next_seen, changes) = reconcile_snapshot(
+                task_seen.as_ref(),
+                scan.entries,
+                &scan.incomplete_dirs,
+                MAX_TASK_ENTRIES,
+            );
+            for (path, task, prev, activity) in changes {
+                if !sink.send(task_event(agent_id, &path, &task, prev.as_ref(), activity)) {
+                    return;
                 }
             }
-            task_seen = Some(task_now);
+            task_seen = Some(next_seen);
         }
 
         if let Some(wmi_now) = wmi_snapshot() {
@@ -575,7 +597,7 @@ fn startup_snapshot() -> HashMap<String, ()> {
 
 /// 计划任务快照里的一项。系统维护一夜改几十次自带任务的触发器与状态，动作不变；
 /// 劫持已有任务（T1053.005）改的是动作，所以动作单独拿出来比。
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 struct TaskEntry {
     mtime: u64,
     size: u64,
@@ -583,43 +605,49 @@ struct TaskEntry {
     actions: Option<String>,
 }
 
-/// 计划任务快照：任务文件路径 -> mtime 秒、大小与动作。
+/// 计划任务目录递归遍历的最大深度，防止符号链接/目录联接或恶意目录树耗尽资源。
+const MAX_TASK_DEPTH: usize = 8;
+
+/// 计划任务快照：任务文件路径 -> mtime 秒、大小与动作，以及本轮未完整覆盖的目录列表。
 /// 返回 None 表示 Tasks 根目录都读不了（权限等），本轮整体跳过；
-/// 子目录读取失败只跳过该子目录。任务文件这一轮读不到（计划任务服务正在写）时沿用上一轮的动作，
-/// 不把"读不到"当成动作变化。
-fn tasks_snapshot(prev: Option<&HashMap<String, TaskEntry>>) -> Option<HashMap<String, TaskEntry>> {
-    let mut snap = HashMap::new();
-    let mut stack = vec![std::fs::read_dir(TASKS_DIR).ok()?];
-    while let Some(entries) = stack.pop() {
-        for e in entries.flatten() {
-            let path = e.path();
-            if path.is_dir() {
-                if let Ok(sub) = std::fs::read_dir(&path) {
-                    stack.push(sub);
-                }
-            } else if let Ok(meta) = e.metadata() {
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let key = path.display().to_string();
-                let actions = read_task(&path)
-                    .map(|xml| task_actions(&xml))
-                    .or_else(|| prev?.get(&key)?.actions.clone());
-                snap.insert(
-                    key,
-                    TaskEntry {
-                        mtime,
-                        size: meta.len(),
-                        actions,
-                    },
-                );
-            }
-        }
-    }
-    Some(snap)
+/// 若部分子树触及深度/条目上限或读取失败，记录在 `incomplete_dirs` 中，仅这些子树免判删除。
+/// 任务文件这一轮读不到（计划任务服务正在写）时沿用上一轮的动作，不把"读不到"当成动作变化。
+fn tasks_snapshot(prev: Option<&BTreeMap<String, TaskEntry>>) -> Option<ScanResult<TaskEntry>> {
+    tasks_snapshot_at(
+        std::path::Path::new(TASKS_DIR),
+        prev,
+        MAX_TASK_DEPTH,
+        MAX_TASK_ENTRIES,
+    )
+}
+
+fn tasks_snapshot_at(
+    root: &std::path::Path,
+    prev: Option<&BTreeMap<String, TaskEntry>>,
+    max_depth: usize,
+    max_entries: usize,
+) -> Option<ScanResult<TaskEntry>> {
+    scan_dir_snapshot(root, max_depth, max_entries, |e, path| {
+        let meta = e.metadata().ok()?;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let key = path.display().to_string();
+        let actions = read_task(path)
+            .map(|xml| task_actions(&xml))
+            .or_else(|| prev?.get(&key)?.actions.clone());
+        Some((
+            key,
+            TaskEntry {
+                mtime,
+                size: meta.len(),
+                actions,
+            },
+        ))
+    })
 }
 
 /// 任务文件只读前 1 MiB：计划任务服务写出的 XML 只有几 KB，不为塞进来的大文件每 30 秒读一遍。
@@ -1062,7 +1090,13 @@ mod winreg {
     }
 
     /// 枚举键下全部值，返回 (值名, 内容)。字符串类型给原文，其余给类型标注。
+    /// 遇 ERROR_MORE_DATA 时按内核回写的 data_len 动态扩容（上限 256 KiB）；
+    /// 单值超上限时跳过该项继续枚举后续项，绝不提前中断导致漏报后面的持久化项。
     pub fn values(root: HKEY, key: &str) -> Vec<(String, String)> {
+        const ERROR_MORE_DATA: u32 = 234;
+        const INIT_VALUE_BYTES: usize = 4096;
+        const MAX_VALUE_BYTES: usize = 256 * 1024;
+
         let Some(key) = Key::open(root, key) else {
             return Vec::new();
         };
@@ -1070,16 +1104,18 @@ mod winreg {
 
         let mut out = Vec::new();
         let mut index = 0u32;
+        let mut data = vec![0u8; INIT_VALUE_BYTES];
         loop {
             let mut name = [0u16; 512];
             let mut name_len = name.len() as u32;
             let mut kind = 0u32;
-            let mut data = [0u8; 4096];
+            if data.len() > INIT_VALUE_BYTES {
+                data.resize(INIT_VALUE_BYTES, 0);
+            }
             let mut data_len = data.len() as u32;
-            // SAFETY: handle 是有效键句柄；name 与 data 都是栈上数组，name_len / data_len 如实给出各自容量，
-            // 系统最多写这么多并回填实际长度（放不下时返回 ERROR_MORE_DATA，下面按失败结束）；
-            // 保留参数传空指针。
-            let rc = unsafe {
+            // SAFETY: handle 是有效键句柄；name 是栈上数组，data 是堆上 Vec，name_len / data_len
+            // 如实给出各自容量，系统最多写这么多并回填所需长度；保留参数传空指针。
+            let mut rc = unsafe {
                 RegEnumValueW(
                     handle,
                     index,
@@ -1091,12 +1127,40 @@ mod winreg {
                     &mut data_len,
                 )
             };
+            if rc == ERROR_MORE_DATA {
+                let needed = data_len as usize;
+                if needed > data.len() && needed <= MAX_VALUE_BYTES {
+                    data.resize(needed, 0);
+                    name_len = name.len() as u32;
+                    data_len = data.len() as u32;
+                    // SAFETY: 同上；data 已扩容至 needed 字节，name_len / data_len 已重置为当前容量。
+                    rc = unsafe {
+                        RegEnumValueW(
+                            handle,
+                            index,
+                            name.as_mut_ptr(),
+                            &mut name_len,
+                            std::ptr::null_mut(),
+                            &mut kind,
+                            data.as_mut_ptr(),
+                            &mut data_len,
+                        )
+                    };
+                }
+                if rc == ERROR_MORE_DATA {
+                    // 单值超过上限（或键名过长 / 并发变大），跳过本项继续枚举后续项
+                    index += 1;
+                    continue;
+                }
+            }
             if rc != 0 {
                 break; // ERROR_NO_MORE_ITEMS 或读取失败，都结束枚举
             }
-            let value_name = String::from_utf16_lossy(&name[..name_len as usize]);
+            let name_used = (name_len as usize).min(name.len());
+            let data_used = (data_len as usize).min(data.len());
+            let value_name = String::from_utf16_lossy(&name[..name_used]);
             let content = if kind == REG_SZ || kind == REG_EXPAND_SZ {
-                let wide: Vec<u16> = data[..data_len as usize]
+                let wide: Vec<u16> = data[..data_used]
                     .as_chunks::<2>()
                     .0
                     .iter()

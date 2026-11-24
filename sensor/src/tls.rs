@@ -8,6 +8,7 @@ use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Identity};
 
 pub async fn connect(server: &str) -> Result<Channel, Box<dyn std::error::Error + Send + Sync>> {
     let endpoint = Endpoint::from_shared(server.to_string())?
+        .connect_timeout(Duration::from_secs(15))
         .http2_keep_alive_interval(Duration::from_secs(60))
         .keep_alive_timeout(Duration::from_secs(20))
         .keep_alive_while_idle(true)

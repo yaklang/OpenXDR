@@ -6,7 +6,7 @@ import { delegateFinding, fetchFindingDecision, revokeFindingDecision, type Find
 import { useSession } from '../app/session'
 import { useI18n } from '../i18n'
 import { ResolveModal } from './ResolveModal'
-import { errText, fmtTime } from './format'
+import { errText, fmtTime, uuid4 } from './format'
 
 export function FindingDecisionPanel({ finding }: { finding: FindingRow }) {
   const { t } = useI18n()
@@ -32,7 +32,7 @@ export function FindingDecisionPanel({ finding }: { finding: FindingRow }) {
         }}>{t('findingDecisionRevoke')}</Button>}
       </Space>
     </>}
-    {admin && finding.status === 'open' && <Button size="small" onClick={() => setRequest({ requestId: crypto.randomUUID(), expiresAt: new Date(Date.now() + 24 * 3600000).toISOString() })}>{t('findingDecisionExecute')}</Button>}
+    {admin && finding.status === 'open' && <Button size="small" onClick={() => setRequest({ requestId: uuid4(), expiresAt: new Date(Date.now() + 24 * 3600000).toISOString() })}>{t('findingDecisionExecute')}</Button>}
     <ResolveModal open={!!request} title={t('findingDecisionExecute')} hint={t('findingDecisionHint')} onCancel={() => setRequest(null)} onSubmit={async instruction => {
       if (!request) return
       try {

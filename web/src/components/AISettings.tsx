@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { fetchAIModels, fetchAISettings, saveAISettings, testAISettings, type AISettings, type AISettingsPatch, type AIProviderPatch } from '../api'
 import { useI18n } from '../i18n'
 import { LoadError } from './LoadError'
-import { errText } from './format'
+import { errText, uuid4 } from './format'
 
 // 每项旁边标明来自控制台还是环境变量；控制台改过的可以一键回到环境变量
 function Source({ field, view, onReset }: { field: string; view: AISettings; onReset: (f: string) => void }) {
@@ -147,7 +147,7 @@ export function AIModelSettings() {
                   <Space.Compact style={{ width: '100%' }}>
                     <Form.Item name={[name, 'apiKey']} noStyle><Input.Password autoComplete="new-password" disabled={!view.canSaveSecrets}
                       placeholder={saved?.apiKeySet ? t('secretKeep', { hint: saved.apiKeyHint ? `····${saved.apiKeyHint}` : '' }) : t('secretEmpty')} /></Form.Item>
-                    {saved?.apiKeySet && <Button onClick={() => form.setFieldValue(['providers', name, 'apiKey'], '')}>{t('secretClear')}</Button>}
+                    {saved?.apiKeySet && <Button disabled={!view.canSaveSecrets} onClick={() => form.setFieldValue(['providers', name, 'apiKey'], '')}>{t('secretClear')}</Button>}
                   </Space.Compact>
                 </Form.Item>
                 <Button loading={discovering} style={{ marginBottom: 16 }} onClick={async () => {
@@ -166,7 +166,7 @@ export function AIModelSettings() {
                 </Form.Item>
               </Card>
             })}
-            <Button disabled={fields.length >= 4} style={{ marginBottom: 16 }} onClick={() => add({ id: crypto.randomUUID(), name: '', baseUrl: '', model: '', piModel: '', fallbackModels: '', enabled: false })}>{t('aiAddProvider')}</Button>
+            <Button disabled={fields.length >= 4} style={{ marginBottom: 16 }} onClick={() => add({ id: uuid4(), name: '', baseUrl: '', model: '', piModel: '', fallbackModels: '', enabled: false })}>{t('aiAddProvider')}</Button>
           </>}
         </Form.List>
         <Button type="primary" htmlType="submit" loading={busy}>{t('save')}</Button>
