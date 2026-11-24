@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -187,9 +188,11 @@ func (s *Service) decide(ctx context.Context, c Config, tenant, openID, messageI
 	if err != nil {
 		return "", err
 	}
+	var postCommit, onRollback func()
+	nextOutcome := action
 	result := ""
 	if d.ContainmentID != nil {
-		if result, err = s.decideContainment(ctx, *d.ContainmentID, u, action, outcome); err != nil {
+		if result, nextOutcome, postCommit, onRollback, err = s.decideContainment(ctx, *d.ContainmentID, nonce, u, action, outcome); err != nil {
 			return "", err
 		}
 	} else if d.ApprovalID == nil {
@@ -220,35 +223,109 @@ func (s *Service) decide(ctx context.Context, c Config, tenant, openID, messageI
 			result = "已批准；是否实际执行成功，请以 OpenXDR 的命令回执为准。"
 		}
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE feishu_approval_deliveries SET outcome=$2 WHERE nonce=$1`, nonce, action)
+	_, err = tx.ExecContext(ctx, `UPDATE feishu_approval_deliveries SET outcome=$2 WHERE nonce=$1`, nonce, nextOutcome)
 	if err == nil {
 		err = tx.Commit()
 	}
-	// 命令与处置的决定已在各自的事务里提交并审计；投递状态回写失败不否认已做的决定。
+	if err == nil {
+		if postCommit != nil {
+			postCommit()
+		}
+		return result, nil
+	}
+	if onRollback != nil {
+		onRollback()
+		return "", err
+	}
+	// 命令与处置驳回的决定已在各自的事务里提交并审计；投递状态回写失败不否认已做的决定。
 	if d.ApprovalID != nil || d.ContainmentID != nil {
 		return result, nil
 	}
 	return result, err
 }
 
-// decideContainment 卡片上批准或驳回待审批处置。权限按处置所在组重新核对；驳回当场完成。
-// 批准要下发指令，可能超过飞书回调的 3 秒时限，核对通过后在后台执行，结果以平台记录为准
-func (s *Service) decideContainment(ctx context.Context, id uuid.UUID, u *ent.User, action, outcome string) (string, error) {
-	if action != "approve" && action != "reject" {
-		return "", errors.New("操作不匹配")
+const containmentOutcomeApproving = "approving"
+
+type inFlightKey struct {
+	service *Service
+	nonce   string
+}
+
+// inFlightContainment 记录本进程正在后台执行 Approve 的处置卡片：
+// 用于区分“仍在处理中（拦截并发双击）”与“进程在 CAS 前重启遗留的 approving（允许重试）”。
+var inFlightContainment sync.Map
+
+func (s *Service) claimContainmentInFlight(nonce string) (func(), bool) {
+	key := inFlightKey{service: s, nonce: nonce}
+	if _, loaded := inFlightContainment.LoadOrStore(key, struct{}{}); loaded {
+		return nil, false
 	}
-	if outcome != "" {
-		return "", errors.New("这张卡片已经处理过")
+	var once sync.Once
+	return func() {
+		once.Do(func() { inFlightContainment.Delete(key) })
+	}, true
+}
+
+func (s *Service) containmentInFlight(nonce string) bool {
+	_, ok := inFlightContainment.Load(inFlightKey{service: s, nonce: nonce})
+	return ok
+}
+
+// containmentOutcomeBlocks 检查卡片已有 outcome 是否阻止本次操作：
+// 终态（approve/reject）一律拒绝；approving 仅在当前进程仍有后台任务执行时拒绝，
+// 进程在 CAS 前重启导致的遗留状态放行后续核对数据库状态（仍为 proposed 即可重试）。
+func (s *Service) containmentOutcomeBlocks(outcome, nonce string) error {
+	switch outcome {
+	case "":
+		return nil
+	case containmentOutcomeApproving:
+		if s.containmentInFlight(nonce) {
+			return errors.New("这张卡片正在处理中，请稍候")
+		}
+		return nil
+	default:
+		return errors.New("这张卡片已经处理过")
+	}
+}
+
+// containmentApprovedEffective 仅在批准后实际进入待回执/生效/已执行态时才写 containment_approved 审计。
+func containmentApprovedEffective(res *ent.Containment) bool {
+	if res == nil {
+		return false
+	}
+	switch res.State {
+	case entcontainment.StatePending, entcontainment.StateActive, entcontainment.StateExecuted:
+		return true
+	default:
+		return false
+	}
+}
+
+type containmentApproveHooks struct {
+	audit         func(action string)
+	stillProposed func(ctx context.Context) (bool, error)
+	setOutcome    func(ctx context.Context, outcome string)
+}
+
+// decideContainment 卡片上批准或驳回待审批处置。权限按处置所在组重新核对；驳回当场完成。
+// 批准要下发指令，可能超过飞书回调的 3 秒时限，先写 approving 并在事务提交后异步执行；
+// 若后台瞬时失败或进程在 CAS 前重启且处置仍处于 proposed，则释放卡片锁允许重试。
+func (s *Service) decideContainment(ctx context.Context, id uuid.UUID, nonce string, u *ent.User, action, outcome string) (string, string, func(), func(), error) {
+	if action != "approve" && action != "reject" {
+		return "", "", nil, nil, errors.New("操作不匹配")
+	}
+	if err := s.containmentOutcomeBlocks(outcome, nonce); err != nil {
+		return "", "", nil, nil, err
 	}
 	if s.Containment == nil {
-		return "", errors.New("平台未开启处置")
+		return "", "", nil, nil, errors.New("平台未开启处置")
 	}
 	p, err := s.DB.Containment.Get(ctx, id)
 	if err != nil || p.State != entcontainment.StateProposed || p.ExpiresAt == nil || !time.Now().Before(*p.ExpiresAt) || p.GroupID == nil {
-		return "", errors.New("处置已处理或已过期")
+		return "", "", nil, nil, errors.New("处置已处理或已过期")
 	}
 	if !auth.Allowed(auth.GroupRole(ctx, s.DB, u, *p.GroupID), "admin") {
-		return "", errors.New("只有组内 admin 可以审批")
+		return "", "", nil, nil, errors.New("只有组内 admin 可以审批")
 	}
 	audit := func(name string) {
 		_, _ = s.SQL.ExecContext(context.WithoutCancel(ctx), `INSERT INTO audit_logs(id,ts,username,action,target,remote_addr) VALUES($1,now(),$2,$3,$4,'feishu')`,
@@ -256,29 +333,100 @@ func (s *Service) decideContainment(ctx context.Context, id uuid.UUID, u *ent.Us
 	}
 	if action == "reject" {
 		if _, err := s.Containment.Decline(ctx, p, u.Username, "飞书驳回"); err != nil {
-			return "", err
+			return "", "", nil, nil, err
 		}
 		audit("containment_declined")
-		return "已驳回，这条处置不会执行。", nil
+		return "已驳回，这条处置不会执行。", "reject", nil, nil, nil
 	}
-	go s.approveContainment(ctx, p, u.Username, audit)
-	return "已批准，正在下发；结果以 OpenXDR 自主响应页的记录为准。", nil
+	release, ok := s.claimContainmentInFlight(nonce)
+	if !ok {
+		return "", "", nil, nil, errors.New("这张卡片正在处理中，请稍候")
+	}
+	hooks := containmentApproveHooks{
+		audit: audit,
+		stillProposed: func(checkCtx context.Context) (bool, error) {
+			cur, getErr := s.DB.Containment.Get(checkCtx, p.ID)
+			if getErr != nil {
+				return false, getErr
+			}
+			return cur.State == entcontainment.StateProposed, nil
+		},
+		setOutcome: func(updCtx context.Context, value string) {
+			_, _ = s.SQL.ExecContext(updCtx, `UPDATE feishu_approval_deliveries SET outcome=$2 WHERE nonce=$1 AND outcome=$3`,
+				nonce, value, containmentOutcomeApproving)
+		},
+	}
+	postCommit := func() {
+		go func() {
+			defer release()
+			s.approveContainment(ctx, p, u.Username, hooks)
+		}()
+	}
+	return "已批准，正在下发；结果以 OpenXDR 自主响应页的记录为准。", containmentOutcomeApproving, postCommit, release, nil
 }
 
-// approveContainment 在后台执行处置批准，仅在批准实际生效后写入 containment_approved 审计日志。
-func (s *Service) approveContainment(ctx context.Context, p *ent.Containment, actor string, audit func(string)) {
+// approveContainment 在后台执行处置批准，按实际状态转移决定审计日志与卡片锁：
+// - 仅当 err == nil 且状态进入 pending/active/executed 时写 containment_approved；
+// - 下发失败返回 StateFailed 时写 containment_approve_failed，绝不写 containment_approved；
+// - 报错或仍处于 proposed 时，核对数据库状态：仍在 proposed 则释放卡片锁允许重试，已离开则锁定卡片。
+func (s *Service) approveContainment(ctx context.Context, p *ent.Containment, actor string, hooks containmentApproveHooks) {
 	run, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 	defer cancel()
+	writeAudit := func(action string) {
+		if hooks.audit != nil {
+			hooks.audit(action)
+		}
+	}
+	finalizeOutcome := func(allowRetry bool) {
+		if hooks.setOutcome == nil {
+			return
+		}
+		if allowRetry {
+			hooks.setOutcome(run, "")
+			return
+		}
+		hooks.setOutcome(run, "approve")
+	}
+	isStillProposed := func() bool {
+		if hooks.stillProposed == nil {
+			return true
+		}
+		still, checkErr := hooks.stillProposed(run)
+		if checkErr != nil {
+			slog.Warn("飞书批准后回查处置状态失败，允许卡片重试", "containment", p.ID, "err", checkErr)
+			return true
+		}
+		return still
+	}
 	res, err := s.Containment.Approve(run, p, actor)
 	if err != nil {
 		slog.Error("飞书批准的处置下发失败", "containment", p.ID, "err", err)
+		finalizeOutcome(isStillProposed())
 		return
 	}
-	if res != nil && (res.State == entcontainment.StateHeld || res.State == entcontainment.StateDeclined || res.State == entcontainment.StateSkipped) {
-		slog.Warn("飞书批准的处置未生效", "containment", p.ID, "state", res.State)
+	if containmentApprovedEffective(res) {
+		finalizeOutcome(false)
+		writeAudit("containment_approved")
 		return
 	}
-	audit("containment_approved")
+	if res == nil {
+		slog.Warn("飞书批准的处置结果为空", "containment", p.ID)
+		finalizeOutcome(isStillProposed())
+		return
+	}
+	if res.State == entcontainment.StateProposed {
+		slog.Warn("飞书批准的处置仍处于待审批状态，释放卡片允许重试", "containment", p.ID)
+		finalizeOutcome(true)
+		return
+	}
+	if res.State == entcontainment.StateFailed {
+		slog.Error("飞书批准的处置下发失败", "containment", p.ID, "state", res.State)
+		finalizeOutcome(false)
+		writeAudit("containment_approve_failed")
+		return
+	}
+	slog.Warn("飞书批准的处置未生效", "containment", p.ID, "state", res.State)
+	finalizeOutcome(false)
 }
 
 // 长连接退出（如凭据错误这类不可重试的失败）后按指数退避重连，连上过则从头计时。

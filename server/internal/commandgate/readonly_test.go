@@ -71,6 +71,12 @@ func TestReadOnlyAccepts(t *testing.T) {
 		`grep -rn error /var/log/nginx`,
 		`grep -r --include=*.conf -e listen /etc/nginx /opt/app`,
 		`diff -r /opt/app/v1 /opt/app/v2`,
+		// 已知安全变量展开为普通数据或只读子命令
+		`f=/var/log/syslog; grep error $f`,
+		`f=/var/log/syslog; sort -- $f`,
+		`for f in /var/log/*.log; do sort "$f"; done`,
+		`ps -p $pid`,
+		`act=status; svc=nginx; systemctl $act $svc`,
 	} {
 		if !ReadOnly(cmd) {
 			t.Errorf("应判为只读：%s", cmd)
@@ -375,6 +381,22 @@ func TestReadOnlyRejects(t *testing.T) {
 		`for f in /var/log/x.log; do echo $(cat $f); done`,
 		`cat "$HOME"`,
 		`cat "$1"`,
+		// 变量展开或命令替换绕过目标程序选项/子命令约束
+		`x=--output=/tmp/pwn; sort $x /etc/hosts`,
+		`x=-o; sort $x /tmp/pwn /etc/hosts`,
+		`x="-o /tmp/pwn"; sort $x /etc/hosts`,
+		`x=-exec; find / $x id \;`,
+		`x=stop; systemctl $x nginx`,
+		`for x in status stop; do systemctl $x nginx; done`,
+		`a=-o; sort $a/tmp/pwn /etc/hosts`,
+		`sort $UNKNOWN_OPT /etc/hosts`,
+		`sort $(echo -o) /tmp/pwn /etc/hosts`,
+		`systemctl $UNKNOWN_SUB nginx`,
+		`find / $UNKNOWN_ACT id \;`,
+		`IFS=:; x=-o:/tmp/pwn; sort $x /etc/hosts`,
+		`while read -r user; do chage -l "$user" root; done < /etc/passwd`,
+		`chage -l "$USER_OPT" root`,
+		`for a in 1 2 3 4 5 6 7 8 9; do for b in 1 2 3 4 5 6 7 8 9; do sort $a $b; done; done`,
 		``,
 		`   `,
 	} {

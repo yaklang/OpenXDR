@@ -48,8 +48,14 @@ func readOnly(cmd string, nested bool) bool {
 			continue
 		}
 		check, known := readOnlyPrograms[program]
-		if !known || (check != nil && !check(args)) {
+		if !known {
 			return false
+		}
+		if check != nil {
+			argMetas := seg.wordMetas[len(seg.words)-len(args):]
+			if !checkArgsWithVars(program, check, args, argMetas, vars) {
+				return false
+			}
 		}
 	}
 	return true
@@ -89,11 +95,18 @@ func argvReadOnly(words []string) bool {
 	return known && (check == nil || check(args))
 }
 
+// wordMeta 记录段内每个词的动态展开属性（与 segment.words 一一对应）。
+type wordMeta struct {
+	dynamic         bool // 词内包含未转义的变量展开（$...）或命令替换（$(...)）
+	unquotedDynamic bool // 动态展开出现在双引号之外，shell 会对展开结果做分词
+}
+
 // segment 一个命令段：去掉引号后的词、输入重定向目标、含未转义变量展开的词、引号外含通配符的词、
 // 原文（密钥路径按原文找，含重定向目标）、是否有输入重定向、
 // 单引号外是否出现 $ 或反斜杠（shell 会展开或转义，去引号后的词和真正传给程序的参数可能不同）
 type segment struct {
 	words     []string
+	wordMetas []wordMeta
 	inputs    []string
 	varWords  []string
 	globWords []string
@@ -238,6 +251,10 @@ func collectVars(cmd string, segments []segment, nested bool) shellVars {
 	for _, seg := range segments {
 		vars.collect(seg.words)
 	}
+	// 修改 IFS 会改变未加引号变量展开的分词规则，整条命令不再信任静态变量展开
+	if _, ok := vars.values["IFS"]; ok || vars.unknown["IFS"] {
+		vars.off = true
+	}
 	return vars
 }
 
@@ -297,6 +314,112 @@ func (v shellVars) lookup(w string) ([]string, bool) {
 	return []string{""}, !v.nested && localName.MatchString(name)
 }
 
+// maxExpandedCombos 变量笛卡尔展开的组合数上限，超过一律拒绝（交给人审批）。
+const maxExpandedCombos = 64
+
+// checkArgsWithVars 在把参数交给目标程序只读检查器之前，展开所有动态参数并逐组合校验：
+//  1. 已知取值的单变量引用按全部可能取值展开（未加引号的按空白分词），任一组合不通过即拒绝；
+//  2. 无法经 vars.lookup 解析的动态词（未知环境变量、复合展开如 $a$b、命令替换等），
+//     除极少数已严格证明处于安全数据位置的形态外一律拒绝，防止展开为危险选项或写子命令。
+func checkArgsWithVars(program string, check func([]string) bool, args []string, metas []wordMeta, vars shellVars) bool {
+	if len(args) != len(metas) {
+		return false
+	}
+	hasDynamic := false
+	for _, m := range metas {
+		if m.dynamic {
+			hasDynamic = true
+			break
+		}
+	}
+	if !hasDynamic {
+		return check(args)
+	}
+	choices := make([][][]string, len(args))
+	total := 1
+	for i, a := range args {
+		if !metas[i].dynamic {
+			choices[i] = [][]string{{a}}
+			continue
+		}
+		values, ok := vars.lookup(a)
+		if !ok {
+			if !safeUnknownDynamicArg(program, args, metas, i, vars.nested) {
+				return false
+			}
+			choices[i] = [][]string{{"__safe_dynamic_arg__"}}
+			continue
+		}
+		expanded := expandVarChoices(values, metas[i].unquotedDynamic)
+		choices[i] = expanded
+		if len(expanded) > 1 {
+			if total > maxExpandedCombos/len(expanded) {
+				return false
+			}
+			total *= len(expanded)
+		}
+	}
+	var walk func(idx int, cur []string) bool
+	walk = func(idx int, cur []string) bool {
+		if idx == len(choices) {
+			return check(cur)
+		}
+		for _, piece := range choices[idx] {
+			if !walk(idx+1, append(cur, piece...)) {
+				return false
+			}
+		}
+		return true
+	}
+	return walk(0, make([]string, 0, len(args)))
+}
+
+// expandVarChoices 将变量的所有已知取值转为展开后的参数切片列表并去重。
+func expandVarChoices(values []string, unquoted bool) [][]string {
+	var out [][]string
+	for _, v := range values {
+		var parts []string
+		if unquoted {
+			parts = strings.Fields(v)
+		} else {
+			parts = []string{v}
+		}
+		dup := false
+		for _, prev := range out {
+			if slices.Equal(prev, parts) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, parts)
+		}
+	}
+	if len(out) == 0 {
+		return [][]string{{}}
+	}
+	return out
+}
+
+// safeUnknownDynamicArg 判定无法静态解析的动态参数是否位于严格安全的数据位置：
+// - chage -l "$user"：仅含 -l 与一个双引号单变量，即使展开为 -d0 也因缺少用户名无法修改任何账户；
+// - crontab -u "$u" -l（或命令替换内小写循环变量 crontab -u $u -l）：紧跟 -u 后的用户名参数。
+func safeUnknownDynamicArg(program string, args []string, metas []wordMeta, idx int, nested bool) bool {
+	m := simpleVar.FindStringSubmatch(args[idx])
+	if m == nil {
+		return false
+	}
+	name := m[1] + m[2]
+	switch program {
+	case "chage":
+		return len(args) == 2 && idx == 1 && args[0] == "-l" && !metas[idx].unquotedDynamic
+	case "crontab":
+		return idx > 0 && args[idx-1] == "-u" && (!metas[idx].unquotedDynamic || (nested && localName.MatchString(name)))
+	default:
+		return false
+	}
+}
+
 var metadataOnly = map[string]bool{"ls": true, "stat": true, "test": true, "[": true, "echo": true, "printf": true, "true": true, "false": true}
 
 // split 按 shell 规则切成命令段，每段是去掉引号后的词。遇到命令替换、进程替换、heredoc、
@@ -304,9 +427,10 @@ var metadataOnly = map[string]bool{"ls": true, "stat": true, "test": true, "[": 
 func split(cmd string) ([]segment, bool) {
 	var segments []segment
 	var words, inputs, varWords, globWords []string
+	var wordMetas []wordMeta
 	start, redirected, dynamic := 0, false, false
 	var word strings.Builder
-	inWord, input, wordVar, wordGlob := false, false, false, false
+	inWord, input, wordVar, wordGlob, wordDynamic, wordUnquotedDynamic := false, false, false, false, false, false
 	flushWord := func() {
 		if inWord {
 			w := word.String()
@@ -315,6 +439,7 @@ func split(cmd string) ([]segment, bool) {
 				inputs = append(inputs, w)
 			} else {
 				words = append(words, w)
+				wordMetas = append(wordMetas, wordMeta{dynamic: wordDynamic, unquotedDynamic: wordUnquotedDynamic})
 			}
 			if wordVar {
 				varWords = append(varWords, w)
@@ -322,7 +447,7 @@ func split(cmd string) ([]segment, bool) {
 			if wordGlob {
 				globWords = append(globWords, w)
 			}
-			input, wordVar, wordGlob = false, false, false
+			input, wordVar, wordGlob, wordDynamic, wordUnquotedDynamic = false, false, false, false, false
 		}
 		word.Reset()
 		inWord = false
@@ -331,11 +456,11 @@ func split(cmd string) ([]segment, bool) {
 		flushWord()
 		if len(words) > 0 || len(inputs) > 0 {
 			segments = append(segments, segment{
-				words: words, inputs: inputs, varWords: varWords, globWords: globWords,
+				words: words, wordMetas: wordMetas, inputs: inputs, varWords: varWords, globWords: globWords,
 				raw: cmd[start:end], input: redirected, dynamic: dynamic,
 			})
 		}
-		words, inputs, varWords, globWords = nil, nil, nil, nil
+		words, wordMetas, inputs, varWords, globWords = nil, nil, nil, nil, nil
 		redirected, dynamic = false, false
 		start = end + 1
 	}
@@ -358,6 +483,7 @@ func split(cmd string) ([]segment, bool) {
 					return nil, false
 				case '$':
 					dynamic = true
+					wordDynamic = true
 					if j+1 < len(cmd) && cmd[j+1] == '(' {
 						end, ok := substitution(cmd, j)
 						if !ok {
@@ -410,6 +536,8 @@ func split(cmd string) ([]segment, bool) {
 				return nil, false
 			}
 			dynamic = true
+			wordDynamic = true
+			wordUnquotedDynamic = true
 			word.WriteString(cmd[i : end+1])
 			inWord = true
 			i = end
@@ -464,6 +592,8 @@ func split(cmd string) ([]segment, bool) {
 			if c == '$' {
 				dynamic = true
 				wordVar = true
+				wordDynamic = true
+				wordUnquotedDynamic = true
 			}
 			// 词中间的 { 在 sh 是 bash 时会做花括号展开（/e{tc,}/shadow），${f} 的花括号不算
 			if c == '*' || c == '?' || c == '[' || c == '{' && cmd[i-1] != '$' {

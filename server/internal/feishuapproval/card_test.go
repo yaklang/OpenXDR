@@ -92,22 +92,83 @@ func (d stubContainmentDecider) Decline(context.Context, *ent.Containment, strin
 	return nil, nil
 }
 
-func TestApproveContainmentAuditTiming(t *testing.T) {
+func TestApproveContainmentAuditAndOutcome(t *testing.T) {
 	cases := []struct {
-		name      string
-		res       *ent.Containment
-		err       error
-		wantAudit int
+		name          string
+		res           *ent.Containment
+		err           error
+		stillProposed bool
+		checkErr      error
+		wantAudits    []string
+		wantOutcome   string
 	}{
-		{name: "批准生效写入审计", res: &ent.Containment{State: entcontainment.StatePending}, wantAudit: 1},
-		{name: "并发冲突或下发失败不写审计", err: errors.New("not proposed"), wantAudit: 0},
-		{name: "触发熔断不写审计", res: &ent.Containment{State: entcontainment.StateHeld}, wantAudit: 0},
-		{name: "重复处置被驳回不写审计", res: &ent.Containment{State: entcontainment.StateDeclined}, wantAudit: 0},
-		{name: "目标跳过不写审计", res: &ent.Containment{State: entcontainment.StateSkipped}, wantAudit: 0},
+		{
+			name:        "批准进入pending写入成功审计并锁卡",
+			res:         &ent.Containment{State: entcontainment.StatePending},
+			wantAudits:  []string{"containment_approved"},
+			wantOutcome: "approve",
+		},
+		{
+			name:        "批准进入active写入成功审计并锁卡",
+			res:         &ent.Containment{State: entcontainment.StateActive},
+			wantAudits:  []string{"containment_approved"},
+			wantOutcome: "approve",
+		},
+		{
+			name:        "批准进入executed写入成功审计并锁卡",
+			res:         &ent.Containment{State: entcontainment.StateExecuted},
+			wantAudits:  []string{"containment_approved"},
+			wantOutcome: "approve",
+		},
+		{
+			name:        "下发失败返回StateFailed不写成功审计而记失败审计",
+			res:         &ent.Containment{State: entcontainment.StateFailed},
+			wantAudits:  []string{"containment_approve_failed"},
+			wantOutcome: "approve",
+		},
+		{
+			name:          "瞬时失败且仍处于proposed不写审计并释放卡片锁",
+			err:           errors.New("transient db error"),
+			stillProposed: true,
+			wantOutcome:   "",
+		},
+		{
+			name:          "部分成功后报错不写假成功审计并锁卡",
+			err:           errors.New("edge dispatch failed"),
+			stillProposed: false,
+			wantOutcome:   "approve",
+		},
+		{
+			name:        "瞬时失败且回查状态失败时不永久锁死卡片",
+			err:         errors.New("transient error"),
+			checkErr:    errors.New("db unavailable"),
+			wantOutcome: "",
+		},
+		{
+			name:        "返回仍为proposed时不写审计并释放卡片锁",
+			res:         &ent.Containment{State: entcontainment.StateProposed},
+			wantOutcome: "",
+		},
+		{
+			name:        "触发熔断不写审计并锁卡",
+			res:         &ent.Containment{State: entcontainment.StateHeld},
+			wantOutcome: "approve",
+		},
+		{
+			name:        "重复处置被驳回不写审计并锁卡",
+			res:         &ent.Containment{State: entcontainment.StateDeclined},
+			wantOutcome: "approve",
+		},
+		{
+			name:        "目标跳过不写审计并锁卡",
+			res:         &ent.Containment{State: entcontainment.StateSkipped},
+			wantOutcome: "approve",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var audits []string
+			outcome := containmentOutcomeApproving
 			svc := &Service{
 				Containment: stubContainmentDecider{
 					approve: func(_ context.Context, _ *ent.Containment, _ string) (*ent.Containment, error) {
@@ -115,15 +176,64 @@ func TestApproveContainmentAuditTiming(t *testing.T) {
 					},
 				},
 			}
-			svc.approveContainment(context.Background(), &ent.Containment{ID: uuid.New()}, "admin", func(action string) {
-				audits = append(audits, action)
+			svc.approveContainment(context.Background(), &ent.Containment{ID: uuid.New()}, "admin", containmentApproveHooks{
+				audit: func(action string) {
+					audits = append(audits, action)
+				},
+				stillProposed: func(context.Context) (bool, error) {
+					return tc.stillProposed, tc.checkErr
+				},
+				setOutcome: func(_ context.Context, value string) {
+					outcome = value
+				},
 			})
-			if len(audits) != tc.wantAudit {
-				t.Fatalf("审计记录数不符：got=%v want=%d", audits, tc.wantAudit)
+			if len(audits) != len(tc.wantAudits) {
+				t.Fatalf("审计记录数不符：got=%v want=%v", audits, tc.wantAudits)
 			}
-			if tc.wantAudit == 1 && audits[0] != "containment_approved" {
-				t.Fatalf("审计动作不符：got=%q", audits[0])
+			for i := range audits {
+				if audits[i] != tc.wantAudits[i] {
+					t.Fatalf("审计动作不符：got=%v want=%v", audits, tc.wantAudits)
+				}
+			}
+			if outcome != tc.wantOutcome {
+				t.Fatalf("卡片 outcome 不符：got=%q want=%q", outcome, tc.wantOutcome)
 			}
 		})
+	}
+}
+
+func TestContainmentCardRetryAfterRestartOrConcurrentClick(t *testing.T) {
+	svc := &Service{}
+	nonce := uuid.NewString()
+
+	// 未处理卡片允许进入
+	if err := svc.containmentOutcomeBlocks("", nonce); err != nil {
+		t.Fatalf("空 outcome 应允许处理：%v", err)
+	}
+	// 终态卡片拒绝重复处理
+	for _, finalOutcome := range []string{"approve", "reject"} {
+		if err := svc.containmentOutcomeBlocks(finalOutcome, nonce); err == nil {
+			t.Fatalf("终态 %q 不应允许重复处理", finalOutcome)
+		}
+	}
+	// 模拟进程在 CAS 前重启：库里残留 approving，但本进程无 in-flight 记录，应允许重试
+	if err := svc.containmentOutcomeBlocks(containmentOutcomeApproving, nonce); err != nil {
+		t.Fatalf("重启后残留 approving 应允许重试：%v", err)
+	}
+	// 正常处理中：本进程持有 in-flight 占位，并发双击必须被拦截
+	release, ok := svc.claimContainmentInFlight(nonce)
+	if !ok {
+		t.Fatal("首次占位应成功")
+	}
+	if _, okAgain := svc.claimContainmentInFlight(nonce); okAgain {
+		t.Fatal("并发重复占位应失败")
+	}
+	if err := svc.containmentOutcomeBlocks(containmentOutcomeApproving, nonce); err == nil {
+		t.Fatal("后台仍在执行时应拦截并发点击")
+	}
+	// 释放占位后（如后台瞬时失败或事务回滚），可重新接管
+	release()
+	if err := svc.containmentOutcomeBlocks(containmentOutcomeApproving, nonce); err != nil {
+		t.Fatalf("释放占位后应允许重试：%v", err)
 	}
 }
