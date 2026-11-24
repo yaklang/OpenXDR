@@ -16,8 +16,9 @@ use std::{
 
 const MAX_RECORDS: usize = 256;
 const MAX_BYTES: usize = 1024 * 1024;
-/// 防重放记录上限与文件名：持续保留已见过的 command_id 直到超过 expires_unix，
-/// 彻底关闭回执 ACK 删除后到信封过期前的重放窗口
+/// 防重放记录上限与文件名：保留已见过的 command_id，关闭回执 ACK 删除后到信封过期前的重放窗口。
+/// 条目只在表满时淘汰信封过期时间最早的那条，从不按本机墙钟清理：时钟先往前跳过保留期再回拨，
+/// 按时钟清掉的条目在回拨后又处在有效期内，重放窗口就重新打开了
 const MAX_SEEN: usize = 4096;
 const SEEN_FILE: &str = "seen";
 const SEEN_PENDING: &str = "seen.pending";
@@ -28,13 +29,6 @@ pub struct Receipts {
     records: BTreeMap<String, pb::CommandResult>,
     ready: BTreeSet<String>,
     seen: BTreeMap<String, i64>,
-}
-
-fn now_unix_opt() -> Option<i64> {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_secs() as i64)
 }
 
 fn load_seen(path: &Path) -> Option<BTreeMap<String, i64>> {
@@ -151,17 +145,12 @@ impl Receipts {
                 _ => quarantine(dir, &entry.path())?,
             }
         }
-        if let Some(now) = now_unix_opt()
-            && store.prune_seen(now)
-        {
-            store.save_seen()?;
-        }
         sync_dir(dir)?;
         Ok(store)
     }
 
-    fn save_seen(&self) -> io::Result<()> {
-        let bytes = serde_json::to_vec(&self.seen).map_err(|_| invalid("防重放表序列化失败"))?;
+    fn save_seen(&self, seen: &BTreeMap<String, i64>) -> io::Result<()> {
+        let bytes = serde_json::to_vec(seen).map_err(|_| invalid("防重放表序列化失败"))?;
         if bytes.len() > MAX_BYTES {
             return Err(invalid("防重放表超过容量上限"));
         }
@@ -179,33 +168,26 @@ impl Receipts {
         sync_dir(&self.dir)
     }
 
-    /// 清理已超过 expires_unix 的防重放条目，返回是否有条目被删除
-    fn prune_seen(&mut self, now_unix: i64) -> bool {
-        if now_unix <= 0 {
-            return false;
-        }
-        let before = self.seen.len();
-        self.seen.retain(|_, exp| *exp >= now_unix);
-        self.seen.len() != before
-    }
-
-    fn record_seen(&mut self, command: &str, expires_unix: i64, now_unix: i64) -> io::Result<()> {
+    /// 记下见过的指令。表满时淘汰信封过期时间最早的一条（它最先失去重放价值）。
+    /// 先写盘再改内存：写失败时内存与磁盘都还是原样
+    fn record_seen(&mut self, command: &str, expires_unix: i64) -> io::Result<()> {
         if expires_unix <= 0 {
             return Ok(());
         }
-        self.prune_seen(now_unix);
-        if self.seen.len() >= MAX_SEEN
-            && !self.seen.contains_key(command)
-            && let Some(oldest) = self
-                .seen
+        let mut seen = self.seen.clone();
+        if seen.len() >= MAX_SEEN
+            && !seen.contains_key(command)
+            && let Some(oldest) = seen
                 .iter()
                 .min_by_key(|(_, exp)| **exp)
                 .map(|(k, _)| k.clone())
         {
-            self.seen.remove(&oldest);
+            seen.remove(&oldest);
         }
-        self.seen.insert(command.into(), expires_unix);
-        self.save_seen()
+        seen.insert(command.into(), expires_unix);
+        self.save_seen(&seen)?;
+        self.seen = seen;
+        Ok(())
     }
 
     fn save(&mut self, result: pb::CommandResult) -> io::Result<()> {
@@ -234,34 +216,38 @@ impl Receipts {
         Ok(())
     }
 
-    pub fn reserve(
-        &mut self,
-        agent: &str,
-        command: &str,
-        expires_unix: i64,
-        now_unix: i64,
-    ) -> io::Result<bool> {
+    pub fn reserve(&mut self, agent: &str, command: &str, expires_unix: i64) -> io::Result<bool> {
         if !valid_id(agent) || !valid_id(command) {
             return Err(invalid("指令身份无效"));
         }
-        let pruned = self.prune_seen(now_unix);
         if self.records.contains_key(command) || self.seen.contains_key(command) {
-            if pruned {
-                let _ = self.save_seen();
-            }
             return Ok(false);
         }
         if self.records.len() >= MAX_RECORDS {
             return Err(invalid("回执缓存已满，拒绝执行新指令"));
         }
-        self.save(pb::CommandResult {
-            agent_id: agent.into(),
-            command_id: command.into(),
-            detail: "执行尚无持久结果，禁止自动重执行".into(),
-            ..Default::default()
-        })?;
-        // 持久化防重放记录（即使回执随后被 ACK 删除，在 expires_unix 之前仍拒绝重放）
-        self.record_seen(command, expires_unix, now_unix)?;
+        // 占位与防重放记录（回执随后被 ACK 删除，过期前仍拒绝重放）都落盘才算预留成功。
+        // 任一步失败就撤掉占位：指令没执行，不能留下一条重启后报「执行被打断」、同 ID 再也不执行的记录
+        let reserved = self
+            .save(pb::CommandResult {
+                agent_id: agent.into(),
+                command_id: command.into(),
+                detail: "执行尚无持久结果，禁止自动重执行".into(),
+                ..Default::default()
+            })
+            .and_then(|()| self.record_seen(command, expires_unix));
+        if let Err(err) = reserved {
+            self.records.remove(command);
+            match fs::remove_file(self.dir.join(command)) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                    eprintln!("撤销回执占位 {command} 失败: {e}");
+                }
+                _ => {
+                    let _ = sync_dir(&self.dir);
+                }
+            }
+            return Err(err);
+        }
         Ok(true)
     }
 
@@ -299,11 +285,6 @@ impl Receipts {
     /// 待上报的回执。不属于当前注册身份的（server 重建后换了 agent_id）移进隔离区：
     /// 新身份报不了旧身份的结果，留在队里只会占满名额
     pub fn pending(&mut self, agent: &str) -> io::Result<Vec<pb::CommandResult>> {
-        if let Some(now) = now_unix_opt()
-            && self.prune_seen(now)
-        {
-            let _ = self.save_seen();
-        }
         let foreign: Vec<String> = self
             .records
             .values()
@@ -332,11 +313,6 @@ impl Receipts {
         quarantine(&self.dir, &self.dir.join(command))?;
         self.records.remove(command);
         self.ready.remove(command);
-        if let Some(now) = now_unix_opt()
-            && self.prune_seen(now)
-        {
-            let _ = self.save_seen();
-        }
         Ok(())
     }
 
@@ -351,12 +327,7 @@ impl Receipts {
         fs::remove_file(self.dir.join(command))?;
         self.records.remove(command);
         self.ready.remove(command);
-        // 保留 seen 中的防重放记录直到超过 expires_unix，仅清理已过期的其他条目
-        if let Some(now) = now_unix_opt()
-            && self.prune_seen(now)
-        {
-            let _ = self.save_seen();
-        }
+        // seen 里的防重放记录保留，不随回执删除
         sync_dir(&self.dir)
     }
 }
@@ -434,29 +405,37 @@ pub async fn upload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn now_unix() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
     #[test]
     fn full_or_unwritable_queue_refuses_reservation_and_corruption_is_preserved() {
         let dir = std::env::temp_dir().join(format!("receipts-fault-{}", uuid::Uuid::new_v4()));
         let mut store = Receipts::open(&dir).unwrap();
         let agent = uuid::Uuid::new_v4().to_string();
         let command = uuid::Uuid::new_v4().to_string();
-        let now = now_unix_opt().unwrap();
+        let now = now_unix();
         let exp = now + 3600;
         fs::create_dir(dir.join("pending")).unwrap();
-        assert!(store.reserve(&agent, &command, exp, now).is_err());
+        assert!(store.reserve(&agent, &command, exp).is_err());
         assert!(store.records.is_empty());
         fs::remove_dir(dir.join("pending")).unwrap();
-        assert!(store.reserve(&agent, &command, exp, now).unwrap());
+        assert!(store.reserve(&agent, &command, exp).unwrap());
         for _ in 1..MAX_RECORDS {
             assert!(
                 store
-                    .reserve(&agent, &uuid::Uuid::new_v4().to_string(), exp, now)
+                    .reserve(&agent, &uuid::Uuid::new_v4().to_string(), exp)
                     .unwrap()
             );
         }
         assert!(
             store
-                .reserve(&agent, &uuid::Uuid::new_v4().to_string(), exp, now)
+                .reserve(&agent, &uuid::Uuid::new_v4().to_string(), exp)
                 .is_err()
         );
         drop(store);
@@ -479,11 +458,11 @@ mod tests {
         let agent = uuid::Uuid::new_v4().to_string();
         let command = uuid::Uuid::new_v4().to_string();
         let uncertain = uuid::Uuid::new_v4().to_string();
-        let now = now_unix_opt().unwrap();
+        let now = now_unix();
         let exp = now + 3600;
         let mut store = Receipts::open(&dir).unwrap();
-        assert!(store.reserve(&agent, &uncertain, exp, now).unwrap());
-        assert!(store.reserve(&agent, &command, exp, now).unwrap());
+        assert!(store.reserve(&agent, &uncertain, exp).unwrap());
+        assert!(store.reserve(&agent, &command, exp).unwrap());
         store
             .finish(pb::CommandResult {
                 agent_id: agent.clone(),
@@ -496,8 +475,8 @@ mod tests {
         drop(store);
         let mut store = Receipts::open(&dir).unwrap();
         // 已占位的指令不重执行
-        assert!(!store.reserve(&agent, &uncertain, exp, now).unwrap());
-        assert!(!store.reserve(&agent, &command, exp, now).unwrap());
+        assert!(!store.reserve(&agent, &uncertain, exp).unwrap());
+        assert!(!store.reserve(&agent, &command, exp).unwrap());
         // 被打断的那条照实报成结果未知，和终态结果一起待上报
         let pending = store.pending(&agent).unwrap();
         assert_eq!(pending.len(), 2);
@@ -524,7 +503,7 @@ mod tests {
 
         // 换了注册身份：旧身份的回执移进隔离区，不再占名额
         let other = uuid::Uuid::new_v4().to_string();
-        assert!(store.reserve(&agent, &other, exp, now).unwrap());
+        assert!(store.reserve(&agent, &other, exp).unwrap());
         drop(store);
         let mut store = Receipts::open(&dir).unwrap();
         assert!(
@@ -542,11 +521,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("receipts-replay-{}", uuid::Uuid::new_v4()));
         let agent = uuid::Uuid::new_v4().to_string();
         let command = uuid::Uuid::new_v4().to_string();
-        let now = now_unix_opt().unwrap();
+        let now = now_unix();
         let exp = now + 3600;
 
         let mut store = Receipts::open(&dir).unwrap();
-        assert!(store.reserve(&agent, &command, exp, now).unwrap());
+        assert!(store.reserve(&agent, &command, exp).unwrap());
         store
             .finish(pb::CommandResult {
                 agent_id: agent.clone(),
@@ -560,20 +539,78 @@ mod tests {
 
         // 回执删了但在 expires_unix 内，仍必须挡住重放
         assert!(
-            !store.reserve(&agent, &command, exp, now + 10).unwrap(),
+            !store.reserve(&agent, &command, exp).unwrap(),
             "ACK 后到过期前不得重放"
         );
         // 进程重启后从磁盘恢复 seen，仍挡住重放
         drop(store);
         let mut store = Receipts::open(&dir).unwrap();
         assert!(
-            !store.reserve(&agent, &command, exp, now + 60).unwrap(),
+            !store.reserve(&agent, &command, exp).unwrap(),
             "重启后到过期前仍不得重放"
         );
 
-        // 超过 expires_unix 后清理过期条目，不无限累积
-        assert!(store.prune_seen(exp + 1));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 本机时钟先跳到过期时间之后（这里用一个按墙钟早已过期的 exp 模拟）再回拨：
+    /// 打开、上报、确认、拒收都不按墙钟清理，回拨后同一指令仍被挡住
+    #[test]
+    fn seen_survives_clock_jumps_and_is_bounded_by_capacity() {
+        let dir = std::env::temp_dir().join(format!("receipts-clock-{}", uuid::Uuid::new_v4()));
+        let agent = uuid::Uuid::new_v4().to_string();
+        let command = uuid::Uuid::new_v4().to_string();
+        let exp = 1;
+        let mut store = Receipts::open(&dir).unwrap();
+        assert!(store.reserve(&agent, &command, exp).unwrap());
+        store
+            .finish(pb::CommandResult {
+                agent_id: agent.clone(),
+                command_id: command.clone(),
+                status: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        store.pending(&agent).unwrap();
+        store.acknowledge(&agent, &command).unwrap();
+        drop(store);
+        let mut store = Receipts::open(&dir).unwrap();
+        store.pending(&agent).unwrap();
+        assert!(!store.reserve(&agent, &command, exp).unwrap());
+
+        // 表满只淘汰过期时间最早的一条
+        let later = now_unix() + 3600;
+        for i in 0..MAX_SEEN - 1 {
+            store.seen.insert(format!("filler-{i}"), later);
+        }
+        let fresh = uuid::Uuid::new_v4().to_string();
+        assert!(store.reserve(&agent, &fresh, later).unwrap());
+        assert_eq!(store.seen.len(), MAX_SEEN);
+        assert!(!store.seen.contains_key(&command));
+        assert!(store.seen.contains_key(&fresh));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 占位写下了、防重放记录没写成：撤掉占位，指令照常没执行，同 ID 之后还能执行，重启后也不报「被打断」
+    #[test]
+    fn failed_seen_write_rolls_back_reservation() {
+        let dir = std::env::temp_dir().join(format!("receipts-rollback-{}", uuid::Uuid::new_v4()));
+        let agent = uuid::Uuid::new_v4().to_string();
+        let command = uuid::Uuid::new_v4().to_string();
+        let exp = now_unix() + 3600;
+        let mut store = Receipts::open(&dir).unwrap();
+        fs::create_dir(dir.join(SEEN_PENDING)).unwrap();
+        assert!(store.reserve(&agent, &command, exp).is_err());
+        assert!(store.records.is_empty());
         assert!(store.seen.is_empty());
+        assert!(!dir.join(&command).exists(), "磁盘上不能留占位");
+        assert_eq!(store.stats().incomplete, 0);
+
+        fs::remove_dir(dir.join(SEEN_PENDING)).unwrap();
+        drop(store);
+        let mut store = Receipts::open(&dir).unwrap();
+        assert!(store.pending(&agent).unwrap().is_empty());
+        assert!(store.reserve(&agent, &command, exp).unwrap());
         fs::remove_dir_all(dir).unwrap();
     }
 }

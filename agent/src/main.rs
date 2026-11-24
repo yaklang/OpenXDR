@@ -474,10 +474,9 @@ async fn command_stream(
     };
 
     while let Ok(Some(sealed)) = inbound.message().await {
-        let verified = unix_secs(std::time::SystemTime::now()).and_then(|now| {
-            respond::signed::open(&sealed, signer, &agent_id, now).map(|o| (o, now))
-        });
-        let (opened, now) = match verified {
+        let verified = unix_secs(std::time::SystemTime::now())
+            .and_then(|now| respond::signed::open(&sealed, signer, &agent_id, now));
+        let opened = match verified {
             Ok(v) => v,
             Err(detail) => {
                 // 不占执行回执：伪造的指令或时钟异常不配消耗真实指令的 ID
@@ -507,7 +506,7 @@ async fn command_stream(
                     let tx = tx.clone();
                     tokio::spawn(async move {
                         let _permit = permit;
-                        run_command(agent_id, cmd, expires_unix, now, queue, tx).await;
+                        run_command(agent_id, cmd, expires_unix, queue, tx).await;
                     });
                 }
                 Err(_) => {
@@ -529,7 +528,6 @@ async fn command_stream(
             agent_id.clone(),
             cmd,
             expires_unix,
-            now,
             queue.clone(),
             tx.clone(),
         )
@@ -546,14 +544,13 @@ async fn run_command(
     agent_id: String,
     cmd: pb::Command,
     expires_unix: i64,
-    now_unix: i64,
     queue: delivery::Queue,
     stream: tokio::sync::mpsc::Sender<pb::CommandResult>,
 ) -> bool {
     let id = agent_id.clone();
     let command = cmd.id.clone();
     match delivery::access(&queue, move |s| {
-        s.receipts.reserve(&id, &command, expires_unix, now_unix)
+        s.receipts.reserve(&id, &command, expires_unix)
     })
     .await
     {
@@ -720,15 +717,13 @@ mod command_tests {
             health::Health::new(),
         );
         // 未指定动作会产生明确失败回执，不触碰系统；重复投递也不能覆盖首次结果。
-        let now = unix_secs(std::time::SystemTime::now()).unwrap();
-        let exp = now + 3600;
+        let exp = unix_secs(std::time::SystemTime::now()).unwrap() + 3600;
         let (stream, mut streamed) = tokio::sync::mpsc::channel(4);
         assert!(
             run_command(
                 agent.clone(),
                 command.clone(),
                 exp,
-                now,
                 queue.clone(),
                 stream.clone()
             )
@@ -739,7 +734,6 @@ mod command_tests {
                 agent.clone(),
                 command.clone(),
                 exp,
-                now,
                 queue.clone(),
                 stream.clone()
             )
@@ -784,7 +778,6 @@ mod command_tests {
                 agent.clone(),
                 command.clone(),
                 exp,
-                now,
                 queue.clone(),
                 stream.clone()
             )
@@ -797,7 +790,7 @@ mod command_tests {
             id: uuid::Uuid::new_v4().to_string(),
             ..Default::default()
         };
-        assert!(run_command(agent.clone(), old, exp, now, queue.clone(), stream).await);
+        assert!(run_command(agent.clone(), old, exp, queue.clone(), stream).await);
         mode.store(0, std::sync::atomic::Ordering::SeqCst);
         receipts::upload_once(&mut client, &queue, &agent)
             .await

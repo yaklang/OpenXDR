@@ -171,6 +171,7 @@ fn pump(
                     exit_code: d.exit_code,
                     exe_sha256,
                     login,
+                    launch: None,
                 },
             );
             drop(registry);

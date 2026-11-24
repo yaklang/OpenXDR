@@ -377,6 +377,77 @@ pub struct ProcessInfo<'a> {
     pub exe_sha256: Option<Option<String>>,
     /// 锁外预探测的 SSH 登录归属；Unprobed 表示尚未预探测
     pub login: LoginProbe,
+    /// 启动事件已由 register_launch 先行登记（eBPF 路径：慢的富化在锁外跑，登记不能等它）
+    #[cfg_attr(not(all(target_os = "linux", feature = "ebpf")), allow(dead_code))]
+    pub launch: Option<Launch>,
+}
+
+/// 先行登记的结果：启动事件稍后用它组装，GUID 与血缘以登记那一刻为准
+pub struct Launch {
+    guid: uuid::Uuid,
+    parent_guid: Option<uuid::Uuid>,
+    parent: Option<registry::Known>,
+    container: Option<Arc<Container>>,
+    command: Option<Arc<str>>,
+}
+
+/// 启动事件先登记、后组装时的第一步：同步在注册表里登记新进程（GUID、父进程、名字、路径、命令行、
+/// 启动时间、容器、平台指令，登录先沿父进程继承），不做任何慢操作。
+/// 之后到的退出事件、子进程启动事件都能立刻查到它；哈希与登录会话探测完成后再把 Launch 交给
+/// emit_process 发启动事件、补写登录。自检进程不登记，返回 None
+#[cfg_attr(not(all(target_os = "linux", feature = "ebpf")), allow(dead_code))]
+pub(super) fn register_launch(
+    registry: &mut ProcessRegistry,
+    pid: u32,
+    ppid: Option<u32>,
+    name: &str,
+    exe: Option<&str>,
+    cmd_line: Option<&str>,
+) -> Option<Launch> {
+    if registry.is_canary(true, pid, ppid) {
+        return None;
+    }
+    let cmd_line = cmd_line.map(|c| truncate(c, EVENT_CMD_LINE_MAX));
+    Some(launch_entry(
+        registry,
+        pid,
+        ppid,
+        full_name(name, exe),
+        exe,
+        cmd_line,
+    ))
+}
+
+fn launch_entry(
+    registry: &mut ProcessRegistry,
+    pid: u32,
+    ppid: Option<u32>,
+    name: &str,
+    exe: Option<&str>,
+    cmd_line: Option<&str>,
+) -> Launch {
+    let command = command_of(registry, pid, ppid);
+    let parent = ppid.and_then(|p| registry.known(p));
+    // 健康检查的认定要看这个 pid 之前的登记（原地 exec），登记新进程之前取
+    let container = container_or_inherited(registry, pid, ppid)
+        .map(|c| healthcheck_of(registry, pid, ppid, c, cmd_line));
+    let (guid, parent_guid) = registry.register(pid, ppid);
+    registry.describe(pid, name, exe);
+    registry.set_cmd_line(pid, cmd_line);
+    registry.annotate(
+        pid,
+        Some(std::time::SystemTime::now()),
+        container.clone(),
+        command.clone(),
+    );
+    registry.set_login(pid, ppid.and_then(|p| registry.login_of(p)));
+    Launch {
+        guid,
+        parent_guid,
+        parent,
+        container,
+        command,
+    }
 }
 
 /// 在加锁前解析经 fd 执行时的真实可执行路径（Linux），避免锁外算哈希与锁内路径不一致
@@ -801,6 +872,7 @@ fn process_event(
         exit_code,
         exe_sha256,
         login: login_probe,
+        launch,
     } = info;
     // 经 fd 执行的程序换成真实目标，规则看到的 Image 才说得清执行了什么
     #[cfg(target_os = "linux")]
@@ -837,25 +909,24 @@ fn process_event(
             )
         } else {
             let name = full_name(name, exe);
-            let command = command_of(registry, pid, ppid);
+            let l = match launch {
+                Some(l) => l,
+                None => launch_entry(registry, pid, ppid, name, exe, cmd_line),
+            };
             let login = login_of(registry, pid, ppid, login_probe);
-            parent = ppid.and_then(|p| registry.known(p));
-            // 健康检查的认定要看这个 pid 之前的登记（原地 exec），登记新进程之前取
-            let container = container_or_inherited(registry, pid, ppid)
-                .map(|c| healthcheck_of(registry, pid, ppid, c, cmd_line));
-            let (guid, parent_guid) = registry.register(pid, ppid);
-            registry.describe(pid, name, exe);
-            registry.set_cmd_line(pid, cmd_line);
-            registry.annotate(pid, Some(now), container.clone(), command.clone());
-            registry.set_login(pid, login.clone());
+            // 先行登记之后 pid 可能已退出并被复用：登记换了主人就不再改它
+            if registry.guid_of(pid) == Some(l.guid) {
+                registry.set_login(pid, login.clone());
+            }
+            parent = l.parent;
             (
-                guid,
-                parent_guid,
+                l.guid,
+                l.parent_guid,
                 name,
                 exe,
                 None,
-                container,
-                command,
+                l.container,
+                l.command,
                 login,
             )
         };
@@ -1296,6 +1367,106 @@ mod tests {
         assert_eq!(v["process"]["pid"], 300);
         assert_eq!(v["process"]["exit_code"], 137);
         assert_eq!(v["process"]["uid"], launch.process_guid);
+    }
+
+    /// 先行登记（eBPF 路径）：富化完成前到的退出事件和子进程启动事件都认得它，
+    /// 随后发出的启动事件沿用登记时的 GUID，登录归属先沿父进程继承、富化后补写
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn registered_launch_is_visible_before_its_event() {
+        let (gp, parent, child) = (5_000_001, 5_000_002, 5_000_003);
+        let mut reg = ProcessRegistry::default();
+        reg.seed(gp, "sshd", Some("/usr/sbin/sshd"));
+        let session = Arc::new(serde_json::json!({ "uid": "s-1" }));
+        reg.set_login(gp, Some(session.clone()));
+
+        let pl =
+            register_launch(&mut reg, parent, Some(gp), "bash", Some("/bin/bash"), None).unwrap();
+        let parent_guid = pl.guid.to_string();
+        assert_eq!(
+            reg.login_of(parent),
+            Some(session.clone()),
+            "登录先沿父进程继承"
+        );
+
+        // 子进程的启动先于父进程的富化完成：血缘照样连得上
+        let cl = register_launch(
+            &mut reg,
+            child,
+            Some(parent),
+            "id",
+            Some("/usr/bin/id"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            cl.parent_guid.map(|g| g.to_string()),
+            Some(parent_guid.clone())
+        );
+        let child_launch = emit_process(
+            "agent-1",
+            &mut reg,
+            ACTIVITY_LAUNCH,
+            ProcessInfo {
+                pid: child,
+                name: "id",
+                exe: Some("/usr/bin/id"),
+                ppid: Some(parent),
+                exe_sha256: Some(None),
+                login: LoginProbe::Gone,
+                launch: Some(cl),
+                ..Default::default()
+            },
+        );
+        let child_launch = child_launch.last().unwrap();
+        assert_eq!(child_launch.parent_process_guid, parent_guid);
+        let v: Value = serde_json::from_str(&child_launch.raw_json).unwrap();
+        assert_eq!(v["login_session"]["uid"], "s-1");
+        assert_eq!(v["process"]["parent_process"]["name"], "bash");
+
+        // 父进程的退出先于它的启动事件：不丢，GUID 一致
+        let exit = emit_process(
+            "agent-1",
+            &mut reg,
+            ACTIVITY_TERMINATE,
+            ProcessInfo {
+                pid: parent,
+                exit_code: Some(1),
+                exe_sha256: Some(None),
+                ..Default::default()
+            },
+        );
+        let exit = exit.last().expect("先行登记过的进程退出不能被丢");
+        assert_eq!(exit.process_guid, parent_guid);
+        let v: Value = serde_json::from_str(&exit.raw_json).unwrap();
+        assert_eq!(v["process"]["name"], "bash");
+
+        let resolved = Arc::new(serde_json::json!({ "uid": "s-2" }));
+        let launch = emit_process(
+            "agent-1",
+            &mut reg,
+            ACTIVITY_LAUNCH,
+            ProcessInfo {
+                pid: parent,
+                name: "bash",
+                exe: Some("/bin/bash"),
+                ppid: Some(gp),
+                exe_sha256: Some(None),
+                login: LoginProbe::Resolved(Some(resolved.clone())),
+                launch: Some(pl),
+                ..Default::default()
+            },
+        );
+        let launch = launch.last().unwrap();
+        assert_eq!(launch.process_guid, parent_guid);
+        assert_eq!(
+            launch.parent_process_guid,
+            reg.guid_of(gp).unwrap().to_string()
+        );
+        let v: Value = serde_json::from_str(&launch.raw_json).unwrap();
+        assert_eq!(v["login_session"]["uid"], "s-2");
+        assert_eq!(reg.login_of(parent), Some(resolved), "富化后补写登录");
+        assert!(reg.is_exited(parent), "已退出的登记照常排队删除");
     }
 
     /// 登录归属：进程自己的 /proc 读不到（已退场）时沿父进程继承，事件里写成 login_session

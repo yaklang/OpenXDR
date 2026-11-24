@@ -106,6 +106,31 @@ fn normalize_target_str(raw: &str) -> Result<String, String> {
     Ok(target)
 }
 
+/// Windows 防火墙规则名里认得出的封锁目标：规则名是「组名 目标」，目标是封锁时的写法。
+/// 旧版 agent 原样用 server 下发的串（只去空白、去末尾点、转小写，不清零主机位、不压缩 IPv6），
+/// 所以不能按规范化后的目标直接拼规则名，要把组里每条规则的目标规范化后再比。
+/// 只认字母、数字与 `.:/-`：名字要原样嵌进 PowerShell 单引号串，也不能带通配符
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn matching_rule_names(listing: &str, group: &str, target: &str) -> Vec<String> {
+    let mut names: Vec<String> = listing
+        .lines()
+        .map(str::trim)
+        .filter(|name| {
+            name.strip_prefix(group)
+                .and_then(|rest| rest.strip_prefix(' '))
+                .is_some_and(|t| {
+                    t.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b".:/-".contains(&b))
+                        && normalize_target_str(t).as_deref() == Ok(target)
+                })
+        })
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// 解析封锁目标：IP、CIDR，或者域名（交给系统解析器）。返回规范化的目标与地址
 pub fn parse_target(target: &str) -> Result<(String, Vec<Net>), String> {
     let target = target.trim().trim_end_matches('.').to_ascii_lowercase();
@@ -433,10 +458,21 @@ mod platform {
             .collect();
         items.sort();
         items.dedup();
-        let comment = items.join(",");
-        if comment.len() > MAX_NFT_COMMENT {
+        // 超出内核上限时整项丢掉放不下的归属，只按项截断，decode_comment 照样能逐项解析。
+        // 丢掉的目标封锁照样生效（元素还在），只是解除它时认不出、要等其余目标都解除
+        let mut comment = String::new();
+        for item in &items {
+            let sep = usize::from(!comment.is_empty());
+            if comment.len() + sep + item.len() <= MAX_NFT_COMMENT {
+                if sep == 1 {
+                    comment.push(',');
+                }
+                comment.push_str(item);
+            }
+        }
+        if comment.is_empty() {
             return Err(format!(
-                "同一网段 {} 关联的目标过多，注释超出 nftables {MAX_NFT_COMMENT} 字节上限",
+                "网段 {} 的封锁目标名超出 nftables {MAX_NFT_COMMENT} 字节注释上限",
                 elem_net.render()
             ));
         }
@@ -688,11 +724,25 @@ mod platform {
         .map(|_| ())
     }
 
+    /// 组里所有目标规范化后等于 target 的规则都删掉（新旧两种写法的规则名都认），全删完才算解除
     pub fn remove(target: &str) -> Result<usize, String> {
-        let name = format!("{GROUP} {target}");
+        let listing = powershell(&format!(
+            "Get-NetFirewallRule -Group '{GROUP}' -ErrorAction SilentlyContinue | \
+             ForEach-Object {{ $_.DisplayName }}"
+        ))?;
+        let names = super::matching_rule_names(&listing, GROUP, target);
+        if names.is_empty() {
+            return Ok(0);
+        }
+        let list = names
+            .iter()
+            .map(|n| format!("'{n}'"))
+            .collect::<Vec<_>>()
+            .join(",");
         let n = powershell(&format!(
-            "$r = @(Get-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue); \
-             $r | Remove-NetFirewallRule; $r.Count"
+            "$n = 0; foreach ($name in @({list})) {{ \
+             $r = @(Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue); \
+             $r | Remove-NetFirewallRule; $n += $r.Count }}; $n"
         ))?;
         Ok(n.trim().parse().unwrap_or(0))
     }
@@ -796,6 +846,60 @@ mod tests {
         let (v4_t, v4_n) = parse_target("45.9.148.99/24").unwrap();
         assert_eq!(v4_t, "45.9.148.0/24");
         assert_eq!(v4_n[0].render(), "45.9.148.0/24");
+    }
+
+    #[test]
+    fn unblock_matches_legacy_and_canonical_rule_names() {
+        let listing = "OpenXDR Block 10.0.0.5/24\r\n\
+            OpenXDR Block 10.0.0.0/24\n\
+            OpenXDR Block 10.0.1.0/24\n\
+            OpenXDR Block 2001:0db8::1\n\
+            OpenXDR Block 10.0.0.9/24'; Remove-NetFirewallRule *\n\
+            OpenXDR Block 10.0.0.*\n\
+            Other 10.0.0.0/24\n";
+        assert_eq!(
+            matching_rule_names(listing, "OpenXDR Block", "10.0.0.0/24"),
+            ["OpenXDR Block 10.0.0.0/24", "OpenXDR Block 10.0.0.5/24"]
+        );
+        assert_eq!(
+            matching_rule_names(listing, "OpenXDR Block", "2001:db8::1"),
+            ["OpenXDR Block 2001:0db8::1"]
+        );
+        assert!(matching_rule_names(listing, "OpenXDR Block", "10.0.2.0/24").is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn oversized_shared_ip_comment_is_truncated_not_failed() {
+        let ip = parse_target("1.2.3.4").unwrap().1[0].clone();
+        let cidr = parse_target("1.2.3.0/24").unwrap().1[0].clone();
+        let mut owners: Vec<(String, Net)> = (0..10)
+            .map(|i| (format!("cdn-{i:02}.example.com"), ip.clone()))
+            .collect();
+        owners.push(("1.2.3.0/24".into(), cidr.clone()));
+        let entries = platform::reconcile(owners);
+        assert_eq!(entries.len(), 1);
+        let comment = platform::encode_comment(&entries[0].net, &entries[0].owners).unwrap();
+        assert!(comment.len() <= 128, "{comment}");
+        // 按项截断：解析回来的每一项都是完整的归属
+        let decoded = platform::decode_comment(&cidr, &comment);
+        assert!(decoded.contains(&("1.2.3.0/24".into(), cidr.clone())));
+        assert!(decoded.len() > 1 && decoded.len() < 11);
+        assert!(
+            decoded
+                .iter()
+                .skip(1)
+                .all(|(t, n)| { t.starts_with("cdn-") && t.ends_with(".example.com") && n == &ip })
+        );
+
+        // 再加一个解析到同一 IP 的域名：封锁照样成功
+        let script = platform::plan_add(
+            "b4",
+            &entries,
+            "cdn-99.example.com",
+            std::slice::from_ref(&ip),
+        );
+        assert!(script.is_ok(), "{script:?}");
     }
 
     #[cfg(target_os = "linux")]

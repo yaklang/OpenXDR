@@ -302,6 +302,9 @@ fn start_process(
             let mut bufs = (0..8)
                 .map(|_| bytes::BytesMut::with_capacity(2048))
                 .collect::<Vec<_>>();
+            // 富化（哈希、等 journald）放进子任务并发跑，读取循环不等它：登记按到达顺序同步做完，
+            // 退出事件和子进程的启动事件不会因为前一条在算哈希而先到一步。读取任务被撤时子任务随 JoinSet 一起撤
+            let mut enrich = tokio::task::JoinSet::new();
             loop {
                 let Ok(batch) = buf.read_events(&mut bufs).await else {
                     return;
@@ -310,12 +313,22 @@ fn start_process(
                     let Some(ev) = decode::<ExecEvent>(b) else {
                         continue;
                     };
-                    let events = to_agent_event_async(&agent_id, &registry, &ev).await;
-                    for event in events {
-                        if !tx.send(event) {
-                            return;
-                        }
+                    let pending = register_exec(&registry, &ev);
+                    while enrich.try_join_next().is_some() {}
+                    if enrich.len() >= MAX_ENRICH {
+                        enrich.join_next().await;
                     }
+                    let (agent_id, registry, tx) = (agent_id.clone(), registry.clone(), tx.clone());
+                    enrich.spawn(async move {
+                        for event in finish_exec(&agent_id, &registry, pending).await {
+                            if !tx.send(event) {
+                                return;
+                            }
+                        }
+                    });
+                }
+                if tx.is_closed() {
+                    return;
                 }
             }
         });
@@ -844,13 +857,23 @@ fn untruncate(kernel: String, proc_line: Option<String>) -> String {
     }
 }
 
-/// 异步处理 eBPF exec 事件：sshsession 探测（可能等 journald）和 exe_sha256（可能读大文件）
-/// 全部在 ProcessRegistry 锁外异步完成，既不阻塞 Tokio worker 也不拉长锁持有时间
-async fn to_agent_event_async(
-    agent_id: &str,
-    registry: &Shared<ProcessRegistry>,
-    ev: &ExecEvent,
-) -> Vec<AgentEvent> {
+/// 每个 CPU 的读取任务同时在富化的 exec 事件上限：exec 风暴时读取循环在这里等，不无限堆任务
+const MAX_ENRICH: usize = 64;
+
+/// 已先行登记、等待富化的 exec 事件
+struct PendingExec {
+    pid: u32,
+    ppid: Option<u32>,
+    name: String,
+    exe: String,
+    cmd_line: Option<String>,
+    username: String,
+    launch: Option<super::Launch>,
+}
+
+/// eBPF exec 事件的同步部分：解析事件，在注册表里先行登记（GUID、父进程、启动时间等），不做任何等待。
+/// 读取循环拿到事件立刻做，之后到的退出事件、子进程启动事件都查得到它
+fn register_exec(registry: &Shared<ProcessRegistry>, ev: &ExecEvent) -> PendingExec {
     let name = cstr(&ev.comm).into_owned();
     let exe = cstr(&ev.filename).into_owned();
     let cmd_line = match ev.cmd_line() {
@@ -864,25 +887,49 @@ async fn to_agent_event_async(
         .or_else(|| super::container::ppid(ev.pid));
     let username =
         super::execfacts::username("/etc/passwd", ev.uid).unwrap_or_else(|| ev.uid.to_string());
-    let resolved_exe = resolve_launch_exe(ev.pid, Some(&exe), &name);
-    let eff_exe = resolved_exe.as_deref().unwrap_or(&exe);
-    let exe_sha256 = hash::exe_sha256_async(eff_exe).await;
-    let login = LoginProbe::from_of(sshsession::of_async(ev.pid, ppid).await);
+    let exe = resolve_launch_exe(ev.pid, Some(&exe), &name).unwrap_or(exe);
+    let launch = super::register_launch(
+        &mut lock(registry),
+        ev.pid,
+        ppid,
+        &name,
+        Some(&exe),
+        cmd_line.as_deref(),
+    );
+    PendingExec {
+        pid: ev.pid,
+        ppid,
+        name,
+        exe,
+        cmd_line,
+        username,
+        launch,
+    }
+}
 
-    let mut reg = registry.lock().unwrap_or_else(|e| e.into_inner());
+/// eBPF exec 事件的异步部分：sshsession 探测（可能等 journald）和 exe_sha256（可能读大文件）
+/// 全部在 ProcessRegistry 锁外完成，再组装启动事件、补写登录归属。进程这时可能已经退出，照常发
+async fn finish_exec(
+    agent_id: &str,
+    registry: &Shared<ProcessRegistry>,
+    p: PendingExec,
+) -> Vec<AgentEvent> {
+    let exe_sha256 = hash::exe_sha256_async(&p.exe).await;
+    let login = LoginProbe::from_of(sshsession::of_async(p.pid, p.ppid).await);
     emit_process(
         agent_id,
-        &mut reg,
+        &mut lock(registry),
         ACTIVITY_LAUNCH,
         ProcessInfo {
-            pid: ev.pid,
-            name: &name,
-            exe: Some(eff_exe),
-            cmd_line: cmd_line.as_deref(),
-            ppid,
-            username,
+            pid: p.pid,
+            name: &p.name,
+            exe: Some(&p.exe),
+            cmd_line: p.cmd_line.as_deref(),
+            ppid: p.ppid,
+            username: p.username,
             exe_sha256: Some(exe_sha256),
             login,
+            launch: p.launch,
             ..Default::default()
         },
     )
@@ -1387,6 +1434,41 @@ format:
         };
         let v = process_json(&to_exit_event("agent-1", &mut reg, &exit));
         assert_eq!(v["process"]["exit_code"], 3);
+    }
+
+    /// 生产路径：exec 事件先同步登记、富化稍后完成。期间到的退出事件与子进程 exec 都认得它，
+    /// 富化完成后发出的启动事件与先发的退出事件同一个 GUID
+    #[test]
+    fn exit_and_child_exec_during_enrichment_see_registration() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let registry: Shared<ProcessRegistry> = Default::default();
+            let (parent, child) = (5_000_011, 5_000_012);
+            let pending = register_exec(&registry, &exec_event(parent));
+            let guid = lock(&registry).guid_of(parent).unwrap().to_string();
+            let mut cev = exec_event(child);
+            cev.ppid = parent;
+            let child_pending = register_exec(&registry, &cev);
+
+            let exit = ExitEvent {
+                pid: parent,
+                code: 1,
+                has_code: 1,
+            };
+            let exit = to_exit_event_async("agent-1", &registry, &exit).await;
+            let exit = exit.last().expect("富化未完成时的退出事件不能被丢");
+            assert_eq!(exit.process_guid, guid);
+            let v: Value = serde_json::from_str(&exit.raw_json).unwrap();
+            assert_eq!(v["process"]["name"], "probe1");
+
+            let launch = finish_exec("agent-1", &registry, pending).await;
+            assert_eq!(launch.last().unwrap().process_guid, guid);
+            let child_launch = finish_exec("agent-1", &registry, child_pending).await;
+            assert_eq!(child_launch.last().unwrap().parent_process_guid, guid);
+        });
     }
 
     #[test]

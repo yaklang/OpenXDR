@@ -329,8 +329,11 @@ impl ProcessRegistry {
         if !activity_launch {
             return self.canaries.remove(&pid).is_some_and(|at| fresh(&at));
         }
+        // 父进程是 agent 或另一个自检进程才认（eBPF 路径同一条启动事件会问两次，后代第二次问也得认）
         if self.canaries.get(&pid).is_some_and(fresh) {
-            return ppid.is_none_or(|p| p == std::process::id());
+            return ppid.is_none_or(|p| {
+                p == std::process::id() || self.canaries.get(&p).is_some_and(fresh)
+            });
         }
         if ppid.is_some_and(|p| self.canaries.get(&p).is_some_and(fresh)) {
             self.canaries.insert(pid, Instant::now());

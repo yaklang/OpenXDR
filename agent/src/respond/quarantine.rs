@@ -277,8 +277,15 @@ fn copy_fd_and_remove(
     Ok(())
 }
 
-/// 从隔离区安全恢复到原路径：create_new + O_NOFOLLOW 原子建文件，在 fd 上直接 fchown/fchmod，
-/// 彻底消除恢复目标后的符号链接 TOCTOU 窗口
+/// 从隔离区恢复到原路径。
+///
+/// 同一文件系统优先不覆盖地改名（Linux renameat2 RENAME_NOREPLACE、Windows MoveFileExW 不带 REPLACE_EXISTING）：
+/// 原子，且原样保留 inode 上的一切——xattr（security.capability、SELinux 标签）、mtime、其他硬链接，
+/// Windows 上的 ACL 与备用数据流，也不用双倍空间。旧版直接 rename 再按路径 chown/chmod，有两个洞：
+/// rename 会覆盖检查之后才出现在原路径上的文件，按路径改属主权限会跟随中途换上的符号链接。
+/// 这里改名本身拒绝覆盖、也不跟随目标处的符号链接，属主与权限改在改名前就已打开的隔离文件句柄上
+/// （改名不换 inode，句柄仍指向恢复出去的那个文件），路径上再怎么换都碰不到。
+/// 跨文件系统或系统不支持不覆盖改名时，才退回 create_new + O_NOFOLLOW 新建再拷贝，属主权限同样改在句柄上
 fn restore_blob(blob: &Path, to: &Path, record: &Record) -> io::Result<()> {
     // 隔离区文件平时权限 0o000，恢复时临时对属主可读（所在目录为 0700）
     #[cfg(unix)]
@@ -286,8 +293,13 @@ fn restore_blob(blob: &Path, to: &Path, record: &Record) -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(blob, fs::Permissions::from_mode(0o400));
     }
-    let res = (|| -> io::Result<()> {
+    // Ok(true)：已改名移回，隔离区里不再有它
+    let res = (|| -> io::Result<bool> {
         let (mut src, src_meta) = open_regular_nofollow(blob)?;
+        if rename_noreplace(blob, to).is_ok() {
+            restore_meta_fd(&src, record);
+            return Ok(true);
+        }
         let mut dst = create_new_nofollow(to)?;
         let write_res = (|| -> io::Result<()> {
             let copied = io::copy(&mut src, &mut dst)?;
@@ -302,13 +314,62 @@ fn restore_blob(blob: &Path, to: &Path, record: &Record) -> io::Result<()> {
             let _ = fs::remove_file(to);
             return Err(e);
         }
-        Ok(())
+        Ok(false)
     })();
-    if res.is_err() {
-        lock_down(blob);
-        return res;
+    match res {
+        Ok(true) => Ok(()),
+        Ok(false) => fs::remove_file(blob),
+        Err(e) => {
+            lock_down(blob);
+            Err(e)
+        }
     }
-    fs::remove_file(blob)
+}
+
+/// 改名但绝不覆盖目标、不跟随目标处的符号链接。跨文件系统、内核或文件系统不支持时返回错误，由调用方退回拷贝。
+/// 直接走系统调用而不用 libc 的 renameat2 包装：老 glibc（2.28 以前）没有这个符号
+#[cfg(target_os = "linux")]
+fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let from = CString::new(from.as_os_str().as_bytes())?;
+    let to = CString::new(to.as_os_str().as_bytes())?;
+    // SAFETY: 两个路径是以 0 结尾、调用期间一直存活的 C 字符串，内核只读它们；其余参数为常量
+    let rc = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(windows)]
+fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+    let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: from / to 是以 0 结尾的 UTF-16 缓冲，在调用期间一直存活，MoveFileExW 只读它们；
+    // 不带 MOVEFILE_REPLACE_EXISTING：目标已存在就失败；不带 MOVEFILE_COPY_ALLOWED：跨卷就失败
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } != 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn rename_noreplace(_from: &Path, _to: &Path) -> io::Result<()> {
+    Err(io::Error::from(io::ErrorKind::Unsupported))
 }
 
 fn sha256_reader(f: &mut impl Read) -> io::Result<String> {
@@ -516,6 +577,55 @@ mod tests {
             fs::metadata(&file).unwrap().permissions().mode() & 0o7777,
             0o750
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// 同一文件系统恢复是改名：还是原来那个 inode，硬链接、mtime 原样保留
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn restore_on_same_fs_keeps_inode_links_and_mtime() {
+        use std::os::unix::fs::MetadataExt;
+        let root = temp();
+        let store = root.join("store");
+        let file = root.join("bin.sh");
+        let link = root.join("bin-link.sh");
+        fs::write(&file, b"#!/bin/sh\n").unwrap();
+        fs::hard_link(&file, &link).unwrap();
+        let mtime = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        let before = fs::metadata(&file).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+
+        move_in(&store, &file, &id).unwrap();
+        move_out(&store, &file).unwrap();
+        let after = fs::metadata(&file).unwrap();
+        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+        assert_eq!(after.nlink(), 2, "另一个硬链接应仍指向恢复出来的文件");
+        assert_eq!(after.modified().unwrap(), mtime);
+        assert_eq!(after.mode() & 0o7777, before.mode() & 0o7777);
+        assert!(!store.join(format!("{id}.bin")).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// 不覆盖改名：目标已在（检查之后才冒出来的文件或符号链接）就失败，两边都不动
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rename_noreplace_never_clobbers() {
+        let root = temp();
+        let (a, b, link) = (root.join("a"), root.join("b"), root.join("link"));
+        fs::write(&a, b"a").unwrap();
+        fs::write(&b, b"b").unwrap();
+        std::os::unix::fs::symlink(root.join("nowhere"), &link).unwrap();
+        assert!(rename_noreplace(&a, &b).is_err());
+        assert!(rename_noreplace(&a, &link).is_err());
+        assert_eq!(fs::read(&a).unwrap(), b"a");
+        assert_eq!(fs::read(&b).unwrap(), b"b");
+        assert!(!root.join("nowhere").exists());
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -3,10 +3,11 @@
 //!
 //! 独立表意味着解除隔离只需删掉这张表，不会碰到主机原有的防火墙规则。
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::process::Command as Proc;
 
 use super::Outcome;
+use super::netblock::Net;
 use crate::pb::Command;
 
 /// 隔离规则单独一张表，与主机原有规则互不干扰
@@ -51,7 +52,7 @@ pub fn active() -> bool {
 fn build_ruleset(allow: &[String]) -> Result<String, String> {
     let mut parsed = Vec::with_capacity(allow.len());
     for ep in allow {
-        parsed.push(parse_endpoint(ep)?);
+        parsed.extend(parse_endpoint(ep)?);
     }
 
     let mut s = String::new();
@@ -80,8 +81,9 @@ fn build_ruleset(allow: &[String]) -> Result<String, String> {
             "add rule inet {TABLE} {chain} icmpv6 type {{ nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert }} accept\n"
         ));
     }
-    for (host, port) in parsed {
-        let family = if host.is_ipv6() { "ip6" } else { "ip" };
+    for (net, port) in parsed {
+        let family = if net.addr.is_ipv6() { "ip6" } else { "ip" };
+        let host = render(&net);
         let port_clause = port.map_or(String::new(), |p| format!(" tcp dport {p}"));
         s.push_str(&format!(
             "add rule inet {TABLE} output {family} daddr {host}{port_clause} accept\n"
@@ -94,8 +96,12 @@ fn build_ruleset(allow: &[String]) -> Result<String, String> {
     Ok(s)
 }
 
-/// 严格解析放行地址：只接受合法 `IpAddr` 或带非零端口的 `SocketAddr`（IPv6 带端口须写成 `[addr]:port`）
-fn parse_endpoint(ep: &str) -> Result<(IpAddr, Option<u16>), String> {
+/// 严格解析放行地址，返回要放行的网段与端口：
+/// - 合法 `IpAddr`，或带非零端口的 `SocketAddr`（IPv6 带端口须写成 `[addr]:port`）
+/// - 网段 `ip/prefix`（不带端口，主机位清零）
+/// - 主机名或 `主机名:端口`：字符集严格限定为字母、数字、`-`、`.`，在本机解析成地址后再写进规则，
+///   规则里只出现解析出的数字地址，主机名本身不进 nft 脚本；解析失败才拒绝
+fn parse_endpoint(ep: &str) -> Result<Vec<(Net, Option<u16>)>, String> {
     let trimmed = ep.trim();
     if trimmed.is_empty() {
         return Err("放行地址为空".into());
@@ -104,12 +110,73 @@ fn parse_endpoint(ep: &str) -> Result<(IpAddr, Option<u16>), String> {
         if sa.port() == 0 {
             return Err(format!("放行地址端口不能为 0：{ep}"));
         }
-        return Ok((sa.ip(), Some(sa.port())));
+        return Ok(vec![(host_net(sa.ip()), Some(sa.port()))]);
     }
     if let Ok(ip) = trimmed.parse::<IpAddr>() {
-        return Ok((ip, None));
+        return Ok(vec![(host_net(ip), None)]);
     }
-    Err(format!("放行地址无效（须为合法 IP 或 IP:端口）：{ep}"))
+    if let Some((addr, prefix)) = trimmed.split_once('/') {
+        let invalid = || format!("放行网段无效（须为 地址/前缀长度）：{ep}");
+        let addr: IpAddr = addr.parse().map_err(|_| invalid())?;
+        let prefix: u8 = prefix.parse().map_err(|_| invalid())?;
+        if prefix > if addr.is_ipv4() { 32 } else { 128 } {
+            return Err(invalid());
+        }
+        return Ok(vec![(Net::canonical(addr, prefix), None)]);
+    }
+    let (host, port) = match trimmed.rsplit_once(':') {
+        Some((h, p)) => (h, Some(port_of(p, ep)?)),
+        None => (trimmed, None),
+    };
+    if !hostname(host) {
+        return Err(format!(
+            "放行地址无效（须为 IP、IP:端口、网段或主机名[:端口]）：{ep}"
+        ));
+    }
+    let mut nets: Vec<Net> = (host, port.unwrap_or(0))
+        .to_socket_addrs()
+        .map_err(|e| format!("放行地址 {host} 解析失败：{e}"))?
+        .map(|a| host_net(a.ip()))
+        .collect();
+    nets.sort();
+    nets.dedup();
+    if nets.is_empty() {
+        return Err(format!("放行地址 {host} 没有解析出地址"));
+    }
+    Ok(nets.into_iter().map(|n| (n, port)).collect())
+}
+
+fn port_of(p: &str, ep: &str) -> Result<u16, String> {
+    match p.parse::<u16>() {
+        Ok(0) => Err(format!("放行地址端口不能为 0：{ep}")),
+        Ok(port) => Ok(port),
+        Err(_) => Err(format!("放行地址端口无效：{ep}")),
+    }
+}
+
+/// 主机名：每段 1–63 个字母、数字或 `-`，不以 `-` 开头结尾，总长不超过 253
+fn hostname(s: &str) -> bool {
+    s.len() <= 253
+        && s.split('.').all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
+fn host_net(ip: IpAddr) -> Net {
+    Net::canonical(ip, if ip.is_ipv4() { 32 } else { 128 })
+}
+
+/// 单个地址只写地址本身，网段写成 地址/前缀
+fn render(net: &Net) -> String {
+    if net == &host_net(net.addr) {
+        net.addr.to_string()
+    } else {
+        net.render()
+    }
 }
 
 fn apply(script: &str) -> Result<(), String> {
@@ -222,7 +289,12 @@ mod tests {
             "1.2.3.4:abc",
             "1.2.3.4; flush ruleset",
             "1.2.3.4\nflush ruleset",
-            "example.com:443",
+            "evil.com;flush ruleset",
+            "evil.com:443 accept",
+            "-bad.example.com",
+            "10.0.0.0/33",
+            "10.0.0.0/x",
+            "10.0.0.0/24:443",
             "[1.2.3.4",
             "1.2.3.4]",
             "[2001:db8::1]",
@@ -243,21 +315,35 @@ mod tests {
 
     #[test]
     fn endpoint_parse_valid() {
+        let one = |ep: &str| {
+            let v = parse_endpoint(ep).unwrap();
+            assert_eq!(v.len(), 1, "{ep}");
+            (render(&v[0].0), v[0].1)
+        };
+        assert_eq!(one("1.2.3.4:443"), ("1.2.3.4".into(), Some(443)));
+        assert_eq!(one("10.0.0.9"), ("10.0.0.9".into(), None));
         assert_eq!(
-            parse_endpoint("1.2.3.4:443").unwrap(),
-            ("1.2.3.4".parse().unwrap(), Some(443))
+            one("[2001:db8::1]:8443"),
+            ("2001:db8::1".into(), Some(8443))
         );
-        assert_eq!(
-            parse_endpoint("10.0.0.9").unwrap(),
-            ("10.0.0.9".parse().unwrap(), None)
-        );
-        assert_eq!(
-            parse_endpoint("[2001:db8::1]:8443").unwrap(),
-            ("2001:db8::1".parse().unwrap(), Some(8443))
-        );
-        assert_eq!(
-            parse_endpoint("2001:db8::1").unwrap(),
-            ("2001:db8::1".parse().unwrap(), None)
-        );
+        assert_eq!(one("2001:db8::1"), ("2001:db8::1".into(), None));
+        // 网段：主机位清零
+        assert_eq!(one("10.1.1.7/24"), ("10.1.1.0/24".into(), None));
+        assert_eq!(one("2001:db8::5/64"), ("2001:db8::/64".into(), None));
+    }
+
+    #[test]
+    fn ruleset_cidr_and_hostname() {
+        let s = rules(&["10.1.1.0/24"]);
+        assert!(s.contains("output ip daddr 10.1.1.0/24 accept"));
+        assert!(s.contains("input ip saddr 10.1.1.0/24 accept"));
+
+        // 主机名在本机解析，规则里只出现数字地址
+        let s = rules(&["localhost:8081"]);
+        assert!(s.contains("daddr 127.0.0.1 tcp dport 8081 accept"), "{s}");
+        assert!(s.contains("saddr 127.0.0.1 tcp sport 8081 accept"), "{s}");
+        assert!(!s.contains("localhost"), "主机名不得写进 nft 脚本：{s}");
+        let hosts = parse_endpoint("localhost").unwrap();
+        assert!(hosts.iter().all(|(_, port)| port.is_none()));
     }
 }
