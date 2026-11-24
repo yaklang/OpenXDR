@@ -169,7 +169,7 @@ func TestRejectMismatchedAndRevokedCards(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := f.s.decide(f.ctx, f.c, tenant, openID, messageID, nonce, "approve"); err == nil {
+			if _, err := f.s.decideCard(f.ctx, f.c, tenant, openID, messageID, nonce, "approve"); err == nil {
 				t.Fatal("非法审批被接受")
 			}
 			if f.s.DB.Approval.GetX(f.ctx, a.ID).Status != approval.StatusPending {
@@ -190,7 +190,7 @@ func TestConcurrentDecisionsOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := f.s.decide(f.ctx, f.c, "tenant", "open-1", "message-1", nonce, "approve")
+			_, err := f.s.decideCard(f.ctx, f.c, "tenant", "open-1", "message-1", nonce, "approve")
 			results <- err
 		}()
 	}
@@ -246,7 +246,7 @@ func TestGateConsumesFeishuApprovalOnce(t *testing.T) {
 				t.Fatal("审批前下发了命令")
 			default:
 			}
-			if _, err := f.s.decide(f.ctx, f.c, "tenant", "open-1", "message-1", nonce, action); err != nil {
+			if _, err := f.s.decideCard(f.ctx, f.c, "tenant", "open-1", "message-1", nonce, action); err != nil {
 				t.Fatal(err)
 			}
 			if action == "approve" {
@@ -270,7 +270,7 @@ func TestGateConsumesFeishuApprovalOnce(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("闸门未结束")
 			}
-			if _, err := f.s.decide(f.ctx, f.c, "tenant", "open-1", "message-1", nonce, "approve"); err == nil {
+			if _, err := f.s.decideCard(f.ctx, f.c, "tenant", "open-1", "message-1", nonce, "approve"); err == nil {
 				t.Fatal("旧卡片重复批准")
 			}
 			if webhookCalls != 0 {

@@ -182,11 +182,6 @@ func (s *Service) action(ctx context.Context, c Config, e *callback.CardActionTr
 	return &callback.CardActionTriggerResponse{Toast: &callback.Toast{Type: "success", Content: out.text}, Card: &callback.Card{Type: "raw", Data: statusCard(out.text)}}, nil
 }
 
-func (s *Service) decide(ctx context.Context, c Config, tenant, openID, messageID, nonce, action string) (string, error) {
-	out, err := s.decideCard(ctx, c, tenant, openID, messageID, nonce, action)
-	return out.text, err
-}
-
 func (s *Service) decideCard(ctx context.Context, c Config, tenant, openID, messageID, nonce, action string) (decideOutcome, error) {
 	if tenant == "" || openID == "" || messageID == "" || (action != "approve" && action != "reject" && action != "test") {
 		return decideOutcome{}, errors.New("无效回调")

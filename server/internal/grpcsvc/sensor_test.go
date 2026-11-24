@@ -2,11 +2,13 @@ package grpcsvc
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
@@ -226,5 +228,29 @@ func TestSensorRegisterResponseSignatureRoundtrip(t *testing.T) {
 		decoded.GetUpgradePlatform() != orig.UpgradePlatform ||
 		!bytes.Equal(decoded.GetUpgradeSignature(), orig.UpgradeSignature) {
 		t.Fatalf("编解码往返不一致：got=%+v want=%+v", &decoded, orig)
+	}
+}
+
+// 缓存未过期直接命中内存快照（不触库），过期后重新查库（无 DB 时返回空）。
+func TestSensorAssetIPIndexCache(t *testing.T) {
+	id := uuid.New()
+	s := &SensorServer{assetCacheTTL: 50 * time.Millisecond}
+	s.assets.at = time.Now()
+	s.assets.byIP = map[string]*uuid.UUID{"10.0.0.5": &id}
+	s.assets.byOS = map[string]string{"10.0.0.5": "linux"}
+
+	byIP, byOS, err := s.assetIPIndex(context.Background())
+	if err != nil {
+		t.Fatalf("命中缓存不应报错：%v", err)
+	}
+	if byIP["10.0.0.5"] != &id || byOS["10.0.0.5"] != "linux" {
+		t.Fatalf("未命中内存缓存：byIP=%v byOS=%v", byIP, byOS)
+	}
+
+	// 过期后走查库分支（DB=nil 返回 nil）
+	s.assets.at = time.Now().Add(-time.Second)
+	byIP, byOS, err = s.assetIPIndex(context.Background())
+	if err != nil || byIP != nil || byOS != nil {
+		t.Fatalf("缓存过期且无 DB 应返回 nil：byIP=%v byOS=%v err=%v", byIP, byOS, err)
 	}
 }

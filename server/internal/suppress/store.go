@@ -225,10 +225,6 @@ func (s *Store) hit(id uuid.UUID, now time.Time) {
 	s.mu.Unlock()
 }
 
-func (s *Store) flush(ctx context.Context) {
-	s.Flush(ctx)
-}
-
 // Flush 立即把内存累计的抑制命中计数回写数据库
 func (s *Store) Flush(ctx context.Context) {
 	s.mu.Lock()

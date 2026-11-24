@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,44 +21,52 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
-	"openxdr/server/internal/dedup"
 	"openxdr/server/internal/enroll"
 	"openxdr/server/internal/eventbus"
 	"openxdr/server/internal/ingest"
-	"openxdr/server/internal/intel"
-	"openxdr/server/internal/sigma"
-	"openxdr/server/internal/suppress"
 	"openxdr/server/pb"
 )
 
 // OCSF class：网络活动 / DNS 活动
 const (
-	classNetworkActivity = 4001
-	classDNSActivity     = 4003
+	classNetworkActivity       = 4001
+	classDNSActivity           = 4003
+	defaultSensorAssetCacheTTL = 30 * time.Second
 )
 
 const protoTCP = 6
 
-// SensorServer 流量探针接入：会话记录归一化成 OCSF 事件入库并过规则。
+type sensorAssetIndex struct {
+	mu   sync.RWMutex
+	byIP map[string]*uuid.UUID
+	byOS map[string]string
+	at   time.Time
+}
+
+// SensorServer 流量探针接入：会话记录归一化成 OCSF 事件并写入事件总线。
 type SensorServer struct {
 	pb.UnimplementedSensorServiceServer
-	DB          *ent.Client
-	Rules       sigma.Catalog
-	DedupWindow time.Duration
-	Suppress    *suppress.Store
-	Intel       *intel.Store
-	Events      eventbus.Bus
+	assets sensorAssetIndex
+	DB     *ent.Client
+	Events eventbus.Bus
 	// sensor 安装包与自动升级开关，与 agent 共用 AGENT_DIST_DIR / AGENT_AUTO_UPGRADE
 	Dist        *enroll.Dist
 	AutoUpgrade bool
+
+	// 测试覆写项；零值使用默认常量
+	assetCacheTTL time.Duration
+}
+
+func (s *SensorServer) cacheTTL() time.Duration {
+	if s.assetCacheTTL > 0 {
+		return s.assetCacheTTL
+	}
+	return defaultSensorAssetCacheTTL
 }
 
 func (s *SensorServer) ReportFlows(stream pb.SensorService_ReportFlowsServer) error {
 	ctx := stream.Context()
 	var received uint64
-
-	// 一台探针覆盖多个资产，指纹要带 asset。去重状态跨批保留，直到连接结束
-	deduper := dedup.New(s.DedupWindow)
 
 	for {
 		batch, err := stream.Recv()
@@ -73,20 +82,17 @@ func (s *SensorServer) ReportFlows(stream pb.SensorService_ReportFlowsServer) er
 		if batch.DroppedPackets > 0 {
 			slog.Warn("探针丢包", "sensor", batch.SensorId, "dropped", batch.DroppedPackets)
 		}
-		var ingestErr error
-		if s.Events != nil {
-			ingestErr = s.enqueue(ctx, batch)
-		} else {
-			ingestErr = s.ingest(ctx, batch, deduper)
-		}
-		if ingestErr != nil {
-			return ingestErr
+		if err := s.enqueue(ctx, batch); err != nil {
+			return err
 		}
 		received += uint64(len(batch.Flows))
 	}
 }
 
 func (s *SensorServer) enqueue(ctx context.Context, batch *pb.FlowBatch) error {
+	if s.Events == nil {
+		return status.Error(codes.Unavailable, "事件总线未配置")
+	}
 	assetByIP, osByIP, err := s.assetIPIndex(ctx)
 	if err != nil {
 		return err
@@ -123,81 +129,33 @@ func (s *SensorServer) enqueue(ctx context.Context, batch *pb.FlowBatch) error {
 	return eventbus.PublishBatch(ctx, s.Events, pending)
 }
 
-func (s *SensorServer) ingest(ctx context.Context, batch *pb.FlowBatch, deduper *dedup.Deduper) error {
-	// 网络事件按地址归属资产，让 NTA 数据和 EDR 数据落到同一实体上。
-	// 资产数量是主机量级，每批建一次索引即可。
-	assetByIP, osByIP, err := s.assetIPIndex(ctx)
-	if err != nil {
-		return err
-	}
-
-	var eventCreates []*ent.EventCreate
-	var alertCreates []*ent.AlertCreate
-
-	for _, f := range batch.Flows {
-		classUID := classNetworkActivity
-		if f.DnsQuery != "" {
-			classUID = classDNSActivity
-		}
-		raw := flowRaw(f)
-		var rawMap map[string]any
-		_ = json.Unmarshal(raw, &rawMap)
-
-		eventID := uuid.Must(uuid.NewV7())
-		ts := time.Unix(0, f.StartUnixNs)
-		assetID, assetOS := flowAsset(f, assetByIP, osByIP)
-		ec := s.DB.Event.Create().
-			SetID(eventID).
-			SetTs(ts).
-			SetClassUID(classUID).
-			SetSource("sensor").
-			SetNillableAssetID(assetID).
-			SetConnTuple(connTuple(f)).
-			SetRaw(sanitizeRawJSON(raw))
-		eventCreates = append(eventCreates, ec)
-
-		for _, h := range intel.Detections(s.Rules.Evaluate(classUID, assetOS, rawMap), s.Intel.Match(rawMap, ts)) {
-			if s.Suppress.Suppressed(h.RuleID, assetID, rawMap, ts) {
-				continue
-			}
-			fingerprint := h.RuleID + "|" + f.SrcIp
-			if assetID != nil {
-				fingerprint = h.RuleID + "|" + assetID.String()
-			}
-			if deduper.Hit(fingerprint, ts) {
-				continue
-			}
-			alertID := uuid.Must(uuid.NewV7())
-			alertCreates = append(alertCreates, s.DB.Alert.Create().
-				SetID(alertID).
-				SetTs(ts).
-				SetRuleID(h.RuleID).
-				SetSeverity(h.Severity).
-				SetEventID(eventID).
-				SetNillableAssetID(assetID).
-				SetLastTs(ts))
-			deduper.Track(fingerprint, alertID, ts)
-		}
-	}
-
-	if len(eventCreates) > 0 {
-		if _, err := s.DB.Event.CreateBulk(eventCreates...).Save(ctx); err != nil {
-			return err
-		}
-	}
-	if len(alertCreates) > 0 {
-		if _, err := s.DB.Alert.CreateBulk(alertCreates...).Save(ctx); err != nil {
-			return err
-		}
-	}
-	return deduper.Flush(ctx, s.DB)
-}
-
-// assetIPIndex 建立 IP -> 资产 的索引，同时带出操作系统，
-// 规则的 logsource product 要靠它过滤。
+// assetIPIndex 读取或刷新短期 IP -> 资产索引缓存（仅选归属所需列，排除已下线资产）。
 func (s *SensorServer) assetIPIndex(ctx context.Context) (map[string]*uuid.UUID, map[string]string, error) {
-	assets, err := s.DB.Asset.Query().Where(asset.IPAddrsNotNil()).All(ctx)
+	now := time.Now()
+	s.assets.mu.RLock()
+	if !s.assets.at.IsZero() && now.Sub(s.assets.at) < s.cacheTTL() {
+		byIP, byOS := s.assets.byIP, s.assets.byOS
+		s.assets.mu.RUnlock()
+		return byIP, byOS, nil
+	}
+	s.assets.mu.RUnlock()
+
+	if s.DB == nil {
+		return nil, nil, nil
+	}
+	assets, err := s.DB.Asset.Query().
+		Where(asset.RetiredAtIsNil(), asset.IPAddrsNotNil()).
+		Select(asset.FieldID, asset.FieldOs, asset.FieldIPAddrs).
+		All(ctx)
 	if err != nil {
+		// 查库失败时保留上次缓存（若有），避免短暂抖动导致全部流量丢失归属
+		s.assets.mu.RLock()
+		if !s.assets.at.IsZero() {
+			byIP, byOS := s.assets.byIP, s.assets.byOS
+			s.assets.mu.RUnlock()
+			return byIP, byOS, nil
+		}
+		s.assets.mu.RUnlock()
 		return nil, nil, err
 	}
 	index := make(map[string]*uuid.UUID, len(assets))
@@ -205,12 +163,21 @@ func (s *SensorServer) assetIPIndex(ctx context.Context) (map[string]*uuid.UUID,
 	for _, a := range assets {
 		id := a.ID
 		for _, ip := range a.IPAddrs {
+			if ip == "" {
+				continue
+			}
+			if _, exists := index[ip]; exists {
+				continue
+			}
 			index[ip] = &id
 			if a.Os != nil {
 				osIndex[ip] = strings.ToLower(*a.Os)
 			}
 		}
 	}
+	s.assets.mu.Lock()
+	s.assets.byIP, s.assets.byOS, s.assets.at = index, osIndex, time.Now()
+	s.assets.mu.Unlock()
 	return index, osIndex, nil
 }
 

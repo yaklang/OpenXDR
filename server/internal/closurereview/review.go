@@ -331,10 +331,6 @@ func eligible(inc *ent.Incident) bool {
 	}
 	return true
 }
-func load(ctx context.Context, db *ent.Client, id uuid.UUID) (*material, error) {
-	return loadWithRules(ctx, db, nil, nil, id)
-}
-
 func loadWithRules(ctx context.Context, db *ent.Client, rules []*sigma.Rule, sift *sifter, id uuid.UUID) (*material, error) {
 	inc, err := db.Incident.Get(ctx, id)
 	if err != nil {

@@ -20,10 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"openxdr/server/ent/asset"
-	"openxdr/server/internal/dedup"
 	"openxdr/server/internal/enroll"
-	"openxdr/server/internal/intel"
-	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 	"openxdr/server/pb"
 )
@@ -172,8 +169,10 @@ func TestSensorRegisterHealthUpgrade(t *testing.T) {
 func TestSensorFlowsIdentityAndInboundAttribution(t *testing.T) {
 	ctx, client := testdb.New(t)
 	gw := client.Asset.Create().SetHostname("gw01").SetOs("linux").SetIPAddrs([]string{"203.0.113.10"}).SaveX(ctx)
-	srv := &SensorServer{DB: client, DedupWindow: time.Hour, Rules: loadDNSRule(t),
-		Suppress: suppress.New(client, time.Hour), Intel: intel.New(client, time.Hour)}
+	srv := &SensorServer{
+		DB:     client,
+		Events: newTestBus(t, ctx, client, loadDNSRule(t), nil, nil, time.Hour),
+	}
 
 	stream := newFakeFlowStream(ctxWithCN("sensor:tap01"), []*pb.FlowBatch{{SensorId: "gw01"}})
 	if err := srv.ReportFlows(stream); status.Code(err) != codes.PermissionDenied {
@@ -186,7 +185,7 @@ func TestSensorFlowsIdentityAndInboundAttribution(t *testing.T) {
 			Ja3: "ja3-scan", TlsHandshakeOnly: true},
 		{SrcIp: "198.51.100.8", DstIp: "192.0.2.1", SrcPort: 40001, DstPort: 443, Protocol: 6, StartUnixNs: now},
 	}}
-	if err := srv.ingest(ctx, batch, dedup.New(time.Hour)); err != nil {
+	if err := srv.enqueue(ctx, batch); err != nil {
 		t.Fatal(err)
 	}
 	events := client.Event.Query().AllX(ctx)

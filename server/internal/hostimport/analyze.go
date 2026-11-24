@@ -51,10 +51,6 @@ func previewBinding(actor, group string) string {
 	return "host-import-preview:v1:" + actor + ":" + group
 }
 
-func (s *Service) Analyze(ctx context.Context, document, actor, group string) (*Analysis, error) {
-	return s.AnalyzeDocument(ctx, Document{Text: document}, actor, group)
-}
-
 func (s *Service) AnalyzeDocument(ctx context.Context, doc Document, actor, group string) (*Analysis, error) {
 	if err := doc.Validate(); err != nil {
 		return nil, err

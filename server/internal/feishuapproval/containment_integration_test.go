@@ -67,22 +67,22 @@ func TestContainmentCards(t *testing.T) {
 	if card["header"].(map[string]any)["title"].(map[string]any)["content"] != "OpenXDR 处置待审批" {
 		t.Fatalf("卡片标题不对：%v", card)
 	}
-	if _, err := f.s.decide(f.ctx, f.c, "tenant", "open-1", "message-1", nonce, "reject"); err != nil {
+	if _, err := f.s.decideCard(f.ctx, f.c, "tenant", "open-1", "message-1", nonce, "reject"); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.declined) != 1 || fake.declined[0] != reject.ID {
 		t.Fatalf("应驳回：%v", fake.declined)
 	}
-	if _, err := f.s.decide(f.ctx, f.c, "tenant", "open-1", "message-1", nonce, "approve"); err == nil {
+	if _, err := f.s.decideCard(f.ctx, f.c, "tenant", "open-1", "message-1", nonce, "approve"); err == nil {
 		t.Fatal("同一张卡片不能再点")
 	}
 
 	approve := proposed(t, f)
 	nonce = deliveredContainment(t, f, approve, f.u, "message-2")
-	if _, err := f.s.decide(f.ctx, f.c, "tenant", "open-1", "message-2", nonce, "test"); err == nil {
+	if _, err := f.s.decideCard(f.ctx, f.c, "tenant", "open-1", "message-2", nonce, "test"); err == nil {
 		t.Fatal("处置卡片不接受连接测试操作")
 	}
-	if _, err := f.s.decide(f.ctx, f.c, "tenant", "open-1", "message-2", nonce, "approve"); err != nil {
+	if _, err := f.s.decideCard(f.ctx, f.c, "tenant", "open-1", "message-2", nonce, "approve"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -97,7 +97,7 @@ func TestContainmentCards(t *testing.T) {
 	stale := proposed(t, f)
 	nonce = deliveredContainment(t, f, stale, f.u, "message-3")
 	f.s.DB.Containment.UpdateOne(stale).SetState(entcontainment.StateDeclined).ExecX(f.ctx)
-	if _, err := f.s.decide(f.ctx, f.c, "tenant", "open-1", "message-3", nonce, "approve"); err == nil {
+	if _, err := f.s.decideCard(f.ctx, f.c, "tenant", "open-1", "message-3", nonce, "approve"); err == nil {
 		t.Fatal("已在平台处理过的处置不能再从卡片批准")
 	}
 }

@@ -100,11 +100,6 @@ func (s *Service) startTaskLease(ctx context.Context, session *ent.AgentSession)
 	return work, owner, func() { cancel(); <-done }, nil
 }
 
-func (s *Service) renewTaskLease(ctx context.Context, id, owner uuid.UUID, now, deadline time.Time) error {
-	_, err := s.renewTaskLeaseAck(ctx, id, owner, now, deadline)
-	return err
-}
-
 // renewTaskLeaseAck 只有 CAS 写入明确成功时返回已确认截止；超时提交结果未知不能扩展本地租约。
 func (s *Service) renewTaskLeaseAck(ctx context.Context, id, owner uuid.UUID, now, deadline time.Time) (time.Time, error) {
 	session, err := s.DB.AgentSession.Get(ctx, id)

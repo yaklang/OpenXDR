@@ -45,18 +45,22 @@ func TestFindingAutonomyClaimsBudgetAndScope(t *testing.T) {
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("second claim %d %v", len(rows), err)
 	}
-	if err := svc.guardFindingExec(ctx, session, b.ID, "df -h"); err == nil {
+	guard := func(host uuid.UUID, cmd string) error {
+		_, _, err := svc.findingExecTarget(ctx, session, host, cmd)
+		return err
+	}
+	if err := guard(b.ID, "df -h"); err == nil {
 		t.Fatal("cross group host accepted")
 	}
-	if err := svc.guardFindingExec(ctx, session, a.ID, "df -h"); err != nil {
+	if err := guard(a.ID, "df -h"); err != nil {
 		t.Fatal(err)
 	}
 	for _, cmd := range []string{"iptables -S", "iptables -L -n -v", "nft list ruleset"} {
-		if err := svc.guardFindingExec(ctx, session, a.ID, cmd); err != nil {
+		if err := guard(a.ID, cmd); err != nil {
 			t.Fatalf("只读防火墙诊断被拒：%s: %v", cmd, err)
 		}
 	}
-	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl restart -- test.service"); err == nil {
+	if err := guard(a.ID, "systemctl restart -- test.service"); err == nil {
 		t.Fatal("write without trusted maintenance scope accepted")
 	}
 	// 黑名单：非模板写操作归属到待办后交通用命令闸门（硬拒绝 → 组黑名单 → AI 审计员），不在这里拒绝
@@ -80,16 +84,16 @@ func TestFindingAutonomyClaimsBudgetAndScope(t *testing.T) {
 	}
 	// 未知写操作不能补发，独立只读观察仍可继续。
 	db.Command.Create().SetAssetID(a.ID).SetKind("exec").SetCmd("systemctl restart app").SetStatus("unknown").SaveX(ctx)
-	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl restart app"); err == nil {
+	if err := guard(a.ID, "systemctl restart app"); err == nil {
 		t.Fatal("unknown replay accepted")
 	}
-	if err := svc.guardFindingExec(ctx, session, a.ID, "df -h"); err != nil {
+	if err := guard(a.ID, "df -h"); err != nil {
 		t.Fatal(err)
 	}
 	id := uuid.MustParse(strings.TrimPrefix(session.Subjects[0], "finding:"))
 	f := db.Finding.GetX(ctx, id)
 	db.Finding.UpdateOneID(f.ID).SetWorkAttempts(4).ExecX(ctx)
-	if err := svc.guardFindingExec(ctx, session, a.ID, "systemctl restart app"); err == nil {
+	if err := guard(a.ID, "systemctl restart app"); err == nil {
 		t.Fatal("budget ignored")
 	}
 	if err := findings.Release(ctx, db, session.ID, time.Now()); err != nil {
@@ -99,7 +103,7 @@ func TestFindingAutonomyClaimsBudgetAndScope(t *testing.T) {
 	if f.WorkSessionID != nil || f.WorkLeaseUntil != nil || f.WorkNextCheckAt == nil || f.WorkNextCheckAt.Before(time.Now().Add(23*time.Hour)) {
 		t.Fatalf("not deferred: %+v", f)
 	}
-	if err := svc.guardFindingExec(ctx, session, a.ID, "df -h"); err == nil {
+	if err := guard(a.ID, "df -h"); err == nil {
 		t.Fatal("released task may execute")
 	}
 }

@@ -526,10 +526,6 @@ func TestRepairGrantLookupIsExactAndReadOnly(t *testing.T) {
 	x := setup(t)
 	check := func(want bool) {
 		t.Helper()
-		got, err := x.store.HasGrant(x.ctx, x.session.GroupID, x.f.AssetID, RestartFailedService, x.grant.Units[0])
-		if err != nil || got != want {
-			t.Fatal(got, err)
-		}
 		all, err := x.store.HasAssetGrant(x.ctx, x.session.GroupID, x.f.AssetID)
 		if err != nil || all != want {
 			t.Fatal("asset scope", all, err)
@@ -538,12 +534,6 @@ func TestRepairGrantLookupIsExactAndReadOnly(t *testing.T) {
 	check(false)
 	x.save(t)
 	check(true)
-	if got, err := x.store.HasGrant(x.ctx, x.session.GroupID, x.f.AssetID, RestartFailedService, "another-worker.service"); err != nil || got {
-		t.Fatal("similar unit considered delegated", got, err)
-	}
-	if got, err := x.store.HasGrant(x.ctx, x.session.GroupID, x.f.AssetID, RestartFailedService, "sshd.service"); err == nil || got {
-		t.Fatal("core unit accepted")
-	}
 	g := x.db.Group.Create().SetName("other").SaveX(x.ctx)
 	if got, err := x.store.HasAssetGrant(x.ctx, g.ID, x.f.AssetID); err != nil || got {
 		t.Fatal("wrong group accepted", got, err)

@@ -3,6 +3,7 @@
 package grpcsvc
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -10,11 +11,16 @@ import (
 	"github.com/google/uuid"
 
 	"openxdr/server/ent"
-	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
-	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 	"openxdr/server/pb"
+)
+
+const (
+	classAuth           = 3002
+	authStatusSuccess   = 1
+	authStatusFailure   = 2
+	bruteforceThreshold = 5
 )
 
 func authEvent(agentID, user string, statusID int) *pb.AgentEvent {
@@ -29,11 +35,11 @@ func authEvent(agentID, user string, statusID int) *pb.AgentEvent {
 	}
 }
 
-func newAuthServer(t *testing.T, client *ent.Client) *Server {
+func newAuthServer(t *testing.T, ctx context.Context, client *ent.Client) *Server {
 	t.Helper()
 	return &Server{
-		DB: client, Rules: loadMimikatzRule(t), DedupWindow: time.Hour,
-		Suppress: suppress.New(client, time.Hour), Intel: intel.New(client, time.Hour),
+		DB:     client,
+		Events: newTestBus(t, ctx, client, loadMimikatzRule(t), nil, nil, time.Hour),
 	}
 }
 
@@ -58,7 +64,7 @@ func TestBruteforceSuccessEscalation(t *testing.T) {
 	success.TsUnixNs = now.UnixNano()
 	events = append(events, success)
 
-	s := newAuthServer(t, client)
+	s := newAuthServer(t, ctx, client)
 	if err := s.ReportEvents(&fakeAgentStream{ctx: ctx, events: events}); err != nil {
 		t.Fatalf("ReportEvents 失败: %v", err)
 	}
@@ -94,7 +100,7 @@ func TestBruteforceBelowThreshold(t *testing.T) {
 		authEvent(agentGUID.String(), "alice", authStatusSuccess),
 	}
 
-	s := newAuthServer(t, client)
+	s := newAuthServer(t, ctx, client)
 	if err := s.ReportEvents(&fakeAgentStream{ctx: ctx, events: events}); err != nil {
 		t.Fatalf("ReportEvents 失败: %v", err)
 	}
@@ -120,7 +126,7 @@ func TestBruteforceUserIsolation(t *testing.T) {
 	}
 	events = append(events, authEvent(agentGUID.String(), "bob", authStatusSuccess))
 
-	s := newAuthServer(t, client)
+	s := newAuthServer(t, ctx, client)
 	if err := s.ReportEvents(&fakeAgentStream{ctx: ctx, events: events}); err != nil {
 		t.Fatalf("ReportEvents 失败: %v", err)
 	}
@@ -148,7 +154,7 @@ func TestBruteforceRejectsFailuresAtOrAfterSuccess(t *testing.T) {
 			success := authEvent(agentGUID.String(), "root", authStatusSuccess)
 			success.TsUnixNs = now.UnixNano()
 			events = append(events, success)
-			if err := newAuthServer(t, client).ReportEvents(&fakeAgentStream{ctx: ctx, events: events}); err != nil {
+			if err := newAuthServer(t, ctx, client).ReportEvents(&fakeAgentStream{ctx: ctx, events: events}); err != nil {
 				t.Fatal(err)
 			}
 			if n, err := client.Alert.Query().Count(ctx); err != nil || n != 0 {

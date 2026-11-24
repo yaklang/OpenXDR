@@ -8,10 +8,8 @@ import (
 	"time"
 
 	entintel "openxdr/server/ent/intel"
-	"openxdr/server/internal/dedup"
 	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
-	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 	"openxdr/server/pb"
 )
@@ -31,8 +29,10 @@ func TestIntelMatchOnSensorFlow(t *testing.T) {
 	store := intel.New(client, time.Hour)
 	store.Reload(ctx)
 
-	s := &SensorServer{DB: client, Rules: sigma.LoadDir(t.TempDir()),
-		Suppress: suppress.New(client, time.Hour), Intel: store}
+	s := &SensorServer{
+		DB:     client,
+		Events: newTestBus(t, ctx, client, sigma.LoadDir(t.TempDir()), nil, store, time.Hour),
+	}
 	now := time.Now().UnixNano()
 
 	batch := &pb.FlowBatch{
@@ -49,8 +49,8 @@ func TestIntelMatchOnSensorFlow(t *testing.T) {
 				StartUnixNs: now, Protocol: 6},
 		},
 	}
-	if err := s.ingest(ctx, batch, dedup.New(time.Hour)); err != nil {
-		t.Fatalf("ingest 失败: %v", err)
+	if err := s.enqueue(ctx, batch); err != nil {
+		t.Fatalf("enqueue 失败: %v", err)
 	}
 
 	alerts, err := client.Alert.Query().All(ctx)
