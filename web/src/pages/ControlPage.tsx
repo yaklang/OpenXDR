@@ -289,7 +289,7 @@ function FactsTab({ facts, refId, adding, onAdded }: { facts: UseQueryResult<Fac
           )}
           {addKind === 'channel' && (
             <Form.Item name="subject" label={t('factChannelSubject')} extra={t('factChannelHint')} rules={[{ required: true, whitespace: true }]}>
-              <Input className="mono" placeholder="10.1.1.36 / 10.8.0.0/24" />
+              <Input className="mono" placeholder="10.0.0.36 / 10.8.0.0/24" />
             </Form.Item>
           )}
           {addKind === 'decision' && (

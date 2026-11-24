@@ -180,7 +180,7 @@ export function ChangeSourcesCard() {
             extra={t('changeSourceRepoHint')}
             rules={[{ required: true, whitespace: true, max: 200 }]}
           >
-            <Input placeholder="ZacharyZcR/RoyalSecurity-Network" className="mono" />
+            <Input placeholder="example-org/network-config" className="mono" />
           </Form.Item>
           <Form.Item name="name" label={t('integrationName')}>
             <Input maxLength={100} />

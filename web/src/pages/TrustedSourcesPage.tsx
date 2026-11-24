@@ -316,7 +316,7 @@ export function TrustedSourcesPage() {
             <Input className="mono" placeholder="SHA256:…" />
           </Form.Item>
           <Form.Item name="sourceCidr" label={t('tsSourceCidr')} extra={t('tsSourceCidrHint')}>
-            <Input className="mono" placeholder="10.1.1.35" />
+            <Input className="mono" placeholder="10.0.0.35" />
           </Form.Item>
           <Form.Item name="loginUser" label={t('tsLoginUser')}>
             <Input placeholder="root" />

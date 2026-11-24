@@ -46,7 +46,7 @@ xdr identify pve1 udp/5405 low 'Corosync 集群通信' '进程 corosync，PVE �
 xdr egress pve2 208.111.34.178 low 'Tailscale 中继' 'tailscaled 连 DERP 中继，组网正常业务'
 xdr memories                                # 本组长期记忆（实时，含刚记下的）：id 来源 主机 内容 待复核说明
 xdr remember pve1 '每天 04:30 cron 跑 /root/port-check.sh，用 /dev/tcp 探测内网端口，是例行巡检'
-xdr remember - '10.1.1.100 是 pve1 上的 LXC 203（网关：Caddy + docker），不是独立主机'
+xdr remember - '10.0.0.100 是宿主机上的 LXC 容器（反代网关），不是独立主机'
 xdr forget <记忆 id>                         # 删掉被现场证据推翻的 AI 记忆
 xdr suppress pve1 8f1d3b56-7a29-4e03-b5c8-1d4f9e2a7b60 'VM100 vpn-proxy 每天 10:58 解析订阅域名，例行业务' 30 'query.hostname$=.doggygo.top'
 xdr suppress pve1 5d0f6b6e-3c43-4a8e-9a54-2f8e2c7d1b90 'Termix 面板每分钟 SSH 健康检查' 30 'process.cmd_line~=__TERMIX_EXIT' 'dst_endpoint.port=22'
@@ -113,7 +113,7 @@ EOF
   - 容器：任何事件都可能带 `raw->'container'`（`->>'runtime'` docker / lxc / qemu…、`->>'uid'`、`->>'name'`），说明进程在哪个容器或虚拟机里
   - 文件（1001）：`raw->'file'->>'path'`；认证（3002）：`raw->>'status_id'`（1 成功 2 失败）
   - 内核模块（1005）：`raw->'module'->'file'->>'name'`、`raw->'module'->'file'->>'path'`，`raw->>'activity_id'` 1 加载 4 卸载；没有进程与用户字段
-- `assets.ip_addrs` 是 jsonb 字符串数组：按地址找主机用 `ip_addrs ? '10.1.1.3'`，展开用 `jsonb_array_elements_text(ip_addrs)`，不是 PostgreSQL 数组。
+- `assets.ip_addrs` 是 jsonb 字符串数组：按地址找主机用 `ip_addrs ? '10.0.0.3'`，展开用 `jsonb_array_elements_text(ip_addrs)`，不是 PostgreSQL 数组。
   - 不确定结构时先 `SELECT raw FROM events WHERE ... LIMIT 1` 看一条，再写正式查询。
 - 规则名：`xdr context | jq '.rule_titles'`，rule_id 对应的中文标题在这里，不要猜。
 - incidents.status：triaged 表示 AI 已研判、尚未人工结案。

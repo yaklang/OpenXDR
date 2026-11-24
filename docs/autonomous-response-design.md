@@ -17,7 +17,7 @@
 | 触发 | 只有 AI 研判结论 malicious 且置信度 ≥ 90（`response/auto.go`） | 分钟级；模型不可用时完全不响应 |
 | 动作 | 只有隔离整台主机 | agent 支持 9 种处置，自动响应只用了最重的一种 |
 | 目标 | incident 里所有涉事资产，**包括受害者** | 这次如果开着，会隔离 node1，自己把生产停掉 |
-| 粒度 | 主机 | 攻击者在 uos-server 的靶场容器里，隔离主机会把整个平台一起断掉 |
+| 粒度 | 主机 | 攻击者在 lab-server 的靶场容器里，隔离主机会把整个平台一起断掉 |
 | 界面 | incident 详情里的 `ResponsePanel` | 看不到平台做过什么、什么还在生效，也没有集中撤销 |
 | 指令通道 | agent 执行收到的任何指令；跨节点经 NATS，6222 只靠一个共享密码 | 拿到路由密码就能给全网发 root 命令（已由指令签名修复，见下文） |
 
@@ -31,7 +31,7 @@
 |---|---|---|
 | 内网横向喷洒 | `xdr:internal-lateral-spray`（P0 已上线） | 有 |
 | 数据库进程拉起 shell | postgres / mysqld / redis-server / sqlservr 的子进程是 sh / bash / python 等（`COPY FROM PROGRAM`、UDF） | 有（`lnx_database_spawns_shell.yml`，2026-11-04） |
-| 容器逃逸 | 容器里 nsenter / unshare / 经 /proc/1/root 跳进宿主机命名空间（`lnx_container_namespace_escape`），或改写、探查 cgroup release_agent（`falco/release_agent_container_escape`）。只隔离那个容器；核心资产记跳过 | 有（2026-11-09；回测：uos-server 靶场失陷 7 次真阳性，node1 patroni 容器里的运维操作落在核心资产上跳过） |
+| 容器逃逸 | 容器里 nsenter / unshare / 经 /proc/1/root 跳进宿主机命名空间（`lnx_container_namespace_escape`），或改写、探查 cgroup release_agent（`falco/release_agent_container_escape`）。只隔离那个容器；核心资产记跳过 | 有（2026-11-09；回测：lab-server 靶场失陷 7 次真阳性，node1 patroni 容器里的运维操作落在核心资产上跳过） |
 | 反弹 shell | shell、解释器或 netcat 类工具的标准输入输出被 dup 成一条 TCP 连接（`lnx_shell_stdio_to_network`，依赖 agent 的 stdio_socket 事件）。结束该进程、本机封锁对端（对端是本机自己的地址时 agent 拒绝封锁，只结束进程）；核心资产只告警 | 有（2026-11-09；回测：上线 12 小时除 sshd 外没有进程这样做，sshd 不在名单里） |
 | 爆破得手 | `xdr:bruteforce-success` | 有 |
 | 高置信情报命中 | 情报库 C2 / 恶意 IP 的出站连接 | 有 |
@@ -103,7 +103,7 @@ agent 新增 `ISOLATE_CONTAINER` / `UNISOLATE_CONTAINER`，目标是容器 ID：
 - **策略**：信号 × 等级 → 动作的矩阵。第一版只读，展示代码里的策略。
 - **熔断状态**：当前计数与阈值，组管理员可以在这里恢复。
 
-通知改成事后报告：「已自动隔离 uos-server 上的容器 range_c11_comp1_t2，原因是 60 分钟内对 6 台主机喷洒 SSH」。
+通知改成事后报告：「已自动隔离 lab-server 上的容器 range_c11_comp1_t2，原因是 60 分钟内对 6 台主机喷洒 SSH」。
 
 ## 自身防护
 
@@ -128,7 +128,7 @@ agent 新增 `ISOLATE_CONTAINER` / `UNISOLATE_CONTAINER`，目标是容器 ID：
 
 | 时间（UTC） | 实际发生 | 按本设计 |
 |---|---|---|
-| 11-02 23:30:01 | 跳板容器喷洒到第三台主机，`xdr:internal-lateral-spray` 命中 | 来源 uos-server 是实验等级，从出站事件认出容器 `range_c11_comp1_t2`，秒级隔离该容器；受害侧封锁 10.1.1.170 |
+| 11-02 23:30:01 | 跳板容器喷洒到第三台主机，`xdr:internal-lateral-spray` 命中 | 来源 lab-server 是实验等级，从出站事件认出容器 `range_c11_comp1_t2`，秒级隔离该容器；受害侧封锁 10.0.0.170 |
 | 11-03 | 经 Patroni 改 pg_hba、`COPY FROM PROGRAM` | 不会发生：跳板容器已经断网 |
 | 假设仍发生 | postgres 拉起 sh | 核心等级：结束 sh 进程树、封锁来源，不隔离 node1 |
 
@@ -180,7 +180,7 @@ P1 上线时 `CONTAINMENT_ENABLED` 默认关闭，生产先用 `CONTAINMENT_SCOP
   同一条告警已经为某个键做过决定（包括被跳过、被熔断），就不再重新决定。
 - **到期**：直接下发解除，不做 AI 复核（P4 再加）。解除下发失败（agent 离线）就推迟 5 分钟重试，租约保持生效。
 - **范围**：`CONTAINMENT_SCOPE=lab` 时，攻击涉及的主机（来源、受害方或失陷主机）里没有实验等级的就只记 skipped。
-- **边界网关**：配了 `CONTAINMENT_EDGE_HOSTS` 时，任何自动执行的公网地址封锁都在网关上再封一份（角色 edge，同一租约）；批准的待审批封锁在批准时一并上边界。内网地址不上边界，原动作被跳过时边界也跳过。生产上网关是 gateway（10.1.1.100，核心等级，2026-11-09 接入）
+- **边界网关**：配了 `CONTAINMENT_EDGE_HOSTS` 时，任何自动执行的公网地址封锁都在网关上再封一份（角色 edge，同一租约）；批准的待审批封锁在批准时一并上边界。内网地址不上边界，原动作被跳过时边界也跳过。生产上网关是 gateway（10.0.0.100，核心等级，2026-11-09 接入）
 - **SSO 账号**：配了 Authentik 时，SSO 登录事件（成功、失败）每 30 秒拉一次，挂在运行 Authentik 的资产上进检测；爆破得手时由 server 直接调 Authentik 停用该账号并作废它已登录的会话（`disable_sso_account`，一次性，不自动恢复，在自主响应页人工恢复），核心资产也照样执行，因为停用发生在 Authentik 上、与能否登上主机无关。超级管理员、服务账号与 `AUTHENTIK_PROTECTED` 里的账号永远不停用，被拒记为失败。生产上 2026-11-09 接入，服务账号 `openxdr-response`
 - **熔断**：按滑动窗口数生效过的处置，挡下的记 held，不会补执行。手动恢复等 P3 的页面。
 - **受保护目标**：目标都经 `response.NormalizeTarget` 校验，`ISOLATION_ALLOW` 里的 server 地址不封、内置账号不锁。
@@ -188,8 +188,8 @@ P1 上线时 `CONTAINMENT_ENABLED` 默认关闭，生产先用 `CONTAINMENT_SCOP
 
 ### 验收
 
-`correlate.TestCampaignReplayProwlPivot` 回放到 23:30:01 喷洒告警出现，5 秒后的一轮就隔离 uos-server，
-node2、node1、lizhen-dev 封锁 10.1.1.170；回放结束时后来的 openxdr-test-linux、dynamicdefend-v2 也封锁，已生效的不重复下发。
+`correlate.TestCampaignReplayProwlPivot` 回放到 23:30:01 喷洒告警出现，5 秒后的一轮就隔离 lab-server，
+node2、node1、dev-a 封锁 10.0.0.170；回放结束时后来的 openxdr-test-linux、app-server 也封锁，已生效的不重复下发。
 
 ## P3 实现说明
 
@@ -218,7 +218,7 @@ node2、node1、lizhen-dev 封锁 10.1.1.170；回放结束时后来的 openxdr-
 - **处置**：容器隔离走租约，到期自动解除，人工可解除。
   - 实验与生产等级认出容器就只隔离容器。
   - 实验等级认不出容器才隔离整机，生产等级认不出就不动来源，核心不动来源。
-- **已知局限**：2026-11-02 那次，uos-server 的 agent 没有报出跳板容器连向受害主机的外连（受害方的探针看到了），
+- **已知局限**：2026-11-02 那次，lab-server 的 agent 没有报出跳板容器连向受害主机的外连（受害方的探针看到了），
   回放语料里也没有这类事件，所以回放验收仍是隔离整机。其他 docker 主机的容器外连现在都带容器归属。
 
 ## 数据库拉起 shell（2026-11-04）
@@ -227,13 +227,13 @@ node2、node1、lizhen-dev 封锁 10.1.1.170；回放结束时后来的 openxdr-
 agent 的进程注册表里没有它。按父进程判断的规则对这类攻击全部落空。
 
 - **agent**：启动事件的父进程不在注册表里时，现场读 `/proc/<ppid>` 补名字、路径与命令行（`live_parent`，原来只用于折叠）。
-  PostgreSQL 后端的进程标题带着客户端地址，例如 `postgres: postgres openxdr 10.1.1.170(41866) COPY`。
+  PostgreSQL 后端的进程标题带着客户端地址，例如 `postgres: postgres openxdr 10.0.0.170(41866) COPY`。
 - **规则**：`rules/lnx_database_spawns_shell.yml` 判定数据库服务进程（postgres / mysqld / mariadbd / redis-server / mongod / sqlservr）
   拉起 shell、解释器或下载工具，排除 PostgreSQL 启动时的 `locale -a`。
   - 语料用 11-03 生产原文，加 MySQL UDF 变体与 `locale -a` 良性对照。
   - 生产近 3 天，数据库父进程的子进程只有 2 条 `locale -a`。
 - **快路径**：结束该进程、在数据库主机上封锁客户端地址，客户端是纳管主机就遏制来源。
-  按 11-03 原样，客户端 uos-server 是实验等级，范围 `lab` 下也会处置。
+  按 11-03 原样，客户端 lab-server 是实验等级，范围 `lab` 下也会处置。
 
 ## P4：到期 AI 复核（2026-11-05）
 

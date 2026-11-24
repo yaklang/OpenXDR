@@ -7,12 +7,12 @@
   控制台状态确认 process/network/DNS 均 active；修复后真实网络事件 3 条、DNS 2 条均含 process GUID。
   安装脚本与 pilot service 同步补上该上限，避免新安装重现；已有安装需按安装文档更新 service。
   4.19 内核不支持当前 fanotify 名字报告，文件监控仍为 inotify/degraded，未伪装成完整采集。
-- **gym SSH**：独立 nftables 表 `inet openxdr_ssh_guard`，仅允许管理网段 `10.1.1.0/24`、
+- **业务主机 SSH**：独立 nftables 表 `inet openxdr_ssh_guard`，仅允许管理网段 `10.0.0.0/24`、
   `tailscale0`、本机及已建立连接；阻断其他来源的新 SSH 连接。
   `/etc/systemd/system/openxdr-ssh-guard.service` 持久加载 `/etc/nftables.d/openxdr-ssh-guard.nft`，
   没有改 Docker 管理的表。独立新管理连接成功；临时 netns 内的非管理来源连接超时且命中 DROP 计数。
   测试 netns/veth 已清理，验证后取消三分钟自动回滚 timer。回退可停止并禁用该独立 service。
-- **Registry 写入面**：保留 SoulRaid 现有匿名拉取依赖，启用 `storage.maintenance.readonly.enabled=true`。
+- **Registry 写入面**：保留红队平台现有匿名拉取依赖，启用 `storage.maintenance.readonly.enabled=true`。
   配置文件 `/etc/openxdr-registry-readonly.yml` 只读挂载，原数据目录 `/opt/registry` 不变。
   首次环境变量方式因当前 Registry 版本解析不兼容失败，自动恢复旧容器；改用配置文件，先隔离容器验证，再应用生产。
   实测 `/v2/` 为 200、上传初始化为 405；192 依赖端读取 worker manifest 为 200。

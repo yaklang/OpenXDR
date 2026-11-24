@@ -87,7 +87,7 @@ func (ChangeRecordAsset) Fields() []ent.Field {
 		field.UUID("change_record_id", uuid.UUID{}),
 		field.UUID("asset_id", uuid.UUID{}),
 		field.Time("committed_at"),
-		// 命中的确定性线索（如 host:gateway、ip:10.1.1.100、vmid:100、lxc:gateway）
+		// 命中的确定性线索（如 host:gateway、ip:10.0.0.100、vmid:100、lxc:gateway）
 		field.JSON("clues", []string{}).Optional(),
 	}
 }

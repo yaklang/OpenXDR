@@ -168,7 +168,7 @@ Kernel-Network `netwatch_win.rs`，TcpConnect 12/28、TcpAccept 15/31、UDP 发�
   系统解析器（Dnscache 服务）的查询见 4003
 - `protocol_name`：`tcp` / `udp`，与 `conn_tuple` 前缀一致；UDP 的源端口可能是 0（首个数据报才绑定端口）
 - UDP 出站的源地址：未连接套接字按路由查出口地址；查不到时**省略** `src_endpoint.ip`，`conn_tuple` 源地址留空
-  （`udp::41641>110.42.47.158:41641`），不报 0.0.0.0 / ::——未指定地址不是一台主机。
+  （`udp::41641>203.0.113.10:41641`），不报 0.0.0.0 / ::——未指定地址不是一台主机。
   旧版 agent 会照报未指定地址，server 侧资产图谱两种都按上报资产自己的地址处理
 - `dst_endpoint.hostname`：目的地址最近被本机解析过时的域名（agent 自己看到的 DNS 应答），没见过就省略；
   参与域名情报碰撞
@@ -222,8 +222,8 @@ Kernel-Network `netwatch_win.rs`，TcpConnect 12/28、TcpAccept 15/31、UDP 发�
   "activity_id": 6,
   "query": { "hostname": "github.com", "type": "A", "rcode_id": 0 },
   "answers": [ { "type": "CNAME", "rdata": "x.github.com", "ttl": 60 }, { "type": "A", "ip": "20.205.243.166", "ttl": 30 } ],
-  "src_endpoint": { "ip": "10.1.1.10", "port": 40445 },
-  "dst_endpoint": { "ip": "10.1.1.1", "port": 53 },
+  "src_endpoint": { "ip": "10.0.0.10", "port": 40445 },
+  "dst_endpoint": { "ip": "10.0.0.1", "port": 53 },
   "process": { "pid": 1234, "uid": "<进程 GUID>", "name": "curl" },
   "container": { "runtime": "lxc", "uid": "203", "name": "dns" }
 }

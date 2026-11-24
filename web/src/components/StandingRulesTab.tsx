@@ -555,7 +555,7 @@ export function StandingRulesTab({
           {(editing?.actionTemplate ?? selectedTplKey) === 'mgmt_port_restrict' && (
             <>
               <Form.Item name="allowedCidrsText" label={t('ruleAllowedCidrs')} extra={t('ruleAllowedCidrsHint')}>
-                <Input className="mono" placeholder="10.8.0.0/24, 10.1.1.36/32" />
+                <Input className="mono" placeholder="10.8.0.0/24, 10.0.0.36/32" />
               </Form.Item>
               <Form.Item name="portsText" label={t('rulePorts')}>
                 <Input className="mono" placeholder="3389, 5900, 8006, 9090" />

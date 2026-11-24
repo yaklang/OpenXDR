@@ -107,7 +107,7 @@ func (s *Service) Disabled() string {
 	case s.broken != "":
 		return s.broken
 	case s.GRPCURL == "":
-		return "未配置 ENROLL_GRPC_URL（agent 连接 server 的 gRPC 地址，如 https://10.1.1.199:8081）"
+		return "未配置 ENROLL_GRPC_URL（agent 连接 server 的 gRPC 地址，如 https://10.0.0.199:8081）"
 	}
 	return ""
 }
