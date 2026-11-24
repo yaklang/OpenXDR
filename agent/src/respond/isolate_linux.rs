@@ -94,14 +94,15 @@ pub fn isolate(cmd: &Command) -> Outcome {
 }
 
 pub fn unisolate(_cmd: &Command) -> Outcome {
-    match unisolate_table_with("nft", TABLE, NFT_TIMEOUT) {
+    match unisolate_table(TABLE) {
         Ok(UnisolateOutcome::Removed) => Outcome::ok("已解除隔离"),
         Ok(UnisolateOutcome::AlreadyAbsent) => Outcome::ok("本机当前未处于隔离状态"),
         Err(e) => Outcome::failed(format!("解除隔离失败: {e}")),
     }
 }
 
-/// 隔离表当前存在状态：明确区分存在、确认不存在与启动/查询超时或失败。
+/// 隔离表当前存在状态：通过完整无截断的 `nft list tables` 枚举确认，
+/// 彻底摆脱对 stderr 子串与 locale 的依赖。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TableState {
     Present,
@@ -115,7 +116,7 @@ pub(super) enum UnisolateOutcome {
     AlreadyAbsent,
 }
 
-/// 区分 nft 启动/等待/超时等执行层故障与子进程实际运行后返回的命令级非零退出。
+/// 区分 nft 启动/等待/超时等执行层故障与子进程实际运行后的命令级非零退出。
 #[derive(Debug, PartialEq, Eq)]
 enum NftExecError {
     SpawnOrIo(String),
@@ -124,15 +125,6 @@ enum NftExecError {
 }
 
 impl NftExecError {
-    fn is_confirmed_table_missing(&self) -> bool {
-        match self {
-            Self::Exit(stderr) => {
-                stderr.contains("No such file") || stderr.contains("does not exist")
-            }
-            Self::SpawnOrIo(_) | Self::Timeout(_) => false,
-        }
-    }
-
     fn into_message(self) -> String {
         match self {
             Self::SpawnOrIo(m) | Self::Timeout(m) | Self::Exit(m) => m,
@@ -140,47 +132,95 @@ impl NftExecError {
     }
 }
 
-fn table_state_with(program: &str, table: &str, timeout: Duration) -> TableState {
-    match run_nft_with_timeout_raw(program, &["list", "table", "inet", table], timeout) {
-        Ok(_) => TableState::Present,
-        Err(e) if e.is_confirmed_table_missing() => TableState::Absent,
-        Err(_) => TableState::Unknown,
+/// 精确核对 `nft list tables` 输出中是否包含 `table inet <table>`。
+fn list_tables_contains(output: &str, family: &str, table: &str) -> bool {
+    output.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        parts.next() == Some("table")
+            && parts.next() == Some(family)
+            && parts.next() == Some(table)
+            && parts.next().is_none()
+    })
+}
+
+fn table_state_with(
+    program: &str,
+    list_args: &[&str],
+    table: &str,
+    timeout: Duration,
+) -> TableState {
+    match run_nft_with_timeout_raw(program, list_args, timeout) {
+        Ok((stdout, false)) => {
+            if list_tables_contains(&stdout, "inet", table) {
+                TableState::Present
+            } else {
+                TableState::Absent
+            }
+        }
+        // 枚举失败、超时、启动/加载器错误或输出被截断：一律判 Unknown
+        Ok((_, true)) | Err(_) => TableState::Unknown,
     }
 }
 
 pub(super) fn table_state(table: &str) -> TableState {
-    table_state_with("nft", table, NFT_TIMEOUT)
+    table_state_with("nft", &["list", "tables"], table, NFT_TIMEOUT)
 }
 
 fn delete_table_confirmed_with(
     program: &str,
+    delete_args: &[&str],
+    list_args: &[&str],
     table: &str,
     timeout: Duration,
 ) -> Result<(), String> {
-    match run_nft_with_timeout_raw(program, &["delete", "table", "inet", table], timeout) {
+    match run_nft_with_timeout_raw(program, delete_args, timeout) {
         Ok(_) => Ok(()),
-        Err(e) if e.is_confirmed_table_missing() => Ok(()),
-        Err(e) => Err(e.into_message()),
+        Err(e) => {
+            if table_state_with(program, list_args, table, timeout) == TableState::Absent {
+                Ok(())
+            } else {
+                Err(e.into_message())
+            }
+        }
     }
 }
 
 pub(super) fn delete_table_confirmed(table: &str) -> Result<(), String> {
-    delete_table_confirmed_with("nft", table, NFT_TIMEOUT)
+    delete_table_confirmed_with(
+        "nft",
+        &["delete", "table", "inet", table],
+        &["list", "tables"],
+        table,
+        NFT_TIMEOUT,
+    )
 }
 
 pub(super) fn unisolate_table(table: &str) -> Result<UnisolateOutcome, String> {
-    unisolate_table_with("nft", table, NFT_TIMEOUT)
+    unisolate_table_with(
+        "nft",
+        &["delete", "table", "inet", table],
+        &["list", "tables"],
+        table,
+        NFT_TIMEOUT,
+    )
 }
 
 fn unisolate_table_with(
     program: &str,
+    delete_args: &[&str],
+    list_args: &[&str],
     table: &str,
     timeout: Duration,
 ) -> Result<UnisolateOutcome, String> {
-    match run_nft_with_timeout_raw(program, &["delete", "table", "inet", table], timeout) {
+    match run_nft_with_timeout_raw(program, delete_args, timeout) {
         Ok(_) => Ok(UnisolateOutcome::Removed),
-        Err(e) if e.is_confirmed_table_missing() => Ok(UnisolateOutcome::AlreadyAbsent),
-        Err(e) => Err(e.into_message()),
+        Err(e) => {
+            if table_state_with(program, list_args, table, timeout) == TableState::Absent {
+                Ok(UnisolateOutcome::AlreadyAbsent)
+            } else {
+                Err(e.into_message())
+            }
+        }
     }
 }
 
@@ -555,7 +595,7 @@ fn nft_script_with_timeout_raw(
     let stderr = if let Some(rx) = err_rx {
         let rem = deadline.saturating_duration_since(Instant::now());
         match rx.recv_timeout(rem) {
-            Ok(buf) => buf,
+            Ok((buf, _)) => buf,
             Err(_) => {
                 kill_process_group(&mut child);
                 return Err(ScriptError::Unknown(format!(
@@ -622,11 +662,12 @@ fn kill_process_group(child: &mut std::process::Child) {
 fn spawn_pipe_reader<R: Read + Send + 'static>(
     pipe: Option<R>,
     limit: usize,
-) -> Option<std::sync::mpsc::Receiver<Vec<u8>>> {
+) -> Option<std::sync::mpsc::Receiver<(Vec<u8>, bool)>> {
     pipe.map(|mut r| {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut kept = Vec::new();
+            let mut truncated = false;
             let mut chunk = [0u8; 4096];
             while let Ok(n) = r.read(&mut chunk) {
                 if n == 0 {
@@ -635,9 +676,14 @@ fn spawn_pipe_reader<R: Read + Send + 'static>(
                 if kept.len() < limit {
                     let take = (limit - kept.len()).min(n);
                     kept.extend_from_slice(&chunk[..take]);
+                    if take < n {
+                        truncated = true;
+                    }
+                } else {
+                    truncated = true;
                 }
             }
-            let _ = tx.send(kept);
+            let _ = tx.send((kept, truncated));
         });
         rx
     })
@@ -645,14 +691,16 @@ fn spawn_pipe_reader<R: Read + Send + 'static>(
 
 #[cfg(test)]
 fn run_nft_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
-    run_nft_with_timeout_raw(program, args, timeout).map_err(NftExecError::into_message)
+    run_nft_with_timeout_raw(program, args, timeout)
+        .map(|(stdout, _)| stdout)
+        .map_err(NftExecError::into_message)
 }
 
 fn run_nft_with_timeout_raw(
     program: &str,
     args: &[&str],
     timeout: Duration,
-) -> Result<String, NftExecError> {
+) -> Result<(String, bool), NftExecError> {
     let mut child = Proc::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -683,15 +731,15 @@ fn run_nft_with_timeout_raw(
         }
     };
 
-    let recv = |rx: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
+    let recv = |rx: Option<std::sync::mpsc::Receiver<(Vec<u8>, bool)>>,
                 child: &mut std::process::Child|
-     -> Result<Vec<u8>, NftExecError> {
+     -> Result<(Vec<u8>, bool), NftExecError> {
         let Some(rx) = rx else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), false));
         };
         let rem = deadline.saturating_duration_since(Instant::now());
         match rx.recv_timeout(rem) {
-            Ok(buf) => Ok(buf),
+            Ok(pair) => Ok(pair),
             Err(_) => {
                 kill_process_group(child);
                 Err(NftExecError::Timeout(format!("读取 {program} 输出超时")))
@@ -699,14 +747,17 @@ fn run_nft_with_timeout_raw(
         }
     };
 
-    let stdout = recv(out_rx, &mut child)?;
-    let stderr = recv(err_rx, &mut child)?;
+    let (stdout, stdout_truncated) = recv(out_rx, &mut child)?;
+    let (stderr, _) = recv(err_rx, &mut child)?;
     if !status.success() {
         return Err(NftExecError::Exit(
             String::from_utf8_lossy(&stderr).trim().to_string(),
         ));
     }
-    Ok(String::from_utf8_lossy(&stdout).into_owned())
+    Ok((
+        String::from_utf8_lossy(&stdout).into_owned(),
+        stdout_truncated,
+    ))
 }
 
 #[cfg(test)]
@@ -1090,41 +1141,128 @@ mod tests {
     }
 
     #[test]
-    fn spawn_enoent_is_not_misclassified_as_missing_table_or_unisolated() {
+    fn table_state_uses_full_enumeration_and_rejects_enoent_loader_and_truncation() {
         let missing_bin = "/nonexistent-openxdr-nft-binary-enoent";
+        let list_args = &["list", "tables"];
+        let del_args = &["delete", "table", "inet", TABLE];
 
-        // 1. 真实 ENOENT 包含 "No such file or directory"，但必须判为 Unknown 而非 Absent
+        // 1. 真实 ENOENT -> Unknown，清理与解封均返错，提交超时仍保租约
         assert_eq!(
-            table_state_with(missing_bin, TABLE, Duration::from_secs(1)),
+            table_state_with(missing_bin, list_args, TABLE, Duration::from_secs(1)),
             TableState::Unknown
         );
-
-        // 2. 清理时真实 ENOENT 必须返回 Err，绝不伪装成已清除
-        let del_err =
-            delete_table_confirmed_with(missing_bin, TABLE, Duration::from_secs(1)).unwrap_err();
-        assert!(del_err.contains("无法执行"), "{del_err}");
-
-        // 3. 端到端通过生产分类层：提交超时 + 复核 ENOENT + 清理 ENOENT -> 仍保留租约
-        let res = apply_with(
-            "add table inet openxdr_isolation\n",
-            |_| Err(ScriptError::Unknown("执行 nft 超时".into())),
-            || table_state_with(missing_bin, TABLE, Duration::from_secs(1)),
-            || delete_table_confirmed_with(missing_bin, TABLE, Duration::from_secs(1)),
+        assert!(
+            delete_table_confirmed_with(
+                missing_bin,
+                del_args,
+                list_args,
+                TABLE,
+                Duration::from_secs(1)
+            )
+            .is_err()
         );
-        assert_eq!(res, Ok(ApplyOutcome::UncertainPreserved));
+        assert_eq!(
+            apply_with(
+                "add table inet openxdr_isolation\n",
+                |_| Err(ScriptError::Unknown("执行 nft 超时".into())),
+                || table_state_with(missing_bin, list_args, TABLE, Duration::from_secs(1)),
+                || delete_table_confirmed_with(
+                    missing_bin,
+                    del_args,
+                    list_args,
+                    TABLE,
+                    Duration::from_secs(1)
+                ),
+            ),
+            Ok(ApplyOutcome::UncertainPreserved)
+        );
+        assert!(
+            unisolate_table_with(
+                missing_bin,
+                del_args,
+                list_args,
+                TABLE,
+                Duration::from_secs(1)
+            )
+            .is_err()
+        );
 
-        // 4. 解封时真实 ENOENT 必须失败，绝不误报“未处于隔离状态”
-        let uniso_err =
-            unisolate_table_with(missing_bin, TABLE, Duration::from_secs(1)).unwrap_err();
-        assert!(uniso_err.contains("无法执行"), "{uniso_err}");
+        // 2. 动态加载器缺共享库（exit 127 + 含 "No such file or directory"）：
+        //    必须判 Unknown，绝不能误判为表不存在或解封成功
+        let loader_err = &[
+            "-c",
+            "echo 'nft: error while loading shared libraries: libnftables.so.1: cannot open shared object file: No such file or directory' >&2; exit 127",
+        ];
+        assert_eq!(
+            table_state_with("sh", loader_err, TABLE, Duration::from_secs(1)),
+            TableState::Unknown
+        );
+        assert!(
+            delete_table_confirmed_with(
+                "sh",
+                loader_err,
+                loader_err,
+                TABLE,
+                Duration::from_secs(1)
+            )
+            .is_err()
+        );
+        assert!(
+            unisolate_table_with("sh", loader_err, loader_err, TABLE, Duration::from_secs(1))
+                .is_err()
+        );
+        assert_eq!(
+            apply_with(
+                "add table inet openxdr_isolation\n",
+                |_| Err(ScriptError::Unknown("执行 nft 超时".into())),
+                || table_state_with("sh", loader_err, TABLE, Duration::from_secs(1)),
+                || delete_table_confirmed_with(
+                    "sh",
+                    loader_err,
+                    loader_err,
+                    TABLE,
+                    Duration::from_secs(1)
+                ),
+            ),
+            Ok(ApplyOutcome::UncertainPreserved)
+        );
 
-        // 5. 子进程实际退出并输出内核“No such file or directory”才确认为表不存在
-        let exit_missing = run_nft_with_timeout_raw(
-            "sh",
-            &["-c", "echo 'Error: No such file or directory' >&2; exit 1"],
-            Duration::from_secs(1),
-        )
-        .unwrap_err();
-        assert!(exit_missing.is_confirmed_table_missing());
+        // 3. 完整表枚举成功且不含目标表（含相似前缀/不同 family 干扰项）-> 确认为 Absent，
+        //    删除失败后经表枚举确认返回 AlreadyAbsent
+        let list_without = &[
+            "-c",
+            "printf 'table ip openxdr_isolation\\ntable inet openxdr_isolation_other\\ntable inet filter\\n'",
+        ];
+        assert_eq!(
+            table_state_with("sh", list_without, TABLE, Duration::from_secs(1)),
+            TableState::Absent
+        );
+        assert_eq!(
+            unisolate_table_with(
+                "sh",
+                &["-c", "exit 1"],
+                list_without,
+                TABLE,
+                Duration::from_secs(1)
+            ),
+            Ok(UnisolateOutcome::AlreadyAbsent)
+        );
+
+        // 4. 完整表枚举成功且精确包含目标表 -> Present
+        let list_with = &[
+            "-c",
+            "printf 'table inet filter\\ntable inet openxdr_isolation\\n'",
+        ];
+        assert_eq!(
+            table_state_with("sh", list_with, TABLE, Duration::from_secs(1)),
+            TableState::Present
+        );
+
+        // 5. 表枚举输出超限（> 1 MiB）被截断 -> 保守判 Unknown，绝不把截断后的缺失当 Absent
+        let truncated_list = &["-c", "head -c 1100000 /dev/zero | tr '\\0' 'a'"];
+        assert_eq!(
+            table_state_with("sh", truncated_list, TABLE, Duration::from_secs(2)),
+            TableState::Unknown
+        );
     }
 }
