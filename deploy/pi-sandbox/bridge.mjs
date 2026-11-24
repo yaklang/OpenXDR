@@ -24,6 +24,21 @@ const isGLM = model => /(^|\/)glm[-_.]/i.test(model);
 const textOf = message => (message?.content || [])
   .filter(part => part.type === 'text').map(part => part.text).join('');
 
+// 仅当达到轮次上限且模型正常产出工具调用（非错误/中止的残缺消息）时，才按 max_turns 截停后续轮次
+export function shouldLimitTurn(message, turns, maxTurns) {
+  if (turns < maxTurns) return false;
+  if (!message || message.stopReason === 'error' || message.stopReason === 'aborted') return false;
+  return Array.isArray(message.content) && message.content.some(part => part.type === 'toolCall');
+}
+
+// 统一结算本轮结果：真实 error 绝不被 limited 掩盖；非 max_turns 主动触发的 aborted 同样视为失败
+export function resolveRunOutcome(last, turns, limited) {
+  if (!last || last.stopReason === 'error' || (!limited && last.stopReason === 'aborted')) {
+    throw new Error(last?.errorMessage || 'Pi 未返回有效结果');
+  }
+  return { type: 'result', response: textOf(last), turns, stop_reason: limited ? 'max_turns' : last.stopReason };
+}
+
 // 模型配置按请求现写：GLM 走模板思考并跨轮保留，与在工作站上直接用 Pi 时一致
 function writeModels(request) {
   const glm = isGLM(request.model);
@@ -138,7 +153,7 @@ export async function run(request, send, callTool, signal) {
     routing.annotate(event);
     if (event.type === 'turn_end') {
       turns++;
-      if (turns >= maxTurns && Array.isArray(event.message?.content) && event.message.content.some(part => part.type === 'toolCall')) {
+      if (shouldLimitTurn(event.message, turns, maxTurns)) {
         limited = true;
         session.abort();
       }
@@ -155,10 +170,7 @@ export async function run(request, send, callTool, signal) {
     await session.prompt(request.prompt);
     signal?.throwIfAborted();
     const last = session.agent.state.messages.findLast(message => message.role === 'assistant');
-    if (!limited && (!last || ['error', 'aborted'].includes(last.stopReason))) {
-      throw new Error(last?.errorMessage || 'Pi 未返回有效结果');
-    }
-    send({ type: 'result', response: textOf(last), turns, stop_reason: limited ? 'max_turns' : last.stopReason });
+    send(resolveRunOutcome(last, turns, limited));
   } finally {
     globalThis.fetch = originalFetch;
     signal?.removeEventListener('abort', abort);

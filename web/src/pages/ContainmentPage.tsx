@@ -47,6 +47,9 @@ export function ContainmentPage() {
   const client = useQueryClient()
   const { canWrite, isAdmin, groups } = useSession()
   const canAct = useCanAct()
+  // 批准/驳回需要平台 admin 或资产所在组 admin（未分组资产仅平台 admin），与后端 decideContainment 一致
+  const canAdmin = (groupId: string | null | undefined) =>
+    isAdmin || (canWrite && !!groupId && groups.find(g => g.id === groupId)?.role === 'admin')
   const canActAny = isAdmin || (canWrite && groups.some(g => g.role === 'admin' || g.role === 'analyst'))
   const [state, setState] = useState('')
   const [page, setPage] = useState(1)
@@ -198,32 +201,38 @@ export function ContainmentPage() {
                 ? [{
                     title: t('actions'), width: 140,
                     fixed: wideTable ? 'right' as const : undefined,
-                    render: (_: unknown, c: Containment) => !canAct(assetGroups[c.assetId]) ? null : c.state === 'proposed' ? (
-                      <TableActions>
-                        <Popconfirm title={t('cmtApproveConfirm')} disabled={actingId !== null} onConfirm={() => decide(c.id, true)}>
-                          <Button type="link" size="small" loading={actingId === c.id} disabled={actingId !== null}>{t('cmtApprove')}</Button>
-                        </Popconfirm>
-                        <Popconfirm
-                          title={t('cmtDeclineConfirm')}
-                          disabled={actingId !== null}
-                          description={<Input size="small" placeholder={t('cmtDeclineReason')} value={why} onChange={e => setWhy(e.target.value)} />}
-                          onConfirm={() => decide(c.id, false)}
-                        >
-                          <Button type="link" danger size="small" loading={actingId === c.id} disabled={actingId !== null}>{t('cmtDecline')}</Button>
-                        </Popconfirm>
-                      </TableActions>
-                    ) : c.liftable && (
-                      <TableActions>
-                        <Popconfirm
-                          title={t(c.state === 'active' ? 'cmtLiftConfirm' : 'cmtRestoreConfirm')}
-                          disabled={actingId !== null}
-                          description={<Input size="small" placeholder={t('cmtLiftReason')} value={why} onChange={e => setWhy(e.target.value)} />}
-                          onConfirm={() => lift(c.id)}
-                        >
-                          <Button type="link" danger size="small" loading={actingId === c.id} disabled={actingId !== null}>{t(c.state === 'active' ? 'cmtLift' : 'cmtRestore')}</Button>
-                        </Popconfirm>
-                      </TableActions>
-                    ),
+                    render: (_: unknown, c: Containment) => {
+                      const groupId = assetGroups[c.assetId]
+                      if (c.state === 'proposed') {
+                        return canAdmin(groupId) ? (
+                          <TableActions>
+                            <Popconfirm title={t('cmtApproveConfirm')} disabled={actingId !== null} onConfirm={() => decide(c.id, true)}>
+                              <Button type="link" size="small" loading={actingId === c.id} disabled={actingId !== null}>{t('cmtApprove')}</Button>
+                            </Popconfirm>
+                            <Popconfirm
+                              title={t('cmtDeclineConfirm')}
+                              disabled={actingId !== null}
+                              description={<Input size="small" placeholder={t('cmtDeclineReason')} value={why} onChange={e => setWhy(e.target.value)} />}
+                              onConfirm={() => decide(c.id, false)}
+                            >
+                              <Button type="link" danger size="small" loading={actingId === c.id} disabled={actingId !== null}>{t('cmtDecline')}</Button>
+                            </Popconfirm>
+                          </TableActions>
+                        ) : null
+                      }
+                      return c.liftable && canAct(groupId) ? (
+                        <TableActions>
+                          <Popconfirm
+                            title={t(c.state === 'active' ? 'cmtLiftConfirm' : 'cmtRestoreConfirm')}
+                            disabled={actingId !== null}
+                            description={<Input size="small" placeholder={t('cmtLiftReason')} value={why} onChange={e => setWhy(e.target.value)} />}
+                            onConfirm={() => lift(c.id)}
+                          >
+                            <Button type="link" danger size="small" loading={actingId === c.id} disabled={actingId !== null}>{t(c.state === 'active' ? 'cmtLift' : 'cmtRestore')}</Button>
+                          </Popconfirm>
+                        </TableActions>
+                      ) : null
+                    },
                   }]
                 : []),
             ]}
