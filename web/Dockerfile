@@ -4,7 +4,7 @@ FROM --platform=$BUILDPLATFORM node:22.23.3-alpine3.23 AS build
 ARG NPM_REGISTRY=https://registry.npmjs.org
 WORKDIR /src
 COPY package.json package-lock.json ./
-RUN npm config set registry ${NPM_REGISTRY} && npm ci
+RUN --mount=type=cache,target=/root/.npm npm config set registry ${NPM_REGISTRY} && npm ci
 COPY . ./
 RUN npm run build
 

@@ -9,13 +9,16 @@ ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 COPY server/go.mod server/go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY server/ ./
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /openxdr-server . && \
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /openxdr-server . && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /openxdr-gencerts ./cmd/gencerts && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /openxdr-ipdb ./cmd/ipdb
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /decoy-dist/decoyhost-linux-amd64 ./cmd/decoyhost && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /decoy-dist/decoyhost-linux-arm64 ./cmd/decoyhost
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /decoy-dist/decoyhost-linux-amd64 ./cmd/decoyhost && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /decoy-dist/decoyhost-linux-arm64 ./cmd/decoyhost
 
 # agent 与 sensor 安装包：发版时用 --build-context agents=<含 dist/ 的目录> 注入，本地构建为空目录
 FROM alpine:3.22.6 AS agents
@@ -32,8 +35,9 @@ FROM node:22.23.3-alpine3.23 AS node-bin
 
 FROM --platform=$BUILDPLATFORM node:22.23.3-alpine3.23 AS pi-runtime
 WORKDIR /pi-runtime
+COPY server/pi-runtime/package.json server/pi-runtime/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --ignore-scripts
 COPY server/pi-runtime/ ./
-RUN npm ci --omit=dev --ignore-scripts
 
 FROM alpine:3.22.6
 # node 依赖 libstdc++；chromium + 中文字体渲染报告，Poppler 将 PDF 页面渲染为视觉模型输入
