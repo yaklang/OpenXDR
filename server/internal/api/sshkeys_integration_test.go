@@ -195,6 +195,28 @@ func TestSSHKeysInventoryAndClaimAPI(t *testing.T) {
 	if len(list2.Keys) != 1 || list2.Keys[0].Fingerprint != fp1 {
 		t.Fatalf("已移除的钥匙不应再出现在 present 列表中: %+v", list2.Keys)
 	}
+
+	// 已登记（有在效、非共享钥匙事实）的钥匙新出现：照常告警，但不提议移除——删已登记的运维钥匙只会诱导误批
+	const fp3 = "SHA256:tEASU9i+VK5inO+zsLSji03jAgYb4xB4r/f+YyF3E50"
+	client.Fact.Create().SetKind("key").SetSubject(fp3).SetHolder("integration:foghaven").
+		SetContent("Foghaven 凯伊的每机运维钥").SetSource("human").SetCreatedBy("root").SaveX(ctx)
+	if err := svc.IngestSnapshot(ctx, host.ID, &pb.ReportSSHKeysRequest{
+		ObservedAtMs:              now.Add(3 * time.Minute).UnixMilli(),
+		AuthorizedKeysCommand:     "/usr/local/bin/keys %u",
+		AuthorizedKeysCommandUser: "nobody",
+		Keys: []*pb.SSHAuthorizedKey{
+			{Account: "root", Path: "/root/.ssh/authorized_keys", KeyType: "ssh-ed25519", Fingerprint: fp1, Comment: "kei@foghaven"},
+			{Account: "root", Path: "/root/.ssh/authorized_keys", KeyType: "ssh-ed25519", Fingerprint: fp3, Comment: "kei@foghaven-20261115"},
+		},
+	}); err != nil {
+		t.Fatalf("已登记钥匙快照入库失败: %v", err)
+	}
+	if n := client.Alert.Query().Where(alert.RuleIDEQ(sigma.RuleNewSSHKey)).CountX(ctx); n != 2 {
+		t.Fatalf("已登记钥匙新出现仍应告警, got=%d", n)
+	}
+	if n := client.Approval.Query().CountX(ctx); n != 1 {
+		t.Fatalf("已登记钥匙不应生成移除提议, 审批数=%d", n)
+	}
 }
 
 func TestSSHKeysBackfillOnceAndUnchangedFastPath(t *testing.T) {

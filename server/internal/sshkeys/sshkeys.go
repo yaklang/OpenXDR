@@ -624,6 +624,13 @@ func (s *Service) handleNewKey(ctx context.Context, assetRow *ent.Asset, obs *en
 	}
 
 	if s.Gate != nil {
+		registered, err := s.registeredKey(ctx, obs.Fingerprint, assetRow.ID, assetRow.GroupID)
+		if err != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if registered {
+			return nil
+		}
 		if _, err := s.EnsureRemovalProposal(ctx, obs.ID); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -639,6 +646,24 @@ func (s *Service) handleNewKey(ctx context.Context, assetRow *ent.Asset, obs *en
 		}
 	}
 	return nil
+}
+
+// registeredKey 钥匙有在效的非共享钥匙事实（知道归谁、用途已登记）时，新出现只告警、不提议移除：
+// 提议删一把已登记的运维钥匙只会诱导误批。共享钥匙照常提议，它们本就在撤销计划里；查询出错按未登记处理。
+func (s *Service) registeredKey(ctx context.Context, fp string, assetID uuid.UUID, groupID *uuid.UUID) (bool, error) {
+	now := s.now()
+	live, err := s.DB.Fact.Query().
+		Where(
+			fact.KindEQ("key"),
+			fact.SubjectEQ(fp),
+			fact.RetiredAtIsNil(),
+			fact.Or(fact.ExpiresAtIsNil(), fact.ExpiresAtGT(now)),
+		).
+		All(ctx)
+	if err != nil {
+		return false, err
+	}
+	return matchKeyFact(live, fp, assetID, groupID) != nil && !anyVisibleKeyFactShared(live, fp, assetID, groupID), nil
 }
 
 // findWriterSession 从同资产近期文件监控（1001）或进程（1007）事件中查找写入该钥匙文件的登录会话

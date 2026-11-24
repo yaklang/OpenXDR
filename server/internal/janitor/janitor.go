@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"openxdr/server/ent"
+	"openxdr/server/ent/approval"
 	"openxdr/server/ent/decoyobservation"
 	"openxdr/server/ent/event"
 	"openxdr/server/ent/session"
@@ -95,6 +96,13 @@ func (j *Janitor) Run(ctx context.Context) {
 					slog.Info("清理过期诱饵观察", "deleted", n)
 				}
 			}
+			// 过期审批收口：异步提议没有等待方，等待方随进程退出时也来不及改状态，
+			// 不收口就会一直挂在待审批里（Decide 早已拒绝过期审批）
+			if n, err := j.expireApprovals(ctx, time.Now()); err != nil {
+				slog.Error("收口过期审批失败", "err", err)
+			} else if n > 0 {
+				slog.Info("收口过期审批", "expired", n)
+			}
 			// 过期会话是纯垃圾：认证早已拒绝它们，行却一直躺在表里
 			if n, err := j.DB.Session.Delete().
 				Where(session.ExpiresAtLT(time.Now())).
@@ -105,6 +113,13 @@ func (j *Janitor) Run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (j *Janitor) expireApprovals(ctx context.Context, now time.Time) (int, error) {
+	return j.DB.Approval.Update().
+		Where(approval.StatusIn(approval.StatusPending, approval.StatusApproved), approval.ExpiresAtLTE(now)).
+		SetStatus(approval.StatusExpired).
+		Save(ctx)
 }
 
 // retireGuard 是时序证据可能引用的最老事件年龄：最大窗口 24 小时加迟到余量，再留一小时处理耗时。
