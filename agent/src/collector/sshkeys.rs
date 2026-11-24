@@ -14,12 +14,16 @@
 //! - 启动时盘点一次，之后复用 `fswatch` 文件变更通知防抖重扫，不另做定时轮询。
 
 #[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
+#[cfg(target_os = "linux")]
 use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(any(target_os = "linux", test))]
 use std::time::Duration;
 #[cfg(target_os = "linux")]
 use std::time::Instant;
 
+#[cfg(target_os = "linux")]
+use prost::Message;
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "linux")]
 use tokio::sync::Notify;
@@ -40,6 +44,9 @@ const SSHD_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_KEY_FILE_BYTES: usize = 1024 * 1024;
 #[cfg(target_os = "linux")]
 const MAX_KEYS_TOTAL: usize = 4096;
+/// 单帧 ReportSshKeysRequest 的 protobuf 编码体积上限（3 MiB，为 gRPC 默认 4 MiB 上限留足余量）
+#[cfg(target_os = "linux")]
+const MAX_SNAPSHOT_BYTES: usize = 3 * 1024 * 1024;
 #[cfg(target_os = "linux")]
 const REPORT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(any(target_os = "linux", test))]
@@ -65,6 +72,8 @@ pub struct Snapshot {
     pub keys: Vec<KeyEntry>,
     pub authorized_keys_command: String,
     pub authorized_keys_command_user: String,
+    /// 因条数或单帧 protobuf 体积预算（3 MiB）触顶而被截断
+    pub truncated: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -187,24 +196,7 @@ pub async fn report(
                 tokio::time::sleep(wait).await;
                 continue;
             }
-            let mut req = tonic::Request::new(ReportSshKeysRequest {
-                agent_id: agent_id.clone(),
-                observed_at_ms: snap.observed_at_ms,
-                keys: snap
-                    .keys
-                    .into_iter()
-                    .map(|k| SshAuthorizedKey {
-                        account: k.account,
-                        path: k.path,
-                        key_type: k.key_type,
-                        fingerprint: k.fingerprint,
-                        comment: k.comment,
-                        options: k.options,
-                    })
-                    .collect(),
-                authorized_keys_command: snap.authorized_keys_command,
-                authorized_keys_command_user: snap.authorized_keys_command_user,
-            });
+            let mut req = tonic::Request::new(build_report_request(&agent_id, snap));
             req.set_timeout(REPORT_RPC_TIMEOUT);
             match tokio::time::timeout(REPORT_RPC_TIMEOUT, client.report_ssh_keys(req)).await {
                 Ok(Ok(_)) => {
@@ -798,29 +790,44 @@ fn collect_snapshot() -> Snapshot {
     candidate_files.sort();
     candidate_files.dedup();
 
+    let base_bytes = base_request_bytes(
+        &cfg.authorized_keys_command,
+        &cfg.authorized_keys_command_user,
+    );
     let mut keys = Vec::new();
+    let mut used_bytes = base_bytes;
+    let mut truncated = false;
     let mut seen = std::collections::HashSet::new();
-    for (account, path) in candidate_files {
+    'outer: for (account, path) in candidate_files {
         let Some(content) = read_regular_nofollow(&path, MAX_KEY_FILE_BYTES) else {
             continue;
         };
         for parsed in parse_authorized_keys(&content) {
             if seen.insert((account.clone(), path.clone(), parsed.fingerprint.clone())) {
-                keys.push(KeyEntry {
+                let entry = KeyEntry {
                     account: account.clone(),
                     path: path.clone(),
                     key_type: parsed.key_type,
                     fingerprint: parsed.fingerprint,
                     comment: parsed.comment,
                     options: parsed.options,
-                });
-                if keys.len() >= MAX_KEYS_TOTAL {
-                    break;
+                };
+                let entry_bytes = key_entry_wire_bytes(&entry);
+                if keys.len() >= MAX_KEYS_TOTAL
+                    || used_bytes.saturating_add(entry_bytes) > MAX_SNAPSHOT_BYTES
+                {
+                    truncated = true;
+                    eprintln!(
+                        "SSH 钥匙盘点快照触及上限（已保留 {} 条，约 {} 字节，上限 {} 字节），已截断剩余条目",
+                        keys.len(),
+                        used_bytes,
+                        MAX_SNAPSHOT_BYTES
+                    );
+                    break 'outer;
                 }
+                used_bytes += entry_bytes;
+                keys.push(entry);
             }
-        }
-        if keys.len() >= MAX_KEYS_TOTAL {
-            break;
         }
     }
     keys.sort();
@@ -830,21 +837,140 @@ fn collect_snapshot() -> Snapshot {
         keys,
         authorized_keys_command: cfg.authorized_keys_command,
         authorized_keys_command_user: cfg.authorized_keys_command_user,
+        truncated,
     }
+}
+
+/// 估算 ReportSshKeysRequest 固定头部的 protobuf 字节数（为 agent_id 预留 256 字节余量）
+#[cfg(target_os = "linux")]
+fn base_request_bytes(authorized_keys_command: &str, authorized_keys_command_user: &str) -> usize {
+    ReportSshKeysRequest {
+        agent_id: "x".repeat(256),
+        observed_at_ms: i64::MAX,
+        keys: Vec::new(),
+        authorized_keys_command: authorized_keys_command.to_string(),
+        authorized_keys_command_user: authorized_keys_command_user.to_string(),
+    }
+    .encoded_len()
+}
+
+/// 计算单条 KeyEntry 编码进 ReportSshKeysRequest.keys（字段 3）时的实际字节增量
+#[cfg(target_os = "linux")]
+fn key_entry_wire_bytes(k: &KeyEntry) -> usize {
+    let msg = SshAuthorizedKey {
+        account: k.account.clone(),
+        path: k.path.clone(),
+        key_type: k.key_type.clone(),
+        fingerprint: k.fingerprint.clone(),
+        comment: k.comment.clone(),
+        options: k.options.clone(),
+    };
+    let len = msg.encoded_len();
+    1 + prost::encoding::encoded_len_varint(len as u64) + len
+}
+
+/// 按单帧 protobuf 字节预算与条数上限打包钥匙条目，返回 `(保留条目, 是否截断)`。
+#[cfg(all(target_os = "linux", test))]
+fn pack_keys_within_budget(
+    entries: Vec<KeyEntry>,
+    base_bytes: usize,
+    max_bytes: usize,
+) -> (Vec<KeyEntry>, bool) {
+    let mut kept = Vec::new();
+    let mut used = base_bytes;
+    let mut truncated = false;
+    for entry in entries {
+        let entry_bytes = key_entry_wire_bytes(&entry);
+        if kept.len() >= MAX_KEYS_TOTAL || used.saturating_add(entry_bytes) > max_bytes {
+            truncated = true;
+            break;
+        }
+        used += entry_bytes;
+        kept.push(entry);
+    }
+    kept.sort();
+    (kept, truncated)
+}
+
+/// 组装上报请求，并做最终体积兜底：确保 encoded_len() 始终不超过 MAX_SNAPSHOT_BYTES（3 MiB）。
+#[cfg(target_os = "linux")]
+fn build_report_request(agent_id: &str, snap: Snapshot) -> ReportSshKeysRequest {
+    let mut req = ReportSshKeysRequest {
+        agent_id: agent_id.to_string(),
+        observed_at_ms: snap.observed_at_ms,
+        keys: snap
+            .keys
+            .into_iter()
+            .map(|k| SshAuthorizedKey {
+                account: k.account,
+                path: k.path,
+                key_type: k.key_type,
+                fingerprint: k.fingerprint,
+                comment: k.comment,
+                options: k.options,
+            })
+            .collect(),
+        authorized_keys_command: snap.authorized_keys_command,
+        authorized_keys_command_user: snap.authorized_keys_command_user,
+    };
+    let mut popped = 0usize;
+    while !req.keys.is_empty() && req.encoded_len() > MAX_SNAPSHOT_BYTES {
+        req.keys.pop();
+        popped += 1;
+    }
+    if popped > 0 {
+        eprintln!(
+            "SSH 钥匙上报请求超出单帧体积预算（{} 字节），额外截断 {popped} 条以保证低于 gRPC 上限",
+            MAX_SNAPSHOT_BYTES
+        );
+    }
+    req
+}
+
+#[cfg(target_os = "linux")]
+fn kill_process_group(child: &mut std::process::Child) {
+    let pid = child.id() as libc::pid_t;
+    if pid > 0 {
+        // SAFETY: 调用方通过 process_group(0) 为子进程建立了独立进程组（pgid == pid），
+        // 向负 pgid 发送 SIGKILL 终止整棵进程树，防后代继承 stdout 写端导致挂死。
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[cfg(target_os = "linux")]
 fn read_child_stdout_with_timeout(
-    mut child: std::process::Child,
+    child: std::process::Child,
     timeout: Duration,
     max_bytes: usize,
 ) -> Option<String> {
+    read_child_stdout_checked(child, timeout, max_bytes).map(|(text, truncated)| {
+        if truncated {
+            eprintln!("sshd -T 输出超过 {max_bytes} 字节上限，已截断处理");
+        }
+        text
+    })
+}
+
+/// 带超时读取子进程 stdout：读线程经 channel 返回结果，主线程按共享 deadline 等待（绝不无限 join），
+/// 超时或 try_wait 异常均杀整棵进程树并回收子进程。返回 `Some((输出文本, 是否截断))`。
+#[cfg(target_os = "linux")]
+fn read_child_stdout_checked(
+    mut child: std::process::Child,
+    timeout: Duration,
+    max_bytes: usize,
+) -> Option<(String, bool)> {
     use std::io::Read;
 
     // 后台线程并发排空 stdout，避免输出超过 64 KiB 管道缓冲区时主线程等待退出发生死锁
-    let reader = child.stdout.take().map(|mut stdout| {
+    let rx = child.stdout.take().map(|mut stdout| {
+        let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut kept = Vec::new();
+            let mut truncated = false;
             let mut chunk = [0u8; 8192];
             while let Ok(n) = stdout.read(&mut chunk) {
                 if n == 0 {
@@ -853,30 +979,50 @@ fn read_child_stdout_with_timeout(
                 if kept.len() < max_bytes {
                     let take = (max_bytes - kept.len()).min(n);
                     kept.extend_from_slice(&chunk[..take]);
+                    if take < n {
+                        truncated = true;
+                    }
+                } else {
+                    truncated = true;
                 }
             }
-            kept
-        })
-    });
+            let _ = tx.send((kept, truncated));
+        });
+        rx
+    })?;
 
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = Instant::now() + timeout;
     let exited_ok = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status.success(),
             Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break false;
+                if Instant::now() >= deadline {
+                    kill_process_group(&mut child);
+                    return None;
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
-            Err(_) => break false,
+            Err(_) => {
+                kill_process_group(&mut child);
+                return None;
+            }
         }
     };
 
-    let bytes = reader.and_then(|h| h.join().ok())?;
-    exited_ok.then(|| String::from_utf8_lossy(&bytes).into_owned())
+    if !exited_ok {
+        return None;
+    }
+
+    let rem = deadline.saturating_duration_since(Instant::now());
+    let (bytes, truncated) = match rx.recv_timeout(rem) {
+        Ok(pair) => pair,
+        Err(_) => {
+            // 父进程已退出但后代进程仍持有 stdout 写端，杀整棵进程组并超时放弃
+            kill_process_group(&mut child);
+            return None;
+        }
+    };
+    Some((String::from_utf8_lossy(&bytes).into_owned(), truncated))
 }
 
 #[cfg(target_os = "linux")]
@@ -890,6 +1036,7 @@ fn read_sshd_config() -> SshdKeyConfig {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            .process_group(0)
             .spawn()
         else {
             continue;
@@ -1102,16 +1249,19 @@ authorizedkeyscommanduser nobody\n";
     fn read_child_stdout_handles_large_output_without_deadlock_and_times_out() {
         use std::process::{Command, Stdio};
 
-        // 输出 128 KiB（超过默认 64 KiB 管道缓冲），验证并发读线程不死锁且按上限截断
+        // 输出 128 KiB（超过默认 64 KiB 管道缓冲），验证并发读线程不死锁且按上限截断并标记 truncated
         let child = Command::new("sh")
             .args(["-c", "head -c 131072 /dev/zero | tr '\\0' 'a'"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            .process_group(0)
             .spawn()
             .unwrap();
-        let out = read_child_stdout_with_timeout(child, Duration::from_secs(5), 1024).unwrap();
+        let (out, truncated) =
+            read_child_stdout_checked(child, Duration::from_secs(5), 1024).unwrap();
         assert_eq!(out.len(), 1024);
+        assert!(truncated, "超上限输出应明确标记截断");
 
         // 超时子进程应被及时终止返回 None
         let started = std::time::Instant::now();
@@ -1120,9 +1270,67 @@ authorizedkeyscommanduser nobody\n";
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            .process_group(0)
             .spawn()
             .unwrap();
         assert!(read_child_stdout_with_timeout(slow, Duration::from_millis(150), 1024).is_none());
         assert!(started.elapsed() < Duration::from_secs(3));
+
+        // 父进程立刻退出但后代进程仍持 stdout 写端 sleep 30，验证在 deadline 内准时返回不挂死
+        let started = std::time::Instant::now();
+        let leaky = Command::new("sh")
+            .args(["-c", "sleep 30 &"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        assert!(read_child_stdout_with_timeout(leaky, Duration::from_millis(200), 1024).is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "后代持有 stdout 写端时应在 deadline 内返回不挂死，实际耗时 {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn snapshot_protobuf_budget_caps_frame_under_3_mib() {
+        // 构造 600 条合法但选项很长的条目（单条约 16 KiB，总量 ~9.6 MiB >> 4 MiB gRPC 默认上限）
+        let long_opts: Vec<String> = (0..MAX_OPTIONS_PER_KEY)
+            .map(|j| format!("from=\"{}\"", "1".repeat(240 - (j % 10))))
+            .collect();
+        let entries: Vec<KeyEntry> = (0..600)
+            .map(|i| KeyEntry {
+                account: format!("user{i}"),
+                path: format!("/home/user{i}/.ssh/authorized_keys"),
+                key_type: "ssh-ed25519".into(),
+                fingerprint: format!("SHA256:{i:043}"),
+                comment: "c".repeat(MAX_COMMENT_CHARS),
+                options: long_opts.clone(),
+            })
+            .collect();
+
+        let base = base_request_bytes("/usr/local/bin/fetch-keys", "nobody");
+        let (kept, truncated) = pack_keys_within_budget(entries, base, MAX_SNAPSHOT_BYTES);
+        assert!(truncated, "总量超过 3 MiB 时必须触发截断");
+        assert!(!kept.is_empty(), "截断后应保留预算内的合法条目");
+        assert!(kept.len() < 600);
+
+        let snap = Snapshot {
+            observed_at_ms: 1_700_000_000_000,
+            keys: kept,
+            authorized_keys_command: "/usr/local/bin/fetch-keys".into(),
+            authorized_keys_command_user: "nobody".into(),
+            truncated,
+        };
+        let req = build_report_request("agent-host-01", snap);
+        assert!(
+            req.encoded_len() <= MAX_SNAPSHOT_BYTES,
+            "单帧 protobuf 编码体积 {} 超过 3 MiB 预算 {}",
+            req.encoded_len(),
+            MAX_SNAPSHOT_BYTES
+        );
     }
 }

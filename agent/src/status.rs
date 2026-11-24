@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 const ISOLATION_TTL: Duration = Duration::from_secs(10);
 /// 本机状态端点并发处理连接上限，超限时直接关闭新连接，防打满任务或阻塞线程池
 const MAX_CONCURRENT_STATUS: usize = 16;
+/// 单次状态查询（含获取单飞锁与隔离状态探针刷新）的总截止时间，防底层探针卡死占满并发槽位
+const STATUS_REPLY_TIMEOUT: Duration = Duration::from_secs(3);
 
 type IsolationCache = Arc<tokio::sync::Mutex<Option<(Instant, bool)>>>;
 
@@ -29,8 +31,11 @@ where
     value
 }
 
-async fn snapshot(health: &Health, cache: &IsolationCache) -> Status {
-    let isolated = isolated_with(cache, crate::respond::host_isolated).await;
+async fn snapshot_with<F>(health: &Health, cache: &IsolationCache, probe: F) -> Status
+where
+    F: FnOnce() -> bool + Send + 'static,
+{
+    let isolated = isolated_with(cache, probe).await;
     Status {
         version: env!("CARGO_PKG_VERSION").into(),
         last_contact_unix_ms: health.last_contact_ms(),
@@ -39,12 +44,38 @@ async fn snapshot(health: &Health, cache: &IsolationCache) -> Status {
     }
 }
 
-/// 一次连接的回复：一行 JSON。缓存命中全程纯异步；仅缓存过期时单飞进阻塞线程
-async fn reply(health: Arc<Health>, cache: IsolationCache) -> Option<Vec<u8>> {
-    let status = snapshot(&health, &cache).await;
+#[cfg(all(test, unix))]
+async fn snapshot(health: &Health, cache: &IsolationCache) -> Status {
+    snapshot_with(health, cache, crate::respond::host_isolated).await
+}
+
+/// 一次连接的回复：一行 JSON。缓存命中全程纯异步；仅缓存过期时单飞进阻塞线程，
+/// 整个等待（含排队等锁与探针执行）受 timeout 约束，超时返回 None 直接关闭连接释放槽位。
+async fn reply_with<F>(
+    health: Arc<Health>,
+    cache: IsolationCache,
+    timeout: Duration,
+    probe: F,
+) -> Option<Vec<u8>>
+where
+    F: FnOnce() -> bool + Send + 'static,
+{
+    let status = tokio::time::timeout(timeout, snapshot_with(&health, &cache, probe))
+        .await
+        .ok()?;
     let mut line = serde_json::to_vec(&status).ok()?;
     line.push(b'\n');
     Some(line)
+}
+
+async fn reply(health: Arc<Health>, cache: IsolationCache) -> Option<Vec<u8>> {
+    reply_with(
+        health,
+        cache,
+        STATUS_REPLY_TIMEOUT,
+        crate::respond::host_isolated,
+    )
+    .await
 }
 
 /// 开本机状态端点。起不来（非 root 调试、端点被占）只是没有托盘与状态命令可用，采集照常
@@ -337,5 +368,37 @@ mod tests {
             1,
             "并发过期刷新应单飞执行一次"
         );
+    }
+
+    #[tokio::test]
+    async fn reply_times_out_when_probe_stalls_and_recovers_afterwards() {
+        let health = Health::new();
+        let cache = IsolationCache::default();
+
+        // 探针阻塞远超 reply deadline：必须在 deadline 内返回 None，不挂死、不写脏缓存
+        let started = Instant::now();
+        let timed_out = reply_with(
+            health.clone(),
+            cache.clone(),
+            Duration::from_millis(80),
+            || {
+                std::thread::sleep(Duration::from_millis(300));
+                false
+            },
+        )
+        .await;
+        assert!(timed_out.is_none(), "探针卡死时应超时返回 None 释放槽位");
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "超时返回不应等待卡死探针结束"
+        );
+        assert!(cache.lock().await.is_none(), "超时后不得写入错误缓存");
+
+        // 探针恢复后应正常返回状态 JSON 并刷新缓存
+        let line = reply_with(health, cache, Duration::from_millis(500), || true)
+            .await
+            .expect("探针恢复后应正常返回状态");
+        let status: Status = serde_json::from_slice(&line).unwrap();
+        assert!(status.isolated);
     }
 }

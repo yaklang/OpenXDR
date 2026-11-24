@@ -7,7 +7,8 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
-use std::process::{Command, Output, Stdio};
+use std::os::unix::process::CommandExt;
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
@@ -69,22 +70,57 @@ pub fn spawn(agent_id: String, sink: EventSink) {
 /// 发行版 ID 与版本（/etc/os-release），漏洞库按发行版版本分生态
 pub type Os = (String, String);
 
-/// 带超时执行外部命令：后台线程并发排空 stdout/stderr 防管道死锁，超时强制 kill 并回收子进程。
-fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> std::io::Result<Output> {
+#[derive(Debug)]
+struct CmdOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    stdout_truncated: bool,
+}
+
+fn kill_process_group(child: &mut std::process::Child) {
+    let pid = child.id() as libc::pid_t;
+    if pid > 0 {
+        // SAFETY: 子进程已通过 process_group(0) 独立成组（pgid == pid），
+        // 向负 pgid 发 SIGKILL 杀整棵进程树，防后代继承管道写端导致挂死。
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// 带超时执行外部命令：子进程独立进程组，后台线程经 channel 排空 stdout/stderr 并与命令共享同一截止时间，
+/// 绝不无期限 join；超时或异常时杀整棵进程树并回收子进程。
+fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> std::io::Result<CmdOutput> {
+    run_with_limits(program, args, timeout, MAX_CMD_OUTPUT_BYTES, 64 * 1024)
+}
+
+fn run_with_limits(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+    max_stdout: usize,
+    max_stderr: usize,
+) -> std::io::Result<CmdOutput> {
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()?;
 
     fn drain_pipe<R: Read + Send + 'static>(
         pipe: Option<R>,
         limit: usize,
-    ) -> Option<std::thread::JoinHandle<Vec<u8>>> {
+    ) -> Option<std::sync::mpsc::Receiver<(Vec<u8>, bool)>> {
         pipe.map(|mut r| {
+            let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let mut kept = Vec::new();
+                let mut truncated = false;
                 let mut chunk = [0u8; 8192];
                 while let Ok(n) = r.read(&mut chunk) {
                     if n == 0 {
@@ -93,30 +129,29 @@ fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> std::io:
                     if kept.len() < limit {
                         let take = (limit - kept.len()).min(n);
                         kept.extend_from_slice(&chunk[..take]);
+                        if take < n {
+                            truncated = true;
+                        }
+                    } else {
+                        truncated = true;
                     }
                 }
-                kept
-            })
+                let _ = tx.send((kept, truncated));
+            });
+            rx
         })
     }
 
-    let out_reader = drain_pipe(child.stdout.take(), MAX_CMD_OUTPUT_BYTES);
-    let err_reader = drain_pipe(child.stderr.take(), 64 * 1024);
+    let out_rx = drain_pipe(child.stdout.take(), max_stdout);
+    let err_rx = drain_pipe(child.stderr.take(), max_stderr);
 
     let deadline = Instant::now() + timeout;
     let status = loop {
-        match child.try_wait()? {
-            Some(status) => break status,
-            None => {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    if let Some(h) = out_reader {
-                        let _ = h.join();
-                    }
-                    if let Some(h) = err_reader {
-                        let _ = h.join();
-                    }
+                    kill_process_group(&mut child);
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
                         format!("{program} 执行超时"),
@@ -124,15 +159,39 @@ fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> std::io:
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
+            Err(e) => {
+                kill_process_group(&mut child);
+                return Err(e);
+            }
         }
     };
 
-    let stdout = out_reader.and_then(|h| h.join().ok()).unwrap_or_default();
-    let stderr = err_reader.and_then(|h| h.join().ok()).unwrap_or_default();
-    Ok(Output {
+    let recv = |rx: Option<std::sync::mpsc::Receiver<(Vec<u8>, bool)>>,
+                child: &mut std::process::Child|
+     -> std::io::Result<(Vec<u8>, bool)> {
+        let Some(rx) = rx else {
+            return Ok((Vec::new(), false));
+        };
+        let rem = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(rem) {
+            Ok(pair) => Ok(pair),
+            Err(_) => {
+                kill_process_group(child);
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("{program} 管道读取超时"),
+                ))
+            }
+        }
+    };
+
+    let (stdout, stdout_truncated) = recv(out_rx, &mut child)?;
+    let (stderr, _) = recv(err_rx, &mut child)?;
+    Ok(CmdOutput {
         status,
         stdout,
         stderr,
+        stdout_truncated,
     })
 }
 
@@ -166,6 +225,9 @@ fn snapshot() -> Result<(Os, &'static str, Vec<Package>), String> {
     };
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    if out.stdout_truncated {
+        return Err(format!("{manager} 输出超过上限被截断，拒绝使用残缺清单"));
     }
     let text = String::from_utf8_lossy(&out.stdout);
     let packages = if manager == "rpm" {
@@ -414,5 +476,34 @@ mod tests {
         let err = run_with_timeout("sleep", &["30"], Duration::from_millis(150)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn run_with_timeout_does_not_hang_when_descendant_holds_stdout() {
+        // 父 shell 立刻退出，但后台后代 sleep 仍继承 stdout 写端，验证在 deadline 内返回且不挂死
+        let started = Instant::now();
+        let err =
+            run_with_timeout("sh", &["-c", "sleep 30 &"], Duration::from_millis(200)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "后代持有 stdout 写端时应在 deadline 内返回，实际耗时 {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn run_with_limits_marks_truncated_output() {
+        let out = run_with_limits(
+            "sh",
+            &["-c", "head -c 4096 /dev/zero | tr '\\0' 'a'"],
+            Duration::from_secs(5),
+            128,
+            1024,
+        )
+        .unwrap();
+        assert!(out.status.success());
+        assert_eq!(out.stdout.len(), 128);
+        assert!(out.stdout_truncated, "超上限输出应明确标记截断");
     }
 }

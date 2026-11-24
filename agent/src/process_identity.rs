@@ -4,6 +4,8 @@ use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 
 const MAX_IDENTITIES: usize = 65536;
+/// 满表时单次在锁外做存活探测的最老候选批量，避免持有全局锁全表扫描阻塞采集与处置。
+const PRUNE_BATCH: usize = 256;
 /// 清理已退出进程后若仍达上限，按写入顺序淘汰最老的一小批条目，绝不全量清空存活进程。
 const EVICT_BATCH: usize = 64;
 
@@ -21,39 +23,63 @@ struct IdentityTable {
 }
 
 impl IdentityTable {
-    fn insert_with_limit(
+    fn insert_direct(&mut self, pid: u32, guid: Uuid, birth: u64) {
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.wrapping_add(1);
+        self.entries.insert(pid, Entry { guid, birth, seq });
+    }
+
+    /// 抽取写入序最老的最多 `batch` 条 `(pid, birth)` 候选，供调用方释放锁后在锁外做内核存活探测。
+    fn sample_oldest(&self, batch: usize) -> Vec<(u32, u64)> {
+        if batch == 0 || self.entries.is_empty() {
+            return Vec::new();
+        }
+        let mut by_age: Vec<(u64, u32, u64)> = self
+            .entries
+            .iter()
+            .map(|(&p, e)| (e.seq, p, e.birth))
+            .collect();
+        if by_age.len() > batch {
+            by_age.select_nth_unstable_by_key(batch, |&(seq, _, _)| seq);
+            by_age.truncate(batch);
+        }
+        by_age.into_iter().map(|(_, p, b)| (p, b)).collect()
+    }
+
+    /// 删除锁外探测确认已退出的陈旧条目（仅当 birth 仍匹配时才删，防释锁期间同 PID 新写入被误删）；
+    /// 若仍达上限，按写入顺序淘汰最老的一小批，再插入新条目。
+    fn apply_prune_and_insert(
         &mut self,
         pid: u32,
         guid: Uuid,
-        birth: Option<u64>,
+        birth: u64,
         limit: usize,
-        mut is_alive: impl FnMut(u32, u64) -> bool,
+        dead: &[(u32, u64)],
     ) {
+        for &(dead_pid, dead_birth) in dead {
+            if self
+                .entries
+                .get(&dead_pid)
+                .is_some_and(|e| e.birth == dead_birth)
+            {
+                self.entries.remove(&dead_pid);
+            }
+        }
         self.entries.remove(&pid);
-        let Some(birth) = birth else {
-            return;
-        };
-        if limit == 0 {
-            return;
-        }
         if self.entries.len() >= limit {
-            // 优先清理已退出或 PID 已被复用的陈旧记录，保护存活进程不被 fork 洪泛挤出
-            self.entries.retain(|&p, entry| is_alive(p, entry.birth));
-        }
-        if self.entries.len() >= limit {
-            // 极端情况下存活进程真达上限：仅驱逐最老的少量条目
             let target = limit.saturating_sub(EVICT_BATCH.min(limit).max(1));
             let drop_count = self.entries.len().saturating_sub(target);
             let mut by_age: Vec<(u64, u32)> =
                 self.entries.iter().map(|(&p, e)| (e.seq, p)).collect();
-            by_age.sort_unstable();
-            for (_, old_pid) in by_age.into_iter().take(drop_count) {
+            if drop_count < by_age.len() {
+                by_age.select_nth_unstable_by_key(drop_count, |&(seq, _)| seq);
+                by_age.truncate(drop_count);
+            }
+            for (_, old_pid) in by_age {
                 self.entries.remove(&old_pid);
             }
         }
-        let seq = self.next_seq;
-        self.next_seq = self.next_seq.wrapping_add(1);
-        self.entries.insert(pid, Entry { guid, birth, seq });
+        self.insert_direct(pid, guid, birth);
     }
 
     fn matches(&self, pid: u32, guid: Uuid, birth: u64) -> bool {
@@ -72,10 +98,57 @@ fn is_pid_alive(pid: u32, expected_birth: u64) -> bool {
     Target::read_birth(pid).ok() == Some(expected_birth)
 }
 
+/// 分批增量清理并记录进程身份：所有内核存活探测 I/O 均在释放全局锁后执行。
+fn record_with(
+    table: &Mutex<IdentityTable>,
+    pid: u32,
+    guid: Uuid,
+    birth: Option<u64>,
+    limit: usize,
+    prune_batch: usize,
+    mut is_alive: impl FnMut(u32, u64) -> bool,
+) {
+    let candidates = {
+        let mut ids = table.lock().unwrap_or_else(|e| e.into_inner());
+        ids.entries.remove(&pid);
+        let Some(birth) = birth else {
+            return;
+        };
+        if limit == 0 {
+            return;
+        }
+        if ids.entries.len() < limit {
+            ids.insert_direct(pid, guid, birth);
+            return;
+        }
+        ids.sample_oldest(prune_batch)
+    };
+
+    // 锁外执行分批存活探测，不阻塞并发采集与 verified() 处置校验
+    let dead: Vec<(u32, u64)> = candidates
+        .into_iter()
+        .filter(|&(p, b)| !is_alive(p, b))
+        .collect();
+
+    let Some(birth) = birth else {
+        return;
+    };
+    let mut ids = table.lock().unwrap_or_else(|e| e.into_inner());
+    ids.apply_prune_and_insert(pid, guid, birth, limit, &dead);
+}
+
 pub fn record(pid: u32, guid: Uuid) {
+    // 读取进程创建时间（Linux 读 /proc，Windows 调 Target::open_readonly）始终在锁外执行
     let birth = Target::read_birth(pid).ok();
-    let mut ids = identities().lock().unwrap_or_else(|e| e.into_inner());
-    ids.insert_with_limit(pid, guid, birth, MAX_IDENTITIES, is_pid_alive);
+    record_with(
+        identities(),
+        pid,
+        guid,
+        birth,
+        MAX_IDENTITIES,
+        PRUNE_BATCH,
+        is_pid_alive,
+    );
 }
 
 pub fn verified(pid: u32, guid: &str) -> Result<Target, String> {
@@ -303,41 +376,74 @@ mod tests {
     }
 
     #[test]
-    fn full_table_prunes_dead_and_preserves_alive_entries() {
-        let mut table = IdentityTable::default();
+    fn full_table_prunes_dead_in_batches_outside_lock_and_preserves_alive_entries() {
+        let table = Mutex::new(IdentityTable::default());
         let alive_guid = Uuid::new_v4();
         let new_guid = Uuid::new_v4();
-        // 模拟表满（limit = 4）：PID 100 存活，PID 101..=103 已退出
-        table.insert_with_limit(100, alive_guid, Some(1000), 4, |p, _| p == 100);
-        for p in 101..=103 {
-            table.insert_with_limit(p, Uuid::new_v4(), Some(1000 + p as u64), 4, |pid, _| {
-                pid == 100
-            });
+        // 模拟表满（limit = 10，prune_batch = 4）：PID 100 存活，PID 101..=109 已退出
+        record_with(&table, 100, alive_guid, Some(1000), 10, 4, |p, _| p == 100);
+        for p in 101..=109 {
+            record_with(
+                &table,
+                p,
+                Uuid::new_v4(),
+                Some(1000 + p as u64),
+                10,
+                4,
+                |pid, _| pid == 100,
+            );
         }
-        assert_eq!(table.entries.len(), 4);
+        assert_eq!(table.lock().unwrap().entries.len(), 10);
 
-        // 插入第 5 条触发清理：已退出 PID 被清理，存活的 PID 100 必须保留
-        table.insert_with_limit(200, new_guid, Some(2000), 4, |p, _| p == 100 || p == 200);
-        assert!(table.matches(100, alive_guid, 1000), "存活进程不得被清空");
-        assert!(table.matches(200, new_guid, 2000));
-        assert_eq!(table.entries.len(), 2);
+        // 插入第 11 条触发分批清理：只探测最老的 4 条，且回调期间全局锁已释放
+        let mut probed = 0usize;
+        let reused_guid = Uuid::new_v4();
+        record_with(&table, 200, new_guid, Some(2000), 10, 4, |p, _| {
+            probed += 1;
+            // 验证存活探测在锁外执行：此处可立即拿到锁
+            let mut guard = table.try_lock().expect("is_alive 必须在释放全局锁后执行");
+            // 模拟释锁期间 PID 102 被新进程复用并覆盖了 birth，旧候选判死后不得误删新写入
+            if p == 102 {
+                guard.insert_direct(102, reused_guid, 9999);
+            }
+            p == 100
+        });
+        assert_eq!(probed, 4, "满表时只应分批探测 prune_batch 条最老候选");
+        {
+            let guard = table.lock().unwrap();
+            assert!(guard.matches(100, alive_guid, 1000), "存活进程不得被清空");
+            assert!(
+                guard.matches(102, reused_guid, 9999),
+                "释锁期间同 PID 新写入的条目不得被旧探测结果误删"
+            );
+            assert!(guard.matches(200, new_guid, 2000));
+            // 抽查的 4 条为 100(活)、101(死删)、102(已换新birth保留)、103(死删) -> 10 - 2 + 1 = 9
+            assert_eq!(guard.entries.len(), 9);
+        }
 
         // 全部存活且达上限时，只驱逐最老的少量条目，保留其余存活进程
-        let mut full = IdentityTable::default();
+        let full = Mutex::new(IdentityTable::default());
         let mut guids = Vec::new();
         for p in 1..=100u32 {
             let g = Uuid::new_v4();
             guids.push((p, g));
-            full.insert_with_limit(p, g, Some(p as u64), 100, |_, _| true);
+            record_with(&full, p, g, Some(p as u64), 100, 16, |_, _| true);
         }
         let extra = Uuid::new_v4();
-        full.insert_with_limit(101, extra, Some(101), 100, |_, _| true);
-        assert!(full.entries.len() < 100);
+        let mut probed_full = 0usize;
+        record_with(&full, 101, extra, Some(101), 100, 16, |_, _| {
+            probed_full += 1;
+            assert!(full.try_lock().is_ok(), "锁外探测不应持有全局锁");
+            true
+        });
+        assert_eq!(probed_full, 16);
+        let guard = full.lock().unwrap();
+        assert!(guard.entries.len() < 100);
         assert!(
-            full.matches(100, guids[99].1, 100),
+            guard.matches(100, guids[99].1, 100),
             "较新的存活进程不得被全量清空"
         );
-        assert!(full.matches(101, extra, 101));
-        assert!(!full.matches(1, guids[0].1, 1), "最老条目应被优先驱逐");
+        assert!(guard.matches(101, extra, 101));
+        assert!(!guard.matches(1, guids[0].1, 1), "最老条目应被优先驱逐");
     }
 }

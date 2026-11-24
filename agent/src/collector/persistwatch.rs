@@ -7,7 +7,7 @@
 //! 且注册表通知本身也不告诉你改了什么，终归要 diff。
 //! 增、改、删都上报：清理持久化痕迹与写入痕迹同样是攻击信号。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::process::Stdio;
@@ -16,6 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::pb::AgentEvent;
 
 use super::EventSink;
+use super::persistwatch_tasks::{reconcile_snapshot, scan_dir_snapshot};
 
 /// OCSF Registry Value Activity / File System Activity
 const CLASS_REGISTRY: u32 = 201002;
@@ -76,7 +77,12 @@ fn run(agent_id: &str, sink: &EventSink) {
     let mut reg_seen = registry_snapshot();
     let mut file_seen = startup_snapshot();
     let mut svc_seen = services_snapshot();
-    let mut task_seen = tasks_snapshot(None);
+    let mut task_seen = tasks_snapshot(None).map(|(snap, complete)| {
+        if !complete {
+            eprintln!("计划任务首轮基线未完整扫描（触发上限或读取失败），后续完整轮次将自动补齐");
+        }
+        snap
+    });
     let mut wmi_seen = wmi_snapshot();
 
     while !sink.is_closed() {
@@ -117,16 +123,19 @@ fn run(agent_id: &str, sink: &EventSink) {
             svc_seen = Some(svc_now);
         }
 
-        if let Some(task_now) = tasks_snapshot(task_seen.as_ref()) {
-            if let Some(seen) = &task_seen {
-                for (path, task, activity) in diff(seen, &task_now) {
-                    let prev = seen.get(path).filter(|_| activity == 3);
-                    if !sink.send(task_event(agent_id, path, task, prev, activity)) {
-                        return;
-                    }
+        if let Some((task_now, complete)) = tasks_snapshot(task_seen.as_ref()) {
+            if !complete {
+                eprintln!(
+                    "计划任务快照未完整扫描（触发深度/条目上限或目录读取失败），本轮保留未覆盖旧基线并跳过删除判定"
+                );
+            }
+            let (next_seen, changes) = reconcile_snapshot(task_seen.as_ref(), task_now, complete);
+            for (path, task, prev, activity) in changes {
+                if !sink.send(task_event(agent_id, &path, &task, prev.as_ref(), activity)) {
+                    return;
                 }
             }
-            task_seen = Some(task_now);
+            task_seen = Some(next_seen);
         }
 
         if let Some(wmi_now) = wmi_snapshot() {
@@ -575,7 +584,7 @@ fn startup_snapshot() -> HashMap<String, ()> {
 
 /// 计划任务快照里的一项。系统维护一夜改几十次自带任务的触发器与状态，动作不变；
 /// 劫持已有任务（T1053.005）改的是动作，所以动作单独拿出来比。
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 struct TaskEntry {
     mtime: u64,
     size: u64,
@@ -587,11 +596,13 @@ struct TaskEntry {
 const MAX_TASK_DEPTH: usize = 8;
 const MAX_TASK_ENTRIES: usize = 4096;
 
-/// 计划任务快照：任务文件路径 -> mtime 秒、大小与动作。
+/// 计划任务快照：任务文件路径 -> mtime 秒、大小与动作，以及本轮是否完整扫描（`complete`）。
 /// 返回 None 表示 Tasks 根目录都读不了（权限等），本轮整体跳过；
-/// 子目录读取失败只跳过该子目录。任务文件这一轮读不到（计划任务服务正在写）时沿用上一轮的动作，
-/// 不把"读不到"当成动作变化。
-fn tasks_snapshot(prev: Option<&HashMap<String, TaskEntry>>) -> Option<HashMap<String, TaskEntry>> {
+/// 若触及深度/条目上限或任一子目录读取失败，`complete` 为 `false`，调用方跳过删除判定并保留旧基线缺失项。
+/// 任务文件这一轮读不到（计划任务服务正在写）时沿用上一轮的动作，不把"读不到"当成动作变化。
+fn tasks_snapshot(
+    prev: Option<&BTreeMap<String, TaskEntry>>,
+) -> Option<(BTreeMap<String, TaskEntry>, bool)> {
     tasks_snapshot_at(
         std::path::Path::new(TASKS_DIR),
         prev,
@@ -602,58 +613,31 @@ fn tasks_snapshot(prev: Option<&HashMap<String, TaskEntry>>) -> Option<HashMap<S
 
 fn tasks_snapshot_at(
     root: &std::path::Path,
-    prev: Option<&HashMap<String, TaskEntry>>,
+    prev: Option<&BTreeMap<String, TaskEntry>>,
     max_depth: usize,
     max_entries: usize,
-) -> Option<HashMap<String, TaskEntry>> {
-    let mut snap = HashMap::new();
-    let mut stack = vec![(std::fs::read_dir(root).ok()?, 0usize)];
-    let mut visited = 0usize;
-    while let Some((entries, depth)) = stack.pop() {
-        for e in entries.flatten() {
-            if visited >= max_entries {
-                return Some(snap);
-            }
-            visited += 1;
-            // DirEntry::file_type 不跟随符号链接或 Windows 目录联接（reparse point）
-            let Ok(ft) = e.file_type() else {
-                continue;
-            };
-            if ft.is_symlink() {
-                continue;
-            }
-            let path = e.path();
-            if ft.is_dir() {
-                if depth < max_depth
-                    && let Ok(sub) = std::fs::read_dir(&path)
-                {
-                    stack.push((sub, depth + 1));
-                }
-            } else if ft.is_file()
-                && let Ok(meta) = e.metadata()
-            {
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let key = path.display().to_string();
-                let actions = read_task(&path)
-                    .map(|xml| task_actions(&xml))
-                    .or_else(|| prev?.get(&key)?.actions.clone());
-                snap.insert(
-                    key,
-                    TaskEntry {
-                        mtime,
-                        size: meta.len(),
-                        actions,
-                    },
-                );
-            }
-        }
-    }
-    Some(snap)
+) -> Option<(BTreeMap<String, TaskEntry>, bool)> {
+    scan_dir_snapshot(root, max_depth, max_entries, |e, path| {
+        let meta = e.metadata().ok()?;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let key = path.display().to_string();
+        let actions = read_task(path)
+            .map(|xml| task_actions(&xml))
+            .or_else(|| prev?.get(&key)?.actions.clone());
+        Some((
+            key,
+            TaskEntry {
+                mtime,
+                size: meta.len(),
+                actions,
+            },
+        ))
+    })
 }
 
 /// 任务文件只读前 1 MiB：计划任务服务写出的 XML 只有几 KB，不为塞进来的大文件每 30 秒读一遍。

@@ -4,15 +4,50 @@ use super::netblock::Net;
 use crate::pb::Command;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::ptr::{null, null_mut};
-use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{FWP_E_ALREADY_EXISTS, FWP_E_SUBLAYER_NOT_FOUND, HANDLE};
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::*;
 use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_WINNT;
 use windows_sys::core::GUID;
 
 const SUBLAYER: GUID = GUID::from_u128(0x76d87151_94b3_42bd_9394_127c3b11492e);
-const DNS_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_ALLOW_ENDPOINTS: usize = 128;
+const TOTAL_RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESOLVED: usize = 32;
+const MAX_TOTAL_ENDPOINTS: usize = 256;
+const MAX_INFLIGHT_DNS: usize = 8;
+
+static INFLIGHT_DNS: AtomicUsize = AtomicUsize::new(0);
+
+/// 在途 DNS 解析并发槽位，解析线程结束时自动归还。
+struct DnsSlot;
+
+impl DnsSlot {
+    fn try_acquire() -> Option<Self> {
+        let mut cur = INFLIGHT_DNS.load(Ordering::Relaxed);
+        loop {
+            if cur >= MAX_INFLIGHT_DNS {
+                return None;
+            }
+            match INFLIGHT_DNS.compare_exchange_weak(
+                cur,
+                cur + 1,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Some(Self),
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+}
+
+impl Drop for DnsSlot {
+    fn drop(&mut self) {
+        INFLIGHT_DNS.fetch_sub(1, Ordering::Release);
+    }
+}
 const LAYERS: [(GUID, bool); 4] = [
     (FWPM_LAYER_ALE_AUTH_CONNECT_V4, false),
     (FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, false),
@@ -50,21 +85,57 @@ fn hostname(s: &str) -> bool {
         })
 }
 
-fn resolve_hostname(host: &str, port: Option<u16>, timeout: Duration) -> Result<Vec<Net>, String> {
+fn system_resolve(host: &str, port: u16) -> Result<Vec<IpAddr>, String> {
+    (host, port)
+        .to_socket_addrs()
+        .map(|iter| iter.map(|a| a.ip()).collect())
+        .map_err(|e| e.to_string())
+}
+
+fn resolve_hostname_with<F>(
+    host: &str,
+    port: Option<u16>,
+    deadline: Instant,
+    resolver: F,
+) -> Result<Vec<Net>, String>
+where
+    F: Fn(&str, u16) -> Result<Vec<IpAddr>, String> + Send + 'static,
+{
+    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+        return Err(format!(
+            "放行地址 {host} 解析超时（已超过整条隔离指令截止时间）"
+        ));
+    };
+    if remaining.is_zero() {
+        return Err(format!(
+            "放行地址 {host} 解析超时（已超过整条隔离指令截止时间）"
+        ));
+    }
+    let Some(slot) = DnsSlot::try_acquire() else {
+        return Err(format!(
+            "在途 DNS 解析已达并发上限（{MAX_INFLIGHT_DNS}），拒绝解析 {host}"
+        ));
+    };
     let owned_host = host.to_string();
     let resolve_port = port.unwrap_or(0);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let res = (owned_host.as_str(), resolve_port)
-            .to_socket_addrs()
-            .map(|iter| iter.map(|a| a.ip()).collect::<Vec<_>>());
+        let _slot = slot;
+        let res = resolver(&owned_host, resolve_port);
         let _ = tx.send(res);
     });
-    let ips = match rx.recv_timeout(timeout) {
+    let ips = match rx.recv_timeout(remaining) {
         Ok(Ok(ips)) => ips,
         Ok(Err(e)) => return Err(format!("放行地址 {host} 解析失败：{e}")),
         Err(_) => return Err(format!("放行地址 {host} 解析超时")),
     };
+    validate_resolved_nets(host, ips)
+}
+
+fn validate_resolved_nets(
+    host: &str,
+    ips: impl IntoIterator<Item = IpAddr>,
+) -> Result<Vec<Net>, String> {
     let mut nets: Vec<Net> = ips
         .into_iter()
         .filter(|ip| !ip.is_unspecified() && !ip.is_multicast())
@@ -72,14 +143,22 @@ fn resolve_hostname(host: &str, port: Option<u16>, timeout: Duration) -> Result<
         .collect();
     nets.sort();
     nets.dedup();
-    nets.truncate(MAX_RESOLVED);
     if nets.is_empty() {
         return Err(format!("放行地址 {host} 没有解析出有效地址"));
+    }
+    if nets.len() > MAX_RESOLVED {
+        return Err(format!(
+            "放行地址 {host} 解析出 {} 个地址，超过上限 {MAX_RESOLVED}，拒绝截断以免丢失控制端地址",
+            nets.len()
+        ));
     }
     Ok(nets)
 }
 
-fn parse_endpoint(ep: &str) -> Result<Vec<Endpoint>, String> {
+fn parse_endpoint_with<F>(ep: &str, deadline: Instant, resolver: F) -> Result<Vec<Endpoint>, String>
+where
+    F: Fn(&str, u16) -> Result<Vec<IpAddr>, String> + Send + 'static,
+{
     let trimmed = ep.trim();
     if trimmed.is_empty() {
         return Err("放行地址为空".into());
@@ -125,17 +204,37 @@ fn parse_endpoint(ep: &str) -> Result<Vec<Endpoint>, String> {
             "放行地址无效（须为 IP、IP:端口、网段或主机名[:端口]）：{ep}"
         ));
     }
-    let nets = resolve_hostname(host, port, DNS_TIMEOUT)?;
+    let nets = resolve_hostname_with(host, port, deadline, resolver)?;
     Ok(nets.into_iter().map(|net| Endpoint { net, port }).collect())
 }
 
 fn endpoints(values: &[String]) -> Result<Vec<Endpoint>, String> {
-    if values.is_empty() || values.len() > 128 {
-        return Err("放行地址须为 1–128 项（IP、IP:端口、网段或主机名[:端口]）".into());
+    endpoints_with(values, TOTAL_RESOLVE_TIMEOUT, system_resolve)
+}
+
+fn endpoints_with<F>(
+    values: &[String],
+    total_timeout: Duration,
+    resolver: F,
+) -> Result<Vec<Endpoint>, String>
+where
+    F: Fn(&str, u16) -> Result<Vec<IpAddr>, String> + Send + Sync + Clone + 'static,
+{
+    if values.is_empty() || values.len() > MAX_ALLOW_ENDPOINTS {
+        return Err(format!(
+            "放行地址须为 1–{MAX_ALLOW_ENDPOINTS} 项（IP、IP:端口、网段或主机名[:端口]）"
+        ));
     }
+    let deadline = Instant::now() + total_timeout;
     let mut out = Vec::with_capacity(values.len());
     for s in values {
-        out.extend(parse_endpoint(s)?);
+        out.extend(parse_endpoint_with(s, deadline, resolver.clone())?);
+        if out.len() > MAX_TOTAL_ENDPOINTS {
+            return Err(format!(
+                "放行地址展开后共 {} 条，超过上限 {MAX_TOTAL_ENDPOINTS}，拒绝截断以免丢失控制端地址",
+                out.len()
+            ));
+        }
     }
     Ok(out)
 }
@@ -505,5 +604,36 @@ mod tests {
         let local = endpoints(&["localhost:8081".into()]).unwrap();
         assert!(!local.is_empty());
         assert!(local.iter().all(|e| e.port == Some(8081)));
+    }
+
+    #[test]
+    fn rejects_over_resolved_and_shares_overall_deadline() {
+        let ips = (0..64u8).map(|i| IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, i)));
+        let err = validate_resolved_nets("many.example.com", ips).unwrap_err();
+        assert!(err.contains("超过上限"), "{err}");
+
+        let domains: Vec<String> = (0..9).map(|i| format!("h{i}.example.com:443")).collect();
+        let err = endpoints_with(&domains, Duration::from_secs(2), |host, _| {
+            let idx: u8 = host
+                .strip_prefix('h')
+                .and_then(|s| s.split('.').next())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            Ok((1..=30u8)
+                .map(|j| IpAddr::V4(std::net::Ipv4Addr::new(10, idx, 0, j)))
+                .collect())
+        })
+        .unwrap_err();
+        assert!(err.contains("超过上限"), "{err}");
+
+        let slow: Vec<String> = (0..4).map(|i| format!("slow{i}.example.com:443")).collect();
+        let started = Instant::now();
+        let err = endpoints_with(&slow, Duration::from_millis(200), |_, _| {
+            std::thread::sleep(Duration::from_millis(120));
+            Ok(vec![IpAddr::V4(std::net::Ipv4Addr::new(10, 1, 1, 1))])
+        })
+        .unwrap_err();
+        assert!(err.contains("超时"), "{err}");
+        assert!(started.elapsed() < Duration::from_millis(450));
     }
 }

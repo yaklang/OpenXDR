@@ -3,9 +3,12 @@
 //!
 //! 独立表意味着解除隔离只需删掉这张表，不会碰到主机原有的防火墙规则。
 
+use std::io::Read;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
-use std::process::Command as Proc;
-use std::time::Duration;
+use std::os::unix::process::CommandExt;
+use std::process::{Command as Proc, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use super::Outcome;
 use super::netblock::Net;
@@ -13,10 +16,51 @@ use crate::pb::Command;
 
 /// 隔离规则单独一张表，与主机原有规则互不干扰
 const TABLE: &str = "openxdr_isolation";
-/// 主机名 DNS 解析超时，防止坏 DNS 长期卡死隔离指令
-const DNS_TIMEOUT: Duration = Duration::from_secs(5);
-/// 单个主机名最多放行的解析 IP 数量上限，防规则膨胀
+/// 单条隔离指令允许的放行地址输入项上限
+const MAX_ALLOW_ENDPOINTS: usize = 128;
+/// 整条隔离指令所有主机名解析共享的总截止时间，防止串行超时累计卡死指令流
+const TOTAL_RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
+/// 单个主机名最多允许解析出的去重 IP 数量，超限直接拒绝执行而非静默截断丢弃控制端地址
 const MAX_RESOLVED: usize = 32;
+/// 所有放行项展开后的总地址上限，超限直接拒绝执行而非静默丢弃
+const MAX_TOTAL_ENDPOINTS: usize = 256;
+/// 全局在途 DNS 解析并发上限，防止重复超时堆积无限多阻塞解析线程
+const MAX_INFLIGHT_DNS: usize = 8;
+/// `nft` 查询/删表子进程超时上限，防止内核或 nft 卡死拖垮状态探针与隔离解除
+const NFT_TIMEOUT: Duration = Duration::from_secs(3);
+/// `run_nft` 输出缓冲区保留上限
+const MAX_NFT_OUTPUT_BYTES: usize = 1024 * 1024;
+
+static INFLIGHT_DNS: AtomicUsize = AtomicUsize::new(0);
+
+/// 在途 DNS 解析并发槽位，解析线程结束时自动归还。
+struct DnsSlot;
+
+impl DnsSlot {
+    fn try_acquire() -> Option<Self> {
+        let mut cur = INFLIGHT_DNS.load(Ordering::Relaxed);
+        loop {
+            if cur >= MAX_INFLIGHT_DNS {
+                return None;
+            }
+            match INFLIGHT_DNS.compare_exchange_weak(
+                cur,
+                cur + 1,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Some(Self),
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+}
+
+impl Drop for DnsSlot {
+    fn drop(&mut self) {
+        INFLIGHT_DNS.fetch_sub(1, Ordering::Release);
+    }
+}
 
 pub fn isolate(cmd: &Command) -> Outcome {
     if cmd.allow_endpoints.is_empty() {
@@ -55,9 +99,32 @@ pub fn active() -> bool {
 
 /// 生成完整规则集。在同一 nft 事务里先建再删再建，避免旧表已删但新规则失败导致失陷主机解封。
 fn build_ruleset(allow: &[String]) -> Result<String, String> {
+    build_ruleset_with(allow, TOTAL_RESOLVE_TIMEOUT, system_resolve)
+}
+
+fn build_ruleset_with<F>(
+    allow: &[String],
+    total_timeout: Duration,
+    resolver: F,
+) -> Result<String, String>
+where
+    F: Fn(&str, u16) -> Result<Vec<IpAddr>, String> + Send + Sync + Clone + 'static,
+{
+    if allow.is_empty() || allow.len() > MAX_ALLOW_ENDPOINTS {
+        return Err(format!(
+            "放行地址须为 1–{MAX_ALLOW_ENDPOINTS} 项（IP、IP:端口、网段或主机名[:端口]）"
+        ));
+    }
+    let deadline = Instant::now() + total_timeout;
     let mut parsed = Vec::with_capacity(allow.len());
     for ep in allow {
-        parsed.extend(parse_endpoint(ep)?);
+        parsed.extend(parse_endpoint_with(ep, deadline, resolver.clone())?);
+        if parsed.len() > MAX_TOTAL_ENDPOINTS {
+            return Err(format!(
+                "放行地址展开后共 {} 条，超过上限 {MAX_TOTAL_ENDPOINTS}，拒绝截断以免丢失控制端地址",
+                parsed.len()
+            ));
+        }
     }
 
     let mut s = String::new();
@@ -101,12 +168,31 @@ fn build_ruleset(allow: &[String]) -> Result<String, String> {
     Ok(s)
 }
 
+fn system_resolve(host: &str, port: u16) -> Result<Vec<IpAddr>, String> {
+    (host, port)
+        .to_socket_addrs()
+        .map(|iter| iter.map(|a| a.ip()).collect())
+        .map_err(|e| e.to_string())
+}
+
 /// 严格解析放行地址，返回要放行的网段与端口：
 /// - 合法 `IpAddr`，或带非零端口的 `SocketAddr`（IPv6 带端口须写成 `[addr]:port`）
 /// - 网段 `ip/prefix`（不带端口，主机位清零）
 /// - 主机名或 `主机名:端口`：字符集严格限定为字母、数字、`-`、`.`，在本机解析成地址后再写进规则，
-///   规则里只出现解析出的数字地址，主机名本身不进 nft 脚本；解析失败才拒绝
+///   规则里只出现解析出的数字地址，主机名本身不进 nft 脚本；解析失败、超时或超限均拒绝
+#[cfg(test)]
 fn parse_endpoint(ep: &str) -> Result<Vec<(Net, Option<u16>)>, String> {
+    parse_endpoint_with(ep, Instant::now() + TOTAL_RESOLVE_TIMEOUT, system_resolve)
+}
+
+fn parse_endpoint_with<F>(
+    ep: &str,
+    deadline: Instant,
+    resolver: F,
+) -> Result<Vec<(Net, Option<u16>)>, String>
+where
+    F: Fn(&str, u16) -> Result<Vec<IpAddr>, String> + Send + 'static,
+{
     let trimmed = ep.trim();
     if trimmed.is_empty() {
         return Err("放行地址为空".into());
@@ -138,39 +224,69 @@ fn parse_endpoint(ep: &str) -> Result<Vec<(Net, Option<u16>)>, String> {
             "放行地址无效（须为 IP、IP:端口、网段或主机名[:端口]）：{ep}"
         ));
     }
-    let nets = resolve_hostname(host, port, DNS_TIMEOUT)?;
+    let nets = resolve_hostname_with(host, port, deadline, resolver)?;
     Ok(nets.into_iter().map(|n| (n, port)).collect())
 }
 
-/// 在独立线程中带超时解析主机名，防止系统 DNS 卡死；去重排序并限制最多 MAX_RESOLVED 个地址。
-fn resolve_hostname(host: &str, port: Option<u16>, timeout: Duration) -> Result<Vec<Net>, String> {
+/// 在独立线程中按共享截止时间解析主机名，受全局在途并发上限约束；
+/// 去重后超过 MAX_RESOLVED 直接拒绝，绝不静默截断丢弃可能唯一的控制端地址。
+fn resolve_hostname_with<F>(
+    host: &str,
+    port: Option<u16>,
+    deadline: Instant,
+    resolver: F,
+) -> Result<Vec<Net>, String>
+where
+    F: Fn(&str, u16) -> Result<Vec<IpAddr>, String> + Send + 'static,
+{
+    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+        return Err(format!(
+            "放行地址 {host} 解析超时（已超过整条隔离指令截止时间）"
+        ));
+    };
+    if remaining.is_zero() {
+        return Err(format!(
+            "放行地址 {host} 解析超时（已超过整条隔离指令截止时间）"
+        ));
+    }
+    let Some(slot) = DnsSlot::try_acquire() else {
+        return Err(format!(
+            "在途 DNS 解析已达并发上限（{MAX_INFLIGHT_DNS}），拒绝解析 {host}"
+        ));
+    };
     let owned_host = host.to_string();
     let resolve_port = port.unwrap_or(0);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let res = (owned_host.as_str(), resolve_port)
-            .to_socket_addrs()
-            .map(|iter| iter.map(|a| a.ip()).collect::<Vec<_>>());
+        let _slot = slot;
+        let res = resolver(&owned_host, resolve_port);
         let _ = tx.send(res);
     });
-    let ips = match rx.recv_timeout(timeout) {
+    let ips = match rx.recv_timeout(remaining) {
         Ok(Ok(ips)) => ips,
         Ok(Err(e)) => return Err(format!("放行地址 {host} 解析失败：{e}")),
         Err(_) => return Err(format!("放行地址 {host} 解析超时")),
     };
-    let nets = cap_resolved_nets(ips);
-    if nets.is_empty() {
-        return Err(format!("放行地址 {host} 没有解析出地址"));
-    }
-    Ok(nets)
+    validate_resolved_nets(host, ips)
 }
 
-fn cap_resolved_nets(ips: impl IntoIterator<Item = IpAddr>) -> Vec<Net> {
+fn validate_resolved_nets(
+    host: &str,
+    ips: impl IntoIterator<Item = IpAddr>,
+) -> Result<Vec<Net>, String> {
     let mut nets: Vec<Net> = ips.into_iter().map(host_net).collect();
     nets.sort();
     nets.dedup();
-    nets.truncate(MAX_RESOLVED);
-    nets
+    if nets.is_empty() {
+        return Err(format!("放行地址 {host} 没有解析出地址"));
+    }
+    if nets.len() > MAX_RESOLVED {
+        return Err(format!(
+            "放行地址 {host} 解析出 {} 个地址，超过上限 {MAX_RESOLVED}，拒绝截断以免丢失控制端地址",
+            nets.len()
+        ));
+    }
+    Ok(nets)
 }
 
 fn port_of(p: &str, ep: &str) -> Result<u16, String> {
@@ -235,15 +351,100 @@ pub(super) fn nft_script(script: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn run_nft(args: &[&str]) -> Result<String, String> {
-    let out = Proc::new("nft")
-        .args(args)
-        .output()
-        .map_err(|e| format!("无法执行 nft: {e}"))?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+fn kill_process_group(child: &mut std::process::Child) {
+    let pid = child.id() as libc::pid_t;
+    if pid > 0 {
+        // SAFETY: 子进程已通过 process_group(0) 独立成组（pgid == pid），
+        // 发送 SIGKILL 到负 pgid 终止整棵进程树，防后代继续占用管道或卡死。
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn spawn_pipe_reader<R: Read + Send + 'static>(
+    pipe: Option<R>,
+    limit: usize,
+) -> Option<std::sync::mpsc::Receiver<Vec<u8>>> {
+    pipe.map(|mut r| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = r.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                if kept.len() < limit {
+                    let take = (limit - kept.len()).min(n);
+                    kept.extend_from_slice(&chunk[..take]);
+                }
+            }
+            let _ = tx.send(kept);
+        });
+        rx
+    })
+}
+
+fn run_nft(args: &[&str]) -> Result<String, String> {
+    run_nft_with_timeout("nft", args, NFT_TIMEOUT)
+}
+
+fn run_nft_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
+    let mut child = Proc::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| format!("无法执行 {program}: {e}"))?;
+
+    let out_rx = spawn_pipe_reader(child.stdout.take(), MAX_NFT_OUTPUT_BYTES);
+    let err_rx = spawn_pipe_reader(child.stderr.take(), 64 * 1024);
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    kill_process_group(&mut child);
+                    return Err(format!("执行 {program} 超时"));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => {
+                kill_process_group(&mut child);
+                return Err(format!("等待 {program} 失败: {e}"));
+            }
+        }
+    };
+
+    let recv = |rx: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
+                child: &mut std::process::Child|
+     -> Result<Vec<u8>, String> {
+        let Some(rx) = rx else {
+            return Ok(Vec::new());
+        };
+        let rem = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(rem) {
+            Ok(buf) => Ok(buf),
+            Err(_) => {
+                kill_process_group(child);
+                Err(format!("读取 {program} 输出超时"))
+            }
+        }
+    };
+
+    let stdout = recv(out_rx, &mut child)?;
+    let stderr = recv(err_rx, &mut child)?;
+    if !status.success() {
+        return Err(String::from_utf8_lossy(&stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
 #[cfg(test)]
@@ -375,17 +576,70 @@ mod tests {
     }
 
     #[test]
-    fn resolved_hostname_ips_are_capped_to_max_resolved() {
+    fn resolved_hostname_exceeding_max_resolved_is_rejected() {
         let ips = (0..64u8).map(|i| IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, i)));
-        let capped = cap_resolved_nets(ips);
-        assert_eq!(capped.len(), MAX_RESOLVED);
-        assert_eq!(
-            capped[0].addr,
-            IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 0))
+        let err = validate_resolved_nets("many.example.com", ips).unwrap_err();
+        assert!(err.contains("超过上限"), "超限应直接拒绝：{err}");
+
+        // 恰好 MAX_RESOLVED 个去重地址应放行
+        let exact =
+            (0..MAX_RESOLVED as u8).map(|i| IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 1, i)));
+        let ok = validate_resolved_nets("ok.example.com", exact).unwrap();
+        assert_eq!(ok.len(), MAX_RESOLVED);
+    }
+
+    #[test]
+    fn allow_endpoints_count_and_total_resolved_limits_are_enforced() {
+        // 超过 128 个输入项直接拒绝
+        let too_many: Vec<String> = (0..=MAX_ALLOW_ENDPOINTS)
+            .map(|i| format!("10.0.{}.{}:443", i / 256, i % 256))
+            .collect();
+        let err = build_ruleset(&too_many).unwrap_err();
+        assert!(err.contains("1–128"), "{err}");
+
+        // 9 个域名各返回 30 个 IP = 270 > MAX_TOTAL_ENDPOINTS(256)，拒绝而非静默截断
+        let domains: Vec<String> = (0..9).map(|i| format!("h{i}.example.com:443")).collect();
+        let err = build_ruleset_with(&domains, Duration::from_secs(2), |host, _| {
+            let idx: u8 = host
+                .strip_prefix('h')
+                .and_then(|s| s.split('.').next())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            Ok((1..=30u8)
+                .map(|j| IpAddr::V4(std::net::Ipv4Addr::new(10, idx, 0, j)))
+                .collect())
+        })
+        .unwrap_err();
+        assert!(err.contains("超过上限"), "{err}");
+    }
+
+    #[test]
+    fn multiple_hostnames_share_single_overall_deadline() {
+        // 4 个慢域名每个睡 120ms，但整条隔离指令共享 200ms 总截止时间，不会累计到 480ms
+        let domains: Vec<String> = (0..4).map(|i| format!("slow{i}.example.com:443")).collect();
+        let started = Instant::now();
+        let err = build_ruleset_with(&domains, Duration::from_millis(200), |_host, _| {
+            std::thread::sleep(Duration::from_millis(120));
+            Ok(vec![IpAddr::V4(std::net::Ipv4Addr::new(10, 1, 1, 1))])
+        })
+        .unwrap_err();
+        let elapsed = started.elapsed();
+        assert!(err.contains("超时"), "应因共享截止时间超时拒绝：{err}");
+        assert!(
+            elapsed < Duration::from_millis(450),
+            "多域名应共享同一截止时间，实际耗时 {elapsed:?}"
         );
-        assert_eq!(
-            capped[MAX_RESOLVED - 1].addr,
-            IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, (MAX_RESOLVED - 1) as u8))
+    }
+
+    #[test]
+    fn run_nft_with_timeout_kills_stalled_command_and_descendant() {
+        let started = Instant::now();
+        let err = run_nft_with_timeout("sh", &["-c", "sleep 30 &"], Duration::from_millis(150))
+            .unwrap_err();
+        assert!(err.contains("超时"), "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "后代持有 stdout 时也应在超时内返回"
         );
     }
 }
