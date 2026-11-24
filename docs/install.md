@@ -149,7 +149,10 @@ ThreatFox 与 URLhaus 需要 abuse.ch Auth-Key。可在「系统设置 → 外�
 docker compose -f docker-compose.yml -f docker-compose.syslog.yml up -d
 ```
 
-该配置启用 server 的 `SYSLOG_ADDR=:514`，宿主机同时映射 TCP / UDP 1514；
-可在 `.env` 设置 `SYSLOG_PORT` 改宿主机端口。升级和日常重建时保持两个 `-f` 参数。
-转发设备指向 server 的 1514 端口，仅向可信设备放行。控制台「系统集成」可检查
+该配置启用 server 的 `SYSLOG_ADDR=:5514`（容器以非 root 运行，监听不了 1024 以下端口），
+宿主机同时映射 TCP / UDP 514 到容器 5514；宿主机 514 已被本机 rsyslog 等占用时，
+在 `.env` 设置 `SYSLOG_PORT` 改宿主机端口。升级和日常重建时保持两个 `-f` 参数。
+转发设备指向 server 的 514 端口（或你设的 `SYSLOG_PORT`），仅向可信设备放行。
+旧版本默认映射宿主机 1514：升级后要么把转发设备改指 514，要么在 `.env` 写
+`SYSLOG_PORT=1514` 保持原端口，转发配置不用动。控制台「系统集成」可检查
 当前节点监听、收包和入队状态。协议、rsyslog 示例与限制见 [日志接入](deployment.md#日志接入)。

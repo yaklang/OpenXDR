@@ -224,19 +224,21 @@ server 内置 syslog 接收（同端口 UDP + TCP，RFC3164 与 RFC5424 都支�
 配置 `SYSLOG_ADDR` 启用：
 
 ```bash
-# 仓库部署：显式启用并同时映射 UDP / TCP，宿主机默认 1514
-# 可在 .env 设置 SYSLOG_PORT 调整宿主机端口
+# 仓库部署：显式启用，容器内监听 5514，宿主机默认 514 同时映射 UDP / TCP
+# 宿主机 514 被占用（或要沿用旧版的 1514）时在 .env 设置 SYSLOG_PORT
 docker compose -f docker-compose.yml -f docker-compose.syslog.yml up -d
 
 # 被监控主机把日志转发过来
-echo '*.* @<server>:1514' >> /etc/rsyslog.conf && systemctl restart rsyslog
+echo '*.* @<server>:514' >> /etc/rsyslog.conf && systemctl restart rsyslog
 ```
 
 控制台「系统集成」显示当前 server 节点的 UDP / TCP 监听状态、最近收包时间、
 收到的报文、队列满丢弃、成功入队、入队失败与未匹配资产计数。
 计数从节点启动起累计，集群不合并；成功入队不代表已经落库。
 TCP 当前使用换行分帧；不支持 TLS Syslog 与 RFC6587 octet-counting。
-仅向可信转发源开放接收端口。`@@<server>:1514` 表示 rsyslog 使用 TCP，`@` 表示 UDP。
+仅向可信转发源开放接收端口。`@@<server>:514` 表示 rsyslog 使用 TCP，`@` 表示 UDP。
+旧版本 Syslog 编排默认映射宿主机 1514；升级后转发设备要改指 514，
+或在 `.env` 设 `SYSLOG_PORT=1514` 保持原端口。
 
 报文归属资产时先看源 IP：源 IP 是已登记资产就归它，报文里的 hostname 不作数，
 免得一台已纳管主机伪造 hostname 把日志嫁祸给别的主机；源 IP 不是已登记资产时才按 hostname 匹配。
@@ -473,8 +475,8 @@ server 全部通过环境变量配置，均有默认值：
 | `AI_BASE_URL` | `http://localhost:11434/v1` | OpenAI 兼容端点 |
 | `AI_TIMEOUT_SECONDS` | `300` | 单次模型请求超时。自部署模型推理慢（开着思考、多人共用）就调大，如 900；推理没在超时内跑完不算研判失败，稍后用同样的上下文重试 |
 | `AI_RETRIAGE_COOLDOWN_MINUTES` | `30` | 已研判的事件又并入普通新证据时，距上次研判至少隔这么久才重研判，冷却期内的新告警到期一次带上；级别升高或头一回出现情报命中、凭据窃取等高危类告警时不等。默认 30：生产上被系统例行变更反复并入的事件每几分钟来一批告警，不限流时一天能被重研判几十次、把慢模型的研判名额占满；30 分钟把它压到每小时至多两次，又不至于让真实攻击的后续动作晚太久才被重新定性（升级类本来就立即重判）。只认环境变量，控制台不可改 |
-| `SYSLOG_ADDR` | 空（不启用） | syslog 监听地址，如 `:514`。UDP 与 TCP 同时监听 |
-| `SYSLOG_TRUSTED_RELAYS` | 空 | 受信 syslog 转发器，逗号分隔的 IP 或 CIDR（如 `10.1.1.5,10.2.0.0/24`）。从这些地址来的报文按报文里的 hostname 归属资产；其余来源按源 IP 归属，源 IP 不是已登记资产时才看 hostname。格式不对 server 拒绝启动。见[日志接入](#日志接入) |
+| `SYSLOG_ADDR` | 空（不启用） | syslog 监听地址，如 `:5514`（容器以非 root 运行，用 1024 以上端口；Syslog 编排已设好）。UDP 与 TCP 同时监听 |
+| `SYSLOG_TRUSTED_RELAYS` | 空 | 受信 syslog 转发器，逗号分隔的 IP 或 CIDR（如 `10.0.0.5,10.2.0.0/24`）。从这些地址来的报文按报文里的 hostname 归属资产；其余来源按源 IP 归属，源 IP 不是已登记资产时才看 hostname。格式不对 server 拒绝启动。见[日志接入](#日志接入) |
 | `SUPPRESSION_RELOAD_SECONDS` | `30` | 抑制规则重载与命中计数回写周期 |
 | `INTEL_RELOAD_SECONDS` | `30` | 威胁情报重载与命中计数回写周期 |
 | `WEBHOOK_MIN_SEVERITY` | `0` | 低于该级别的事件不推送（1 信息 ~ 5 严重），0 表示全推。控制台保存过通知配置后以控制台为准 |

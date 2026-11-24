@@ -1,8 +1,10 @@
 #!/bin/sh
 # 沙箱主机防火墙：容器出口只放行模型端点（其余立刻拒绝），容器不能访问宿主；sandboxd 端口只对平台节点开放。
 # 规则放在自有链里，重复执行只会重建自有链；Docker 不管 DOCKER-USER，重启 docker 也不会冲掉。
-# DNS 隔离建议：宿主机可在创建 openxdr-sandbox 网桥或启动容器时配合 --dns 指向受控解析器（或仅使用模型端点直连 IP），
-# 防止容器向外部任意 DNS 发起隧道查询；默认出站 UDP/53 亦被下方 OPENXDR-SBX-FWD 拒绝。
+# DNS 不受这里管控：openxdr-sandbox 是自定义网络，容器只用 Docker 内嵌解析 127.0.0.11，
+# 由宿主侧 dockerd 代为向上游查询，不经过 DOCKER-USER / FORWARD。下方规则只拒绝容器直连外部 53，
+# 经内嵌解析的 DNS 隧道外泄没有被拦。要收口需让宿主或 dockerd 的上游只指向受控解析器
+# （如 daemon.json 的 dns、或只解析模型端点的本地解析器），或模型端点直接写 IP。
 # 用法：MODEL_ENDPOINTS="10.0.0.5:8000 ..." PLATFORM_NODES="10.0.0.1 10.0.0.2" sh firewall.sh
 set -eu
 BRIDGE=${SANDBOX_BRIDGE:-br-sandbox}
