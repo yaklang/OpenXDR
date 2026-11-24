@@ -85,6 +85,10 @@ pub fn isolate(cmd: &Command) -> Outcome {
             "已隔离本机（提交确认超时，复核已生效），放行 {}",
             cmd.allow_endpoints.join(", ")
         )),
+        Ok(ApplyOutcome::UncertainPreserved) => Outcome::ok(format!(
+            "本机隔离提交超时且复核与清理均未确认清除，保守按已生效保留自动解封租约，放行 {}",
+            cmd.allow_endpoints.join(", ")
+        )),
         Err(e) => Outcome::failed(e),
     }
 }
@@ -93,16 +97,42 @@ pub fn unisolate(_cmd: &Command) -> Outcome {
     match run_nft(&["delete", "table", "inet", TABLE]) {
         Ok(_) => Outcome::ok("已解除隔离"),
         // 表不存在说明本来就没隔离，视为已达成目标
-        Err(e) if e.contains("No such file") || e.contains("does not exist") => {
-            Outcome::ok("本机当前未处于隔离状态")
-        }
+        Err(e) if is_table_missing_err(&e) => Outcome::ok("本机当前未处于隔离状态"),
         Err(e) => Outcome::failed(format!("解除隔离失败: {e}")),
+    }
+}
+
+pub(super) fn is_table_missing_err(e: &str) -> bool {
+    e.contains("No such file") || e.contains("does not exist")
+}
+
+/// 隔离表当前存在状态：明确区分存在、确认不存在与查询超时/失败。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TableState {
+    Present,
+    Absent,
+    Unknown,
+}
+
+pub(super) fn table_state(table: &str) -> TableState {
+    match run_nft(&["list", "table", "inet", table]) {
+        Ok(_) => TableState::Present,
+        Err(e) if is_table_missing_err(&e) => TableState::Absent,
+        Err(_) => TableState::Unknown,
+    }
+}
+
+pub(super) fn delete_table_confirmed(table: &str) -> Result<(), String> {
+    match run_nft(&["delete", "table", "inet", table]) {
+        Ok(_) => Ok(()),
+        Err(e) if is_table_missing_err(&e) => Ok(()),
+        Err(e) => Err(e),
     }
 }
 
 /// 本机当前是否处于隔离：隔离表还在
 pub fn active() -> bool {
-    run_nft(&["list", "table", "inet", TABLE]).is_ok()
+    table_state(TABLE) == TableState::Present
 }
 
 /// 生成完整规则集。在同一 nft 事务里先建再删再建，避免旧表已删但新规则失败导致失陷主机解封。
@@ -331,15 +361,17 @@ fn render(net: &Net) -> String {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum ApplyOutcome {
+pub(super) enum ApplyOutcome {
     /// 规则正常提交成功
     Applied,
     /// 提交确认超时，但复核确认隔离表已生效（按成功上报以保留服务端自动解封租约）
     AppliedAfterTimeout,
+    /// 提交、复核与清理均无法确认规则未生效（保守按已生效上报以保留服务端自动解封租约）
+    UncertainPreserved,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum ScriptError {
+pub(super) enum ScriptError {
     /// 明确失败（未能启动、返回非零退出码、写入失败等）
     Failed(String),
     /// 执行或读写超时，内核规则是否已提交未知，需显式复核
@@ -355,38 +387,42 @@ impl ScriptError {
 }
 
 fn apply(script: &str) -> Result<ApplyOutcome, String> {
+    apply_table_script(TABLE, script)
+}
+
+/// 在当前网络命名空间中应用指定隔离表规则：超时后显式复核表状态，
+/// 仅在确认不存在或确认清除成功后才回报确定失败；否则保守保留租约。
+pub(super) fn apply_table_script(table: &str, script: &str) -> Result<ApplyOutcome, String> {
     apply_with(
         script,
         |s| nft_script_with_timeout_raw("nft", &["-f", "-"], s, NFT_SCRIPT_TIMEOUT),
-        active,
-        || {
-            let _ = run_nft(&["delete", "table", "inet", TABLE]);
-        },
+        || table_state(table),
+        || delete_table_confirmed(table),
     )
 }
 
-fn apply_with<FRun, FCheck, FCleanup>(
+pub(super) fn apply_with<FRun, FCheck, FCleanup>(
     script: &str,
     run: FRun,
-    is_isolated: FCheck,
+    check_state: FCheck,
     cleanup: FCleanup,
 ) -> Result<ApplyOutcome, String>
 where
     FRun: FnOnce(&str) -> Result<(), ScriptError>,
-    FCheck: FnOnce() -> bool,
-    FCleanup: FnOnce(),
+    FCheck: FnOnce() -> TableState,
+    FCleanup: FnOnce() -> Result<(), String>,
 {
     match run(script) {
         Ok(()) => Ok(ApplyOutcome::Applied),
         Err(ScriptError::Failed(e)) => Err(e),
-        Err(ScriptError::Unknown(e)) => {
-            if is_isolated() {
-                Ok(ApplyOutcome::AppliedAfterTimeout)
-            } else {
-                cleanup();
-                Err(format!("{e}（复核隔离表未生效，已尝试清理）"))
-            }
-        }
+        Err(ScriptError::Unknown(e)) => match check_state() {
+            TableState::Present => Ok(ApplyOutcome::AppliedAfterTimeout),
+            TableState::Absent => Err(format!("{e}（复核隔离表确认不存在）")),
+            TableState::Unknown => match cleanup() {
+                Ok(()) => Err(format!("{e}（复核未知，已确认清除隔离表）")),
+                Err(_) => Ok(ApplyOutcome::UncertainPreserved),
+            },
+        },
     }
 }
 
@@ -886,8 +922,11 @@ mod tests {
                     Duration::from_millis(120),
                 )
             },
-            || true,
-            || cleaned.store(true, Ordering::SeqCst),
+            || TableState::Present,
+            || {
+                cleaned.store(true, Ordering::SeqCst);
+                Ok(())
+            },
         );
         assert_eq!(res, Ok(ApplyOutcome::AppliedAfterTimeout));
         assert!(
@@ -895,7 +934,7 @@ mod tests {
             "复核已生效时不得误删隔离表"
         );
 
-        // 2. 应用超时且复核未生效 -> 尽力清理残留表并返回 Err
+        // 2. 应用超时且复核确认表不存在 -> 直接返回 Err（不误报生效）
         let cleaned = AtomicBool::new(false);
         let err = apply_with(
             "add table inet openxdr_isolation\n",
@@ -907,20 +946,64 @@ mod tests {
                     Duration::from_millis(120),
                 )
             },
-            || false,
-            || cleaned.store(true, Ordering::SeqCst),
+            || TableState::Absent,
+            || {
+                cleaned.store(true, Ordering::SeqCst);
+                Ok(())
+            },
         )
         .unwrap_err();
+        assert!(!cleaned.load(Ordering::SeqCst));
         assert!(
-            cleaned.load(Ordering::SeqCst),
-            "超时且复核未生效时应尝试清理隔离表"
-        );
-        assert!(
-            err.contains("超时") && err.contains("未生效"),
-            "错误信息应说明超时且复核未生效：{err}"
+            err.contains("超时") && err.contains("不存在"),
+            "错误信息应说明超时且确认不存在：{err}"
         );
 
-        // 3. 明确失败（非零退出）-> 不复核不清理，直接返回 Err
+        // 3. 应用超时 + 复核超时(Unknown) + 清理失败 -> 无法确认规则未生效，
+        //    必须保守返回 Ok(UncertainPreserved) 保住自动解封租约
+        let cleaned = AtomicBool::new(false);
+        let res = apply_with(
+            "add table inet openxdr_isolation\n",
+            |s| {
+                nft_script_with_timeout_raw(
+                    "sh",
+                    &["-c", "sleep 30"],
+                    s,
+                    Duration::from_millis(120),
+                )
+            },
+            || TableState::Unknown,
+            || {
+                cleaned.store(true, Ordering::SeqCst);
+                Err("delete timeout".into())
+            },
+        );
+        assert!(cleaned.load(Ordering::SeqCst));
+        assert_eq!(res, Ok(ApplyOutcome::UncertainPreserved));
+
+        // 4. 应用超时 + 复核超时(Unknown) + 清理确认成功 -> 确认表已清除，返回 Err
+        let cleaned = AtomicBool::new(false);
+        let err = apply_with(
+            "add table inet openxdr_isolation\n",
+            |s| {
+                nft_script_with_timeout_raw(
+                    "sh",
+                    &["-c", "sleep 30"],
+                    s,
+                    Duration::from_millis(120),
+                )
+            },
+            || TableState::Unknown,
+            || {
+                cleaned.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(cleaned.load(Ordering::SeqCst));
+        assert!(err.contains("已确认清除"), "{err}");
+
+        // 5. 明确失败（非零退出）-> 不复核不清理，直接返回 Err
         let checked = AtomicBool::new(false);
         let cleaned = AtomicBool::new(false);
         let err = apply_with(
@@ -935,9 +1018,12 @@ mod tests {
             },
             || {
                 checked.store(true, Ordering::SeqCst);
-                true
+                TableState::Present
             },
-            || cleaned.store(true, Ordering::SeqCst),
+            || {
+                cleaned.store(true, Ordering::SeqCst);
+                Ok(())
+            },
         )
         .unwrap_err();
         assert_eq!(err, "syntax error");
