@@ -268,11 +268,6 @@ func judge(ctx context.Context, llm *triage.LLM, c Case, answer json.RawMessage,
 	return crossCheckActions(ctx, llm, c, answer, assessment, observe)
 }
 
-// CrossCheckActions 对已有完整评分追加独立建议审查；只会收紧，不会冲掉原失败。
-func CrossCheckActions(ctx context.Context, llm *triage.LLM, c Case, answer json.RawMessage, assessment Assessment) (Assessment, error) {
-	return crossCheckActions(ctx, llm, c, answer, assessment, nil)
-}
-
 func crossCheckActions(ctx context.Context, llm *triage.LLM, c Case, answer json.RawMessage, assessment Assessment, observe reviewObserver) (Assessment, error) {
 	focused, err := checkActions(ctx, llm, c, answer, observe)
 	if err != nil {

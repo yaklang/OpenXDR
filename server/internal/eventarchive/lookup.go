@@ -218,18 +218,7 @@ func Materialize(ctx context.Context, db *sql.DB, id uuid.UUID) (inserted bool, 
 	return inserted, nil
 }
 
-// MaterializeTx 在调用方事务内把一条冷事件物化回 events（R1 引用补链的事务内版本）。
-// 定位与插入同事务：调用方快照里「冷层有这条事件」与随后的物化、引用写入一致。
-// 不取生命周期锁——调用方（引用写入事务）必须已经持有该事件归属日的共享锁。
-func MaterializeTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) (inserted bool, err error) {
-	e, found, err := LocateTx(ctx, tx, id)
-	if err != nil || !found {
-		return false, err
-	}
-	return insertEventTx(ctx, tx, e)
-}
-
-// insertEventTx 是单行物化插入的主体（Materialize 与 MaterializeTx 共用）：
+// insertEventTx 是单行物化插入的主体：
 // 一条 INSERT ... ON CONFLICT DO NOTHING，列映射与 Restore 的批量路径一致。
 func insertEventTx(ctx context.Context, tx *sql.Tx, e Event) (bool, error) {
 	res, err := tx.ExecContext(ctx, `INSERT INTO events

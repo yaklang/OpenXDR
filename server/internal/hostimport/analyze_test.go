@@ -35,7 +35,7 @@ const extractedResult = `{"hosts":[{"hostname":"app-prod","address":"192.0.2.10"
 
 func TestAnalyzeProseConfirmSnapshot(t *testing.T) {
 	s := analysisService(t, extractedResult, "stop")
-	preview, err := s.Analyze(context.Background(), proseDocument, "owner", "group")
+	preview, err := s.AnalyzeDocument(context.Background(), Document{Text: proseDocument}, "owner", "group")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestAnalyzeProseConfirmSnapshot(t *testing.T) {
 func TestAnalyzeRejectsIncompleteOrInventedCredentials(t *testing.T) {
 	for _, test := range []struct{ output, finish string }{{extractedResult, "length"}, {extractedResult, ""}, {strings.ReplaceAll(extractedResult, "doc-only-secret", "invented-password"), "stop"}, {`{"hosts":`, "stop"}, {`{"hosts":[]}`, "stop"}, {`{"incomplete":true,"hosts":[{"address":"192.0.2.10"}]}`, "stop"}} {
 		s := analysisService(t, test.output, test.finish)
-		if _, err := s.Analyze(context.Background(), proseDocument, "owner", "group"); err == nil {
+		if _, err := s.AnalyzeDocument(context.Background(), Document{Text: proseDocument}, "owner", "group"); err == nil {
 			t.Fatal("接受不完整或编造结果")
 		}
 	}
@@ -93,19 +93,19 @@ func TestPreviewExpiryAndValidation(t *testing.T) {
 		t.Fatal("静默猜测操作系统")
 	}
 	s.Vault = nil
-	if _, err := s.Analyze(context.Background(), proseDocument, "owner", "group"); err == nil {
+	if _, err := s.AnalyzeDocument(context.Background(), Document{Text: proseDocument}, "owner", "group"); err == nil {
 		t.Fatal("未配置密钥仍返回凭据引用")
 	}
 	s = analysisService(t, `{"hosts":[{"address":"192.0.2.10","os":"linux","port":22,"lines":[1]}]}`, "stop")
 	s.Vault = nil
-	if _, err := s.Analyze(context.Background(), proseDocument, "owner", "group"); err != nil {
+	if _, err := s.AnalyzeDocument(context.Background(), Document{Text: proseDocument}, "owner", "group"); err != nil {
 		t.Fatal("无凭据文档不应要求密钥", err)
 	}
 }
 
 func TestPreviewRedactsSecretMatchingMetadata(t *testing.T) {
 	s := analysisService(t, strings.ReplaceAll(extractedResult, "doc-only-secret", "ops"), "stop")
-	preview, err := s.Analyze(context.Background(), strings.ReplaceAll(proseDocument, "doc-only-secret", "ops"), "owner", "group")
+	preview, err := s.AnalyzeDocument(context.Background(), Document{Text: strings.ReplaceAll(proseDocument, "doc-only-secret", "ops")}, "owner", "group")
 	if err != nil {
 		t.Fatal(err)
 	}

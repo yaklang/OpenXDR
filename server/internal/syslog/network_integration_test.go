@@ -11,9 +11,7 @@ import (
 	"time"
 
 	"openxdr/server/internal/ingest"
-	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
-	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 )
 
@@ -40,11 +38,9 @@ func TestSyslogUDPEndToEnd(t *testing.T) {
 	}
 
 	s := &Server{
-		DB:       client,
-		Rules:    sigma.LoadDir(dir),
-		Addr:     freeUDPPort(t),
-		Suppress: suppress.New(client, time.Hour),
-		Intel:    intel.New(client, time.Hour),
+		DB:     client,
+		Addr:   freeUDPPort(t),
+		Events: newTestBus(t, ctx, client, sigma.LoadDir(dir), time.Hour),
 	}
 
 	ctxRun, cancel := context.WithCancel(ctx)

@@ -72,7 +72,7 @@ func approved(id uuid.UUID) Decision {
 }
 func TestCloseWithProvenanceAndIdempotence(t *testing.T) {
 	f := setup(t)
-	if _, err := load(f.ctx, f.db, f.inc.ID); err != nil {
+	if _, err := loadWithRules(f.ctx, f.db, nil, nil, f.inc.ID); err != nil {
 		t.Fatalf("load: %v eligible=%v inc=%+v proposal=%+v", err, eligible(f.inc), f.inc, f.inc.ClosureProposal)
 	}
 	ok, err := f.r.Review(f.ctx, f.inc.ID)

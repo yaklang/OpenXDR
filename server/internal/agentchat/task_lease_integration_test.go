@@ -83,10 +83,10 @@ func TestTaskLeaseOwnershipAndHardDeadline(t *testing.T) {
 		otherStop()
 		t.Fatal("同一会话被第二执行者领取")
 	}
-	if err := svc.renewTaskLease(work, session.ID, uuid.New(), time.Now(), hard); err == nil {
+	if _, err := svc.renewTaskLeaseAck(work, session.ID, uuid.New(), time.Now(), hard); err == nil {
 		t.Fatal("错误所有者可续租")
 	}
-	if err := svc.renewTaskLease(work, session.ID, owner, time.Now(), hard.Add(time.Hour)); err != nil {
+	if _, err := svc.renewTaskLeaseAck(work, session.ID, owner, time.Now(), hard.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	current := db.AgentSession.GetX(ctx, session.ID)
@@ -94,7 +94,7 @@ func TestTaskLeaseOwnershipAndHardDeadline(t *testing.T) {
 		t.Fatal("续租超过持久化硬期限")
 	}
 	db.AgentSession.UpdateOneID(session.ID).SetRunExpiresAt(time.Now().Add(-time.Second)).ExecX(ctx)
-	if err := svc.renewTaskLease(work, session.ID, owner, time.Now(), hard); err == nil {
+	if _, err := svc.renewTaskLeaseAck(work, session.ID, owner, time.Now(), hard); err == nil {
 		t.Fatal("已过期租约被复活")
 	}
 }

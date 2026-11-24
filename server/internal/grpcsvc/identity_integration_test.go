@@ -13,10 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"openxdr/server/internal/intel"
 	"openxdr/server/internal/response"
-	"openxdr/server/internal/sigma"
-	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 	"openxdr/server/pb"
 )
@@ -25,8 +22,8 @@ import (
 func TestIdentityEnforcement(t *testing.T) {
 	ctx, client := testdb.New(t)
 	srv := &Server{
-		DB: client, Rules: loadMimikatzRule(t),
-		DedupWindow: time.Minute, Suppress: suppress.New(client, 0), Intel: intel.New(client, 0),
+		DB:     client,
+		Events: newTestBus(t, ctx, client, loadMimikatzRule(t), nil, nil, time.Minute),
 	}
 
 	// 用 web01 的绑定证书注册 web01：放行，拿到 agent_id
@@ -78,10 +75,7 @@ func TestIdentityEnforcement(t *testing.T) {
 // 采集配置随 Register 下发：设过配置的资产，agent 注册时应拿到它。
 func TestRegisterReturnsConfig(t *testing.T) {
 	ctx, client := testdb.New(t)
-	srv := &Server{
-		DB: client, Rules: sigma.LoadDir(t.TempDir()),
-		DedupWindow: time.Minute, Suppress: suppress.New(client, 0), Intel: intel.New(client, 0),
-	}
+	srv := &Server{DB: client}
 
 	// 首次注册：还没配置，下发空串（agent 用内置默认）
 	resp, err := srv.Register(ctx, &pb.RegisterRequest{Hostname: "web01", Os: "linux"})

@@ -3,6 +3,7 @@ package grpcsvc
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -17,15 +18,10 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
-	"openxdr/server/internal/automation"
-	"openxdr/server/internal/cmdorigin"
-	"openxdr/server/internal/dedup"
 	"openxdr/server/internal/enroll"
 	"openxdr/server/internal/eventbus"
 	"openxdr/server/internal/ingest"
-	"openxdr/server/internal/intel"
 	"openxdr/server/internal/response"
-	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/sshkeys"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/pb"
@@ -36,17 +32,11 @@ type Server struct {
 	DB *ent.Client
 	// LXC 名字 → 同名资产，见 guest.go
 	guests guestCache
-	// SQL 核对平台指令标记与可信来源用；不配置时两者都不认，照常告警
-	SQL interface {
-		cmdorigin.Querier
-		automation.Querier
-	}
-	Rules       sigma.Catalog
-	DedupWindow time.Duration
-	Hub         *response.Hub
-	Suppress    *suppress.Store
-	Intel       *intel.Store
-	Events      eventbus.Bus
+	// SQL 与 Suppress 供未注入 SSHKeys 服务时的兜底构造使用，见 sshkeys.go
+	SQL      *sql.DB
+	Hub      *response.Hub
+	Suppress *suppress.Store
+	Events   eventbus.Bus
 	// agent 安装包与自动升级开关
 	Dist        *enroll.Dist
 	AutoUpgrade bool
@@ -139,12 +129,8 @@ func sendDist(dist *enroll.Dist, platform, sha256 string, send func([]byte) erro
 	}
 }
 
-// 攒批落库的两个触发条件：满 batchSize 条，或距上次落库超过 flushInterval。
-// 只按条数会让低流量的 agent 长时间不落库，事件在 server 内存里干等。
-const (
-	batchSize     = 500
-	flushInterval = 2 * time.Second
-)
+// 定时冲刷未满批的事件，避免低流量 agent 长时间积压在内存里。
+const flushInterval = 2 * time.Second
 
 func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 	ctx := stream.Context()
@@ -156,7 +142,6 @@ func (s *Server) ReportEvents(stream pb.AgentService_ReportEventsServer) error {
 	st := &agentStream{
 		s: s, ctx: ctx,
 		verifiedIDs: map[string]bool{},
-		deduper:     dedup.New(s.DedupWindow),
 	}
 	for {
 		select {
@@ -222,37 +207,22 @@ type agentStream struct {
 	verifiedIDs  map[string]bool
 	queuedEvents []ingest.Envelope
 	queuedBytes  int
-	eventCreates []*ent.EventCreate
-	alertCreates []*ent.AlertCreate
-	// 一条流对应一台主机，告警指纹 (rule_id, asset_id) 在流内就是 rule_id
-	deduper *dedup.Deduper
 }
 
 func (st *agentStream) flush() error {
-	if len(st.queuedEvents) > 0 {
-		if err := eventbus.PublishBatch(st.ctx, st.s.Events, st.queuedEvents); err != nil {
-			return status.Errorf(codes.Unavailable, "事件入队失败: %v", err)
-		}
-		st.received += uint64(len(st.queuedEvents))
-		st.queuedEvents = nil
-		st.queuedBytes = 0
+	if len(st.queuedEvents) == 0 {
+		return nil
 	}
-	if len(st.eventCreates) > 0 {
-		if _, err := st.s.DB.Event.CreateBulk(st.eventCreates...).Save(st.ctx); err != nil {
-			return err
-		}
-		st.eventCreates = nil
+	if err := eventbus.PublishBatch(st.ctx, st.s.Events, st.queuedEvents); err != nil {
+		return status.Errorf(codes.Unavailable, "事件入队失败: %v", err)
 	}
-	if len(st.alertCreates) > 0 {
-		if _, err := st.s.DB.Alert.CreateBulk(st.alertCreates...).Save(st.ctx); err != nil {
-			return err
-		}
-		st.alertCreates = nil
-	}
-	return st.deduper.Flush(st.ctx, st.s.DB)
+	st.received += uint64(len(st.queuedEvents))
+	st.queuedEvents = nil
+	st.queuedBytes = 0
+	return nil
 }
 
-// handle 处理一条事件：配了事件队列就入队，否则就地检测并攒批落库。
+// handle 处理一条事件并写入事件队列。
 func (st *agentStream) handle(ev *pb.AgentEvent) error {
 	if err := st.verify(ev); err != nil {
 		return err
@@ -276,24 +246,7 @@ func (st *agentStream) handle(ev *pb.AgentEvent) error {
 		rawMap = map[string]any{}
 	}
 
-	ts := time.Unix(0, ev.TsUnixNs)
-	if st.s.Events != nil {
-		return st.publish(ev, raw, rawMap, ts)
-	}
-	eventID := uuid.Must(uuid.NewV7())
-	st.queueEvent(ev, eventID, ts, raw)
-	if err := st.detect(ev, eventID, rawMap, ts); err != nil {
-		return err
-	}
-	if err := st.checkBruteforce(ev, eventID, rawMap, ts); err != nil {
-		return err
-	}
-
-	// 长连接流，攒批落库
-	if st.received++; st.received%batchSize == 0 {
-		return st.flush()
-	}
-	return nil
+	return st.publish(ev, raw, rawMap, time.Unix(0, ev.TsUnixNs))
 }
 
 // verify 每个 agent_id 首次出现时核对证书身份。
@@ -345,6 +298,9 @@ func fileFingerprintSuffix(classUID uint32, rawMap map[string]any) string {
 
 // publish 事件入队，检测与落库交给队列消费端。
 func (st *agentStream) publish(ev *pb.AgentEvent, raw json.RawMessage, rawMap map[string]any, ts time.Time) error {
+	if st.s.Events == nil {
+		return status.Error(codes.Unavailable, "事件总线未配置")
+	}
 	assetID, assetOS, raw := st.attribute(raw, rawMap)
 	partitionKey := ev.AgentId
 	if assetID != nil {
@@ -372,126 +328,5 @@ func (st *agentStream) publish(ev *pb.AgentEvent, raw json.RawMessage, rawMap ma
 	if len(st.queuedEvents) >= eventbus.BatchSize(st.s.Events) || st.queuedBytes >= 256<<10 {
 		return st.flush()
 	}
-	return nil
-}
-
-// queueEvent 事件加入待落库批次。
-func (st *agentStream) queueEvent(ev *pb.AgentEvent, eventID uuid.UUID, ts time.Time, raw json.RawMessage) {
-	ec := st.s.DB.Event.Create().
-		SetID(eventID).
-		SetTs(ts).
-		SetClassUID(int(ev.ClassUid)).
-		SetSource("agent").
-		SetNillableAssetID(st.assetID).
-		SetRaw(sanitizeRawJSON(raw))
-	if pg, err := uuid.Parse(ev.ProcessGuid); err == nil {
-		ec.SetProcessGUID(pg)
-	}
-	if ppg, err := uuid.Parse(ev.ParentProcessGuid); err == nil {
-		ec.SetParentProcessGUID(ppg)
-	}
-	if ev.Username != "" {
-		ec.SetUsername(ev.Username)
-	}
-	if ev.ConnTuple != "" {
-		ec.SetConnTuple(ev.ConnTuple)
-	}
-	st.eventCreates = append(st.eventCreates, ec)
-}
-
-// detect 规则与情报命中，经抑制、去重后生成告警。
-func (st *agentStream) detect(ev *pb.AgentEvent, eventID uuid.UUID, rawMap map[string]any, ts time.Time) error {
-	fpSuffix := fileFingerprintSuffix(ev.ClassUid, rawMap)
-
-	sigma.WithActor(rawMap, ev.Username)
-	rules := st.s.Rules.Evaluate(int(ev.ClassUid), st.assetOS, rawMap)
-	hits := intel.Detections(rules, st.s.Intel.Match(rawMap, ts))
-	var command, source *uuid.UUID
-	var healthcheck bool
-	if len(hits) > 0 {
-		var err error
-		if command, err = cmdorigin.Of(st.ctx, st.s.SQL, rawMap, st.assetID, ts); err != nil {
-			return status.Errorf(codes.Unavailable, "核对平台指令失败: %v", err)
-		}
-		// 平台指令优先，其次是登记的可信自动化来源
-		if command == nil {
-			if source, err = automation.Of(st.ctx, st.s.SQL, rawMap, st.assetID, ts); err != nil {
-				return status.Errorf(codes.Unavailable, "核对可信来源失败: %v", err)
-			}
-			healthcheck = automation.Healthcheck(rawMap)
-		}
-	}
-	var lineage []map[string]any
-	if len(hits) > 0 && ev.ClassUid == 1007 && st.s.Suppress != nil && st.s.Suppress.NeedsLineage() {
-		var parentGUID *uuid.UUID
-		if id, parseErr := uuid.Parse(ev.ParentProcessGuid); parseErr == nil {
-			parentGUID = &id
-		}
-		lineage = suppress.ResolveLineageEnt(st.ctx, st.s.DB, st.assetID, parentGUID, ts, rawMap)
-	}
-	for _, h := range hits {
-		// 抑制先于去重：被压掉的命中不该占用去重槽位
-		if st.s.Suppress.SuppressedWithLineage(h.RuleID, st.assetID, rawMap, lineage, ts) {
-			continue
-		}
-		fingerprint := h.RuleID + fpSuffix
-		if command != nil {
-			fingerprint += "|cmd:" + command.String()
-		}
-		if source != nil {
-			fingerprint += "|auto:" + source.String()
-		}
-		if healthcheck {
-			fingerprint += "|healthcheck"
-		}
-		if st.deduper.Hit(fingerprint, ts) {
-			continue
-		}
-		alertID := uuid.Must(uuid.NewV7())
-		st.alertCreates = append(st.alertCreates, st.s.DB.Alert.Create().
-			SetID(alertID).
-			SetTs(ts).
-			SetRuleID(h.RuleID).
-			SetSeverity(h.Severity).
-			SetEventID(eventID).
-			SetNillableAssetID(st.assetID).
-			SetNillableCommandID(command).
-			SetNillableAutomationID(source).
-			SetHealthcheck(healthcheck).
-			SetAutomationWatch((source != nil || healthcheck) && automation.Watch(h.RuleID, rules)).
-			SetLastTs(ts))
-		st.deduper.Track(fingerprint, alertID, ts)
-	}
-	return nil
-}
-
-// checkBruteforce 爆破得手跨事件升级：成功登录前的窗口内同用户多次失败。
-// 先 flush 让同批未落库的失败事件可见，再回查——成功登录稀少，不构成负担
-func (st *agentStream) checkBruteforce(ev *pb.AgentEvent, eventID uuid.UUID, rawMap map[string]any, ts time.Time) error {
-	if int(ev.ClassUid) != classAuth || authStatus(rawMap) != authStatusSuccess ||
-		st.assetID == nil || ev.Username == "" {
-		return nil
-	}
-	if err := st.flush(); err != nil {
-		return err
-	}
-	if st.s.countAuthFailures(st.ctx, *st.assetID, ev.Username, ts) < bruteforceThreshold ||
-		st.s.Suppress.Suppressed(sigma.RuleBruteforceSuccess, st.assetID, rawMap, ts) {
-		return nil
-	}
-	fingerprint := sigma.RuleBruteforceSuccess + "|" + ev.Username
-	if st.deduper.Hit(fingerprint, ts) {
-		return nil
-	}
-	alertID := uuid.Must(uuid.NewV7())
-	st.alertCreates = append(st.alertCreates, st.s.DB.Alert.Create().
-		SetID(alertID).
-		SetTs(ts).
-		SetRuleID(sigma.RuleBruteforceSuccess).
-		SetSeverity(5).
-		SetEventID(eventID).
-		SetAssetID(*st.assetID).
-		SetLastTs(ts))
-	st.deduper.Track(fingerprint, alertID, ts)
 	return nil
 }

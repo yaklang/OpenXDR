@@ -13,9 +13,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
-	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
-	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 	"openxdr/server/pb"
 )
@@ -69,11 +67,8 @@ func TestSensorReportFlowsStream(t *testing.T) {
 	}
 
 	s := &SensorServer{
-		DB:          client,
-		Rules:       loadEvilYaml(t),
-		DedupWindow: time.Hour,
-		Suppress:    suppress.New(client, time.Hour),
-		Intel:       intel.New(client, time.Hour),
+		DB:     client,
+		Events: newTestBus(t, ctx, client, loadEvilYaml(t), nil, nil, time.Hour),
 	}
 
 	now := time.Now().UnixNano()

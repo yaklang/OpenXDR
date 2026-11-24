@@ -4,6 +4,7 @@ package grpcsvc
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"os"
@@ -15,12 +16,36 @@ import (
 
 	"google.golang.org/grpc"
 
+	"openxdr/server/ent"
+	"openxdr/server/internal/eventbus"
+	"openxdr/server/internal/ingest"
 	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 	"openxdr/server/pb"
 )
+
+func newTestBus(t *testing.T, ctx context.Context, client *ent.Client, rules sigma.Catalog, sup *suppress.Store, ioc *intel.Store, dedupWindow time.Duration) eventbus.Bus {
+	t.Helper()
+	db, err := sql.Open("pgx", os.Getenv("INTEGRATION_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := ingest.EnsureSchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if sup == nil {
+		sup = suppress.New(client, time.Hour)
+	}
+	if ioc == nil {
+		ioc = intel.New(client, time.Hour)
+	}
+	return replayBus{&ingest.Processor{
+		DB: db, Rules: rules, Suppress: sup, Intel: ioc, DedupWindow: dedupWindow,
+	}}
+}
 
 const mimikatzRule = `
 id: proc-mimikatz
@@ -94,7 +119,7 @@ func TestAgentReportEvents(t *testing.T) {
 	}
 
 	stream := &fakeAgentStream{ctx: ctx, events: []*pb.AgentEvent{enroll, boring}}
-	s := &Server{DB: client, Rules: loadMimikatzRule(t), DedupWindow: time.Hour, Suppress: suppress.New(client, time.Hour), Intel: intel.New(client, time.Hour)}
+	s := &Server{DB: client, Events: newTestBus(t, ctx, client, loadMimikatzRule(t), nil, nil, time.Hour)}
 	if err := s.ReportEvents(stream); err != nil {
 		t.Fatalf("ReportEvents 失败: %v", err)
 	}
@@ -124,7 +149,7 @@ func TestAgentReportEvents(t *testing.T) {
 func TestAgentReportEventsEOF(t *testing.T) {
 	ctx, client := testdb.New(t)
 	empty := &fakeAgentStream{ctx: ctx} // 无事件，立即 EOF
-	s := &Server{DB: client, Rules: loadMimikatzRule(t), DedupWindow: time.Hour, Suppress: suppress.New(client, time.Hour), Intel: intel.New(client, time.Hour)}
+	s := &Server{DB: client, Events: newTestBus(t, ctx, client, loadMimikatzRule(t), nil, nil, time.Hour)}
 	if err := s.ReportEvents(empty); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("空流应正常收尾，得到 %v", err)
 	}

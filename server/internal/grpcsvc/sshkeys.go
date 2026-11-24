@@ -2,7 +2,6 @@ package grpcsvc
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"time"
 
@@ -47,13 +46,9 @@ func (s *Server) ReportSSHKeys(ctx context.Context, req *pb.ReportSSHKeysRequest
 
 	svc := s.SSHKeys
 	if svc == nil {
-		var sqlDB *sql.DB
-		if raw, ok := s.SQL.(*sql.DB); ok {
-			sqlDB = raw
-		}
 		svc = &sshkeys.Service{
 			DB:       s.DB,
-			SQL:      sqlDB,
+			SQL:      s.SQL,
 			Gate:     &commandgate.Gate{DB: s.DB, Hub: s.Hub},
 			Suppress: s.Suppress,
 		}

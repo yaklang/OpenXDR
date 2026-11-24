@@ -73,7 +73,7 @@ func TestStoreReloadAndFlush(t *testing.T) {
 	}
 
 	// 命中计数已累计，flush 落库
-	store.flush(ctx)
+	store.Flush(ctx)
 
 	g, err := client.Suppression.Get(ctx, global.ID)
 	if err != nil {

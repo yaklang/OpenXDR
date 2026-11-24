@@ -627,28 +627,6 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 	return tx.Commit()
 }
 
-// HasGrant 仅查询服务端实际保存的精确授权，不把模型声明或相似服务名视为委托。
-func (s *Store) HasGrant(ctx context.Context, groupID, assetID uuid.UUID, action, unit string) (bool, error) {
-	if groupID == uuid.Nil || assetID == uuid.Nil || (action != RestartFailedService && action != ReclaimDisk) || (action == RestartFailedService && !validUnit(unit)) {
-		return false, errors.New("维护范围查询必须指定真实组、资产、精确动作及服务或回收命令")
-	}
-	owned, err := s.DB.Asset.Query().Where(asset.IDEQ(assetID), asset.GroupIDEQ(groupID), asset.OsEQ("linux")).Exist(ctx)
-	if err != nil || !owned {
-		return false, err
-	}
-	policy, err := s.Load(ctx)
-	if err != nil {
-		return false, err
-	}
-	now := time.Now()
-	for _, grant := range policy.Grants {
-		if grantApplies(grant, groupID, assetID, now) && actionScope(grant, action, unit, unit) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func repairWork(f *ent.Finding, finalize bool) (findings.Work, error) {
 	var work findings.Work
 	if len(f.Work) != 0 {

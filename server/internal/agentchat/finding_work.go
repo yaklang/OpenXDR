@@ -60,14 +60,8 @@ func (s *Service) prepareFindingWork(ctx context.Context, session *ent.AgentSess
 	return true, true, nil
 }
 
-// guardFindingExec 不扩大组授权；预算耗尽只允许只读命令，历史未知动作未澄清前禁止新增写操作。
 func (s *Service) isFindingFollowup(ctx context.Context, session *ent.AgentSession) (bool, error) {
 	return s.DB.TaskRun.Query().Where(taskrun.TaskIDEQ(findings.FollowupTask), taskrun.SessionIDEQ(session.ID), taskrun.GroupIDEQ(session.GroupID), taskrun.StatusEQ("running")).Exist(ctx)
-}
-
-func (s *Service) guardFindingExec(ctx context.Context, session *ent.AgentSession, host uuid.UUID, cmd string) error {
-	_, _, err := s.findingExecTarget(ctx, session, host, cmd)
-	return err
 }
 
 // findingExecTarget 自治跟进会话里的命令归属到领取的待办。写操作走黑名单：模板动作（重启服务、磁盘回收）
@@ -495,22 +489,5 @@ func (s *Service) findingReferences(ctx context.Context, session *ent.AgentSessi
 }
 
 func findingWorkJSON(f *ent.Finding) any { var w any; _ = json.Unmarshal(f.Work, &w); return w }
-
-func originalTitle(f *ent.Finding) string {
-	var w findings.Work
-	_ = json.Unmarshal(f.Work, &w)
-	if w.OriginalTitle != "" {
-		return w.OriginalTitle
-	}
-	return f.Title
-}
-func originalProblem(f *ent.Finding) string {
-	var w findings.Work
-	_ = json.Unmarshal(f.Work, &w)
-	if w.OriginalProblem != "" {
-		return w.OriginalProblem
-	}
-	return f.Detail
-}
 
 var findingRestart = regexp.MustCompile(`^systemctl restart -- ([a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}\.service)$`)

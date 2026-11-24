@@ -355,9 +355,6 @@ export interface CommandRow {
   detections?: { ruleId: string; title?: string; author?: string; count: number }[]
 }
 
-export const fetchCommands = (filter: { incidentId?: string; assetId?: string }) =>
-  get<CommandRow[]>(`/api/commands?${new URLSearchParams({ ...filter, view: 'summary' })}`)
-
 export const fetchCommandsPage = (filter: { incidentId?: string; assetId?: string }, page: number, pageSize = 10) =>
   get<{ items: CommandRow[]; total: number }>(`/api/commands?${new URLSearchParams({ ...filter, view: 'summary', page: String(page), pageSize: String(pageSize) })}`)
 export const fetchCommand = (id: string) => get<CommandRow>(`/api/commands/${id}`)

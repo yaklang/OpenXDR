@@ -151,7 +151,8 @@ func main() {
 
 	// 研判与资产标注共用一个端点与模型，每次调用按当时的配置，用量按用途分开记
 	llmFor := func(feature string) *triage.LLM { return newLLM(client, conf, feature) }
-	assetEngine := startAssetMap(ctx, db, client, llmFor, conf)
+	assetEngine, ipDB := startAssetMap(ctx, db, client, llmFor, conf)
+	defer ipDB.Close()
 
 	hub := response.NewHub(client, os.Getenv("RESPONSE_ENABLED") == "true")
 	hub.Signer = commandSigner(hub.Enabled)
@@ -179,7 +180,7 @@ func main() {
 		defer router.Close()
 	}
 	defer events.Close()
-	syslogServer := startSyslog(ctx, client, rules, dedupWindow, suppressions, intelStore, events)
+	syslogServer := startSyslog(ctx, client, events)
 	startAuthentik(ctx, db, client, events)
 
 	if err := cluster.WithLock(ctx, db, "bootstrap", func() error { return auth.Bootstrap(ctx, client) }); err != nil {
@@ -194,7 +195,7 @@ func main() {
 	sshKeysSvc := &sshkeys.Service{
 		DB: client, SQL: db, Suppress: suppressions, Gate: chat.Gate,
 	}
-	grpcServer, dists := startGRPC(db, client, rules, dedupWindow, hub, suppressions, intelStore, events, sshKeysSvc)
+	grpcServer, dists := startGRPC(db, client, hub, suppressions, events, sshKeysSvc)
 	triageEngine.EndpointEvidence = chat.CollectEndpointEvidence
 	chat.ReviewFinding = (&findingreview.Reviewer{
 		DB:                client,
@@ -528,7 +529,7 @@ func newLLM(client *ent.Client, conf func() aiconf.Config, feature string) *tria
 }
 
 // startAssetMap 资产图谱与攻击面，以及公网目的地址的背景信息补全。
-func startAssetMap(ctx context.Context, db *sql.DB, client *ent.Client, llmFor func(string) *triage.LLM, conf func() aiconf.Config) *assetmap.Engine {
+func startAssetMap(ctx context.Context, db *sql.DB, client *ent.Client, llmFor func(string) *triage.LLM, conf func() aiconf.Config) (*assetmap.Engine, *ipdb.DB) {
 	// 资产图谱与攻击面：物化清单与依赖边始终运行；配置了研判与标注模型才做 AI 标注
 	assetEngine := &assetmap.Engine{
 		DB: client, SQL: db,
@@ -550,7 +551,7 @@ func startAssetMap(ctx context.Context, db *sql.DB, client *ent.Client, llmFor f
 		HTTP: &http.Client{Timeout: 15 * time.Second},
 	}
 	go cluster.RunLeader(ctx, db, "ipinfo", ipEnricher.Run)
-	return assetEngine
+	return assetEngine, ipDB
 }
 
 // startTriage 研判引擎：AI 带只读调查工具逐个研判 incident。结论驱动的处置在自主响应引擎里（containment/verdict.go）
@@ -823,7 +824,7 @@ func startMaintenance(ctx context.Context, db *sql.DB, client *ent.Client, hub *
 }
 
 // startSyslog syslog 接入，与采集端共用同一事件管道。
-func startSyslog(ctx context.Context, client *ent.Client, rules sigma.Catalog, dedupWindow time.Duration, suppressions *suppress.Store, intelStore *intel.Store, events eventbus.Bus) *syslog.Server {
+func startSyslog(ctx context.Context, client *ent.Client, events eventbus.Bus) *syslog.Server {
 	relays, err := syslog.ParseRelays(os.Getenv("SYSLOG_TRUSTED_RELAYS"))
 	if err != nil {
 		slog.Error("SYSLOG_TRUSTED_RELAYS 无效，应为逗号分隔的 IP 或 CIDR", "err", err)
@@ -831,11 +832,7 @@ func startSyslog(ctx context.Context, client *ent.Client, rules sigma.Catalog, d
 	}
 	receiver := &syslog.Server{
 		DB:            client,
-		Rules:         rules,
 		Addr:          os.Getenv("SYSLOG_ADDR"),
-		DedupWindow:   dedupWindow,
-		Suppress:      suppressions,
-		Intel:         intelStore,
 		Events:        events,
 		TrustedRelays: relays,
 	}
@@ -844,7 +841,7 @@ func startSyslog(ctx context.Context, client *ent.Client, rules sigma.Catalog, d
 }
 
 // startGRPC 监听 agent 与 sensor 接入，返回 gRPC 服务与采集端安装包目录。
-func startGRPC(db *sql.DB, client *ent.Client, rules sigma.Catalog, dedupWindow time.Duration, hub *response.Hub, suppressions *suppress.Store, intelStore *intel.Store, events eventbus.Bus, sshKeysSvc *sshkeys.Service) (*grpc.Server, enroll.Dists) {
+func startGRPC(db *sql.DB, client *ent.Client, hub *response.Hub, suppressions *suppress.Store, events eventbus.Bus, sshKeysSvc *sshkeys.Service) (*grpc.Server, enroll.Dists) {
 	grpcAddr := getenv("GRPC_ADDR", ":8081")
 	lis, err := net.Listen("tcp", grpcAddr)
 	if err != nil {
@@ -867,11 +864,8 @@ func startGRPC(db *sql.DB, client *ent.Client, rules sigma.Catalog, dedupWindow 
 	pb.RegisterAgentServiceServer(grpcServer, &grpcsvc.Server{
 		DB:          client,
 		SQL:         db,
-		Rules:       rules,
-		DedupWindow: dedupWindow,
 		Hub:         hub,
 		Suppress:    suppressions,
-		Intel:       intelStore,
 		Events:      events,
 		Dist:        dists.Agent,
 		AutoUpgrade: autoUpgrade,
@@ -879,10 +873,6 @@ func startGRPC(db *sql.DB, client *ent.Client, rules sigma.Catalog, dedupWindow 
 	})
 	pb.RegisterSensorServiceServer(grpcServer, &grpcsvc.SensorServer{
 		DB:          client,
-		Rules:       rules,
-		DedupWindow: dedupWindow,
-		Suppress:    suppressions,
-		Intel:       intelStore,
 		Events:      events,
 		Dist:        dists.Sensor,
 		AutoUpgrade: autoUpgrade,

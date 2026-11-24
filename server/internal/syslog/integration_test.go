@@ -4,6 +4,7 @@ package syslog
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net"
 	"os"
@@ -11,12 +12,38 @@ import (
 	"testing"
 	"time"
 
-	"openxdr/server/internal/dedup"
+	"openxdr/server/ent"
+	"openxdr/server/internal/eventbus"
+	"openxdr/server/internal/ingest"
 	"openxdr/server/internal/intel"
 	"openxdr/server/internal/sigma"
 	"openxdr/server/internal/suppress"
 	"openxdr/server/internal/testdb"
 )
+
+type directBus struct{ processor *ingest.Processor }
+
+func (b directBus) Publish(ctx context.Context, e ingest.Envelope) error {
+	return b.processor.Process(ctx, e)
+}
+func (directBus) Ready() bool  { return true }
+func (directBus) Close() error { return nil }
+
+func newTestBus(t *testing.T, ctx context.Context, client *ent.Client, rules sigma.Catalog, dedupWindow time.Duration) eventbus.Bus {
+	t.Helper()
+	db, err := sql.Open("pgx", os.Getenv("INTEGRATION_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := ingest.EnsureSchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	return directBus{&ingest.Processor{
+		DB: db, Rules: rules, Suppress: suppress.New(client, time.Hour),
+		Intel: intel.New(client, time.Hour), DedupWindow: dedupWindow,
+	}}
+}
 
 const sshRule = `
 id: b1e7a4f0-2c93-4d58-9a16-5f0d3e8c7b24
@@ -43,7 +70,7 @@ func loadSSHRule(t *testing.T) *sigma.Engine {
 }
 
 // 端到端：RFC3164 报文 → 归类到 linux 资产、命中 ssh 规则 → 生成一条告警；
-// 同主机重复命中走 dedup 不再建新告警。
+// 同主机重复命中走持久去重不再建新告警。
 func TestSyslogBuildLifecycle(t *testing.T) {
 	ctx, client := testdb.New(t)
 	asset, err := client.Asset.Create().
@@ -52,17 +79,14 @@ func TestSyslogBuildLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := &Server{DB: client, Rules: loadSSHRule(t), Suppress: suppress.New(client, time.Hour), Intel: intel.New(client, time.Hour)}
-	ded := dedup.New(time.Hour)
+	s := &Server{DB: client, Events: newTestBus(t, ctx, client, loadSSHRule(t), time.Hour)}
 	line := `<34>Oct 11 22:14:15 web01 sshd[123]: Failed password for root from 1.2.3.4`
 
-	// 第一次：命中规则 → 1 条告警
-	ec, first := s.build(ctx, incoming{line: line}, ded)
-	if len(first) != 1 {
-		t.Fatalf("首次应生成 1 条告警，实际 %d", len(first))
+	// 第一次：命中规则 → 1 条事件 + 1 条告警
+	if err := s.enqueue(ctx, incoming{line: line}); err != nil {
+		t.Fatal(err)
 	}
-
-	evt, err := ec.Save(ctx)
+	evt, err := client.Event.Query().Only(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,11 +102,17 @@ func TestSyslogBuildLifecycle(t *testing.T) {
 	if err := json.Unmarshal(evt.Raw, &raw); err != nil || raw.Message == "" {
 		t.Errorf("raw 应含 message，得到 %v", string(evt.Raw))
 	}
+	if n, err := client.Alert.Query().Count(ctx); err != nil || n != 1 {
+		t.Fatalf("首次应生成 1 条告警，实际 %d (err=%v)", n, err)
+	}
 
 	// 第二次：同主机同指纹 → 去重，无新告警
-	_, second := s.build(ctx, incoming{line: line}, ded)
-	if len(second) != 0 {
-		t.Errorf("窗口内重复命中应去重，实际新建 %d 条", len(second))
+	line2 := `<34>Oct 11 22:14:16 web01 sshd[124]: Failed password for root from 1.2.3.4`
+	if err := s.enqueue(ctx, incoming{line: line2}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := client.Alert.Query().Count(ctx); err != nil || n != 1 {
+		t.Errorf("窗口内重复命中应去重，实际总计 %d 条 (err=%v)", n, err)
 	}
 }
 
@@ -121,11 +151,8 @@ func TestSyslogConsumeFlushesOnCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Server{
-		DB:          client,
-		Rules:       loadSSHRule(t),
-		DedupWindow: time.Hour,
-		Suppress:    suppress.New(client, time.Hour),
-		Intel:       intel.New(client, time.Hour),
+		DB:     client,
+		Events: newTestBus(t, ctx, client, loadSSHRule(t), time.Hour),
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	queue := make(chan incoming, 8)

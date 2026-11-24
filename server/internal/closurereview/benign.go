@@ -432,11 +432,8 @@ func ancestorOf(ctx context.Context, db *ent.Client, asset, guid uuid.UUID, befo
 	return ancestor{ProcessGUID: guid, ParentGUID: ev.ParentProcessGUID, EventID: &ev.ID, Ts: &ev.Ts, Record: record, Missing: record == nil}, nil
 }
 
-// benignAlert 情报命中、诱饵观测、严重告警与平台合成检测不走良性自动结案（高危告警另要主机事实覆盖，见 loadBenign）；
+// alertStall 这条告警不能走良性结案的原因：情报命中、诱饵观测、严重告警与平台合成检测不走良性自动结案（高危告警另要主机事实覆盖，见 loadBenign）；
 // 唯一例外是首次出现的新进程：它是最常见的良性噪声，原始进程事件足以核验。
-func benignAlert(a *ent.Alert) bool { return alertStall(a) == nil }
-
-// alertStall 这条告警不能走良性结案的原因
 func alertStall(a *ent.Alert) error {
 	switch {
 	case a.AssetID == nil || a.Edges.Asset == nil:

@@ -50,6 +50,7 @@ jobs:
               - 'validation/**'
               - 'deploy/ha/logs/**'
               - 'deploy/pi-sandbox/**'
+              - 'deploy/pilot/**'
               - 'integrations/dygk/**'
               - '.github/workflows/ci.yml'
             deception:
@@ -129,6 +130,8 @@ jobs:
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - name: 日志归档回归
         run: python3 -m unittest discover -s deploy/ha/logs -p 'test_*.py'
+      - name: 处置复核脚本回归
+        run: python3 -m unittest discover -s deploy/pilot -p 'test_*.py'
       - name: 构建
         working-directory: server
         run: go build ./...
@@ -268,7 +271,7 @@ jobs:
         run: npm test
 
       - name: Sandbox CLI contract
-        run: node --test deploy/pi-sandbox/xdr.test.mjs
+        run: node --test deploy/pi-sandbox/xdr.test.mjs deploy/pi-sandbox/bridge.test.mjs
 
   web:
     name: Web (React)

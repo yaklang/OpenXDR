@@ -16,13 +16,9 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/asset"
-	"openxdr/server/internal/dedup"
 	"openxdr/server/internal/eventbus"
 	"openxdr/server/internal/ingest"
-	"openxdr/server/internal/intel"
 	"openxdr/server/internal/redact"
-	"openxdr/server/internal/sigma"
-	"openxdr/server/internal/suppress"
 )
 
 // ClassApplicationActivity 应用日志事件的 class。
@@ -33,10 +29,8 @@ const ClassApplicationActivity = 100001
 // 单条报文长度上限，超出截断。UDP 侧同时是读缓冲大小
 const maxMessageLen = 64 * 1024
 
-// 攒批落库与网络保护阈值
+// 网络保护与缓存阈值
 const (
-	batchSize            = 500
-	flushInterval        = 2 * time.Second
 	maxTCPConns          = 256
 	tcpIdleTimeout       = 2 * time.Minute
 	shutdownFlushTimeout = 5 * time.Second
@@ -59,11 +53,7 @@ type Server struct {
 	monitor       monitor
 	assets        assetIndex
 	DB            *ent.Client
-	Rules         sigma.Catalog
 	Addr          string
-	DedupWindow   time.Duration
-	Suppress      *suppress.Store
-	Intel         *intel.Store
 	Events        eventbus.Bus
 	TrustedRelays []netip.Prefix // 受信转发器（SYSLOG_TRUSTED_RELAYS），来自这里的报文按 hostname 归属；为空时都不受信，见 resolveAsset
 
@@ -207,59 +197,34 @@ func (s *Server) listenTCP(ctx context.Context, queue chan<- incoming) {
 	}
 }
 
-// consume 单协程消费，攒批落库。多协程写同一批没有意义，反而要加锁。
+// consume 单协程消费队列并写入事件总线；停机时在短超时内排空已收队列。
 func (s *Server) consume(ctx context.Context, queue <-chan incoming) {
-	ticker := time.NewTicker(flushInterval)
-	defer ticker.Stop()
-
-	// 一台主机反复报同一条日志（暴力破解、刷屏应用）只留一行告警并计数
-	deduper := dedup.New(s.DedupWindow)
-
-	var events []*ent.EventCreate
-	var alerts []*ent.AlertCreate
-	flush := func(fctx context.Context) {
-		if len(events) > 0 {
-			if _, err := s.DB.Event.CreateBulk(events...).Save(fctx); err != nil {
-				slog.Error("Syslog 事件落库失败", "err", err)
-			}
-			events = nil
+	publish := func(pctx context.Context, in incoming) {
+		if s.Events == nil {
+			return
 		}
-		if len(alerts) > 0 {
-			if _, err := s.DB.Alert.CreateBulk(alerts...).Save(fctx); err != nil {
-				slog.Error("Syslog 告警落库失败", "err", err)
-			}
-			alerts = nil
-		}
-		if err := deduper.Flush(fctx, s.DB); err != nil {
-			slog.Error("Syslog 告警计数更新失败", "err", err)
+		err := s.enqueue(pctx, in)
+		s.published(err)
+		if err != nil {
+			slog.Error("Syslog 事件入队失败", "err", err)
 		}
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			// 停机时使用独立短超时上下文，确保最后一批事件、告警与计数能落库
 			fctx, cancel := context.WithTimeout(context.Background(), shutdownFlushTimeout)
-			flush(fctx)
-			cancel()
-			return
-		case <-ticker.C:
-			flush(ctx)
-		case in := <-queue:
-			if s.Events != nil {
-				err := s.enqueue(ctx, in)
-				s.published(err)
-				if err != nil {
-					slog.Error("Syslog 事件入队失败", "err", err)
+			for {
+				select {
+				case in := <-queue:
+					publish(fctx, in)
+				default:
+					cancel()
+					return
 				}
-				continue
 			}
-			e, a := s.build(ctx, in, deduper)
-			events = append(events, e)
-			alerts = append(alerts, a...)
-			if len(events) >= batchSize {
-				flush(ctx)
-			}
+		case in := <-queue:
+			publish(ctx, in)
 		}
 	}
 }
@@ -292,69 +257,6 @@ func (s *Server) enqueue(ctx context.Context, in incoming) error {
 		Timestamp: msg.Ts, ClassUID: ClassApplicationActivity, Source: "syslog",
 		AssetID: assetID, AssetOS: assetOS, Raw: raw,
 	})
-}
-
-func (s *Server) build(ctx context.Context, in incoming, deduper *dedup.Deduper) (*ent.EventCreate, []*ent.AlertCreate) {
-	msg := Parse(in.line, time.Now())
-	msg.Content = redact.String(msg.Content)
-	assetID, assetOS := s.resolveAsset(ctx, msg.Hostname, in.from)
-	if assetID == nil {
-		s.unassigned()
-	}
-
-	raw, _ := json.Marshal(map[string]any{
-		"activity_id": 1,
-		"severity_id": msg.Severity,
-		"message":     msg.Content,
-		"metadata": map[string]any{
-			"product":  map[string]any{"name": msg.AppName},
-			"log_name": msg.MsgID,
-		},
-		"actor":    map[string]any{"process": map[string]any{"pid": msg.ProcID}},
-		"device":   map[string]any{"hostname": msg.Hostname},
-		"facility": msg.Facility,
-	})
-	raw = withAuditFields(withAuthSource(raw, msg), msg)
-
-	eventID := uuid.Must(uuid.NewV7())
-	ec := s.DB.Event.Create().
-		SetID(eventID).
-		SetTs(msg.Ts).
-		SetClassUID(ClassApplicationActivity).
-		SetSource("syslog").
-		SetNillableAssetID(assetID).
-		SetRaw(raw)
-
-	var rawMap map[string]any
-	_ = json.Unmarshal(raw, &rawMap)
-
-	// 指纹带主机，不同主机的同类日志不能被合并成一条
-	origin := msg.Hostname
-	if origin == "" && in.from != nil {
-		origin = in.from.String()
-	}
-
-	var created []*ent.AlertCreate
-	for _, h := range intel.Detections(s.Rules.Evaluate(ClassApplicationActivity, assetOS, rawMap), s.Intel.Match(rawMap, msg.Ts)) {
-		if s.Suppress.Suppressed(h.RuleID, assetID, rawMap, msg.Ts) {
-			continue
-		}
-		fingerprint := h.RuleID + "|" + origin
-		if deduper.Hit(fingerprint, msg.Ts) {
-			continue
-		}
-		alertID := uuid.Must(uuid.NewV7())
-		created = append(created, s.DB.Alert.Create().
-			SetID(alertID).
-			SetTs(msg.Ts).
-			SetRuleID(h.RuleID).
-			SetSeverity(h.Severity).
-			SetEventID(eventID).
-			SetNillableAssetID(assetID).
-			SetLastTs(msg.Ts))
-		deduper.Track(fingerprint, alertID, msg.Ts)
-	}
-	return ec, created
 }
 
 // snapshotAssets 读取或刷新短期资产索引缓存（仅选归属所需字段，锁外查库避免阻塞）。
