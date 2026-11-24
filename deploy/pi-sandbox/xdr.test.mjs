@@ -524,3 +524,35 @@ test('xdr suppress requires positive integer days (>= 1)', async () => {
     });
   });
 });
+
+test('xdr streams >150 KiB payloads without hitting E2BIG (report file/stdin and track stdin)', async () => {
+  const bigMarkdown = `## 结论\n\n${'A'.repeat(160 * 1024)}\n`;
+  const tmpDir = mkdtempSync(join(tmpdir(), 'xdr-large-report-'));
+  const mdPath = join(tmpDir, 'report.md');
+  writeFileSync(mdPath, bigMarkdown);
+  try {
+    await withMockSocket(call => ({ output: JSON.stringify({ ok: true, name: call.name }) }), async ({ execXdr, calls }) => {
+      await execXdr(['report', '大报告', '一句话结论', mdPath, 'attention']);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].name, 'report');
+      assert.equal(calls[0].args.title, '大报告');
+      assert.equal(calls[0].args.summary, '一句话结论');
+      assert.equal(calls[0].args.level, 'attention');
+      assert.equal(calls[0].args.markdown, bigMarkdown);
+
+      calls.length = 0;
+      await execXdr(['report', '大报告 stdin', '一句话结论', '-'], bigMarkdown);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].name, 'report');
+      assert.equal(calls[0].args.markdown, bigMarkdown);
+
+      calls.length = 0;
+      await execXdr(['track', 'pve1', 'large-detail', 'low', 'open', '长详情', '-'], bigMarkdown);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].name, 'track');
+      assert.equal(calls[0].args.detail, bigMarkdown);
+    });
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

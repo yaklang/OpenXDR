@@ -470,9 +470,10 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 		}
 	}
 	problem := problemHash(actual, work)
+	key := useKey(actual.AssetID, unit)
 	var prior use
 	if finalize {
-		used, err := tx.Setting.Get(ctx, useKey(actual.AssetID, unit))
+		used, err := tx.Setting.Query().Where(setting.IDEQ(key)).Where(func(q *sql.Selector) { q.ForUpdate() }).Only(ctx)
 		if err != nil {
 			return errors.New("没有可复核的原维护预留")
 		}
@@ -503,10 +504,9 @@ func (s *Store) authorize(ctx context.Context, session *ent.AgentSession, f *ent
 		return errors.New("原问题或维护授权版本已变化，原预留不再适用")
 	}
 
-	key := useKey(actual.AssetID, unit)
 	var old *ent.Setting
 	if !finalize {
-		old, err = tx.Setting.Get(ctx, key)
+		old, err = tx.Setting.Query().Where(setting.IDEQ(key)).Where(func(q *sql.Selector) { q.ForUpdate() }).Only(ctx)
 		if err != nil && !ent.IsNotFound(err) {
 			return err
 		}

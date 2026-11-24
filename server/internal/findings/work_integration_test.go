@@ -38,3 +38,25 @@ func TestClaimPrioritizesRiskWithoutMovedAssetsBlockingQueue(t *testing.T) {
 		}
 	}
 }
+
+func TestClaimExcludesRetiredAndParkedBeforeLimit(t *testing.T) {
+	ctx, db := testdb.New(t)
+	now := time.Now()
+	g := db.Group.Create().SetName("prod").SaveX(ctx)
+	live := db.Asset.Create().SetHostname("live-1").SetGroupID(g.ID).SaveX(ctx)
+	retired := db.Asset.Create().SetHostname("retired-1").SetGroupID(g.ID).SetRetiredAt(now.Add(-time.Hour)).SaveX(ctx)
+	parked := db.Asset.Create().SetHostname("parked-1").SetGroupID(g.ID).SetParkedAt(now.Add(-time.Hour)).SaveX(ctx)
+	for i := 0; i < BatchSize+2; i++ {
+		db.Finding.Create().SetGroupID(g.ID).SetAssetID(retired.ID).SetKey(fmt.Sprint("ret", i)).SetTitle("已退役高危").SetSeverity("high").SetFirstSeen(now.Add(-48 * time.Hour)).ExecX(ctx)
+		db.Finding.Create().SetGroupID(g.ID).SetAssetID(parked.ID).SetKey(fmt.Sprint("park", i)).SetTitle("停机保留高危").SetSeverity("high").SetFirstSeen(now.Add(-48 * time.Hour)).ExecX(ctx)
+	}
+	want := db.Finding.Create().SetGroupID(g.ID).SetAssetID(live.ID).SetKey("live-low").SetTitle("在线资产待办").SetSeverity("low").SaveX(ctx)
+	session := db.AgentSession.Create().SetGroupID(g.ID).SetModel("m").SetKind("task").SetInitiator("system").SetStatus("running").SaveX(ctx)
+	rows, err := Claim(ctx, db, session, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ID != want.ID {
+		t.Fatalf("已退役或停机保留资产不应挤占 BatchSize：len=%d rows=%+v", len(rows), rows)
+	}
+}

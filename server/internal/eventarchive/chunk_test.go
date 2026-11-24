@@ -2,10 +2,13 @@ package eventarchive
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"math"
 	"math/rand"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -314,5 +317,48 @@ func TestTooManyEventsRejected(t *testing.T) {
 	}
 	if _, err := EncodeBlock(events); err == nil {
 		t.Fatal("超过条数上限必须拒绝")
+	}
+}
+
+func TestAppendIntNegativeAndRoundTrip(t *testing.T) {
+	for _, n := range []int64{0, 1, -1, -4001, math.MaxInt64, math.MinInt64} {
+		got := string(appendInt(nil, n))
+		want := strconv.FormatInt(n, 10)
+		if got != want {
+			t.Fatalf("appendInt(%d) = %q, want %q", n, got, want)
+		}
+	}
+	ev := Event{
+		ID:       uuid.New(),
+		Ts:       time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+		ClassUID: -1,
+		Source:   "agent",
+		Raw:      json.RawMessage(`{}`),
+	}
+	block, err := EncodeBlock([]Event{ev})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := block.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeBlock(raw)
+	if err != nil {
+		t.Fatalf("负 ClassUID 解码失败: %v", err)
+	}
+	if len(got) != 1 || got[0].ClassUID != -1 {
+		t.Fatalf("负 ClassUID 往返不一致: %+v", got)
+	}
+}
+
+func TestDayLockGuardAliveNilReceiver(t *testing.T) {
+	var nilGuard *DayLockGuard
+	if err := nilGuard.Alive(context.Background()); err == nil {
+		t.Fatal("nil DayLockGuard 调用 Alive 应返回错误")
+	}
+	closed := &DayLockGuard{day: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
+	if err := closed.Alive(context.Background()); err == nil || !strings.Contains(err.Error(), "2026-09-01") {
+		t.Fatalf("已关闭的 DayLockGuard 应返回含日期的错误，实际=%v", err)
 	}
 }

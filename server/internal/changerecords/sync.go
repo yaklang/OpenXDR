@@ -3,6 +3,7 @@ package changerecords
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -231,18 +232,12 @@ func (s *Syncer) syncSourceLocked(ctx context.Context, id uuid.UUID) (int, error
 }
 
 func (s *Syncer) saveCommit(ctx context.Context, src *ent.ChangeSource, d CommitDetail, snap *Snapshot) (bool, error) {
-	tx, err := s.DB.Tx(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-
-	rec, err := tx.ChangeRecord.Query().
+	rec, err := s.DB.ChangeRecord.Query().
 		Where(changerecord.SourceIDEQ(src.ID), changerecord.ShaEQ(d.SHA)).
 		Only(ctx)
 	created := false
 	if ent.IsNotFound(err) {
-		rec, err = tx.ChangeRecord.Create().
+		rec, err = s.DB.ChangeRecord.Create().
 			SetSourceID(src.ID).
 			SetRepo(src.Repo).
 			SetSha(d.SHA).
@@ -253,19 +248,25 @@ func (s *Syncer) saveCommit(ctx context.Context, src *ent.ChangeSource, d Commit
 			SetFiles(d.StoredFiles).
 			SetFileCount(d.FileCount).
 			Save(ctx)
+		if err == nil {
+			created = true
+		} else if ent.IsConstraintError(err) {
+			rec, err = s.DB.ChangeRecord.Query().
+				Where(changerecord.SourceIDEQ(src.ID), changerecord.ShaEQ(d.SHA)).
+				Only(ctx)
+		}
 		if err != nil {
 			return false, err
 		}
-		created = true
 	} else if err != nil {
 		return false, err
 	}
 
 	matches := snap.Match(MatchInput{Title: d.Title, Body: d.Body, Files: d.AllFiles})
-	if err := upsertLinks(ctx, tx.Client(), rec, matches); err != nil {
+	if err := s.upsertLinks(ctx, rec, matches); err != nil {
 		return false, err
 	}
-	return created, tx.Commit()
+	return created, nil
 }
 
 // RelinkRecent 用当前纳管资产快照重算指定时间以来的提交关联（幂等补齐新纳管资产或更新后的 VMID/IP）。
@@ -285,11 +286,42 @@ func (s *Syncer) RelinkRecent(ctx context.Context, since time.Time) error {
 	}
 	for _, rec := range records {
 		matches := snap.Match(MatchInput{Title: rec.Title, Body: rec.Body, Files: rec.Files})
-		if err := upsertLinks(ctx, s.DB, rec, matches); err != nil {
+		if err := s.upsertLinks(ctx, rec, matches); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// upsertLinks 幂等写入变更记录与资产的关联：优先用 ON CONFLICT 避免在事务内触发 25P02。
+func (s *Syncer) upsertLinks(ctx context.Context, rec *ent.ChangeRecord, matches []AssetMatch) error {
+	if len(matches) == 0 {
+		return nil
+	}
+	if s.SQL != nil {
+		for _, m := range matches {
+			cluesJSON, err := json.Marshal(m.Clues)
+			if err != nil {
+				return err
+			}
+			id, err := uuid.NewV7()
+			if err != nil {
+				return err
+			}
+			_, err = s.SQL.ExecContext(ctx, `
+INSERT INTO change_record_assets (id, change_record_id, asset_id, committed_at, clues)
+VALUES ($1, $2, $3, $4, $5::jsonb)
+ON CONFLICT (change_record_id, asset_id) DO UPDATE
+SET clues = EXCLUDED.clues
+WHERE change_record_assets.clues IS DISTINCT FROM EXCLUDED.clues`,
+				id, rec.ID, m.AssetID, rec.CommittedAt, string(cluesJSON))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return upsertLinks(ctx, s.DB, rec, matches)
 }
 
 func upsertLinks(ctx context.Context, db *ent.Client, rec *ent.ChangeRecord, matches []AssetMatch) error {
@@ -306,7 +338,12 @@ func upsertLinks(ctx context.Context, db *ent.Client, rec *ent.ChangeRecord, mat
 	for _, link := range existing {
 		byAsset[link.AssetID] = link
 	}
+	seen := make(map[uuid.UUID]struct{}, len(matches))
 	for _, m := range matches {
+		if _, dup := seen[m.AssetID]; dup {
+			continue
+		}
+		seen[m.AssetID] = struct{}{}
 		if cur := byAsset[m.AssetID]; cur != nil {
 			if !slices.Equal(cur.Clues, m.Clues) {
 				if err := db.ChangeRecordAsset.UpdateOneID(cur.ID).SetClues(m.Clues).Exec(ctx); err != nil {

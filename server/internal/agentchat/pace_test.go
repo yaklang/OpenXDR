@@ -90,3 +90,30 @@ func TestPaceWatchRearms(t *testing.T) {
 		t.Fatal("没有触发")
 	}
 }
+
+func TestInvestigateBudgetCapsShortDeadline(t *testing.T) {
+	s := &Service{} // 默认 timeout = 4h
+
+	// 30 分钟任务（如 ops-followup）：预算应按 ctx 剩余期限算，收尾提前量封顶在 15m 而非 2h
+	ctx30, cancel30 := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel30()
+	_, budget := s.investigateBudget(ctx30)
+	if budget > 30*time.Minute || budget < 29*time.Minute {
+		t.Fatalf("30m 任务的收尾预算应约为 30m，实际=%v", budget)
+	}
+	if lead := wrapUpLead(budget, 15*time.Minute); lead > 15*time.Minute || lead < 14*time.Minute {
+		t.Fatalf("30m 任务的收尾提前量应封顶在一半(~15m)，实际=%v", lead)
+	}
+
+	// 长于默认超时的 ctx 仍受 s.timeout() 封顶
+	ctxLong, cancelLong := context.WithTimeout(context.Background(), 6*time.Hour)
+	defer cancelLong()
+	if _, got := s.investigateBudget(ctxLong); got != s.timeout() {
+		t.Fatalf("超长 ctx 应封顶到 s.timeout()=%v，实际=%v", s.timeout(), got)
+	}
+
+	// 无 deadline 时回落到 s.timeout()
+	if _, got := s.investigateBudget(context.Background()); got != s.timeout() {
+		t.Fatalf("无 deadline 应使用 s.timeout()=%v，实际=%v", s.timeout(), got)
+	}
+}

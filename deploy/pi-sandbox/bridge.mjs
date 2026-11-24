@@ -77,8 +77,7 @@ function entriesOf(messages) {
 }
 
 // xdr 的入口：只接受本轮允许的工具名，参数原样交给平台校验
-function serveXdr(allowed, callTool, signal) {
-  const socket = `${XDR_DIR}/xdr.sock`;
+export function serveXdr(allowed, callTool, signal, socket = `${XDR_DIR}/xdr.sock`) {
   rmSync(socket, { force: true });
   const server = http.createServer((req, res) => {
     const reply = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
@@ -93,6 +92,7 @@ function serveXdr(allowed, callTool, signal) {
     req.on('end', async () => {
       let call;
       try { call = JSON.parse(Buffer.concat(chunks).toString()); } catch { return reply(400, { error: '请求不是 JSON' }); }
+      if (!call || typeof call !== 'object' || Array.isArray(call)) return reply(400, { error: '请求体必须是 JSON 对象' });
       if (!allowed.has(call.name)) return reply(200, { error: `本轮不允许使用 xdr ${call.name}` });
       try {
         const result = await callTool(randomUUID(), call.name, call.args ?? {}, signal);

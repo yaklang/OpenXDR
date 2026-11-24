@@ -99,14 +99,22 @@ func Prefix(s string) (netip.Prefix, error) {
 	return netip.PrefixFrom(a, a.BitLen()), nil
 }
 
-// Covers cidr 是否覆盖 ip
-func Covers(cidr, ip string) bool {
+// Covers cidr 是否覆盖单个 IP 或子网段
+func Covers(cidr, target string) bool {
 	p, err := Prefix(cidr)
 	if err != nil {
 		return false
 	}
-	a, err := netip.ParseAddr(ip)
-	return err == nil && p.Contains(a.Unmap())
+	target = strings.TrimSpace(target)
+	if a, err := netip.ParseAddr(target); err == nil {
+		return p.Contains(a.Unmap())
+	}
+	tp, err := netip.ParsePrefix(target)
+	if err != nil {
+		return false
+	}
+	tp = tp.Masked()
+	return p.Bits() <= tp.Bits() && p.Contains(tp.Addr().Unmap())
 }
 
 // Live 当前有效：没停用、没过期

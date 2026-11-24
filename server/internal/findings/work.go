@@ -112,7 +112,12 @@ func Claim(ctx context.Context, db *ent.Client, session *ent.AgentSession, now t
 		finding.Or(finding.WorkLeaseUntilIsNil(), finding.WorkLeaseUntilLTE(now)),
 	).Where(func(s *sql.Selector) {
 		owned := sql.Table(asset.Table).As("work_asset")
-		s.Where(sql.Exists(sql.Select(owned.C(asset.FieldID)).From(owned).Where(sql.And(sql.ColumnsEQ(owned.C(asset.FieldID), s.C(finding.FieldAssetID)), sql.EQ(owned.C(asset.FieldGroupID), session.GroupID)))))
+		s.Where(sql.Exists(sql.Select(owned.C(asset.FieldID)).From(owned).Where(sql.And(
+			sql.ColumnsEQ(owned.C(asset.FieldID), s.C(finding.FieldAssetID)),
+			sql.EQ(owned.C(asset.FieldGroupID), session.GroupID),
+			sql.IsNull(owned.C(asset.FieldRetiredAt)),
+			sql.IsNull(owned.C(asset.FieldParkedAt)),
+		))))
 		s.ForUpdate(sql.WithLockAction(sql.SkipLocked))
 	}).Order(func(s *sql.Selector) {
 		s.OrderExpr(sql.Expr("CASE " + s.C(finding.FieldSeverity) + " WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END"))

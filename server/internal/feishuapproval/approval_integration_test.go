@@ -301,3 +301,25 @@ func TestSettingsHideSecretAndRequireAdmin(t *testing.T) {
 		t.Fatal("非管理员修改配置")
 	}
 }
+
+func TestDeliverSkipsStaleEntriesTerminally(t *testing.T) {
+	f := setup(t)
+	bindUser(t, f, f.u, "open-1")
+	staleApproval := pendingApproval(t, f)
+	if err := f.s.enqueue(f.ctx, f.c); err != nil {
+		t.Fatal(err)
+	}
+	// 审批在投递前已批准，不再是 pending
+	f.s.DB.Approval.UpdateOneID(staleApproval.ID).SetStatus(approval.StatusApproved).ExecX(f.ctx)
+	if err := f.s.deliver(f.ctx, f.c); err != nil {
+		t.Fatal(err)
+	}
+	var attempts int
+	var outcome string
+	if err := f.s.SQL.QueryRowContext(f.ctx, `SELECT attempts,outcome FROM feishu_approval_deliveries WHERE approval_id=$1 AND user_id=$2`, staleApproval.ID, f.u.ID).Scan(&attempts, &outcome); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 3 || outcome != "skipped" {
+		t.Fatalf("已失效投递应标为终态，避免反复占满队列：attempts=%d outcome=%q", attempts, outcome)
+	}
+}

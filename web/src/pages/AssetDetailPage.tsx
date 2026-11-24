@@ -122,7 +122,7 @@ export function AssetDetailPage() {
   return <AssetDetail key={id} />
 }
 
-const VALID_TABS = ['incidents', 'findings', 'events', 'commands', 'vulns', 'localAccounts', 'identity', 'detectionGaps', 'config', 'profile']
+const VALID_TABS = ['incidents', 'findings', 'events', 'commands', 'vulns', 'changes', 'localAccounts', 'identity', 'detectionGaps', 'config', 'profile']
 
 function AssetDetail() {
   const { t } = useI18n()

@@ -61,3 +61,31 @@ func TestHostCoverageSQLExcludesSingleChange(t *testing.T) {
 		t.Fatalf("手写 SQL 与 HostCoverage 口径一致：\n%s\n%s", got, want)
 	}
 }
+
+func TestCovers(t *testing.T) {
+	cases := []struct {
+		cidr   string
+		target string
+		want   bool
+	}{
+		{"10.1.1.0/24", "10.1.1.36", true},
+		{"10.1.1.0/24", "10.1.2.1", false},
+		{"10.1.1.0/24", "10.1.1.0/24", true},
+		{"10.1.0.0/16", "10.1.1.0/24", true},
+		{"10.1.0.0/16", "10.1.1.5/24", true},
+		{"10.1.1.0/24", "10.1.0.0/16", false},
+		{"10.1.1.0/24", "10.1.2.0/24", false},
+		{"10.1.1.36", "10.1.1.36", true},
+		{"10.1.1.36", "10.1.1.36/32", true},
+		{"10.1.1.36", "10.1.1.0/24", false},
+		{"fd00:1::/32", "fd00:1:2::/64", true},
+		{"fd00:1:2::/64", "fd00:1::/32", false},
+		{"10.1.0.0/16", "fd00:1::/64", false},
+		{"10.1.0.0/16", "not-an-ip", false},
+	}
+	for _, tc := range cases {
+		if got := Covers(tc.cidr, tc.target); got != tc.want {
+			t.Errorf("Covers(%q, %q) = %v, want %v", tc.cidr, tc.target, got, tc.want)
+		}
+	}
+}

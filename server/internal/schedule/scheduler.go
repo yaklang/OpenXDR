@@ -449,7 +449,12 @@ func (s *Scheduler) rerun(ctx context.Context, t *ent.Task, g *ent.Group, run *e
 		_ = tx.Rollback()
 		return nil, err
 	}
-	return session, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	sid := session.ID
+	run.SessionID = &sid
+	return session, nil
 }
 
 func (s *Scheduler) newSession(ctx context.Context, tx *ent.Tx, t *ent.Task, g *ent.Group, model string) (*ent.AgentSession, error) {

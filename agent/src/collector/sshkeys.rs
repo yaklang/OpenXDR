@@ -254,7 +254,7 @@ pub fn spawn(sink: super::EventSink, state: Arc<State>) {
             (last_trusted, snap)
         })
         .await;
-        let mut last_trusted = match initial {
+        let last_trusted = match initial {
             Ok((trusted, Some(snap))) => {
                 let count = snap.keys.len();
                 state.update(snap);
@@ -275,25 +275,56 @@ pub fn spawn(sink: super::EventSink, state: Arc<State>) {
         };
 
         let signal = change_signal();
-        loop {
-            signal.notified().await;
-            // 吸收编辑器保存文件时的连续 create/modify/rename 事件
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            let mut trusted_in = last_trusted.clone();
-            if let Ok((trusted_out, snap)) = tokio::task::spawn_blocking(move || {
-                let snap = collect_snapshot(&mut trusted_in);
-                (trusted_in, snap)
-            })
-            .await
-            {
-                last_trusted = trusted_out;
-                if let Some(snap) = snap {
-                    state.update(snap);
-                    sink.capability("ssh-keys", "authorized-keys", "active");
-                }
-            }
-        }
+        watch_changes(
+            &sink,
+            &state,
+            signal,
+            Duration::from_millis(300),
+            last_trusted,
+            |mut trusted| async move {
+                tokio::task::spawn_blocking(move || {
+                    let snap = collect_snapshot(&mut trusted);
+                    (trusted, snap)
+                })
+                .await
+                .unwrap_or_default()
+            },
+        )
+        .await;
     });
+}
+
+#[cfg(target_os = "linux")]
+async fn watch_changes<F, Fut>(
+    sink: &super::EventSink,
+    state: &State,
+    signal: &tokio::sync::Notify,
+    debounce: Duration,
+    mut last_trusted: Option<SshdKeyConfig>,
+    mut collect: F,
+) where
+    F: FnMut(Option<SshdKeyConfig>) -> Fut,
+    Fut: std::future::Future<Output = (Option<SshdKeyConfig>, Option<Snapshot>)>,
+{
+    loop {
+        tokio::select! {
+            _ = sink.closed() => return,
+            _ = signal.notified() => {}
+        }
+        // 吸收编辑器保存文件时的连续 create/modify/rename 事件
+        tokio::time::sleep(debounce).await;
+        if sink.is_closed() {
+            return;
+        }
+        let (trusted_out, snap) = collect(last_trusted.clone()).await;
+        if trusted_out.is_some() {
+            last_trusted = trusted_out;
+        }
+        if let Some(snap) = snap {
+            state.update(snap);
+            sink.capability("ssh-keys", "authorized-keys", "active");
+        }
+    }
 }
 
 /// 补充给 `fswatch` 默认目标的钥匙目录（非 `/home` 用户的 `.ssh` 及 `sshd -T` 静态目录）
@@ -1592,5 +1623,91 @@ authorizedkeyscommanduser nobody\n";
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn watch_changes_exits_cleanly_when_sink_closes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let make_sink = || {
+            let (tx, rx) = tokio::sync::mpsc::channel(4);
+            let sink = super::super::EventSink {
+                tx,
+                dropped: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                health: crate::health::Health::new(),
+                generation: 0,
+            };
+            (sink, rx)
+        };
+
+        // 1. 等待变更信号期间 sink 关闭：任务立即退出，不抢走后续通知
+        let signal = Arc::new(tokio::sync::Notify::new());
+        let state = Arc::new(State::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (sink1, rx1) = make_sink();
+        let handle = {
+            let signal = signal.clone();
+            let state = state.clone();
+            let calls = calls.clone();
+            tokio::spawn(async move {
+                watch_changes(
+                    &sink1,
+                    &state,
+                    &signal,
+                    Duration::from_millis(50),
+                    None,
+                    |trusted| {
+                        let calls = calls.clone();
+                        async move {
+                            calls.fetch_add(1, Ordering::SeqCst);
+                            (trusted, None)
+                        }
+                    },
+                )
+                .await;
+            })
+        };
+        tokio::task::yield_now().await;
+        drop(rx1);
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("sink 关闭后任务应及时退出")
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        // 2. 防抖睡眠期间 sink 关闭：醒来后直接退出，不再触发采集
+        let (sink2, rx2) = make_sink();
+        let handle2 = {
+            let signal = signal.clone();
+            let state = state.clone();
+            let calls = calls.clone();
+            tokio::spawn(async move {
+                watch_changes(
+                    &sink2,
+                    &state,
+                    &signal,
+                    Duration::from_millis(80),
+                    None,
+                    |trusted| {
+                        let calls = calls.clone();
+                        async move {
+                            calls.fetch_add(1, Ordering::SeqCst);
+                            (trusted, None)
+                        }
+                    },
+                )
+                .await;
+            })
+        };
+        tokio::task::yield_now().await;
+        signal.notify_one();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        drop(rx2);
+        tokio::time::timeout(Duration::from_secs(1), handle2)
+            .await
+            .expect("防抖期间 sink 关闭后任务应退出")
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }

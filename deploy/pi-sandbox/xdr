@@ -6,10 +6,15 @@ SOCKET=${XDR_SOCKET:-/tmp/xdr/xdr.sock}
 CONTEXT=${XDR_CONTEXT:-/tmp/xdr/context.json}
 UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 
-call() { # 工具名 参数JSON
+call() { # 工具名 [参数JSON；省略或 - 时从 stdin 读]
   local resp
-  resp=$(/usr/bin/curl -sS --max-time 1800 --unix-socket "$SOCKET" -H 'Content-Type: application/json' \
-    -d "$(jq -cn --arg n "$1" --argjson a "$2" '{name:$n,args:$a}')" http://xdr/tool) || { echo "xdr 通道不可用" >&2; exit 2; }
+  if [ "${2:--}" = - ]; then
+    resp=$(jq -c --arg n "$1" '{name:$n,args:.}' | /usr/bin/curl -sS --max-time 1800 --unix-socket "$SOCKET" -H 'Content-Type: application/json' \
+      --data-binary @- http://xdr/tool) || { echo "xdr 通道不可用" >&2; exit 2; }
+  else
+    resp=$(printf '%s' "$2" | jq -c --arg n "$1" '{name:$n,args:.}' | /usr/bin/curl -sS --max-time 1800 --unix-socket "$SOCKET" -H 'Content-Type: application/json' \
+      --data-binary @- http://xdr/tool) || { echo "xdr 通道不可用" >&2; exit 2; }
+  fi
   if jq -e 'has("error")' >/dev/null <<<"$resp"; then jq -r .error <<<"$resp" >&2; exit 1; fi
   jq -r .output <<<"$resp"
 }
@@ -134,11 +139,9 @@ case "$cmd" in
     timeout=${pos[2]:-60}
     [[ $timeout =~ ^[0-9]+$ ]] && [ "$timeout" -ge 1 ] && [ "$timeout" -le 300 ] || { echo "timeout 必须是 1–300 的整数秒：$timeout" >&2; exit 2; }
     host=$(host_id "${pos[0]}")
-    cmd_text=$(text "${pos[1]}")
-    payload=$(jq -cn --arg h "$host" --arg c "$cmd_text" --argjson t "$timeout" \
+    out=$(text "${pos[1]}" | jq -Rsc --arg h "$host" --argjson t "$timeout" \
       --argjson hf "$has_finding" --arg fid "$finding_id" \
-      '{host:$h,cmd:$c,timeout:$t} + (if $hf == 1 then {finding_id:$fid} else {} end)')
-    out=$(call exec "$payload")
+      '{host:$h,cmd:.,timeout:$t} + (if $hf == 1 then {finding_id:$fid} else {} end)' | call exec -)
     jq -r '"[id=\(.id // "-") status=\(.status) exit=\(.exit_code // "-")\(if .truncated then " truncated" else "" end)]", (.stdout // ""), (if (.stderr // "") != "" then "[stderr]\n" + .stderr else empty end)' <<<"$out" ;;
   repair-capabilities|repair_capabilities)
     need "$cmd" 1 "$@"
@@ -203,7 +206,7 @@ case "$cmd" in
     json=; [ "${1:-}" = --json ] && { json=1; shift; }
     need "$cmd" 1 "$@"
     no_extra "$cmd" 1 "$#"
-    out=$(call query "$(jq -cn --arg s "$(text "$1")" '{sql:$s}')")
+    out=$(text "$1" | jq -Rsc '{sql:.}' | call query -)
     if [ -n "$json" ]; then
       # TSV 会把反斜杠再转义一层，jsonb 列就解析不回来了；JSON 行原样保留嵌套结构
       jq -c '.columns as $c | .rows[] | [$c, .] | transpose | map({(.[0]): .[1]}) | add // {}' <<<"$out"
@@ -283,14 +286,13 @@ case "$cmd" in
     st=${pos[3]}
     case "$st" in open|resolved|withdrawn) ;; *) echo "status 必须是 open / resolved / withdrawn：$st" >&2; exit 2 ;; esac
     title=${pos[4]}
-    detail=$(text "${pos[5]}")
-    payload=$(jq -cn --arg h "$host" --arg k "$key" --arg sv "$sev" --arg st "$st" --arg t "$title" --arg d "$detail" \
+    text "${pos[5]}" | jq -Rsc --arg h "$host" --arg k "$key" --arg sv "$sev" --arg st "$st" --arg t "$title" \
       --arg rc "$repair_command" --arg rm "$repair_mount" --arg wa "$wake_at" --argjson hd "$has_depends" --argjson deps "$depends_on" \
       --argjson hn "$has_next" --arg ns "$next_step" \
       --argjson hb "$has_blocker" --arg bl "$blocker" \
       --argjson he "$has_evidence" --argjson ev "$evidence" \
       --arg rs "$resolution" --argjson hr "$has_rules" --argjson ru "$rules" \
-      '{host:$h,key:$k,severity:$sv,status:$st,title:$t,detail:$d}
+      '{host:$h,key:$k,severity:$sv,status:$st,title:$t,detail:.}
       + (if $rs != "" then {resolution:$rs} else {} end)
       + (if $hr == 1 then {recurrence_rules:$ru} else {} end)
       + (if $rc != "" then {repair_command:$rc} else {} end)
@@ -299,8 +301,7 @@ case "$cmd" in
       + (if $hd == 1 then {depends_on:$deps} else {} end)
       + (if $hn == 1 then {next_step:$ns} else {} end)
       + (if $hb == 1 then {blocker:$bl} else {} end)
-      + (if $he == 1 then {evidence_commands:$ev} else {} end)')
-    call track "$payload" ;;
+      + (if $he == 1 then {evidence_commands:$ev} else {} end)' | call track - ;;
   ignore)
     need "$cmd" 3 "$@"
     no_extra "$cmd" 3 "$#"
@@ -379,7 +380,10 @@ case "$cmd" in
     need "$cmd" 3 "$@"
     no_extra "$cmd" 4 "$#"
     [ "$3" = - ] || [ -f "$3" ] || { echo "正文文件不存在：$3（正文写进文件，或用 - 从 stdin 读）" >&2; exit 2; }
-    if [ "$3" = - ]; then body=$(jq -Rs . ); else body=$(jq -Rs . <"$3"); fi # 正文来自文件，或 - 表示 stdin
-    call report "$(jq -cn --arg t "$1" --arg s "$2" --argjson m "$body" --arg l "${4:-}" '{title:$t,summary:$s,markdown:$m} + (if $l == "" then {} else {level:$l} end)')" ;;
+    if [ "$3" = - ]; then
+      jq -Rsc --arg t "$1" --arg s "$2" --arg l "${4:-}" '{title:$t,summary:$s,markdown:.} + (if $l == "" then {} else {level:$l} end)' | call report -
+    else
+      jq -Rsc --arg t "$1" --arg s "$2" --arg l "${4:-}" '{title:$t,summary:$s,markdown:.} + (if $l == "" then {} else {level:$l} end)' <"$3" | call report -
+    fi ;;
   *) usage; [ -z "$cmd" ] || exit 2 ;;
 esac

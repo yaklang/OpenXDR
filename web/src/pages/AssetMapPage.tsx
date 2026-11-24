@@ -1,7 +1,7 @@
 import { ArrowRightOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { Button, Card, Descriptions, Drawer, Empty, Flex, Input, Skeleton, Space, Switch, Tag, Typography, theme } from 'antd'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { fetchAssetMap, type AssetMap, type MapNode } from '../api'
 import { useSession } from '../app/session'
@@ -45,6 +45,7 @@ export function AssetMapPage() {
   const [allGroups, setAllGroups] = useState(false)
   const [selected, setSelected] = useState<Selection>(null)
   const scope = isAdmin && allGroups ? 'all' : group?.id
+  useEffect(() => { setSelected(null) }, [scope])
   const query = useQuery({ queryKey: ['assetMap', scope], queryFn: () => fetchAssetMap(scope!), enabled: !!scope, refetchInterval: 60_000 })
   const discoveredCount = query.data?.nodes.filter(n => n.kind === 'discovered' || n.kind === 'managed').length ?? 0
   const showDiscovered = discoveredChoice ?? discoveredCount <= 20
@@ -82,7 +83,7 @@ export function AssetMapPage() {
 
       <Drawer open={!!selected} size={480} mask={false} onClose={() => setSelected(null)}
         title={selected && ('node' in selected ? <NodeTitle node={selected.node} /> : `${selected.from.label} → ${selected.to.label}`)}>
-        {selected && 'node' in selected && <NodeDetail node={selected.node} graph={query.data!} canEdit={canEdit} isGroupAdmin={isGroupAdmin} />}
+        {selected && 'node' in selected && query.data && <NodeDetail node={selected.node} graph={query.data} canEdit={canEdit} isGroupAdmin={isGroupAdmin} />}
         {selected && 'edge' in selected && (
           <Descriptions column={1} size="small">
             {selected.edge.note && <Descriptions.Item label={t('edgeNote')}>{selected.edge.note}</Descriptions.Item>}

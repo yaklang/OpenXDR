@@ -291,9 +291,10 @@ pub struct ExitEvent {
 #[map]
 static EXITS: PerfEventArray<ExitEvent> = PerfEventArray::new(0);
 
-/// exit_group 时记下退出码，主线程 sched_process_exit 时取走
+/// exit_group 时记下退出码，主线程 sched_process_exit 时取走；
+/// 多线程进程若主线程提前退出，残留条目由 LRU 淘汰，避免长期泄漏
 #[map]
-static EXIT_CODES: HashMap<u32, i32> = HashMap::with_max_entries(16384, 0);
+static EXIT_CODES: LruHashMap<u32, i32> = LruHashMap::with_max_entries(16384, 0);
 
 // /sys/kernel/tracing/events/syscalls/sys_enter_exit_group/format:
 //   field:long error_code;  offset:16;  size:8

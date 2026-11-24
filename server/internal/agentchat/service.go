@@ -409,15 +409,27 @@ func graceReport(handle piruntime.Handler) piruntime.Handler {
 	}
 }
 
+// investigateBudget 按外层 ctx 剩余期限计算本轮收尾预算，避免短期限任务按默认 4h 封顶提前量。
+func (s *Service) investigateBudget(ctx context.Context) (time.Time, time.Duration) {
+	deadline, ok := ctx.Deadline()
+	budget := s.timeout()
+	if ok {
+		if left := time.Until(deadline); left > 0 {
+			budget = min(left, budget)
+		}
+	}
+	return deadline, budget
+}
+
 // investigate 跑调查阶段并按需收尾。剩余时间少于 wrapUpLead（按本会话实测的模型单轮耗时算）就截停调查，
 // 补齐半截的工具调用，按超时收尾。人点停止、进程退出取消的是外层 ctx，不在这里收尾。
 func (s *Service) investigate(ctx context.Context, session *ent.AgentSession, request piruntime.Request, handle piruntime.Handler, record piruntime.Observer, seq *int) (*piruntime.Result, error) {
-	deadline, _ := ctx.Deadline()
+	deadline, budget := s.investigateBudget(ctx)
 	handle = graceReport(handle)
 	work, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	p := newPace(time.Now())
-	go p.watch(work, deadline, s.timeout(), func() { cancel(errWrapUpDue) })
+	go p.watch(work, deadline, budget, func() { cancel(errWrapUpDue) })
 	result, err := s.Runtime.Run(work, request, handle, p.observe(record))
 	if err != nil && ctx.Err() == nil && errors.Is(context.Cause(work), errWrapUpDue) {
 		if err := s.closeDangling(ctx, session.ID, seq); err != nil {

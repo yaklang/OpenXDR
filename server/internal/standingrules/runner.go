@@ -31,6 +31,7 @@ const (
 	proposalTTL                     = 24 * time.Hour
 	skipDedupWindow                 = 6 * time.Hour
 	onlineGrace                     = 5 * time.Minute
+	consumedProposalGrace           = 6 * time.Minute
 	DefaultMaxProposalExecsPerTick  = 3
 	DefaultMaxHostDispatchesPerTick = 5
 )
@@ -644,6 +645,10 @@ func (r *Runner) reconcilePendingApprovals(ctx context.Context) error {
 			var issuedID uuid.UUID
 			cmdRec, execErr := r.issueAndWait(ctx, a, run.Command, "standing-rule:"+ref, 5*time.Minute, func(c *ent.Command) error {
 				issuedID = c.ID
+				// 指令下发后立刻持久化 CommandID，避免等待回执期间进程中断导致无法对账终态
+				saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+				defer cancel()
+				_ = r.DB.StandingRuleRun.UpdateOneID(run.ID).SetCommandID(c.ID).Exec(saveCtx)
 				return nil
 			})
 			doneAt := r.now()
@@ -665,12 +670,63 @@ func (r *Runner) reconcilePendingApprovals(ctx context.Context) error {
 				_ = r.DB.Finding.UpdateOneID(*run.FindingID).SetWorkNextCheckAt(doneAt).Exec(ctx)
 			}
 			audit.System(ctx, r.DB, "standing_rule_proposal_executed", run.ID.String(), fmt.Sprintf("rule=%s approved_by=%s cmd_id=%s", ref, who, cmdRec.ID))
+		case approval.StatusConsumed:
+			who := "admin"
+			if app.DecidedBy != nil && *app.DecidedBy != "" {
+				who = *app.DecidedBy
+			}
+			if run.CommandID != nil {
+				cmdRec, err := r.DB.Command.Get(ctx, *run.CommandID)
+				if err != nil {
+					if ent.IsNotFound(err) {
+						_ = r.finalizeProposalRun(ctx, run, standingrulerun.StatusFailed, *run.CommandID, fmt.Sprintf("经 %s 批准后指令记录丢失", who), now)
+					}
+					continue
+				}
+				switch cmdRec.Status {
+				case "succeeded":
+					if cmdRec.ExitCode != nil && *cmdRec.ExitCode != 0 {
+						_ = r.finalizeProposalRun(ctx, run, standingrulerun.StatusFailed, cmdRec.ID, fmt.Sprintf("经 %s 批准后执行失败：退出码 %d", who, *cmdRec.ExitCode), now)
+						continue
+					}
+					outSummary := fmt.Sprintf("经 %s 批准并执行完成", who)
+					if cmdRec.Stdout != nil && strings.TrimSpace(*cmdRec.Stdout) != "" {
+						outSummary += "：" + truncateText(strings.TrimSpace(*cmdRec.Stdout), 600)
+					}
+					_ = r.finalizeProposalRun(ctx, run, standingrulerun.StatusSucceeded, cmdRec.ID, outSummary, now)
+					if run.FindingID != nil {
+						_ = r.DB.Finding.UpdateOneID(*run.FindingID).SetWorkNextCheckAt(now).Exec(ctx)
+					}
+				case "failed", "unsupported", "unknown":
+					detail := cmdRec.Status
+					if cmdRec.Detail != nil && *cmdRec.Detail != "" {
+						detail += "：" + *cmdRec.Detail
+					} else if cmdRec.Stderr != nil && strings.TrimSpace(*cmdRec.Stderr) != "" {
+						detail += "：" + truncateText(strings.TrimSpace(*cmdRec.Stderr), 300)
+					}
+					_ = r.finalizeProposalRun(ctx, run, standingrulerun.StatusFailed, cmdRec.ID, fmt.Sprintf("经 %s 批准后执行失败：%s", who, detail), now)
+				default:
+					if now.Sub(cmdRec.CreatedAt) > consumedProposalGrace {
+						_ = r.finalizeProposalRun(ctx, run, standingrulerun.StatusFailed, cmdRec.ID, fmt.Sprintf("经 %s 批准后等待主机指令回执超时", who), now)
+					}
+				}
+				continue
+			}
+			refTime := run.UpdatedAt
+			if app.DecidedAt != nil && app.DecidedAt.After(refTime) {
+				refTime = *app.DecidedAt
+			}
+			if now.Sub(refTime) > consumedProposalGrace {
+				_ = r.finalizeProposalRun(ctx, run, standingrulerun.StatusFailed, uuid.Nil, fmt.Sprintf("经 %s 批准后消费超时，未记录到下发指令", who), now)
+			}
 		}
 	}
 	return nil
 }
 
 func (r *Runner) finalizeProposalRun(ctx context.Context, run *ent.StandingRuleRun, st standingrulerun.Status, cmdID uuid.UUID, result string, now time.Time) error {
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 	upd := r.DB.StandingRuleRun.UpdateOneID(run.ID).
 		SetStatus(st).
 		SetResult(result).
@@ -678,13 +734,13 @@ func (r *Runner) finalizeProposalRun(ctx context.Context, run *ent.StandingRuleR
 	if cmdID != uuid.Nil {
 		upd.SetCommandID(cmdID)
 	}
-	if err := upd.Exec(ctx); err != nil {
+	if err := upd.Exec(saveCtx); err != nil {
 		return err
 	}
 	return r.DB.StandingRule.UpdateOneID(run.RuleID).
 		SetLastRunAt(now).
 		SetLastRunStatus(string(st)).
-		Exec(ctx)
+		Exec(saveCtx)
 }
 
 func (r *Runner) hasPendingWrite(ctx context.Context, assetID uuid.UUID) (bool, error) {

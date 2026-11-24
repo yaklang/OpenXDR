@@ -237,6 +237,10 @@ func (s *Syncer) chunk(ctx context.Context, client *http.Client, url string, off
 		if off > 0 {
 			return 0, false, false, errors.New("源中途不再支持分段下载")
 		}
+		// 200 整包重试前清空已写入的半截残片，避免把第二个压缩包拼在残片后面
+		if err := resetWriter(w); err != nil {
+			return 0, false, false, err
+		}
 		n, err = io.Copy(w, io.LimitReader(resp.Body, maxArchive))
 		return n, true, true, err
 	case http.StatusPartialContent:
@@ -252,6 +256,26 @@ func (s *Syncer) chunk(ctx context.Context, client *http.Client, url string, off
 		return 0, false, false, err
 	}
 	return int64(len(buf)), false, len(buf) < chunkSize, nil
+}
+
+// resetWriter 整包重试前重置目标写入器（如 *os.File），清掉上一次失败残留的字节。
+func resetWriter(w io.Writer) error {
+	if f, ok := w.(interface {
+		Truncate(int64) error
+		Seek(int64, int) (int64, error)
+	}); ok {
+		if err := f.Truncate(0); err != nil {
+			return err
+		}
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		return nil
+	}
+	if r, ok := w.(interface{ Reset() }); ok {
+		r.Reset()
+	}
+	return nil
 }
 
 type osvRecord struct {

@@ -551,3 +551,25 @@ func TestPlatformSelfAwarenessAndRetiredParkedLookup(t *testing.T) {
 		t.Fatalf("取消停机保留后不应再按停机保留直接作答：err=%v res=%+v", err, afterUnpark)
 	}
 }
+
+func TestLookupOwnerCIDRHitsChannelFact(t *testing.T) {
+	ctx, db := testdb.New(t)
+	now := time.Now()
+	g := db.Group.Create().SetName("corp").SaveX(ctx)
+	ch := db.Fact.Create().SetKind("channel").SetSubject("10.1.0.0/16").SetHolder("netops").
+		SetContent("公司内网段").SetCreatedBy("admin").SaveX(ctx)
+
+	res, err := Ask(ctx, db, Request{
+		Kind:        "owner",
+		SubjectKind: "ip",
+		Subject:     "10.1.1.0/24",
+		Groups:      []uuid.UUID{g.ID},
+		Source:      "ask_controller",
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Answered || len(res.Facts) != 1 || res.Facts[0].ID != ch.ID {
+		t.Fatalf("owner + ip + CIDR 应命中覆盖该子网的 channel 事实：answered=%v facts=%+v", res.Answered, res.Facts)
+	}
+}
