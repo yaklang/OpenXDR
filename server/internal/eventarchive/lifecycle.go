@@ -62,7 +62,10 @@ func LockDaySessionExclusive(ctx context.Context, db *sql.DB, day time.Time) (*D
 // Alive 确认锁连接仍在。会话锁随连接消失而释放：专用连接断开后锁已不在手上，
 // 后续块不得在无保护状态下继续，Restore 在每块前调用本方法。
 func (g *DayLockGuard) Alive(ctx context.Context) error {
-	if g == nil || g.conn == nil {
+	if g == nil {
+		return fmt.Errorf("生命周期锁未初始化，不得继续后续块")
+	}
+	if g.conn == nil {
 		return fmt.Errorf("%s 的生命周期锁连接已关闭，不得继续后续块", g.day.Format("2006-01-02"))
 	}
 	if _, err := g.conn.ExecContext(ctx, `SELECT 1`); err != nil {

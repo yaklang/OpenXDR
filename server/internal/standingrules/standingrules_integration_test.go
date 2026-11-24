@@ -225,6 +225,54 @@ func TestStandingRulesLifecycleAndAutoDowngrade(t *testing.T) {
 	_ = fProbe2
 }
 
+func TestReconcileConsumedProposalRuns(t *testing.T) {
+	ctx, db := testdb.New(t)
+	if err := standingrules.SeedBuiltins(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	grp := db.Group.Create().SetName("prod").SaveX(ctx)
+	osLinux := "linux"
+	host := db.Asset.Create().SetHostname("app-consumed").SetGroupID(grp.ID).SetOs(osLinux).SetAgentID(uuid.New()).SetLastSeen(time.Now()).SaveX(ctx)
+	rule := db.StandingRule.Query().Where(standingrule.BuiltinKeyEQ(standingrules.TplLowMemAddSwap)).OnlyX(ctx)
+	now := time.Now()
+	decidedAt := now.Add(-10 * time.Minute)
+
+	// 1. 已消费且 CommandID 指向已成功指令：应补齐为 succeeded
+	appOK := db.Approval.Create().SetGroupID(grp.ID).SetAssetID(host.ID).SetRequestedBy("standing-rule").
+		SetOrigin(approval.OriginAi).SetCmd("echo ok").SetTimeoutMs(60000).
+		SetStatus(approval.StatusConsumed).SetDecidedBy("zachary").SetDecidedAt(decidedAt).SetExpiresAt(now.Add(time.Hour)).SaveX(ctx)
+	cmdOK := db.Command.Create().SetAssetID(host.ID).SetKind("exec").SetIssuedBy("standing-rule").
+		SetCmd("echo ok").SetStatus("succeeded").SetExitCode(0).SetStdout("swap enabled").SetCreatedAt(decidedAt).SetCompletedAt(decidedAt.Add(time.Second)).SaveX(ctx)
+	runOK := db.StandingRuleRun.Create().SetRuleID(rule.ID).SetGroupID(grp.ID).SetAssetID(host.ID).
+		SetTier("propose").SetStatus(standingrulerun.StatusPendingApproval).SetHitSummary("test ok").
+		SetCommand("echo ok").SetApprovalID(appOK.ID).SetCommandID(cmdOK.ID).SaveX(ctx)
+
+	// 2. 已消费但 CommandID 为空且已超过宽限期：应标为 failed，不再永久卡在 pending_approval
+	appOrphan := db.Approval.Create().SetGroupID(grp.ID).SetAssetID(host.ID).SetRequestedBy("standing-rule").
+		SetOrigin(approval.OriginAi).SetCmd("echo lost").SetTimeoutMs(60000).
+		SetStatus(approval.StatusConsumed).SetDecidedBy("zachary").SetDecidedAt(decidedAt).SetExpiresAt(now.Add(time.Hour)).SaveX(ctx)
+	runOrphan := db.StandingRuleRun.Create().SetRuleID(rule.ID).SetGroupID(grp.ID).SetAssetID(host.ID).
+		SetTier("propose").SetStatus(standingrulerun.StatusPendingApproval).SetHitSummary("test orphan").
+		SetCommand("echo lost").SetApprovalID(appOrphan.ID).SetUpdatedAt(decidedAt).SaveX(ctx)
+
+	runner := &standingrules.Runner{
+		DB:  db,
+		Now: func() time.Time { return now },
+	}
+	if err := runner.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	gotOK := db.StandingRuleRun.GetX(ctx, runOK.ID)
+	if gotOK.Status != standingrulerun.StatusSucceeded || !strings.Contains(gotOK.Result, "swap enabled") {
+		t.Fatalf("已消费且指令成功的运行应收敛为 succeeded：status=%s result=%q", gotOK.Status, gotOK.Result)
+	}
+	gotOrphan := db.StandingRuleRun.GetX(ctx, runOrphan.ID)
+	if gotOrphan.Status != standingrulerun.StatusFailed {
+		t.Fatalf("已消费且超时无指令的运行应收敛为 failed：status=%s result=%q", gotOrphan.Status, gotOrphan.Result)
+	}
+}
+
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

@@ -351,16 +351,25 @@ func (s *Service) deliver(ctx context.Context, c Config) error {
 			return err
 		}
 		if !bound {
+			if err = s.skipDelivery(ctx, d.Nonce); err != nil {
+				return err
+			}
 			continue
 		}
 		var card map[string]any
 		if d.ContainmentID != nil {
 			p, e := s.DB.Containment.Get(ctx, *d.ContainmentID)
 			if e != nil || p.State != containment.StateProposed || p.ExpiresAt == nil || !time.Now().Before(*p.ExpiresAt) || p.GroupID == nil {
+				if err = s.skipDelivery(ctx, d.Nonce); err != nil {
+					return err
+				}
 				continue
 			}
 			u, e := s.DB.User.Get(ctx, d.UserID)
 			if e != nil || !auth.Allowed(auth.GroupRole(ctx, s.DB, u, *p.GroupID), "admin") {
+				if err = s.skipDelivery(ctx, d.Nonce); err != nil {
+					return err
+				}
 				continue
 			}
 			card = s.containmentCard(ctx, d, p)
@@ -369,10 +378,16 @@ func (s *Service) deliver(ctx context.Context, c Config) error {
 		if d.ApprovalID != nil {
 			a, err = s.DB.Approval.Get(ctx, *d.ApprovalID)
 			if err != nil || a.Status != approval.StatusPending || !time.Now().Before(a.ExpiresAt) {
+				if err = s.skipDelivery(ctx, d.Nonce); err != nil {
+					return err
+				}
 				continue
 			}
 			u, e := s.DB.User.Get(ctx, d.UserID)
 			if e != nil || !auth.Allowed(auth.GroupRole(ctx, s.DB, u, a.GroupID), "admin") {
+				if err = s.skipDelivery(ctx, d.Nonce); err != nil {
+					return err
+				}
 				continue
 			}
 		}
@@ -395,4 +410,10 @@ func (s *Service) deliver(ctx context.Context, c Config) error {
 		}
 	}
 	return nil
+}
+
+// skipDelivery 将已失效或无权投递的记录标为终态，避免反复占满 LIMIT 20 队列。
+func (s *Service) skipDelivery(ctx context.Context, nonce string) error {
+	_, err := s.SQL.ExecContext(ctx, `UPDATE feishu_approval_deliveries SET attempts=3,outcome='skipped' WHERE nonce=$1`, nonce)
+	return err
 }

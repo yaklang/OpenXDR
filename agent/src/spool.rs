@@ -199,11 +199,7 @@ impl Spool {
             Err(_) => {}
         }
         let pending = self.dir.join("command-signer.pending");
-        let mut file = private_file(&pending, true)?;
-        file.write_all(offered)?;
-        file.sync_all()?;
-        drop(file);
-        replace_file(&pending, &path)?;
+        write_atomic(&pending, &path, |file| file.write_all(offered))?;
         sync_dir(&self.dir)?;
         Ok(Some(offered.to_vec()))
     }
@@ -214,11 +210,9 @@ impl Spool {
             return Err(invalid("注册配置无效或过大"));
         }
         let pending = self.dir.join("session.pending");
-        let mut file = private_file(&pending, true)?;
-        file.write_all(&session.encode_to_vec())?;
-        file.sync_all()?;
-        drop(file);
-        replace_file(&pending, &self.dir.join("session"))?;
+        write_atomic(&pending, &self.dir.join("session"), |file| {
+            file.write_all(&session.encode_to_vec())
+        })?;
         sync_dir(&self.dir)
     }
 
@@ -260,21 +254,13 @@ impl Spool {
         };
         let written = (HEADER_V1 + body.len()) as u64;
         let pending = self.dir.join("pending");
-        let mut file = private_file(&pending, true)?;
-        let write = (|| {
+        let sequence = self.next;
+        write_atomic(&pending, &self.path(sequence), |file| {
             file.write_all(MAGIC)?;
             file.write_all(&[codec])?;
             file.write_all(&digest)?;
-            file.write_all(&body)?;
-            file.sync_all()
-        })();
-        drop(file);
-        if let Err(err) = write {
-            let _ = fs::remove_file(&pending);
-            return Err(err);
-        }
-        let sequence = self.next;
-        replace_file(&pending, &self.path(sequence))?;
+            file.write_all(&body)
+        })?;
         // rename 后即计入本进程索引；目录同步失败也不能覆盖已写入的批次。
         // 容量按实际落盘的字节累计（压缩才换来更大的等效容量），索引恢复时用的也是文件长度。
         self.files.insert(sequence, written);
@@ -456,6 +442,36 @@ fn read_batch(path: &Path) -> io::Result<Vec<AgentEvent>> {
         return Err(invalid("持久批次条数无效"));
     }
     Ok(batch.events)
+}
+
+/// 原子落盘：先拒绝符号链接并清理上次异常残留的 pending 文件，再新建、落盘并替换目标；
+/// 写入或替换失败时顺手清掉 pending，避免下次卡死在 AlreadyExists。
+fn write_atomic(
+    pending: &Path,
+    target: &Path,
+    write: impl FnOnce(&mut File) -> io::Result<()>,
+) -> io::Result<()> {
+    reject_symlink(pending)?;
+    match fs::remove_file(pending) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    let mut file = private_file(pending, true)?;
+    let result = (|| {
+        write(&mut file)?;
+        file.sync_all()
+    })();
+    drop(file);
+    if let Err(err) = result {
+        let _ = fs::remove_file(pending);
+        return Err(err);
+    }
+    if let Err(err) = replace_file(pending, target) {
+        let _ = fs::remove_file(pending);
+        return Err(err);
+    }
+    Ok(())
 }
 
 pub(crate) fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
@@ -1021,5 +1037,46 @@ mod tests {
             after / before
         );
         assert!(ratio > 1.5, "压缩比 {ratio:.2} 太低");
+    }
+
+    #[test]
+    fn stale_pending_files_do_not_block_writes() {
+        let dir = Temp::new();
+        let mut spool = Spool::open(&dir.0, 4 << 20).unwrap();
+
+        // 模拟上次瞬时重命名失败后遗留的 pending 文件
+        fs::write(dir.0.join("pending"), b"stale-batch").unwrap();
+        fs::write(dir.0.join("session.pending"), b"stale-session").unwrap();
+        fs::write(dir.0.join("command-signer.pending"), b"stale-signer").unwrap();
+
+        let ev = event();
+        let seq = spool.append(vec![ev.clone()]).unwrap();
+        assert!(!dir.0.join("pending").exists());
+        assert_eq!(spool.front().unwrap().unwrap().sequence, seq);
+
+        let session = crate::pb::RegisterResponse {
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            ..Default::default()
+        };
+        spool.save_session(&session).unwrap();
+        assert!(!dir.0.join("session.pending").exists());
+        assert_eq!(spool.session().unwrap().unwrap().agent_id, session.agent_id);
+
+        let key = [0x42u8; 32];
+        assert_eq!(spool.pin_signer(&key).unwrap().as_deref(), Some(&key[..]));
+        assert!(!dir.0.join("command-signer.pending").exists());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let outside = dir.0.join("outside-target");
+            fs::write(&outside, b"keep").unwrap();
+            symlink(&outside, dir.0.join("pending")).unwrap();
+            assert_eq!(
+                spool.append(vec![ev]).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+            assert_eq!(fs::read(&outside).unwrap(), b"keep");
+        }
     }
 }

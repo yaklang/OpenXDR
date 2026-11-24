@@ -16,6 +16,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -346,24 +347,7 @@ func appendString(dst []byte, s *string) []byte {
 }
 
 func appendInt(dst []byte, n int64) []byte {
-	if n < 0 {
-		return append(dst, '-')
-	}
-	var buf [20]byte
-	i := len(buf)
-	u := uint64(n)
-	if n < 0 {
-		u = uint64(-n)
-	}
-	for {
-		i--
-		buf[i] = byte('0' + u%10)
-		u /= 10
-		if u == 0 {
-			break
-		}
-	}
-	return append(dst, buf[i:]...)
+	return strconv.AppendInt(dst, n, 10)
 }
 
 const hexDigits = "0123456789abcdef"

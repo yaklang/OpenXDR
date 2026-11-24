@@ -58,13 +58,17 @@ impl Scanner {
     ) -> std::io::Result<Vec<Listener>> {
         let low = ephemeral_low();
         let mut cur = BTreeSet::new();
-        for (file, proto) in [
-            ("/proc/net/tcp", Proto::Tcp),
-            ("/proc/net/tcp6", Proto::Tcp),
-            ("/proc/net/udp", Proto::Udp),
-            ("/proc/net/udp6", Proto::Udp),
+        for (file, proto, optional) in [
+            ("/proc/net/tcp", Proto::Tcp, false),
+            ("/proc/net/tcp6", Proto::Tcp, true),
+            ("/proc/net/udp", Proto::Udp, false),
+            ("/proc/net/udp6", Proto::Udp, true),
         ] {
-            let text = read(file)?;
+            let text = match read(file) {
+                Ok(text) => text,
+                Err(e) if optional && e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
             cur.extend(parse_proc_net(&text, proto, low));
         }
         if cur != self.prev {
@@ -327,5 +331,48 @@ mod tests {
         assert_eq!(socket_inode("pipe:[2597]"), None);
         assert_eq!(socket_inode("/dev/null"), None);
         assert_eq!(socket_inode("socket:[x]"), None);
+    }
+
+    #[test]
+    fn ipv6_not_found_is_optional_while_ipv4_and_other_errors_fail() {
+        let mut scanner = Scanner::default();
+        // 禁用 IPv6 的内核没有 /proc/net/tcp6 与 /proc/net/udp6：仍应返回 IPv4 监听
+        let got = scanner
+            .scan_with(|path| match path {
+                "/proc/net/tcp" => Ok(TCP.into()),
+                "/proc/net/udp" => Ok(UDP.into()),
+                "/proc/net/tcp6" | "/proc/net/udp6" => Err(std::io::ErrorKind::NotFound.into()),
+                other => panic!("unexpected path: {other}"),
+            })
+            .unwrap();
+        assert_eq!(got.len(), 4);
+        assert!(
+            got.iter()
+                .any(|l| l.proto == Proto::Tcp && l.port == 22 && l.addr.is_ipv4())
+        );
+        assert!(
+            got.iter()
+                .any(|l| l.proto == Proto::Udp && l.port == 53 && l.addr.is_ipv4())
+        );
+
+        // IPv6 表的非 NotFound 错误仍应向上传播
+        assert!(
+            scanner
+                .scan_with(|path| match path {
+                    "/proc/net/tcp6" => Err(std::io::ErrorKind::PermissionDenied.into()),
+                    _ => Ok("header\n".into()),
+                })
+                .is_err()
+        );
+
+        // IPv4 表缺失仍应报错
+        assert!(
+            scanner
+                .scan_with(|path| match path {
+                    "/proc/net/tcp" => Err(std::io::ErrorKind::NotFound.into()),
+                    _ => Ok("header\n".into()),
+                })
+                .is_err()
+        );
     }
 }

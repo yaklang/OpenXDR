@@ -416,3 +416,48 @@ func TestAnnotationTier(t *testing.T) {
 		}
 	}
 }
+
+func TestBatchWatermarkMonotonic(t *testing.T) {
+	t0 := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+	t2 := t0.Add(2 * time.Minute)
+	idLow := uuid.MustParse("00000000-0000-7000-8000-000000000001")
+	idMid := uuid.MustParse("00000000-0000-7000-8000-000000000002")
+	idHigh := uuid.MustParse("00000000-0000-7000-8000-000000000003")
+
+	// 乱序批次：最大值不在末尾，必须选出最大 (ts, id)
+	ts, id, adv := batchWatermark([]*ent.Event{
+		{Ts: t1, ID: idLow},
+		{Ts: t2, ID: idLow},
+		{Ts: t0, ID: idHigh},
+	}, t1, idMid)
+	if !adv || !ts.Equal(t2) || id != idLow {
+		t.Fatalf("乱序批次应选出 (t2, idLow)，实际=(%v, %v, %v)", ts, id, adv)
+	}
+
+	// 同时间戳：比较 UUID 大小
+	ts, id, adv = batchWatermark([]*ent.Event{
+		{Ts: t1, ID: idHigh},
+		{Ts: t1, ID: idLow},
+	}, t1, idMid)
+	if !adv || !ts.Equal(t1) || id != idHigh {
+		t.Fatalf("同时间戳应选出最大 ID，实际=(%v, %v, %v)", ts, id, adv)
+	}
+
+	// 全部是迟到历史事件：游标不可回退
+	ts, id, adv = batchWatermark([]*ent.Event{
+		{Ts: t0, ID: idHigh},
+		{Ts: t1, ID: idLow},
+	}, t1, idMid)
+	if adv || !ts.Equal(t1) || id != idMid {
+		t.Fatalf("迟到事件不应回退游标，实际=(%v, %v, %v)", ts, id, adv)
+	}
+
+	// 与当前游标完全相等：不推进
+	ts, id, adv = batchWatermark([]*ent.Event{
+		{Ts: t1, ID: idMid},
+	}, t1, idMid)
+	if adv || !ts.Equal(t1) || id != idMid {
+		t.Fatalf("等于当前游标不应推进，实际=(%v, %v, %v)", ts, id, adv)
+	}
+}

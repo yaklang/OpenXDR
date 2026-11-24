@@ -79,8 +79,10 @@ fn run(agent_id: &str, sink: &EventSink) {
     let mut reg_seen = registry_snapshot();
     let mut file_seen = startup_snapshot();
     let mut svc_seen = services_snapshot();
+    let mut task_complete = false;
     let mut task_seen = tasks_snapshot(None).map(|scan| {
-        if !scan.is_complete() {
+        task_complete = scan.is_complete();
+        if !task_complete {
             eprintln!(
                 "计划任务首轮基线有 {} 个目录未完整扫描（触发上限或读取失败），后续轮次将按目录粒度对账",
                 scan.incomplete_dirs.len()
@@ -91,6 +93,11 @@ fn run(agent_id: &str, sink: &EventSink) {
         baseline
     });
     let mut wmi_seen = wmi_snapshot();
+    sink.capability(
+        "persist",
+        "registry-services-tasks-wmi",
+        persist_state(svc_seen.is_some(), task_complete, wmi_seen.is_some()),
+    );
 
     while !sink.is_closed() {
         std::thread::sleep(POLL_INTERVAL);
@@ -118,7 +125,7 @@ fn run(agent_id: &str, sink: &EventSink) {
         }
         file_seen = file_now;
 
-        if let Some(svc_now) = services_snapshot() {
+        let svc_ok = if let Some(svc_now) = services_snapshot() {
             if let Some(seen) = &svc_seen {
                 for (path, svc, activity) in diff(seen, &svc_now) {
                     let prev = seen.get(path).filter(|_| activity == 3);
@@ -128,10 +135,14 @@ fn run(agent_id: &str, sink: &EventSink) {
                 }
             }
             svc_seen = Some(svc_now);
-        }
+            true
+        } else {
+            false
+        };
 
-        if let Some(scan) = tasks_snapshot(task_seen.as_ref()) {
-            if !scan.is_complete() {
+        let tasks_ok = if let Some(scan) = tasks_snapshot(task_seen.as_ref()) {
+            let complete = scan.is_complete();
+            if !complete {
                 eprintln!(
                     "计划任务快照有 {} 个目录未完整扫描（触发深度/条目上限或读取失败），仅这些子树保留旧基线免判删除",
                     scan.incomplete_dirs.len()
@@ -149,9 +160,12 @@ fn run(agent_id: &str, sink: &EventSink) {
                 }
             }
             task_seen = Some(next_seen);
-        }
+            complete
+        } else {
+            false
+        };
 
-        if let Some(wmi_now) = wmi_snapshot() {
+        let wmi_ok = if let Some(wmi_now) = wmi_snapshot() {
             if let Some(seen) = &wmi_seen {
                 for (path, data, activity) in diff(seen, &wmi_now) {
                     if !sink.send(wmi_event(agent_id, path, data, activity)) {
@@ -160,7 +174,24 @@ fn run(agent_id: &str, sink: &EventSink) {
                 }
             }
             wmi_seen = Some(wmi_now);
-        }
+            true
+        } else {
+            false
+        };
+
+        sink.capability(
+            "persist",
+            "registry-services-tasks-wmi",
+            persist_state(svc_ok, tasks_ok, wmi_ok),
+        );
+    }
+}
+
+fn persist_state(services_ok: bool, tasks_ok: bool, wmi_ok: bool) -> &'static str {
+    if services_ok && tasks_ok && wmi_ok {
+        "active"
+    } else {
+        "degraded"
     }
 }
 
@@ -1609,5 +1640,14 @@ mod tests {
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].2, 4, "删除应报 Delete(4)");
         assert!(d[0].1.contains("evil.exe"), "删除事件应带被删实例的旧属性");
+    }
+
+    #[test]
+    fn persist_state_degrades_when_any_snapshot_fails() {
+        assert_eq!(persist_state(true, true, true), "active");
+        assert_eq!(persist_state(false, true, true), "degraded");
+        assert_eq!(persist_state(true, false, true), "degraded");
+        assert_eq!(persist_state(true, true, false), "degraded");
+        assert_eq!(persist_state(false, false, false), "degraded");
     }
 }

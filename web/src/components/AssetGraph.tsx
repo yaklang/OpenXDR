@@ -115,8 +115,8 @@ export function AssetGraph({ graph, search, selected, onSelect, height = 640 }: 
 
   const fit = () => {
     const el = box.current
-    if (!el) return
-    const k = Math.min(el.clientWidth / area.w, height / area.h, 1.4)
+    if (!el || el.clientWidth <= 0 || height <= 0) return
+    const k = Math.max(0.2, Math.min(el.clientWidth / area.w, height / area.h, 1.4))
     setView({ k, x: (el.clientWidth - area.w * k) / 2 - area.x * k, y: (height - area.h * k) / 2 - area.y * k })
   }
   // 数据或高度变了重新铺满画布

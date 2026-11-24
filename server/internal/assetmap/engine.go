@@ -1,6 +1,7 @@
 package assetmap
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -245,7 +246,7 @@ func (e *Engine) batch(ctx context.Context) (int, error) {
 		}
 	}
 
-	last := events[len(events)-1]
+	maxTs, maxID, advance := batchWatermark(events, e.cursor, e.cursorID)
 	ids := make([]string, len(events))
 	for i, ev := range events {
 		ids[i] = ev.ID.String()
@@ -282,14 +283,17 @@ WHERE id=$1 AND (inventory_at IS NULL OR inventory_at < $4)`, id, string(listeni
 			return 0, err
 		}
 	}
-	// 游标与本批全部物化同一事务提交：整批成功才推进（见 Engine 的游标语义注释）
-	value, _ := json.Marshal(struct {
-		Ts time.Time `json:"ts"`
-		ID uuid.UUID `json:"id"`
-	}{last.Ts, last.ID})
-	if _, err := tx.ExecContext(ctx, `INSERT INTO settings (id, value, updated_at) VALUES ($1, $2::jsonb, now())
+	// 游标与本批全部物化同一事务提交：整批成功且水位严格前进才推进（见 Engine 的游标语义注释），
+	// 队列模式下迟到或乱序的历史事件不会把游标往回拉。
+	if advance {
+		value, _ := json.Marshal(struct {
+			Ts time.Time `json:"ts"`
+			ID uuid.UUID `json:"id"`
+		}{maxTs, maxID})
+		if _, err := tx.ExecContext(ctx, `INSERT INTO settings (id, value, updated_at) VALUES ($1, $2::jsonb, now())
 ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, cursorKey, string(value)); err != nil {
-		return 0, err
+			return 0, err
+		}
 	}
 	if err := graphqueue.Ack(ctx, tx, ids); err != nil {
 		return 0, err
@@ -297,8 +301,35 @@ ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`, cursorKe
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	e.cursor, e.cursorID = last.Ts, last.ID
+	if advance {
+		e.cursor, e.cursorID = maxTs, maxID
+	}
 	return len(events), nil
+}
+
+// cursorAfter 判断 (ts, id) 是否严格大于 (curTs, curID)。
+func cursorAfter(ts time.Time, id uuid.UUID, curTs time.Time, curID uuid.UUID) bool {
+	if ts.After(curTs) {
+		return true
+	}
+	return ts.Equal(curTs) && bytes.Compare(id[:], curID[:]) > 0
+}
+
+// batchWatermark 取本批事件中最大的 (ts, id)，仅当严格大于当前游标时返回 advance=true。
+func batchWatermark(events []*ent.Event, curTs time.Time, curID uuid.UUID) (time.Time, uuid.UUID, bool) {
+	if len(events) == 0 {
+		return curTs, curID, false
+	}
+	maxTs, maxID := events[0].Ts, events[0].ID
+	for _, ev := range events[1:] {
+		if cursorAfter(ev.Ts, ev.ID, maxTs, maxID) {
+			maxTs, maxID = ev.Ts, ev.ID
+		}
+	}
+	if !cursorAfter(maxTs, maxID, curTs, curID) {
+		return curTs, curID, false
+	}
+	return maxTs, maxID, true
 }
 
 // assetIPs 资产登记的地址，判断连接是否发自宿主机本身

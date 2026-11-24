@@ -926,35 +926,45 @@ func List(ctx context.Context, db *ent.Client, visibleAssets []*ent.Asset, now t
 	}
 
 	// 在用的排前面；同为在用按最近登录倒序；同为闲置时未认领排前面，再按主机名与账号排
-	slices.SortFunc(out, func(a, b KeyRow) int {
-		if a.UsageStatus != b.UsageStatus {
-			if a.UsageStatus == "active" {
-				return -1
-			}
-			return 1
+	slices.SortFunc(out, compareKeyRows)
+
+	return ListResult{Keys: out, HostConfigs: hostConfigs}, nil
+}
+
+// compareKeyRows 定义严格的弱序：在用优先且按最近登录倒序（非空先于空），闲置按未认领优先，再按主机名、账号与指纹排序。
+func compareKeyRows(a, b KeyRow) int {
+	if a.UsageStatus != b.UsageStatus {
+		if a.UsageStatus == "active" {
+			return -1
 		}
-		if a.LastLoginAt != nil && b.LastLoginAt != nil && !a.LastLoginAt.Equal(*b.LastLoginAt) {
+		return 1
+	}
+	if a.UsageStatus == "active" {
+		switch {
+		case a.LastLoginAt != nil && b.LastLoginAt == nil:
+			return -1
+		case a.LastLoginAt == nil && b.LastLoginAt != nil:
+			return 1
+		case a.LastLoginAt != nil && b.LastLoginAt != nil && !a.LastLoginAt.Equal(*b.LastLoginAt):
 			if a.LastLoginAt.After(*b.LastLoginAt) {
 				return -1
 			}
 			return 1
 		}
-		if a.ClaimStatus != b.ClaimStatus {
-			if a.ClaimStatus == "unclaimed" {
-				return -1
-			}
-			return 1
+	}
+	if a.ClaimStatus != b.ClaimStatus {
+		if a.ClaimStatus == "unclaimed" {
+			return -1
 		}
-		if c := cmp.Compare(a.Hostname, b.Hostname); c != 0 {
-			return c
-		}
-		if c := cmp.Compare(a.Account, b.Account); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.Fingerprint, b.Fingerprint)
-	})
-
-	return ListResult{Keys: out, HostConfigs: hostConfigs}, nil
+		return 1
+	}
+	if c := cmp.Compare(a.Hostname, b.Hostname); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.Account, b.Account); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Fingerprint, b.Fingerprint)
 }
 
 // matchKeyFact 按具体度（单资产 > 资产组 > 全局）匹配生效中的 key 事实

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -170,5 +171,55 @@ func TestSnapshotUnchangedAndStatementTimeout(t *testing.T) {
 	ms, err := statementTimeoutMillis(shortCtx, 10*time.Second)
 	if err != nil || ms <= 0 || ms > 250 {
 		t.Fatalf("statement_timeout 应收敛到 ctx 剩余时间: ms=%d err=%v", ms, err)
+	}
+}
+
+func TestCompareKeyRowsStrictWeakOrdering(t *testing.T) {
+	t1 := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	rows := []KeyRow{
+		{UsageStatus: "active", LastLoginAt: &t2, ClaimStatus: "claimed", Hostname: "b", Account: "root", Fingerprint: "SHA256:1"},
+		{UsageStatus: "active", LastLoginAt: &t1, ClaimStatus: "unclaimed", Hostname: "a", Account: "root", Fingerprint: "SHA256:2"},
+		{UsageStatus: "active", LastLoginAt: nil, ClaimStatus: "unclaimed", Hostname: "a", Account: "root", Fingerprint: "SHA256:3"},
+		{UsageStatus: "idle", LastLoginAt: &t1, ClaimStatus: "unclaimed", Hostname: "c", Account: "root", Fingerprint: "SHA256:4"},
+		{UsageStatus: "idle", LastLoginAt: nil, ClaimStatus: "claimed", Hostname: "a", Account: "root", Fingerprint: "SHA256:5"},
+		{UsageStatus: "idle", LastLoginAt: &t2, ClaimStatus: "claimed", Hostname: "b", Account: "root", Fingerprint: "SHA256:6"},
+		{UsageStatus: "idle", LastLoginAt: nil, ClaimStatus: "unclaimed", Hostname: "b", Account: "root", Fingerprint: "SHA256:7"},
+	}
+
+	// 验证严格弱序：反自反、反对称与传递性
+	for i, a := range rows {
+		if c := compareKeyRows(a, a); c != 0 {
+			t.Fatalf("违反反自反性: i=%d cmp=%d", i, c)
+		}
+		for j, b := range rows {
+			ab := compareKeyRows(a, b)
+			ba := compareKeyRows(b, a)
+			if ab != -ba {
+				t.Fatalf("违反反对称性: (%d,%d) ab=%d ba=%d", i, j, ab, ba)
+			}
+			for k, c := range rows {
+				bc := compareKeyRows(b, c)
+				ac := compareKeyRows(a, c)
+				if ab < 0 && bc < 0 && !(ac < 0) {
+					t.Fatalf("违反传递性: (%d < %d < %d) 但 cmp(%d,%d)=%d", i, j, k, i, k, ac)
+				}
+				if ab == 0 && bc == 0 && ac != 0 {
+					t.Fatalf("违反等价传递性: (%d == %d == %d) 但 cmp(%d,%d)=%d", i, j, k, i, k, ac)
+				}
+			}
+		}
+	}
+
+	sorted := slices.Clone(rows)
+	slices.SortFunc(sorted, compareKeyRows)
+	// 预期顺序：active 按最近登录倒序（t2 -> t1 -> nil），idle 按 unclaimed 先于 claimed，再按主机名排（不因 idle 的 LastLoginAt 乱序）
+	wantFPs := []string{"SHA256:1", "SHA256:2", "SHA256:3", "SHA256:7", "SHA256:4", "SHA256:5", "SHA256:6"}
+	gotFPs := make([]string, len(sorted))
+	for i, r := range sorted {
+		gotFPs[i] = r.Fingerprint
+	}
+	if !slices.Equal(gotFPs, wantFPs) {
+		t.Fatalf("排序结果不符: got=%v want=%v", gotFPs, wantFPs)
 	}
 }

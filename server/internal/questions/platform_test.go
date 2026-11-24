@@ -11,6 +11,7 @@ import (
 
 	"openxdr/server/ent"
 	"openxdr/server/ent/schema"
+	"openxdr/server/internal/facts"
 )
 
 func TestPlatformIndexEndpointsAndComponentRoles(t *testing.T) {
@@ -89,5 +90,24 @@ func TestMergeEvidenceKeepsPinnedFactAcrossWindowOverflow(t *testing.T) {
 	}
 	if factCount != 1 {
 		t.Fatalf("同一条事实证据不应重复追加：%d", factCount)
+	}
+}
+
+func TestNormalizeAndCoversCIDR(t *testing.T) {
+	sub, err := Normalize("owner", "ip", "10.1.1.5/24")
+	if err != nil {
+		t.Fatalf("规范化 CIDR 失败: %v", err)
+	}
+	if sub != "10.1.1.0/24" {
+		t.Fatalf("规范化结果应为 10.1.1.0/24，实际 %q", sub)
+	}
+	if !facts.Covers("10.1.1.0/24", sub) {
+		t.Fatalf("同网段 channel 事实应覆盖规范化后的 CIDR %q", sub)
+	}
+	if !facts.Covers("10.1.0.0/16", sub) {
+		t.Fatalf("更大网段 channel 事实应覆盖子网 %q", sub)
+	}
+	if facts.Covers("10.1.1.128/25", sub) {
+		t.Fatalf("更小网段不应覆盖更大的 CIDR %q", sub)
 	}
 }

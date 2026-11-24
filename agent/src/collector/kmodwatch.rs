@@ -121,7 +121,8 @@ fn resolve_module_path(modules_dir: &Path, name: &str) -> Option<String> {
         };
         for e in rd.flatten() {
             let p = e.path();
-            if p.is_dir() {
+            // 用 DirEntry::file_type 而不是 Path::is_dir，避免跟随 build/source 等符号链接目录或陷入循环
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
                 stack.push(p);
             } else if e
                 .file_name()
@@ -250,6 +251,31 @@ nf_tables 262144 0 - Live 0xffffffffc0800000
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_module_path_skips_symlink_dirs_and_cycles() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!("openxdr_kmod_sym_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("modules");
+        let outside = base.join("headers");
+        std::fs::create_dir_all(root.join("kernel/fs")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("sneaky.ko"), b"").unwrap();
+        std::fs::write(root.join("kernel/fs/realmod.ko.zst"), b"").unwrap();
+        symlink(&outside, root.join("build")).unwrap();
+        symlink(&root, root.join("loop_self")).unwrap();
+
+        // 既不跟随指向外部的 build 链接，也不在自指向链接里死循环
+        assert_eq!(resolve_module_path(&root, "sneaky"), None);
+        assert_eq!(
+            resolve_module_path(&root, "realmod").as_deref(),
+            Some(root.join("kernel/fs/realmod.ko.zst").to_str().unwrap())
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

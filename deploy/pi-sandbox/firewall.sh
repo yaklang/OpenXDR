@@ -54,6 +54,14 @@ refresh_sets
 
 chain() { iptables -N "$1" 2>/dev/null || iptables -F "$1"; iptables -C "$2" -j "$1" 2>/dev/null || iptables -I "$2" 1 -j "$1"; }
 
+cleanup_temp_rules() {
+  iptables -D DOCKER-USER -i "$BRIDGE" -j REJECT 2>/dev/null || true
+  iptables -D DOCKER-USER -o "$BRIDGE" -j DROP 2>/dev/null || true
+  iptables -D INPUT -i "$BRIDGE" -j DROP 2>/dev/null || true
+  iptables -D INPUT -p tcp --dport "$PORT" -j DROP 2>/dev/null || true
+}
+trap cleanup_temp_rules EXIT
+
 iptables -I DOCKER-USER 1 -i "$BRIDGE" -j REJECT
 iptables -I DOCKER-USER 1 -o "$BRIDGE" -j DROP
 iptables -I INPUT 1 -i "$BRIDGE" -j DROP
@@ -88,7 +96,5 @@ if command -v ip6tables >/dev/null 2>&1 && ip6tables -L -n >/dev/null 2>&1; then
 fi
 
 echo "沙箱防火墙已生效：出口 $MODEL_ENDPOINTS，平台 $PLATFORM_NODES"
-iptables -D DOCKER-USER -i "$BRIDGE" -j REJECT
-iptables -D DOCKER-USER -o "$BRIDGE" -j DROP
-iptables -D INPUT -i "$BRIDGE" -j DROP
-iptables -D INPUT -p tcp --dport "$PORT" -j DROP
+cleanup_temp_rules
+trap - EXIT

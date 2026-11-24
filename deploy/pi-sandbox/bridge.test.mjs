@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import http from 'node:http';
 import { registerHooks } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 // 沙箱依赖只在容器镜像中安装；单测仅验证 bridge.mjs 的轮次上限与结束态判定逻辑
@@ -28,7 +32,7 @@ registerHooks({
   },
 });
 
-const { shouldLimitTurn, resolveRunOutcome } = await import('./bridge.mjs');
+const { shouldLimitTurn, resolveRunOutcome, serveXdr } = await import('./bridge.mjs');
 
 test('工具调用流中断报错（stopReason=error 且含部分 toolCall）达到 maxTurns 不误判为 max_turns', () => {
   const msg = {
@@ -123,4 +127,48 @@ test('即便 limited 为真，真实 model error 也不会被 max_turns 掩盖',
     () => resolveRunOutcome(undefined, 4, true),
     /Pi 未返回有效结果/,
   );
+});
+
+function postUnix(socketPath, body) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      socketPath,
+      path: '/tool',
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    }, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString()) }));
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+test('serveXdr 对 null、原始类型或数组 JSON 请求体返回 HTTP 400', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bridge-xdr-test-'));
+  const socket = join(dir, 'xdr.sock');
+  let called = 0;
+  const server = serveXdr(new Set(['report']), async () => {
+    called++;
+    return { success: true, output: 'ok' };
+  }, undefined, socket);
+  await new Promise(resolve => server.once('listening', resolve));
+  try {
+    for (const payload of ['null', '123', '"hello"', 'true', '[]']) {
+      const res = await postUnix(socket, payload);
+      assert.equal(res.status, 400, `payload=${payload}`);
+      assert.equal(typeof res.body.error, 'string');
+    }
+    assert.equal(called, 0);
+
+    const ok = await postUnix(socket, JSON.stringify({ name: 'report', args: { title: 't' } }));
+    assert.equal(ok.status, 200);
+    assert.deepEqual(ok.body, { output: 'ok' });
+    assert.equal(called, 1);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
