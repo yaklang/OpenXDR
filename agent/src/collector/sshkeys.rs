@@ -29,7 +29,13 @@ use crate::pb::{ReportSshKeysRequest, SshAuthorizedKey, agent_service_client::Ag
 
 const MAX_COMMENT_CHARS: usize = 256;
 const MAX_OPTION_CHARS: usize = 256;
+const MAX_OPTIONS_PER_KEY: usize = 64;
+const MAX_OPTION_BYTES: usize = 512;
 const MAX_CMD_CONFIG_CHARS: usize = 512;
+#[cfg(target_os = "linux")]
+const MAX_SSHD_OUTPUT_BYTES: usize = 1024 * 1024;
+#[cfg(target_os = "linux")]
+const SSHD_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(target_os = "linux")]
 const MAX_KEY_FILE_BYTES: usize = 1024 * 1024;
 #[cfg(target_os = "linux")]
@@ -551,7 +557,19 @@ fn read_quoted_field(s: &str) -> Option<(&str, &str)> {
     Some((s, ""))
 }
 
-/// 按双引号感知的逗号切分 OpenSSH 选项串
+/// 按 UTF-8 字符边界截断到最多 max_bytes 字节
+fn truncate_bytes(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// 按双引号感知的逗号切分 OpenSSH 选项串，限制单行选项数量与单选项长度，防止恶意长行撑爆上报帧
 fn split_options(raw: &str) -> Option<Vec<String>> {
     if raw.is_empty() {
         return None;
@@ -574,9 +592,12 @@ fn split_options(raw: &str) -> Option<Vec<String>> {
         } else if ch == '"' {
             in_quotes = true;
         } else if ch == ',' {
-            let item = clean_text(raw[start..idx].trim(), MAX_OPTION_CHARS);
-            if !item.is_empty() {
-                opts.push(item);
+            if opts.len() < MAX_OPTIONS_PER_KEY {
+                let piece = truncate_bytes(raw[start..idx].trim(), MAX_OPTION_BYTES);
+                let item = clean_text(piece, MAX_OPTION_CHARS);
+                if !item.is_empty() {
+                    opts.push(item);
+                }
             }
             start = idx + 1;
         }
@@ -584,9 +605,12 @@ fn split_options(raw: &str) -> Option<Vec<String>> {
     if in_quotes || escaped {
         return None;
     }
-    let tail = clean_text(raw[start..].trim(), MAX_OPTION_CHARS);
-    if !tail.is_empty() {
-        opts.push(tail);
+    if opts.len() < MAX_OPTIONS_PER_KEY {
+        let piece = truncate_bytes(raw[start..].trim(), MAX_OPTION_BYTES);
+        let tail = clean_text(piece, MAX_OPTION_CHARS);
+        if !tail.is_empty() {
+            opts.push(tail);
+        }
     }
     if opts.is_empty() { None } else { Some(opts) }
 }
@@ -810,12 +834,58 @@ fn collect_snapshot() -> Snapshot {
 }
 
 #[cfg(target_os = "linux")]
+fn read_child_stdout_with_timeout(
+    mut child: std::process::Child,
+    timeout: Duration,
+    max_bytes: usize,
+) -> Option<String> {
+    use std::io::Read;
+
+    // 后台线程并发排空 stdout，避免输出超过 64 KiB 管道缓冲区时主线程等待退出发生死锁
+    let reader = child.stdout.take().map(|mut stdout| {
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            let mut chunk = [0u8; 8192];
+            while let Ok(n) = stdout.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                if kept.len() < max_bytes {
+                    let take = (max_bytes - kept.len()).min(n);
+                    kept.extend_from_slice(&chunk[..take]);
+                }
+            }
+            kept
+        })
+    });
+
+    let deadline = std::time::Instant::now() + timeout;
+    let exited_ok = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break false;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => break false,
+        }
+    };
+
+    let bytes = reader.and_then(|h| h.join().ok())?;
+    exited_ok.then(|| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[cfg(target_os = "linux")]
 fn read_sshd_config() -> SshdKeyConfig {
     use std::process::{Command, Stdio};
 
     let candidates = ["/usr/sbin/sshd", "/sbin/sshd", "sshd"];
     for bin in candidates {
-        let Ok(mut child) = Command::new(bin)
+        let Ok(child) = Command::new(bin)
             .arg("-T")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -824,31 +894,10 @@ fn read_sshd_config() -> SshdKeyConfig {
         else {
             continue;
         };
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    if !status.success() {
-                        break;
-                    }
-                    if let Some(mut stdout) = child.stdout.take() {
-                        let mut buf = String::new();
-                        if std::io::Read::read_to_string(&mut stdout, &mut buf).is_ok() {
-                            return parse_sshd_t(&buf);
-                        }
-                    }
-                    break;
-                }
-                Ok(None) => {
-                    if std::time::Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                Err(_) => break,
-            }
+        if let Some(buf) =
+            read_child_stdout_with_timeout(child, SSHD_TIMEOUT, MAX_SSHD_OUTPUT_BYTES)
+        {
+            return parse_sshd_t(&buf);
         }
     }
     SshdKeyConfig::default()
@@ -1028,5 +1077,52 @@ authorizedkeyscommanduser nobody\n";
         assert_eq!(retry_backoff(6), Duration::from_secs(480));
         assert_eq!(retry_backoff(7), Duration::from_secs(600));
         assert_eq!(retry_backoff(50), Duration::from_secs(600));
+    }
+
+    #[test]
+    fn split_options_enforces_count_and_length_limits() {
+        let many = (0..100)
+            .map(|i| format!("opt{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let parsed = split_options(&many).unwrap();
+        assert_eq!(parsed.len(), MAX_OPTIONS_PER_KEY);
+        assert_eq!(parsed[0], "opt0");
+        assert_eq!(parsed[MAX_OPTIONS_PER_KEY - 1], "opt63");
+
+        let huge = format!("command=\"{}\"", "a".repeat(2000));
+        let parsed = split_options(&huge).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(parsed[0].len() <= MAX_OPTION_BYTES);
+        assert!(parsed[0].chars().count() <= MAX_OPTION_CHARS);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn read_child_stdout_handles_large_output_without_deadlock_and_times_out() {
+        use std::process::{Command, Stdio};
+
+        // 输出 128 KiB（超过默认 64 KiB 管道缓冲），验证并发读线程不死锁且按上限截断
+        let child = Command::new("sh")
+            .args(["-c", "head -c 131072 /dev/zero | tr '\\0' 'a'"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let out = read_child_stdout_with_timeout(child, Duration::from_secs(5), 1024).unwrap();
+        assert_eq!(out.len(), 1024);
+
+        // 超时子进程应被及时终止返回 None
+        let started = std::time::Instant::now();
+        let slow = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        assert!(read_child_stdout_with_timeout(slow, Duration::from_millis(150), 1024).is_none());
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 }

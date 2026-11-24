@@ -169,21 +169,26 @@ pub async fn run(
     }
 }
 
-/// 升级后的收尾：采集侧已全部退出，把队列里剩下的会话推完。
+/// 升级后的收尾：采集侧已全部退出，把队列里剩下的会话推完；限时 30 秒防网络黑洞卡死升级退出。
 pub async fn flush(server: &str, rx: async_channel::Receiver<pb::FlowRecord>, stats: Arc<Stats>) {
     if rx.is_empty() {
         return;
     }
-    let result = match tls::connect(server).await.map(new_client) {
-        Ok(mut client) => client
-            .report_flows(batches(rx, enroll::hostname(), stats))
-            .await
-            .map(|_| ())
-            .map_err(|e| e.to_string()),
-        Err(e) => Err(e.to_string()),
-    };
-    if let Err(e) = result {
-        eprintln!("退出前推送在途会话失败：{e}");
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        match tls::connect(server).await.map(new_client) {
+            Ok(mut client) => client
+                .report_flows(batches(rx, enroll::hostname(), stats))
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => eprintln!("退出前推送在途会话失败：{e}"),
+        Err(_) => eprintln!("退出前推送在途会话超时（30s），放弃剩余在途会话"),
     }
 }
 

@@ -6,7 +6,8 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
@@ -20,6 +21,12 @@ const CLASS_SOFTWARE_INVENTORY: u32 = 5020;
 const POLL: Duration = Duration::from_secs(30 * 60);
 const HEARTBEAT: Duration = Duration::from_secs(24 * 3600);
 const MAX_PACKAGES: usize = 20_000;
+/// package_of 路径→所属包缓存上限，满时清空，防短命路径长期累积导致内存增长
+const MAX_PACKAGE_CACHE: usize = 8192;
+/// dpkg-query / rpm 外部命令超时上限，防锁库或卡死拖垮采集线程
+const CMD_TIMEOUT: Duration = Duration::from_secs(30);
+/// 外部包查询命令 stdout/stderr 最大保留字节数
+const MAX_CMD_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
 
 /// 一个已装的二进制包：名称、版本、源码包名、源码版本
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -62,24 +69,98 @@ pub fn spawn(agent_id: String, sink: EventSink) {
 /// 发行版 ID 与版本（/etc/os-release），漏洞库按发行版版本分生态
 pub type Os = (String, String);
 
+/// 带超时执行外部命令：后台线程并发排空 stdout/stderr 防管道死锁，超时强制 kill 并回收子进程。
+fn run_with_timeout(program: &str, args: &[&str], timeout: Duration) -> std::io::Result<Output> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    fn drain_pipe<R: Read + Send + 'static>(
+        pipe: Option<R>,
+        limit: usize,
+    ) -> Option<std::thread::JoinHandle<Vec<u8>>> {
+        pipe.map(|mut r| {
+            std::thread::spawn(move || {
+                let mut kept = Vec::new();
+                let mut chunk = [0u8; 8192];
+                while let Ok(n) = r.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    if kept.len() < limit {
+                        let take = (limit - kept.len()).min(n);
+                        kept.extend_from_slice(&chunk[..take]);
+                    }
+                }
+                kept
+            })
+        })
+    }
+
+    let out_reader = drain_pipe(child.stdout.take(), MAX_CMD_OUTPUT_BYTES);
+    let err_reader = drain_pipe(child.stderr.take(), 64 * 1024);
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait()? {
+            Some(status) => break status,
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    if let Some(h) = out_reader {
+                        let _ = h.join();
+                    }
+                    if let Some(h) = err_reader {
+                        let _ = h.join();
+                    }
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("{program} 执行超时"),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    };
+
+    let stdout = out_reader.and_then(|h| h.join().ok()).unwrap_or_default();
+    let stderr = err_reader.and_then(|h| h.join().ok()).unwrap_or_default();
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
 fn snapshot() -> Result<(Os, &'static str, Vec<Package>), String> {
     let release = std::fs::read_to_string("/etc/os-release")
         .map_err(|e| format!("读不到 /etc/os-release：{e}"))?;
-    let out = Command::new("dpkg-query")
-        .args(["-W", "-f=${Package}\\t${Version}\\t${source:Package}\\t${source:Version}\\t${db:Status-Abbrev}\\n"])
-        .output();
+    let out = run_with_timeout(
+        "dpkg-query",
+        &[
+            "-W",
+            "-f=${Package}\\t${Version}\\t${source:Package}\\t${source:Version}\\t${db:Status-Abbrev}\\n",
+        ],
+        CMD_TIMEOUT,
+    );
     let (manager, out) = match out {
         Ok(out) => ("dpkg", out),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
             "rpm",
-            Command::new("rpm")
-                .args([
+            run_with_timeout(
+                "rpm",
+                &[
                     "-qa",
                     "--qf",
                     "%{NAME}\t%{EPOCHNUM}:%{VERSION}-%{RELEASE}\t%{SOURCERPM}\t%{ARCH}\n",
-                ])
-                .output()
-                .map_err(|e| format!("没有可用的软件包查询器：{e}"))?,
+                ],
+                CMD_TIMEOUT,
+            )
+            .map_err(|e| format!("没有可用的软件包查询器：{e}"))?,
         ),
         Err(e) => return Err(format!("查询 dpkg 失败：{e}")),
     };
@@ -186,26 +267,29 @@ pub fn package_of(path: &str) -> Option<String> {
     if let Some(hit) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(path) {
         return hit.clone();
     }
-    let found = match Command::new("dpkg-query").args(["-S", "--", path]).output() {
+    let found = match run_with_timeout("dpkg-query", &["-S", "--", path], CMD_TIMEOUT) {
         Ok(out) if out.status.success() => owner_package(&String::from_utf8_lossy(&out.stdout)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Command::new("rpm")
-            .args(["-qf", "--qf", "%{NAME}\n", "--", path])
-            .output()
-            .ok()
-            .filter(|out| out.status.success())
-            .and_then(|out| {
-                String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .next()
-                    .filter(|name| !name.is_empty() && !name.chars().any(char::is_whitespace))
-                    .map(str::to_string)
-            }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => run_with_timeout(
+            "rpm",
+            &["-qf", "--qf", "%{NAME}\n", "--", path],
+            CMD_TIMEOUT,
+        )
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .filter(|name| !name.is_empty() && !name.chars().any(char::is_whitespace))
+                .map(str::to_string)
+        }),
         _ => None,
     };
-    cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(path.to_string(), found.clone());
+    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if map.len() >= MAX_PACKAGE_CACHE {
+        map.clear();
+    }
+    map.insert(path.to_string(), found.clone());
     found
 }
 
@@ -322,5 +406,13 @@ mod tests {
     fn reads_os_release() {
         let text = "PRETTY_NAME=\"Debian GNU/Linux 13 (trixie)\"\nVERSION_ID=\"13\"\nID=debian\n";
         assert_eq!(os_release(text), ("debian".into(), "13".into()));
+    }
+
+    #[test]
+    fn run_with_timeout_kills_stalled_command() {
+        let started = Instant::now();
+        let err = run_with_timeout("sleep", &["30"], Duration::from_millis(150)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 }

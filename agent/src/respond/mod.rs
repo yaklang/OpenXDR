@@ -98,8 +98,18 @@ pub fn host_isolated() -> bool {
 pub async fn execute(agent_id: &str, cmd: &Command) -> CommandResult {
     let outcome = match cmd.kind() {
         CommandKind::KillProcess => process::kill(cmd),
-        CommandKind::IsolateHost => isolate::isolate(cmd),
-        CommandKind::UnisolateHost => isolate::unisolate(cmd),
+        CommandKind::IsolateHost => {
+            let c = cmd.clone();
+            tokio::task::spawn_blocking(move || isolate::isolate(&c))
+                .await
+                .unwrap_or_else(|e| Outcome::failed(format!("隔离任务异常退出: {e}")))
+        }
+        CommandKind::UnisolateHost => {
+            let c = cmd.clone();
+            tokio::task::spawn_blocking(move || isolate::unisolate(&c))
+                .await
+                .unwrap_or_else(|e| Outcome::failed(format!("解除隔离任务异常退出: {e}")))
+        }
         CommandKind::Exec => exec::run(cmd).await,
         CommandKind::BlockNetwork => netblock::block(cmd),
         CommandKind::UnblockNetwork => netblock::unblock(cmd),

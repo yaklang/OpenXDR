@@ -5,6 +5,7 @@
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::process::Command as Proc;
+use std::time::Duration;
 
 use super::Outcome;
 use super::netblock::Net;
@@ -12,6 +13,10 @@ use crate::pb::Command;
 
 /// 隔离规则单独一张表，与主机原有规则互不干扰
 const TABLE: &str = "openxdr_isolation";
+/// 主机名 DNS 解析超时，防止坏 DNS 长期卡死隔离指令
+const DNS_TIMEOUT: Duration = Duration::from_secs(5);
+/// 单个主机名最多放行的解析 IP 数量上限，防规则膨胀
+const MAX_RESOLVED: usize = 32;
 
 pub fn isolate(cmd: &Command) -> Outcome {
     if cmd.allow_endpoints.is_empty() {
@@ -133,17 +138,39 @@ fn parse_endpoint(ep: &str) -> Result<Vec<(Net, Option<u16>)>, String> {
             "放行地址无效（须为 IP、IP:端口、网段或主机名[:端口]）：{ep}"
         ));
     }
-    let mut nets: Vec<Net> = (host, port.unwrap_or(0))
-        .to_socket_addrs()
-        .map_err(|e| format!("放行地址 {host} 解析失败：{e}"))?
-        .map(|a| host_net(a.ip()))
-        .collect();
-    nets.sort();
-    nets.dedup();
+    let nets = resolve_hostname(host, port, DNS_TIMEOUT)?;
+    Ok(nets.into_iter().map(|n| (n, port)).collect())
+}
+
+/// 在独立线程中带超时解析主机名，防止系统 DNS 卡死；去重排序并限制最多 MAX_RESOLVED 个地址。
+fn resolve_hostname(host: &str, port: Option<u16>, timeout: Duration) -> Result<Vec<Net>, String> {
+    let owned_host = host.to_string();
+    let resolve_port = port.unwrap_or(0);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let res = (owned_host.as_str(), resolve_port)
+            .to_socket_addrs()
+            .map(|iter| iter.map(|a| a.ip()).collect::<Vec<_>>());
+        let _ = tx.send(res);
+    });
+    let ips = match rx.recv_timeout(timeout) {
+        Ok(Ok(ips)) => ips,
+        Ok(Err(e)) => return Err(format!("放行地址 {host} 解析失败：{e}")),
+        Err(_) => return Err(format!("放行地址 {host} 解析超时")),
+    };
+    let nets = cap_resolved_nets(ips);
     if nets.is_empty() {
         return Err(format!("放行地址 {host} 没有解析出地址"));
     }
-    Ok(nets.into_iter().map(|n| (n, port)).collect())
+    Ok(nets)
+}
+
+fn cap_resolved_nets(ips: impl IntoIterator<Item = IpAddr>) -> Vec<Net> {
+    let mut nets: Vec<Net> = ips.into_iter().map(host_net).collect();
+    nets.sort();
+    nets.dedup();
+    nets.truncate(MAX_RESOLVED);
+    nets
 }
 
 fn port_of(p: &str, ep: &str) -> Result<u16, String> {
@@ -345,5 +372,20 @@ mod tests {
         assert!(!s.contains("localhost"), "主机名不得写进 nft 脚本：{s}");
         let hosts = parse_endpoint("localhost").unwrap();
         assert!(hosts.iter().all(|(_, port)| port.is_none()));
+    }
+
+    #[test]
+    fn resolved_hostname_ips_are_capped_to_max_resolved() {
+        let ips = (0..64u8).map(|i| IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, i)));
+        let capped = cap_resolved_nets(ips);
+        assert_eq!(capped.len(), MAX_RESOLVED);
+        assert_eq!(
+            capped[0].addr,
+            IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 0))
+        );
+        assert_eq!(
+            capped[MAX_RESOLVED - 1].addr,
+            IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, (MAX_RESOLVED - 1) as u8))
+        );
     }
 }

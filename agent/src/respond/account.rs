@@ -29,7 +29,7 @@ fn checked(cmd: &Command) -> Result<String, String> {
     if !valid(name) {
         return Err("账号名无效".into());
     }
-    if PROTECTED.contains(&name.to_ascii_lowercase().as_str()) {
+    if PROTECTED.contains(&name.to_ascii_lowercase().as_str()) || platform::is_builtin_admin(name) {
         return Err(format!("{name} 是系统内置账号，锁定会让主机无法管理"));
     }
     if platform::is_self(name) {
@@ -78,6 +78,10 @@ mod platform {
         }
     }
 
+    pub fn is_builtin_admin(_: &str) -> bool {
+        false
+    }
+
     /// uid 0 的账号与 agent 自己的账号都不能锁
     pub fn is_self(name: &str) -> bool {
         // SAFETY: geteuid 无参数、总是成功，不读写任何内存。
@@ -106,6 +110,70 @@ mod platform {
 mod platform {
     use crate::respond::powershell;
 
+    /// Windows 内置管理员账号 RID（DOMAIN_USER_RID_ADMIN = 500），不随系统语言或改名变化
+    const DOMAIN_USER_RID_ADMIN: u32 = 500;
+
+    pub fn is_builtin_admin(name: &str) -> bool {
+        use std::ptr::{null, null_mut};
+        use windows_sys::Win32::Security::{
+            GetSidSubAuthority, GetSidSubAuthorityCount, LookupAccountNameW,
+        };
+
+        let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+        let mut sid_len = 0u32;
+        let mut domain_len = 0u32;
+        let mut sid_use = 0i32;
+        // 第一次调用查询 SID 与域名缓冲区所需大小
+        // SAFETY: wide 为以 0 结尾的 UTF-16 串，系统名传空表示本机；出参均为栈上变量，传空缓冲只查询长度。
+        unsafe {
+            LookupAccountNameW(
+                null(),
+                wide.as_ptr(),
+                null_mut(),
+                &mut sid_len,
+                null_mut(),
+                &mut domain_len,
+                &mut sid_use,
+            );
+        }
+        if sid_len == 0 || sid_len > 1024 || domain_len > 1024 {
+            return false;
+        }
+        let mut sid = vec![0u8; sid_len as usize];
+        let mut domain = vec![0u16; domain_len.max(1) as usize];
+        // SAFETY: sid 与 domain 已按首次查询返回的长度分配；指针与长度匹配且在调用期间有效。
+        let ok = unsafe {
+            LookupAccountNameW(
+                null(),
+                wide.as_ptr(),
+                sid.as_mut_ptr().cast(),
+                &mut sid_len,
+                domain.as_mut_ptr(),
+                &mut domain_len,
+                &mut sid_use,
+            )
+        };
+        if ok == 0 {
+            return false;
+        }
+        let sid_ptr = sid.as_mut_ptr().cast();
+        // SAFETY: LookupAccountNameW 成功时 sid_ptr 指向系统写入的有效 SID；
+        // 先读取子授权计数，再在 count > 0 时读取最后一个子授权（即 RID）。
+        let count = unsafe {
+            let p = GetSidSubAuthorityCount(sid_ptr);
+            if p.is_null() { 0 } else { *p }
+        };
+        if count == 0 {
+            return false;
+        }
+        // SAFETY: count >= 1，count - 1 在该有效 SID 的子授权下标范围内。
+        let rid = unsafe {
+            let p = GetSidSubAuthority(sid_ptr, u32::from(count - 1));
+            if p.is_null() { 0 } else { *p }
+        };
+        rid == DOMAIN_USER_RID_ADMIN
+    }
+
     pub fn is_self(name: &str) -> bool {
         std::env::var("USERNAME").is_ok_and(|u| u.eq_ignore_ascii_case(name))
     }
@@ -121,6 +189,9 @@ mod platform {
 
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 mod platform {
+    pub fn is_builtin_admin(_: &str) -> bool {
+        false
+    }
     pub fn is_self(_: &str) -> bool {
         false
     }

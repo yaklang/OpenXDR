@@ -265,21 +265,37 @@ fn covered_by_dirs(path: &str, targets: &[String]) -> bool {
     rel_depth(targets, path).is_some_and(|d| d <= MAX_DEPTH)
 }
 
+/// 单个监控根递归收集子目录的总数上限，防止恶意构造深宽目录树打爆 inotify watch 上限或内存。
+const MAX_SUBDIRS: usize = 4096;
+
 /// 收集 root 及其子目录（含 root，root 深度为 0），最深 max_depth 层。
 /// root 不存在时返回 [root]，由后续挂 watch/mark 失败来跳过。
 fn collect_subdirs(root: &str, max_depth: usize) -> Vec<String> {
+    collect_subdirs_limited(root, max_depth, MAX_SUBDIRS)
+}
+
+fn collect_subdirs_limited(root: &str, max_depth: usize, max_dirs: usize) -> Vec<String> {
+    if max_dirs == 0 {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     let mut stack = vec![(root.trim_end_matches('/').to_string(), 0usize)];
     while let Some((dir, depth)) = stack.pop() {
+        if out.len() >= max_dirs {
+            break;
+        }
         out.push(dir.clone());
-        if depth >= max_depth {
+        if depth >= max_depth || out.len() >= max_dirs {
             continue;
         }
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    stack.push((p.to_string_lossy().into_owned(), depth + 1));
+                // DirEntry::file_type 在 Unix/Windows 上均不跟随符号链接，防软链逃逸或环路
+                if e.file_type().is_ok_and(|t| t.is_dir()) {
+                    if out.len() + stack.len() >= max_dirs {
+                        break;
+                    }
+                    stack.push((e.path().to_string_lossy().into_owned(), depth + 1));
                 }
             }
         }
@@ -480,10 +496,16 @@ fn ino_run(
                     .read_unaligned()
             };
             let name_off = off + std::mem::size_of::<libc::inotify_event>();
-            let name = std::str::from_utf8(&buf[name_off..name_off + ev.len as usize])
+            let Some(end) = name_off
+                .checked_add(ev.len as usize)
+                .filter(|&end| end <= n as usize)
+            else {
+                break;
+            };
+            let name = std::str::from_utf8(&buf[name_off..end])
                 .unwrap_or("")
                 .trim_end_matches('\0');
-            off = name_off + ev.len as usize;
+            off = end;
 
             // watch 被内核摘除（目标已删），清理映射防泄漏。
             // 单文件目标若此刻已重建（编辑器"写临时文件再改名"的替换模式），
@@ -854,6 +876,9 @@ fn fa_activity(mask: u64) -> u8 {
     }
 }
 
+/// fanotify 挂载点 fd 缓存上限，避免长期持有过多挂载点 fd 阻塞 umount 或耗尽描述符。
+const MAX_MOUNT_FDS: usize = 64;
+
 /// 按 fsid 找挂载点 fd：遍历 /proc/self/mountinfo，用 statfs 的 f_fsid 与
 /// 事件 fsid 对拍（man fanotify 示例的做法），命中后打开并缓存。
 /// 注意必须 O_RDONLY：实测 WSL2 6.18 内核对 O_PATH 挂载 fd 的
@@ -894,6 +919,12 @@ fn mount_fd_for(mounts: &mut HashMap<(i32, i32), RawFd>, fsid: (i32, i32)) -> Op
         // SAFETY: c 是 NUL 结尾的 CString，调用期间存活；返回值在下面检查，成功的 fd 交给 mounts 缓存持有。
         let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
         if fd >= 0 {
+            if mounts.len() >= MAX_MOUNT_FDS {
+                for (_, old_fd) in mounts.drain() {
+                    // SAFETY: mounts 独占已缓存的挂载点 fd，满时清空并逐一关闭。
+                    unsafe { libc::close(old_fd) };
+                }
+            }
             mounts.insert(fsid, fd);
             return Some(fd);
         }
@@ -918,6 +949,14 @@ fn fa_resolve(mounts: &mut HashMap<(i32, i32), RawFd>, fid: &Fid) -> Option<Stri
         )
     };
     if fd < 0 {
+        if matches!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESTALE | libc::EBADF)
+        ) && let Some(old_fd) = mounts.remove(&fid.fsid)
+        {
+            // SAFETY: 句柄或挂载点已失效，移除缓存并关闭独占的旧 fd，下次再按需重建。
+            unsafe { libc::close(old_fd) };
+        }
         return None;
     }
     let base = std::fs::read_link(format!("/proc/self/fd/{fd}"))
@@ -1645,5 +1684,40 @@ mod tests {
         assert_eq!(v["process"]["pid"], pid);
         assert!(!v["process"]["name"].as_str().unwrap().is_empty());
         assert!(!v["process"]["file"]["path"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn collect_subdirs_skips_symlinks_and_enforces_limit() {
+        let base =
+            std::env::temp_dir().join(format!("openxdr-fswatch-subdirs-{}", uuid::Uuid::new_v4()));
+        let root = base.join("root");
+        let outside = base.join("outside");
+        let outside_child = outside.join("secret");
+        std::fs::create_dir_all(root.join("real/sub")).unwrap();
+        std::fs::create_dir_all(&outside_child).unwrap();
+        // 指向外部目录的符号链接与指向自身的循环符号链接
+        std::os::unix::fs::symlink(&outside, root.join("link_out")).unwrap();
+        std::os::unix::fs::symlink(&root, root.join("link_loop")).unwrap();
+
+        let found = collect_subdirs(&root.to_string_lossy(), 4);
+        assert!(
+            found.iter().any(|p| p.ends_with("/real/sub")),
+            "真实子目录应被收集：{found:?}"
+        );
+        assert!(
+            !found
+                .iter()
+                .any(|p| p.contains("link_out") || p.contains("link_loop")),
+            "符号链接目录不得被遍历：{found:?}"
+        );
+
+        // 构造多个兄弟子目录，验证超过上限时会被截断
+        for i in 0..10 {
+            std::fs::create_dir_all(root.join(format!("d{i}"))).unwrap();
+        }
+        let limited = collect_subdirs_limited(&root.to_string_lossy(), 4, 5);
+        assert_eq!(limited.len(), 5, "目录总数不得超过上限：{limited:?}");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

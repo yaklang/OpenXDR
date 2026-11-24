@@ -2,26 +2,35 @@
 
 use crate::health::Health;
 use crate::status_proto::{self, Status};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// 查隔离状态要起 nft 或开 WFP 会话；每个登录会话的托盘 15 秒来问一次，结果缓存 10 秒
 const ISOLATION_TTL: Duration = Duration::from_secs(10);
+/// 本机状态端点并发处理连接上限，超限时直接关闭新连接，防打满任务或阻塞线程池
+const MAX_CONCURRENT_STATUS: usize = 16;
 
-type IsolationCache = Arc<Mutex<Option<(Instant, bool)>>>;
+type IsolationCache = Arc<tokio::sync::Mutex<Option<(Instant, bool)>>>;
 
-fn snapshot(health: &Health, cache: &IsolationCache) -> Status {
-    let isolated = {
-        let mut cached = cache.lock().unwrap_or_else(|e| e.into_inner());
-        match *cached {
-            Some((at, value)) if at.elapsed() < ISOLATION_TTL => value,
-            _ => {
-                let value = crate::respond::host_isolated();
-                *cached = Some((Instant::now(), value));
-                value
-            }
-        }
-    };
+/// 读取隔离状态：命中未过期缓存时直接在异步路径返回，不进 blocking pool；
+/// 过期时借助异步互斥锁单飞刷新，同一时刻至多 1 个 spawn_blocking 任务查内核。
+async fn isolated_with<F>(cache: &IsolationCache, probe: F) -> bool
+where
+    F: FnOnce() -> bool + Send + 'static,
+{
+    let mut cached = cache.lock().await;
+    if let Some((at, value)) = *cached
+        && at.elapsed() < ISOLATION_TTL
+    {
+        return value;
+    }
+    let value = tokio::task::spawn_blocking(probe).await.unwrap_or(false);
+    *cached = Some((Instant::now(), value));
+    value
+}
+
+async fn snapshot(health: &Health, cache: &IsolationCache) -> Status {
+    let isolated = isolated_with(cache, crate::respond::host_isolated).await;
     Status {
         version: env!("CARGO_PKG_VERSION").into(),
         last_contact_unix_ms: health.last_contact_ms(),
@@ -30,11 +39,9 @@ fn snapshot(health: &Health, cache: &IsolationCache) -> Status {
     }
 }
 
-/// 一次连接的回复：一行 JSON。查隔离会起进程或开 WFP 会话，放到阻塞线程上
+/// 一次连接的回复：一行 JSON。缓存命中全程纯异步；仅缓存过期时单飞进阻塞线程
 async fn reply(health: Arc<Health>, cache: IsolationCache) -> Option<Vec<u8>> {
-    let status = tokio::task::spawn_blocking(move || snapshot(&health, &cache))
-        .await
-        .ok()?;
+    let status = snapshot(&health, &cache).await;
     let mut line = serde_json::to_vec(&status).ok()?;
     line.push(b'\n');
     Some(line)
@@ -61,6 +68,7 @@ async fn listen(health: Arc<Health>, path: &str) -> std::io::Result<()> {
     // 只读、只有有限信息：托盘跑在普通用户的会话里，本机任何用户都得连得上
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))?;
     let cache = IsolationCache::default();
+    let permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STATUS));
     loop {
         let mut stream = match listener.accept().await {
             Ok((stream, _)) => stream,
@@ -71,8 +79,14 @@ async fn listen(health: Arc<Health>, path: &str) -> std::io::Result<()> {
                 continue;
             }
         };
+        let Ok(permit) = permits.clone().try_acquire_owned() else {
+            // 超过并发上限时直接丢弃新连接，避免本机恶意并发打满任务或阻塞线程池
+            drop(stream);
+            continue;
+        };
         let (health, cache) = (health.clone(), cache.clone());
         tokio::spawn(async move {
+            let _permit = permit;
             if let Some(line) = reply(health, cache).await {
                 let _ = tokio::time::timeout(Duration::from_secs(2), stream.write_all(&line)).await;
             }
@@ -97,6 +111,7 @@ async fn listen(health: Arc<Health>) -> std::io::Result<()> {
     };
     let mut server = options(true).create(status_proto::PIPE)?;
     let cache = IsolationCache::default();
+    let permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STATUS));
     loop {
         if let Err(e) = server.connect().await {
             eprintln!("本机状态端点等待连接失败：{e}");
@@ -105,8 +120,13 @@ async fn listen(health: Arc<Health>) -> std::io::Result<()> {
             continue;
         }
         let mut client = std::mem::replace(&mut server, options(false).create(status_proto::PIPE)?);
+        let Ok(permit) = permits.clone().try_acquire_owned() else {
+            drop(client);
+            continue;
+        };
         let (health, cache) = (health.clone(), cache.clone());
         tokio::spawn(async move {
+            let _permit = permit;
             if let Some(line) = reply(health, cache).await {
                 let _ = tokio::time::timeout(Duration::from_secs(2), client.write_all(&line)).await;
             }
@@ -235,10 +255,10 @@ pub fn provision() {}
 mod tests {
     use super::*;
 
-    #[test]
-    fn snapshot_reports_contact_and_collection() {
+    #[tokio::test]
+    async fn snapshot_reports_contact_and_collection() {
         let health = Health::new();
-        let s = snapshot(&health, &IsolationCache::default());
+        let s = snapshot(&health, &IsolationCache::default()).await;
         assert_eq!(s.last_contact_unix_ms, 0);
         assert_eq!(s.collection, status_proto::Collection::Starting);
         let generation = health.begin(&[("process", true)]);
@@ -282,13 +302,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn isolation_check_is_cached() {
+    #[tokio::test]
+    async fn isolation_check_is_cached_and_singleflight() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
         let cache = IsolationCache::default();
-        *cache.lock().unwrap() = Some((Instant::now(), true));
+        *cache.lock().await = Some((Instant::now(), true));
         assert!(
-            snapshot(&Health::new(), &cache).isolated,
+            snapshot(&Health::new(), &cache).await.isolated,
             "缓存未过期就不再查内核"
+        );
+
+        // 并发缓存未命中时只允许单飞刷新一次，避免惊群占满 blocking pool
+        let fresh_cache = IsolationCache::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let c = fresh_cache.clone();
+            let calls = calls.clone();
+            tasks.push(tokio::spawn(async move {
+                isolated_with(&c, move || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(30));
+                    true
+                })
+                .await
+            }));
+        }
+        for t in tasks {
+            assert!(t.await.unwrap());
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "并发过期刷新应单飞执行一次"
         );
     }
 }

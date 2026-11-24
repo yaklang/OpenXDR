@@ -583,21 +583,55 @@ struct TaskEntry {
     actions: Option<String>,
 }
 
+/// 计划任务目录递归遍历的最大深度与最大扫描条目数（目录+文件），防止符号链接/目录联接或恶意目录树耗尽资源。
+const MAX_TASK_DEPTH: usize = 8;
+const MAX_TASK_ENTRIES: usize = 4096;
+
 /// 计划任务快照：任务文件路径 -> mtime 秒、大小与动作。
 /// 返回 None 表示 Tasks 根目录都读不了（权限等），本轮整体跳过；
 /// 子目录读取失败只跳过该子目录。任务文件这一轮读不到（计划任务服务正在写）时沿用上一轮的动作，
 /// 不把"读不到"当成动作变化。
 fn tasks_snapshot(prev: Option<&HashMap<String, TaskEntry>>) -> Option<HashMap<String, TaskEntry>> {
+    tasks_snapshot_at(
+        std::path::Path::new(TASKS_DIR),
+        prev,
+        MAX_TASK_DEPTH,
+        MAX_TASK_ENTRIES,
+    )
+}
+
+fn tasks_snapshot_at(
+    root: &std::path::Path,
+    prev: Option<&HashMap<String, TaskEntry>>,
+    max_depth: usize,
+    max_entries: usize,
+) -> Option<HashMap<String, TaskEntry>> {
     let mut snap = HashMap::new();
-    let mut stack = vec![std::fs::read_dir(TASKS_DIR).ok()?];
-    while let Some(entries) = stack.pop() {
+    let mut stack = vec![(std::fs::read_dir(root).ok()?, 0usize)];
+    let mut visited = 0usize;
+    while let Some((entries, depth)) = stack.pop() {
         for e in entries.flatten() {
+            if visited >= max_entries {
+                return Some(snap);
+            }
+            visited += 1;
+            // DirEntry::file_type 不跟随符号链接或 Windows 目录联接（reparse point）
+            let Ok(ft) = e.file_type() else {
+                continue;
+            };
+            if ft.is_symlink() {
+                continue;
+            }
             let path = e.path();
-            if path.is_dir() {
-                if let Ok(sub) = std::fs::read_dir(&path) {
-                    stack.push(sub);
+            if ft.is_dir() {
+                if depth < max_depth
+                    && let Ok(sub) = std::fs::read_dir(&path)
+                {
+                    stack.push((sub, depth + 1));
                 }
-            } else if let Ok(meta) = e.metadata() {
+            } else if ft.is_file()
+                && let Ok(meta) = e.metadata()
+            {
                 let mtime = meta
                     .modified()
                     .ok()
@@ -1062,7 +1096,13 @@ mod winreg {
     }
 
     /// 枚举键下全部值，返回 (值名, 内容)。字符串类型给原文，其余给类型标注。
+    /// 遇 ERROR_MORE_DATA 时按内核回写的 data_len 动态扩容（上限 256 KiB）；
+    /// 单值超上限时跳过该项继续枚举后续项，绝不提前中断导致漏报后面的持久化项。
     pub fn values(root: HKEY, key: &str) -> Vec<(String, String)> {
+        const ERROR_MORE_DATA: u32 = 234;
+        const INIT_VALUE_BYTES: usize = 4096;
+        const MAX_VALUE_BYTES: usize = 256 * 1024;
+
         let Some(key) = Key::open(root, key) else {
             return Vec::new();
         };
@@ -1070,16 +1110,18 @@ mod winreg {
 
         let mut out = Vec::new();
         let mut index = 0u32;
+        let mut data = vec![0u8; INIT_VALUE_BYTES];
         loop {
             let mut name = [0u16; 512];
             let mut name_len = name.len() as u32;
             let mut kind = 0u32;
-            let mut data = [0u8; 4096];
+            if data.len() > INIT_VALUE_BYTES {
+                data.resize(INIT_VALUE_BYTES, 0);
+            }
             let mut data_len = data.len() as u32;
-            // SAFETY: handle 是有效键句柄；name 与 data 都是栈上数组，name_len / data_len 如实给出各自容量，
-            // 系统最多写这么多并回填实际长度（放不下时返回 ERROR_MORE_DATA，下面按失败结束）；
-            // 保留参数传空指针。
-            let rc = unsafe {
+            // SAFETY: handle 是有效键句柄；name 是栈上数组，data 是堆上 Vec，name_len / data_len
+            // 如实给出各自容量，系统最多写这么多并回填所需长度；保留参数传空指针。
+            let mut rc = unsafe {
                 RegEnumValueW(
                     handle,
                     index,
@@ -1091,12 +1133,40 @@ mod winreg {
                     &mut data_len,
                 )
             };
+            if rc == ERROR_MORE_DATA {
+                let needed = data_len as usize;
+                if needed > data.len() && needed <= MAX_VALUE_BYTES {
+                    data.resize(needed, 0);
+                    name_len = name.len() as u32;
+                    data_len = data.len() as u32;
+                    // SAFETY: 同上；data 已扩容至 needed 字节，name_len / data_len 已重置为当前容量。
+                    rc = unsafe {
+                        RegEnumValueW(
+                            handle,
+                            index,
+                            name.as_mut_ptr(),
+                            &mut name_len,
+                            std::ptr::null_mut(),
+                            &mut kind,
+                            data.as_mut_ptr(),
+                            &mut data_len,
+                        )
+                    };
+                }
+                if rc == ERROR_MORE_DATA {
+                    // 单值超过上限（或键名过长 / 并发变大），跳过本项继续枚举后续项
+                    index += 1;
+                    continue;
+                }
+            }
             if rc != 0 {
                 break; // ERROR_NO_MORE_ITEMS 或读取失败，都结束枚举
             }
-            let value_name = String::from_utf16_lossy(&name[..name_len as usize]);
+            let name_used = (name_len as usize).min(name.len());
+            let data_used = (data_len as usize).min(data.len());
+            let value_name = String::from_utf16_lossy(&name[..name_used]);
             let content = if kind == REG_SZ || kind == REG_EXPAND_SZ {
-                let wide: Vec<u16> = data[..data_len as usize]
+                let wide: Vec<u16> = data[..data_used]
                     .as_chunks::<2>()
                     .0
                     .iter()

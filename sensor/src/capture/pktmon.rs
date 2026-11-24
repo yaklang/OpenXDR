@@ -23,9 +23,11 @@ type Proc = unsafe extern "system" fn() -> isize;
 
 #[cfg(windows)]
 fn load_library(name: &str) -> *mut c_void {
+    use windows_sys::Win32::System::LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
     let name = wide(name);
-    // SAFETY: 以 0 结尾的 UTF-16 模块名；系统目录里的 DLL，句柄随进程存在，不释放
-    unsafe { windows_sys::Win32::System::LibraryLoader::LoadLibraryW(name.as_ptr()) }
+    // SAFETY: 以 0 结尾的 UTF-16 模块名；限定仅从 System32 搜索加载，消除 DLL 搜索路径劫持面；
+    // 句柄随进程存在，不释放。
+    unsafe { LoadLibraryExW(name.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) }
 }
 
 #[cfg(windows)]

@@ -1,14 +1,18 @@
 //! WFP 独立子层内先放行管理端点，再阻断其余连接。持久规则通过事务原子替换。
 use super::Outcome;
+use super::netblock::Net;
 use crate::pb::Command;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::ptr::{null, null_mut};
+use std::time::Duration;
 use windows_sys::Win32::Foundation::{FWP_E_ALREADY_EXISTS, FWP_E_SUBLAYER_NOT_FOUND, HANDLE};
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::*;
 use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_WINNT;
 use windows_sys::core::GUID;
 
 const SUBLAYER: GUID = GUID::from_u128(0x76d87151_94b3_42bd_9394_127c3b11492e);
+const DNS_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_RESOLVED: usize = 32;
 const LAYERS: [(GUID, bool); 4] = [
     (FWPM_LAYER_ALE_AUTH_CONNECT_V4, false),
     (FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, false),
@@ -17,34 +21,123 @@ const LAYERS: [(GUID, bool); 4] = [
 ];
 #[derive(Debug, PartialEq)]
 struct Endpoint {
-    ip: IpAddr,
+    net: Net,
     port: Option<u16>,
 }
+
+fn host_net(ip: IpAddr) -> Net {
+    Net::canonical(ip, if ip.is_ipv4() { 32 } else { 128 })
+}
+
+fn port_of(p: &str, ep: &str) -> Result<u16, String> {
+    match p.parse::<u16>() {
+        Ok(0) => Err(format!("放行地址端口不能为 0：{ep}")),
+        Ok(port) => Ok(port),
+        Err(_) => Err(format!("放行地址端口无效：{ep}")),
+    }
+}
+
+/// 主机名：每段 1–63 个 ASCII 字母、数字或 `-`，不以 `-` 开头结尾，总长不超过 253
+fn hostname(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 253
+        && s.split('.').all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
+fn resolve_hostname(host: &str, port: Option<u16>, timeout: Duration) -> Result<Vec<Net>, String> {
+    let owned_host = host.to_string();
+    let resolve_port = port.unwrap_or(0);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let res = (owned_host.as_str(), resolve_port)
+            .to_socket_addrs()
+            .map(|iter| iter.map(|a| a.ip()).collect::<Vec<_>>());
+        let _ = tx.send(res);
+    });
+    let ips = match rx.recv_timeout(timeout) {
+        Ok(Ok(ips)) => ips,
+        Ok(Err(e)) => return Err(format!("放行地址 {host} 解析失败：{e}")),
+        Err(_) => return Err(format!("放行地址 {host} 解析超时")),
+    };
+    let mut nets: Vec<Net> = ips
+        .into_iter()
+        .filter(|ip| !ip.is_unspecified() && !ip.is_multicast())
+        .map(host_net)
+        .collect();
+    nets.sort();
+    nets.dedup();
+    nets.truncate(MAX_RESOLVED);
+    if nets.is_empty() {
+        return Err(format!("放行地址 {host} 没有解析出有效地址"));
+    }
+    Ok(nets)
+}
+
+fn parse_endpoint(ep: &str) -> Result<Vec<Endpoint>, String> {
+    let trimmed = ep.trim();
+    if trimmed.is_empty() {
+        return Err("放行地址为空".into());
+    }
+    if let Ok(a) = trimmed.parse::<SocketAddr>() {
+        if a.ip().is_unspecified() || a.ip().is_multicast() || a.port() == 0 {
+            return Err(format!("放行地址或端口无效：{ep}"));
+        }
+        return Ok(vec![Endpoint {
+            net: host_net(a.ip()),
+            port: Some(a.port()),
+        }]);
+    }
+    if let Ok(ip) = trimmed.parse::<IpAddr>() {
+        if ip.is_unspecified() || ip.is_multicast() {
+            return Err(format!("放行地址无效：{ep}"));
+        }
+        return Ok(vec![Endpoint {
+            net: host_net(ip),
+            port: None,
+        }]);
+    }
+    if let Some((addr, prefix)) = trimmed.split_once('/') {
+        let invalid = || format!("放行网段无效（须为 地址/前缀长度）：{ep}");
+        let addr: IpAddr = addr.parse().map_err(|_| invalid())?;
+        let prefix: u8 = prefix.parse().map_err(|_| invalid())?;
+        let max_prefix = if addr.is_ipv4() { 32 } else { 128 };
+        if prefix == 0 || prefix > max_prefix {
+            return Err(invalid());
+        }
+        let net = Net::canonical(addr, prefix);
+        if net.addr.is_multicast() {
+            return Err(format!("放行网段无效：{ep}"));
+        }
+        return Ok(vec![Endpoint { net, port: None }]);
+    }
+    let (host, port) = match trimmed.rsplit_once(':') {
+        Some((h, p)) => (h, Some(port_of(p, ep)?)),
+        None => (trimmed, None),
+    };
+    if !hostname(host) {
+        return Err(format!(
+            "放行地址无效（须为 IP、IP:端口、网段或主机名[:端口]）：{ep}"
+        ));
+    }
+    let nets = resolve_hostname(host, port, DNS_TIMEOUT)?;
+    Ok(nets.into_iter().map(|net| Endpoint { net, port }).collect())
+}
+
 fn endpoints(values: &[String]) -> Result<Vec<Endpoint>, String> {
     if values.is_empty() || values.len() > 128 {
-        return Err("放行地址须为 1–128 个数字 IP 或 IP:端口".into());
+        return Err("放行地址须为 1–128 项（IP、IP:端口、网段或主机名[:端口]）".into());
     }
-    values
-        .iter()
-        .map(|s| {
-            let ep = match s.parse::<SocketAddr>() {
-                Ok(a) => Endpoint {
-                    ip: a.ip(),
-                    port: Some(a.port()),
-                },
-                Err(_) => Endpoint {
-                    ip: s
-                        .parse()
-                        .map_err(|_| "放行地址必须是数字 IP；IPv6 端口格式为 [地址]:端口")?,
-                    port: None,
-                },
-            };
-            if ep.ip.is_unspecified() || ep.ip.is_multicast() || ep.port == Some(0) {
-                return Err("放行地址或端口无效".into());
-            }
-            Ok(ep)
-        })
-        .collect()
+    let mut out = Vec::with_capacity(values.len());
+    for s in values {
+        out.extend(parse_endpoint(s)?);
+    }
+    Ok(out)
 }
 pub fn isolate(cmd: &Command) -> Outcome {
     let allowed = match endpoints(&cmd.allow_endpoints) {
@@ -178,7 +271,7 @@ fn update(engine: &Engine, allowed: Option<&[Endpoint]>) -> Result<(), String> {
             },
         }];
         add_filter(engine, layer, true, &mut loopback)?;
-        for ep in allowed.iter().filter(|e| e.ip.is_ipv6() == ipv6) {
+        for ep in allowed.iter().filter(|e| e.net.addr.is_ipv6() == ipv6) {
             add_endpoint(engine, layer, ep)?;
         }
     }
@@ -186,19 +279,41 @@ fn update(engine: &Engine, allowed: Option<&[Endpoint]>) -> Result<(), String> {
 }
 fn add_endpoint(engine: &Engine, layer: GUID, ep: &Endpoint) -> Result<(), String> {
     let mut v6 = FWP_BYTE_ARRAY16::default();
-    let address = match ep.ip {
-        IpAddr::V4(ip) => FWP_CONDITION_VALUE0 {
+    let mut v4_mask = FWP_V4_ADDR_AND_MASK::default();
+    let mut v6_mask = FWP_V6_ADDR_AND_MASK::default();
+    let address = match ep.net.addr {
+        IpAddr::V4(ip) if ep.net.prefix == 32 => FWP_CONDITION_VALUE0 {
             r#type: FWP_UINT32,
             Anonymous: FWP_CONDITION_VALUE0_0 {
                 uint32: u32::from(ip),
             },
         },
-        IpAddr::V6(ip) => {
+        IpAddr::V4(ip) => {
+            v4_mask.addr = u32::from(ip);
+            v4_mask.mask = u32::MAX.checked_shl(32 - ep.net.prefix as u32).unwrap_or(0);
+            FWP_CONDITION_VALUE0 {
+                r#type: FWP_V4_ADDR_MASK,
+                Anonymous: FWP_CONDITION_VALUE0_0 {
+                    v4AddrMask: &mut v4_mask,
+                },
+            }
+        }
+        IpAddr::V6(ip) if ep.net.prefix == 128 => {
             v6.byteArray16 = ip.octets();
             FWP_CONDITION_VALUE0 {
                 r#type: FWP_BYTE_ARRAY16_TYPE,
                 Anonymous: FWP_CONDITION_VALUE0_0 {
                     byteArray16: &mut v6,
+                },
+            }
+        }
+        IpAddr::V6(ip) => {
+            v6_mask.addr = ip.octets();
+            v6_mask.prefixLength = ep.net.prefix;
+            FWP_CONDITION_VALUE0 {
+                r#type: FWP_V6_ADDR_MASK,
+                Anonymous: FWP_CONDITION_VALUE0_0 {
+                    v6AddrMask: &mut v6_mask,
                 },
             }
         }
@@ -364,14 +479,31 @@ mod tests {
             "192.0.2.1:8081".into(),
             "[2001:db8::1]:443".into(),
             "192.0.2.2".into(),
+            "10.1.1.7/24".into(),
+            "2001:db8::5/64".into(),
         ])
         .unwrap();
         assert_eq!(eps[0].port, Some(8081));
-        assert!(eps[1].ip.is_ipv6());
+        assert_eq!(eps[0].net.prefix, 32);
+        assert!(eps[1].net.addr.is_ipv6());
         assert_eq!(eps[2].port, None);
-        for s in ["0.0.0.0", "::", "host:443", "192.0.2.1:0", "192.0.2.1;cmd"] {
-            assert!(endpoints(&[s.into()]).is_err());
+        assert_eq!(eps[3].net.render(), "10.1.1.0/24");
+        assert_eq!(eps[4].net.render(), "2001:db8::/64");
+        for s in [
+            "0.0.0.0",
+            "::",
+            "0.0.0.0/0",
+            "10.0.0.0/33",
+            "10.0.0.0/24:443",
+            "-bad.example.com",
+            "192.0.2.1:0",
+            "192.0.2.1;cmd",
+        ] {
+            assert!(endpoints(&[s.into()]).is_err(), "{s:?} 应拒绝");
         }
         assert!(endpoints(&[]).is_err());
+        let local = endpoints(&["localhost:8081".into()]).unwrap();
+        assert!(!local.is_empty());
+        assert!(local.iter().all(|e| e.port == Some(8081)));
     }
 }
