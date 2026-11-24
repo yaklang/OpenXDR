@@ -94,19 +94,14 @@ pub fn isolate(cmd: &Command) -> Outcome {
 }
 
 pub fn unisolate(_cmd: &Command) -> Outcome {
-    match run_nft(&["delete", "table", "inet", TABLE]) {
-        Ok(_) => Outcome::ok("已解除隔离"),
-        // 表不存在说明本来就没隔离，视为已达成目标
-        Err(e) if is_table_missing_err(&e) => Outcome::ok("本机当前未处于隔离状态"),
+    match unisolate_table_with("nft", TABLE, NFT_TIMEOUT) {
+        Ok(UnisolateOutcome::Removed) => Outcome::ok("已解除隔离"),
+        Ok(UnisolateOutcome::AlreadyAbsent) => Outcome::ok("本机当前未处于隔离状态"),
         Err(e) => Outcome::failed(format!("解除隔离失败: {e}")),
     }
 }
 
-pub(super) fn is_table_missing_err(e: &str) -> bool {
-    e.contains("No such file") || e.contains("does not exist")
-}
-
-/// 隔离表当前存在状态：明确区分存在、确认不存在与查询超时/失败。
+/// 隔离表当前存在状态：明确区分存在、确认不存在与启动/查询超时或失败。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TableState {
     Present,
@@ -114,19 +109,78 @@ pub(super) enum TableState {
     Unknown,
 }
 
-pub(super) fn table_state(table: &str) -> TableState {
-    match run_nft(&["list", "table", "inet", table]) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum UnisolateOutcome {
+    Removed,
+    AlreadyAbsent,
+}
+
+/// 区分 nft 启动/等待/超时等执行层故障与子进程实际运行后返回的命令级非零退出。
+#[derive(Debug, PartialEq, Eq)]
+enum NftExecError {
+    SpawnOrIo(String),
+    Timeout(String),
+    Exit(String),
+}
+
+impl NftExecError {
+    fn is_confirmed_table_missing(&self) -> bool {
+        match self {
+            Self::Exit(stderr) => {
+                stderr.contains("No such file") || stderr.contains("does not exist")
+            }
+            Self::SpawnOrIo(_) | Self::Timeout(_) => false,
+        }
+    }
+
+    fn into_message(self) -> String {
+        match self {
+            Self::SpawnOrIo(m) | Self::Timeout(m) | Self::Exit(m) => m,
+        }
+    }
+}
+
+fn table_state_with(program: &str, table: &str, timeout: Duration) -> TableState {
+    match run_nft_with_timeout_raw(program, &["list", "table", "inet", table], timeout) {
         Ok(_) => TableState::Present,
-        Err(e) if is_table_missing_err(&e) => TableState::Absent,
+        Err(e) if e.is_confirmed_table_missing() => TableState::Absent,
         Err(_) => TableState::Unknown,
     }
 }
 
-pub(super) fn delete_table_confirmed(table: &str) -> Result<(), String> {
-    match run_nft(&["delete", "table", "inet", table]) {
+pub(super) fn table_state(table: &str) -> TableState {
+    table_state_with("nft", table, NFT_TIMEOUT)
+}
+
+fn delete_table_confirmed_with(
+    program: &str,
+    table: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    match run_nft_with_timeout_raw(program, &["delete", "table", "inet", table], timeout) {
         Ok(_) => Ok(()),
-        Err(e) if is_table_missing_err(&e) => Ok(()),
-        Err(e) => Err(e),
+        Err(e) if e.is_confirmed_table_missing() => Ok(()),
+        Err(e) => Err(e.into_message()),
+    }
+}
+
+pub(super) fn delete_table_confirmed(table: &str) -> Result<(), String> {
+    delete_table_confirmed_with("nft", table, NFT_TIMEOUT)
+}
+
+pub(super) fn unisolate_table(table: &str) -> Result<UnisolateOutcome, String> {
+    unisolate_table_with("nft", table, NFT_TIMEOUT)
+}
+
+fn unisolate_table_with(
+    program: &str,
+    table: &str,
+    timeout: Duration,
+) -> Result<UnisolateOutcome, String> {
+    match run_nft_with_timeout_raw(program, &["delete", "table", "inet", table], timeout) {
+        Ok(_) => Ok(UnisolateOutcome::Removed),
+        Err(e) if e.is_confirmed_table_missing() => Ok(UnisolateOutcome::AlreadyAbsent),
+        Err(e) => Err(e.into_message()),
     }
 }
 
@@ -378,6 +432,7 @@ pub(super) enum ScriptError {
     Unknown(String),
 }
 
+#[cfg(test)]
 impl ScriptError {
     fn into_message(self) -> String {
         match self {
@@ -426,11 +481,7 @@ where
     }
 }
 
-/// 整段规则交给 nft -f - 原子执行。容器隔离在容器的网络命名空间里也用它
-pub(super) fn nft_script(script: &str) -> Result<(), String> {
-    nft_script_with_timeout("nft", &["-f", "-"], script, NFT_SCRIPT_TIMEOUT)
-}
-
+#[cfg(test)]
 fn nft_script_with_timeout(
     program: &str,
     args: &[&str],
@@ -592,11 +643,16 @@ fn spawn_pipe_reader<R: Read + Send + 'static>(
     })
 }
 
-fn run_nft(args: &[&str]) -> Result<String, String> {
-    run_nft_with_timeout("nft", args, NFT_TIMEOUT)
+#[cfg(test)]
+fn run_nft_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
+    run_nft_with_timeout_raw(program, args, timeout).map_err(NftExecError::into_message)
 }
 
-fn run_nft_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
+fn run_nft_with_timeout_raw(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String, NftExecError> {
     let mut child = Proc::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -604,7 +660,7 @@ fn run_nft_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Resu
         .stderr(Stdio::piped())
         .process_group(0)
         .spawn()
-        .map_err(|e| format!("无法执行 {program}: {e}"))?;
+        .map_err(|e| NftExecError::SpawnOrIo(format!("无法执行 {program}: {e}")))?;
 
     let out_rx = spawn_pipe_reader(child.stdout.take(), MAX_NFT_OUTPUT_BYTES);
     let err_rx = spawn_pipe_reader(child.stderr.take(), 64 * 1024);
@@ -616,20 +672,20 @@ fn run_nft_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Resu
             Ok(None) => {
                 if Instant::now() >= deadline {
                     kill_process_group(&mut child);
-                    return Err(format!("执行 {program} 超时"));
+                    return Err(NftExecError::Timeout(format!("执行 {program} 超时")));
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(e) => {
                 kill_process_group(&mut child);
-                return Err(format!("等待 {program} 失败: {e}"));
+                return Err(NftExecError::SpawnOrIo(format!("等待 {program} 失败: {e}")));
             }
         }
     };
 
     let recv = |rx: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
                 child: &mut std::process::Child|
-     -> Result<Vec<u8>, String> {
+     -> Result<Vec<u8>, NftExecError> {
         let Some(rx) = rx else {
             return Ok(Vec::new());
         };
@@ -638,7 +694,7 @@ fn run_nft_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Resu
             Ok(buf) => Ok(buf),
             Err(_) => {
                 kill_process_group(child);
-                Err(format!("读取 {program} 输出超时"))
+                Err(NftExecError::Timeout(format!("读取 {program} 输出超时")))
             }
         }
     };
@@ -646,7 +702,9 @@ fn run_nft_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Resu
     let stdout = recv(out_rx, &mut child)?;
     let stderr = recv(err_rx, &mut child)?;
     if !status.success() {
-        return Err(String::from_utf8_lossy(&stderr).trim().to_string());
+        return Err(NftExecError::Exit(
+            String::from_utf8_lossy(&stderr).trim().to_string(),
+        ));
     }
     Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
@@ -1029,5 +1087,44 @@ mod tests {
         assert_eq!(err, "syntax error");
         assert!(!checked.load(Ordering::SeqCst));
         assert!(!cleaned.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn spawn_enoent_is_not_misclassified_as_missing_table_or_unisolated() {
+        let missing_bin = "/nonexistent-openxdr-nft-binary-enoent";
+
+        // 1. 真实 ENOENT 包含 "No such file or directory"，但必须判为 Unknown 而非 Absent
+        assert_eq!(
+            table_state_with(missing_bin, TABLE, Duration::from_secs(1)),
+            TableState::Unknown
+        );
+
+        // 2. 清理时真实 ENOENT 必须返回 Err，绝不伪装成已清除
+        let del_err =
+            delete_table_confirmed_with(missing_bin, TABLE, Duration::from_secs(1)).unwrap_err();
+        assert!(del_err.contains("无法执行"), "{del_err}");
+
+        // 3. 端到端通过生产分类层：提交超时 + 复核 ENOENT + 清理 ENOENT -> 仍保留租约
+        let res = apply_with(
+            "add table inet openxdr_isolation\n",
+            |_| Err(ScriptError::Unknown("执行 nft 超时".into())),
+            || table_state_with(missing_bin, TABLE, Duration::from_secs(1)),
+            || delete_table_confirmed_with(missing_bin, TABLE, Duration::from_secs(1)),
+        );
+        assert_eq!(res, Ok(ApplyOutcome::UncertainPreserved));
+
+        // 4. 解封时真实 ENOENT 必须失败，绝不误报“未处于隔离状态”
+        let uniso_err =
+            unisolate_table_with(missing_bin, TABLE, Duration::from_secs(1)).unwrap_err();
+        assert!(uniso_err.contains("无法执行"), "{uniso_err}");
+
+        // 5. 子进程实际退出并输出内核“No such file or directory”才确认为表不存在
+        let exit_missing = run_nft_with_timeout_raw(
+            "sh",
+            &["-c", "echo 'Error: No such file or directory' >&2; exit 1"],
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(exit_missing.is_confirmed_table_missing());
     }
 }

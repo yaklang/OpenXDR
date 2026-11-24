@@ -44,10 +44,11 @@ fn run(cmd: &Command, isolate: bool) -> Outcome {
     if isolate {
         return map_isolate_result(uid, in_netns_apply(ns, ruleset()));
     }
-    let script = format!("delete table inet {TABLE}\n");
-    match in_netns(ns, script) {
-        Ok(()) => Outcome::ok(format!("已解除容器 {uid} 的隔离")),
-        Err(e) if super::isolate::is_table_missing_err(&e) => {
+    match in_netns_unisolate(ns) {
+        Ok(super::isolate::UnisolateOutcome::Removed) => {
+            Outcome::ok(format!("已解除容器 {uid} 的隔离"))
+        }
+        Ok(super::isolate::UnisolateOutcome::AlreadyAbsent) => {
             Outcome::ok(format!("容器 {uid} 当前未处于隔离状态"))
         }
         Err(e) => Outcome::failed(e),
@@ -145,10 +146,9 @@ fn in_netns_apply(
     .map_err(|_| "容器隔离线程异常退出".to_string())?
 }
 
-/// 在临时线程里切进容器的网络命名空间执行 nft：命名空间按线程生效，子进程继承这个线程的，
-/// 线程结束即丢弃，agent 其余线程一直留在宿主机网络里
+/// 在临时线程里切进容器的网络命名空间执行解封：区分 nft 启动失败与表确实不存在
 #[cfg(target_os = "linux")]
-fn in_netns(ns: std::fs::File, script: String) -> Result<(), String> {
+fn in_netns_unisolate(ns: std::fs::File) -> Result<super::isolate::UnisolateOutcome, String> {
     std::thread::spawn(move || {
         use std::os::fd::AsRawFd;
         // SAFETY: ns 在调用期间一直打开，fd 有效；CLONE_NEWNET 只切换当前这个临时线程
@@ -158,7 +158,7 @@ fn in_netns(ns: std::fs::File, script: String) -> Result<(), String> {
                 std::io::Error::last_os_error()
             ));
         }
-        super::isolate::nft_script(&script)
+        super::isolate::unisolate_table(TABLE)
     })
     .join()
     .map_err(|_| "容器隔离线程异常退出".to_string())?
