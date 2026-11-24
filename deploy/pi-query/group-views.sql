@@ -172,7 +172,7 @@ ALTER ROLE :"role" SET statement_timeout = '5s';
 -- 分区多时规划器估价虚高会触发 JIT，编译一次就要几秒
 ALTER ROLE :"role" SET jit = off;
 
-GRANT CONNECT ON DATABASE openxdr TO :"role";
+SELECT format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), :'role') \gexec
 GRANT USAGE ON SCHEMA :"schema" TO :"role";
 GRANT SELECT ON ALL TABLES IN SCHEMA :"schema" TO :"role";
 

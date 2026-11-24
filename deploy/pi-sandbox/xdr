@@ -318,10 +318,10 @@ case "$cmd" in
     extra='{}'
     while [ $# -gt 0 ]; do
       case "$1" in
-        --finding) v=$(require_uuid finding "${2:-}"); extra=$(jq -c --arg v "$v" '. + {finding_id:$v}' <<<"$extra"); shift 2 ;;
-        --incident) v=$(require_uuid incident "${2:-}"); extra=$(jq -c --arg v "$v" '. + {incident_id:$v}' <<<"$extra"); shift 2 ;;
-        --at) extra=$(jq -c --arg v "${2:-}" '. + {at:$v}' <<<"$extra"); shift 2 ;;
-        --change) extra=$(jq -c --arg v "${2:-}" '. + {change_key:$v}' <<<"$extra"); shift 2 ;;
+        --finding) [ $# -ge 2 ] || { echo "缺少 $1 参数值" >&2; exit 2; }; v=$(require_uuid finding "$2"); extra=$(jq -c --arg v "$v" '. + {finding_id:$v}' <<<"$extra"); shift 2 ;;
+        --incident) [ $# -ge 2 ] || { echo "缺少 $1 参数值" >&2; exit 2; }; v=$(require_uuid incident "$2"); extra=$(jq -c --arg v "$v" '. + {incident_id:$v}' <<<"$extra"); shift 2 ;;
+        --at) [ $# -ge 2 ] || { echo "缺少 $1 参数值" >&2; exit 2; }; extra=$(jq -c --arg v "$2" '. + {at:$v}' <<<"$extra"); shift 2 ;;
+        --change) [ $# -ge 2 ] || { echo "缺少 $1 参数值" >&2; exit 2; }; extra=$(jq -c --arg v "$2" '. + {change_key:$v}' <<<"$extra"); shift 2 ;;
         *) echo "不认识的参数：$1" >&2; exit 2 ;;
       esac
     done
@@ -357,7 +357,7 @@ case "$cmd" in
   suppress)
     need "$cmd" 5 "$@"
     host=$(host_id "$1"); rule=$2; why=$3; days=$4; shift 4
-    [[ $days =~ ^[0-9]+$ ]] || { echo "天数必须是正整数：$days" >&2; exit 2; }
+    [[ $days =~ ^[1-9][0-9]*$ ]] || { echo "天数必须是正整数：$days" >&2; exit 2; }
     conds='[]'
     for c in "$@"; do
       if [[ $c =~ ^([a-z0-9_.]+)(\$=|~=|=)(.+)$ ]]; then

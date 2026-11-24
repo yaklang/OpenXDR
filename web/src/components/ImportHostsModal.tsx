@@ -4,7 +4,7 @@ import { Alert, App, Button, Checkbox, Flex, Image, Input, InputNumber, Modal, P
 import { useEffect, useRef, useState } from 'react'
 import { extractHostDocument, commitHostImport, deleteHostCredential, enrollHostCredential, fetchHostCredentials, discardHostImportJob, fetchHostImportJob, fetchHostImportStatus, startHostImport, type AIJob, type HostDocumentImage, type HostCredential, type HostImportPreview, type ImportedHost, type ReviewedHost } from '../api'
 import { useSession } from '../app/session'
-import { errText } from './format'
+import { errText, uuid4 } from './format'
 import { useI18n } from '../i18n'
 
 export function ImportHostsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -42,13 +42,13 @@ export function ImportHostsModal({ open, onClose }: { open: boolean; onClose: ()
     refetchInterval: q => (q.state.data?.status === 'running' ? 2000 : false),
   })
   const running = job.data?.status === 'running'
-  const applied = useRef('')
+  const applied = useRef<string | null>(null)
   useEffect(() => {
     const j = job.data
     if (!open || j?.status !== 'done' || !j.result || !j.id || applied.current === j.id) return
     applied.current = j.id
     setConfirmed(false)
-    setPreview({ hosts: j.result.hosts.map(h => ({ ...h, reviewId: crypto.randomUUID() })) })
+    setPreview({ hosts: j.result.hosts.map(h => ({ ...h, reviewId: uuid4() })) })
   }, [open, job.data])
   const parse = useMutation({
     mutationFn: () => startHostImport(selectedGroup!, document, images),
@@ -76,7 +76,7 @@ export function ImportHostsModal({ open, onClose }: { open: boolean; onClose: ()
   const close = () => {
     if (busy) return
     setFilename(''); setDocument(''); setImages([]); setImageOpen(false); setPreview(undefined); setConfirmed(false); setTarget(undefined); setFingerprint('')
-    setTab('import'); parse.reset(); save.reset(); install.reset(); applied.current = ''; onClose()
+    setTab('import'); parse.reset(); save.reset(); install.reset(); applied.current = null; onClose()
   }
   const edit = (id: string | undefined, patch: Partial<ReviewedHost>) => {
     setConfirmed(false)
@@ -119,7 +119,7 @@ export function ImportHostsModal({ open, onClose }: { open: boolean; onClose: ()
       <Flex vertical gap={16}>
         {!secure && <Alert type="warning" title={t('hostHTTPSRequired')} />}
         <Select showSearch optionFilterProp="label" aria-label={t('addHostGroup')} value={selectedGroup} disabled={busy} options={adminGroups.map(g => ({ value: g.id, label: g.name }))}
-          onChange={v => { setGroupId(v); setPreview(undefined); setConfirmed(false) }} />
+          onChange={v => { setGroupId(v); applied.current = null; setPreview(undefined); setConfirmed(false) }} />
         {status.isError && <Alert type="error" title={t('hostImportStatusError')} action={<Button size="small" icon={<ReloadOutlined aria-hidden />} loading={status.isFetching} onClick={() => status.refetch()}>{t('retry')}</Button>} />}
         {status.data && !status.data.credentialStorage && <Alert type="warning" title={t('hostVaultDisabled')} />}
         {status.data && !status.data.aiParsing && <Alert type="warning" title={t('hostAIUnavailable')} />}

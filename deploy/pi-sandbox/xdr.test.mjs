@@ -471,3 +471,56 @@ test('repair capability lookup and conditional follow-up fields preserve exact i
     assert.equal(calls.length, 2);
   });
 });
+
+test('xdr ask rejects missing option values and forwards optional fields', async () => {
+  await withMockSocket(() => ({ output: '{"id":"q1"}' }), async ({ execXdr, calls }) => {
+    await assert.rejects(() => execXdr(['ask', 'owner', 'asset', 'pve1', '谁负责', '--finding']), /缺少 --finding 参数值/);
+    await assert.rejects(() => execXdr(['ask', 'owner', 'asset', 'pve1', '谁负责', '--incident']), /缺少 --incident 参数值/);
+    await assert.rejects(() => execXdr(['ask', 'owner', 'asset', 'pve1', '谁负责', '--at']), /缺少 --at 参数值/);
+    await assert.rejects(() => execXdr(['ask', 'owner', 'asset', 'pve1', '谁负责', '--change']), /缺少 --change 参数值/);
+    assert.equal(calls.length, 0);
+
+    await execXdr([
+      'ask', 'owner', 'asset', 'pve1', '谁负责',
+      '--finding', CMD_UUID_1.toUpperCase(),
+      '--incident', EVENT_UUID_1.toUpperCase(),
+      '--at', '2026-12-01T00:00:00Z',
+      '--change', 'ssh-config',
+    ]);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], {
+      name: 'ask_controller',
+      args: {
+        type: 'owner',
+        subject: { kind: 'asset', value: HOST_UUID },
+        question: '谁负责',
+        finding_id: CMD_UUID_1,
+        incident_id: EVENT_UUID_1,
+        at: '2026-12-01T00:00:00Z',
+        change_key: 'ssh-config',
+      },
+    });
+  });
+});
+
+test('xdr suppress requires positive integer days (>= 1)', async () => {
+  await withMockSocket(() => ({ output: '{"id":"s1"}' }), async ({ execXdr, calls }) => {
+    await assert.rejects(() => execXdr(['suppress', 'pve1', 'rule-1', '误报', '0', 'process.name=cron']), /天数必须是正整数/);
+    await assert.rejects(() => execXdr(['suppress', 'pve1', 'rule-1', '误报', '00', 'process.name=cron']), /天数必须是正整数/);
+    await assert.rejects(() => execXdr(['suppress', 'pve1', 'rule-1', '误报', '-1', 'process.name=cron']), /天数必须是正整数/);
+    assert.equal(calls.length, 0);
+
+    await execXdr(['suppress', 'pve1', 'rule-1', '误报', '7', 'process.name=cron']);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], {
+      name: 'suppress',
+      args: {
+        host: HOST_UUID,
+        rule_id: 'rule-1',
+        reason: '误报',
+        days: 7,
+        conditions: [{ field: 'process.name', op: 'equals', value: 'cron' }],
+      },
+    });
+  });
+});

@@ -136,9 +136,12 @@ export async function run(request, send, callTool, signal) {
   let limited = false;
   session.subscribe(event => {
     routing.annotate(event);
-    if (event.type === 'turn_end' && ++turns >= maxTurns) {
-      limited = true;
-      session.abort();
+    if (event.type === 'turn_end') {
+      turns++;
+      if (turns >= maxTurns && Array.isArray(event.message?.content) && event.message.content.some(part => part.type === 'toolCall')) {
+        limited = true;
+        session.abort();
+      }
     }
     if (!FORWARD.has(event.type)) return;
     if (event.type === 'message_end' && !ROLES.has(event.message?.role)) return;

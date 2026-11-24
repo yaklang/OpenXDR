@@ -1,6 +1,6 @@
 import { ArrowRight, BellRing, Check, Copy } from "lucide-react";
 import { motion } from "motion/react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useCopy } from "@/i18n";
 import { ChapterHead, EASE, type Flow } from "./chapter";
 
@@ -101,11 +101,20 @@ const COPY = {
 export function Closing() {
   const t = useCopy(COPY);
   const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const commands = quickstart(t.host, t.consoleAt);
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
   const copy = async () => {
-    await navigator.clipboard.writeText(commands);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1600);
+    try {
+      await navigator.clipboard.writeText(commands);
+      setCopied(true);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // 非安全上下文或剪贴板权限受限时静默降级
+    }
   };
 
   return (

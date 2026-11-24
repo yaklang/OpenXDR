@@ -6,6 +6,7 @@ import { fetchNotifySettings, saveNotifySettings, testNotifySettings, type Notif
 import { AIModelSettings, IntelLookupSettings } from '../components/AISettings'
 import { AIAccuracy } from '../components/AIAccuracy'
 import { AIUsageOverview } from '../components/AIUsage'
+import { LoadError } from '../components/LoadError'
 import { Page } from '../components/Page'
 import { useI18n } from '../i18n'
 import { errText } from '../components/format'
@@ -36,7 +37,7 @@ export function NotifySettingsCard() {
   const { t } = useI18n()
   const { message } = App.useApp()
   const [form] = Form.useForm<NotifySettings>()
-  const { data, isPending } = useQuery({ queryKey: ['notify-settings'], queryFn: fetchNotifySettings })
+  const { data, isPending, isError, error, refetch } = useQuery({ queryKey: ['notify-settings'], queryFn: fetchNotifySettings })
 
   useEffect(() => {
     // 控制台地址没填过就用当前地址，绝大多数情况正是它
@@ -68,7 +69,7 @@ export function NotifySettingsCard() {
   return (
     <Card title={t('settingsNotify')}>
       <Typography.Paragraph type="secondary">{t('settingsNotifyHint')}</Typography.Paragraph>
-      {isPending ? <Skeleton active /> : (
+      {isPending ? <Skeleton active /> : isError ? <LoadError error={error} onRetry={() => refetch()} /> : (
         <Form form={form} layout="vertical" style={{ maxWidth: 640 }} onFinish={v => save.mutate(v)}>
           <Form.Item name="url" label={t('notifyUrl')} extra={t('notifyUrlHint')}>
             <Input allowClear placeholder="https://oapi.dingtalk.com/robot/send?access_token=…" />

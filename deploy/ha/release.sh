@@ -37,9 +37,11 @@ remote() { node=$1; shift; $SSH "$node" "$@"; }
 
 # 先升不持有 VIP 的节点，对外服务的那台最后动
 first=$1 second=$2
-if remote "$first" "ip -4 -o addr | grep -qw '$VIP'"; then
+first_addrs=$(remote "$first" "ip -4 -o addr") || { echo "无法连接节点 $first 探测 VIP" >&2; exit 1; }
+second_addrs=$(remote "$second" "ip -4 -o addr") || { echo "无法连接节点 $second 探测 VIP" >&2; exit 1; }
+if printf '%s\n' "$first_addrs" | grep -Fqw -- "$VIP"; then
   first=$2 second=$1
-elif ! remote "$second" "ip -4 -o addr | grep -qw '$VIP'"; then
+elif ! printf '%s\n' "$second_addrs" | grep -Fqw -- "$VIP"; then
   echo "两个节点都不持有 VIP $VIP，确认 VIP 设对了" >&2; exit 1
 fi
 

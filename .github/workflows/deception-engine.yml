@@ -60,9 +60,15 @@ jobs:
           {
             echo "tags<<EOF"
             echo "ghcr.io/$owner/openxdr-deception:$REVISION"
-            # 安装编排默认拉 :latest；tag 发布与从 master 手动触发都要更新它
+            # 安装编排默认拉 :latest；tag 发布同步推送版本标签与 :latest，从 master 手动触发更新 :latest
             case "$REF" in
-              refs/tags/dygk-v*|refs/heads/master) echo "ghcr.io/$owner/openxdr-deception:latest" ;;
+              refs/tags/dygk-v*)
+                echo "ghcr.io/$owner/openxdr-deception:${GITHUB_REF_NAME}"
+                echo "ghcr.io/$owner/openxdr-deception:latest"
+                ;;
+              refs/heads/master)
+                echo "ghcr.io/$owner/openxdr-deception:latest"
+                ;;
             esac
             echo "EOF"
           } >> "$GITHUB_OUTPUT"

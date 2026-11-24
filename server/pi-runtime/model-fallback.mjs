@@ -56,9 +56,9 @@ export function modelFallback(request, upstream = globalThis.fetch) {
         let response;
         try {
           response = await upstream(candidate.url, { ...init, headers, body: JSON.stringify(body), redirect: 'error' });
-        } catch {
+        } catch (err) {
           init.signal?.throwIfAborted();
-          if (!crossService) throw new Error('连接推理服务失败');
+          if (!crossService) throw new Error('连接推理服务失败', { cause: err });
           cooldown.set(candidate.group, Date.now() + 60000); last = '连接失败'; continue;
         }
         actual = model;

@@ -2,12 +2,14 @@
 # 容器里没有任何平台凭据：工具请求经 stdin/stdout 交回平台，网络只放行模型端点（宿主防火墙负责）。
 FROM node:24-bookworm-slim
 ARG NPM_REGISTRY=https://registry.npmmirror.com
-RUN sed -i 's|deb.debian.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list.d/debian.sources \
+# 国内构建可传 APT_MIRROR（如 https://mirrors.ustc.edu.cn），默认官方源
+ARG APT_MIRROR=""
+RUN if [ -n "$APT_MIRROR" ]; then sed -i -E "s#https?://deb.debian.org#$APT_MIRROR#g" /etc/apt/sources.list.d/debian.sources; fi \
  && apt-get update && apt-get install -y --no-install-recommends bash curl jq ca-certificates python3 bsdextrautils procps \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/openxdr-sandbox
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --registry=$NPM_REGISTRY
+RUN npm ci --omit=dev --ignore-scripts --registry=$NPM_REGISTRY
 COPY bridge.mjs model-fallback.mjs ./
 COPY skills/ ./skills/
 COPY xdr /usr/local/bin/xdr

@@ -1,10 +1,10 @@
 import { Clamp } from '../components/Clamp'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, App, Button, Card, Descriptions, Input, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, Typography } from 'antd'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link } from 'react-router'
-import { approveContainment, declineContainment, fetchContainments, fetchContainmentStatus, liftContainment, saveContainmentConfig, type Containment, type ContainmentState, type ContainmentStatus } from '../api'
-import { useSession } from '../app/session'
+import { approveContainment, declineContainment, fetchAssets, fetchContainments, fetchContainmentStatus, liftContainment, saveContainmentConfig, type Containment, type ContainmentState, type ContainmentStatus } from '../api'
+import { useCanAct, useSession } from '../app/session'
 import { EmptyHint } from '../components/Ago'
 import { HostLink } from '../components/HostLink'
 import { LoadError } from '../components/LoadError'
@@ -45,11 +45,22 @@ export function ContainmentPage() {
   const wideTable = useWideTable()
   const { message } = App.useApp()
   const client = useQueryClient()
-  const { canWrite, isAdmin } = useSession()
+  const { canWrite, isAdmin, groups } = useSession()
+  const canAct = useCanAct()
+  const canActAny = isAdmin || (canWrite && groups.some(g => g.role === 'admin' || g.role === 'analyst'))
   const [state, setState] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [why, setWhy] = useState('')
+  const actingRef = useRef(false)
+  const [actingId, setActingId] = useState<string | null>(null)
+  const savingRef = useRef(false)
+  const [saving, setSaving] = useState(false)
+  const { data: assetGroups = {} } = useQuery({
+    queryKey: ['assets', 'retired'],
+    queryFn: () => fetchAssets(true),
+    select: as => Object.fromEntries(as.map(a => [a.id, a.groupId])),
+  })
   const status = useQuery({ queryKey: ['containment-status'], queryFn: fetchContainmentStatus, refetchInterval: 15_000 })
   const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ['containments', page, pageSize, state],
@@ -58,6 +69,9 @@ export function ContainmentPage() {
   })
 
   const lift = async (id: string) => {
+    if (actingRef.current) return
+    actingRef.current = true
+    setActingId(id)
     try {
       await liftContainment(id, why.trim())
       setWhy('')
@@ -65,10 +79,16 @@ export function ContainmentPage() {
       message.success(t('cmtLiftDone'))
     } catch (e) {
       message.error(errText(e, t))
+    } finally {
+      actingRef.current = false
+      setActingId(null)
     }
   }
 
   const decide = async (id: string, approve: boolean) => {
+    if (actingRef.current) return
+    actingRef.current = true
+    setActingId(id)
     try {
       await (approve ? approveContainment(id) : declineContainment(id, why.trim()))
       setWhy('')
@@ -76,15 +96,24 @@ export function ContainmentPage() {
       message.success(t(approve ? 'cmtApproveDone' : 'cmtDeclineDone'))
     } catch (e) {
       message.error(errText(e, t))
+    } finally {
+      actingRef.current = false
+      setActingId(null)
     }
   }
 
   const save = async (enabled: boolean, scope: 'lab' | 'all') => {
+    if (savingRef.current) return
+    savingRef.current = true
+    setSaving(true)
     try {
       client.setQueryData(['containment-status'], await saveContainmentConfig(enabled, scope))
       message.success(t('cmtConfigSaved'))
     } catch (e) {
       message.error(errText(e, t))
+    } finally {
+      savingRef.current = false
+      setSaving(false)
     }
   }
 
@@ -98,11 +127,11 @@ export function ContainmentPage() {
         {st && (
           <Card size="small">
             <Descriptions size="small" column={{ xs: 2, md: 3, xl: 6 }}>
-              <Descriptions.Item label={t('cmtStatus')}>{isAdmin && !st.unavailable ? <EnabledSwitch st={st} onSave={save} /> : st.enabled ? <Tag color="green">{t('cmtOn')}</Tag> : <Tag>{t('cmtOff')}</Tag>}</Descriptions.Item>
+              <Descriptions.Item label={t('cmtStatus')}>{isAdmin && !st.unavailable ? <EnabledSwitch st={st} saving={saving} onSave={save} /> : st.enabled ? <Tag color="green">{t('cmtOn')}</Tag> : <Tag>{t('cmtOff')}</Tag>}</Descriptions.Item>
               <Descriptions.Item label={t('cmtScope')}>
                 {isAdmin && !st.unavailable && st.scope ? (
                   <Tooltip title={st.scopeLocked ? t('cmtLocked', { name: 'CONTAINMENT_SCOPE' }) : undefined}>
-                    <Select size="small" aria-label={t('cmtScope')} style={{ minWidth: 220 }} value={st.scope} disabled={st.scopeLocked}
+                    <Select size="small" aria-label={t('cmtScope')} style={{ minWidth: 220 }} value={st.scope} loading={saving} disabled={st.scopeLocked || saving}
                       onChange={v => save(st.enabled, v)}
                       options={[{ value: 'lab', label: t('cmtScopeLab') }, { value: 'all', label: t('cmtScopeAll') }]}
                     />
@@ -165,31 +194,33 @@ export function ContainmentPage() {
                 title: t('cmtSignal'), dataIndex: 'signal', width: 180,
                 render: (v: string, c) => (c.incidentId ? <Link to={`/incidents/${c.incidentId}`}>{v}</Link> : v),
               },
-              ...(canWrite
+              ...(canActAny
                 ? [{
                     title: t('actions'), width: 140,
                     fixed: wideTable ? 'right' as const : undefined,
-                    render: (_: unknown, c: Containment) => c.state === 'proposed' ? (
+                    render: (_: unknown, c: Containment) => !canAct(assetGroups[c.assetId]) ? null : c.state === 'proposed' ? (
                       <TableActions>
-                        <Popconfirm title={t('cmtApproveConfirm')} onConfirm={() => decide(c.id, true)}>
-                          <Button type="link" size="small">{t('cmtApprove')}</Button>
+                        <Popconfirm title={t('cmtApproveConfirm')} disabled={actingId !== null} onConfirm={() => decide(c.id, true)}>
+                          <Button type="link" size="small" loading={actingId === c.id} disabled={actingId !== null}>{t('cmtApprove')}</Button>
                         </Popconfirm>
                         <Popconfirm
                           title={t('cmtDeclineConfirm')}
+                          disabled={actingId !== null}
                           description={<Input size="small" placeholder={t('cmtDeclineReason')} value={why} onChange={e => setWhy(e.target.value)} />}
                           onConfirm={() => decide(c.id, false)}
                         >
-                          <Button type="link" danger size="small">{t('cmtDecline')}</Button>
+                          <Button type="link" danger size="small" loading={actingId === c.id} disabled={actingId !== null}>{t('cmtDecline')}</Button>
                         </Popconfirm>
                       </TableActions>
                     ) : c.liftable && (
                       <TableActions>
                         <Popconfirm
                           title={t(c.state === 'active' ? 'cmtLiftConfirm' : 'cmtRestoreConfirm')}
+                          disabled={actingId !== null}
                           description={<Input size="small" placeholder={t('cmtLiftReason')} value={why} onChange={e => setWhy(e.target.value)} />}
                           onConfirm={() => lift(c.id)}
                         >
-                          <Button type="link" danger size="small">{t(c.state === 'active' ? 'cmtLift' : 'cmtRestore')}</Button>
+                          <Button type="link" danger size="small" loading={actingId === c.id} disabled={actingId !== null}>{t(c.state === 'active' ? 'cmtLift' : 'cmtRestore')}</Button>
                         </Popconfirm>
                       </TableActions>
                     ),
@@ -213,15 +244,15 @@ export function ContainmentPage() {
 }
 
 // 开启要确认（之后平台会直接动手），关闭立即生效
-function EnabledSwitch({ st, onSave }: { st: ContainmentStatus; onSave: (enabled: boolean, scope: 'lab' | 'all') => Promise<void> }) {
+function EnabledSwitch({ st, saving, onSave }: { st: ContainmentStatus; saving: boolean; onSave: (enabled: boolean, scope: 'lab' | 'all') => Promise<void> }) {
   const { t } = useI18n()
   const scope = st.scope ?? 'lab'
-  const sw = <Switch size="small" checked={st.enabled} disabled={st.enabledLocked} checkedChildren={t('cmtOn')} unCheckedChildren={t('cmtOff')}
+  const sw = <Switch size="small" checked={st.enabled} loading={saving} disabled={st.enabledLocked || saving} checkedChildren={t('cmtOn')} unCheckedChildren={t('cmtOff')}
     onChange={on => { if (!on) void onSave(false, scope) }} />
   if (st.enabledLocked) return <Tooltip title={t('cmtLocked', { name: 'CONTAINMENT_ENABLED' })}>{sw}</Tooltip>
   if (st.enabled) return sw
   return (
-    <Popconfirm title={t('cmtEnableConfirm')} description={<div style={{ maxWidth: 360 }}>{t('cmtEnableConfirmDesc')}</div>} onConfirm={() => onSave(true, scope)}>
+    <Popconfirm title={t('cmtEnableConfirm')} disabled={saving} description={<div style={{ maxWidth: 360 }}>{t('cmtEnableConfirmDesc')}</div>} onConfirm={() => onSave(true, scope)}>
       {sw}
     </Popconfirm>
   )

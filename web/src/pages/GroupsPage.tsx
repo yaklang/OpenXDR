@@ -140,7 +140,7 @@ export function GroupsPage() {
   const [creating, setCreating] = useState(false)
   const [managing, setManaging] = useState<GroupRow | null>(null)
   const [form] = Form.useForm()
-  const { data, isPending } = useQuery({ queryKey: ['groups'], queryFn: fetchGroups })
+  const { data, isPending, isError, error, refetch } = useQuery({ queryKey: ['groups'], queryFn: fetchGroups })
 
   const activeQ = q.trim().toLowerCase()
   const rows = (data ?? []).filter(g => !activeQ || g.name.toLowerCase().includes(activeQ))
@@ -172,7 +172,7 @@ export function GroupsPage() {
         extra={activeQ && data ? <Typography.Text type="secondary" style={{ fontSize: 12.5 }}>{t('filteredCount', { n: rows.length, total: data.length })}</Typography.Text> : undefined}
         filters={<Input.Search allowClear style={{ width: 240 }} placeholder={t('searchGroups')} value={q} onChange={e => setQ(e.target.value)} />}
       >
-        <Table<GroupRow>
+        {isError ? <LoadError error={error} onRetry={() => refetch()} /> : <Table<GroupRow>
           sticky={STICKY_HEADER}
           scroll={{ x: 650 }}
           rowKey="id"
@@ -196,7 +196,7 @@ export function GroupsPage() {
               ),
             },
           ]}
-        />
+        />}
       </FilterCard>
       <Modal open={creating} title={t('newGroup')} onCancel={() => { if (!busy) setCreating(false) }} confirmLoading={busy} closable={!busy} maskClosable={!busy} keyboard={!busy} cancelButtonProps={{ disabled: busy }} onOk={() => form.submit()} destroyOnHidden>
         <Form disabled={busy} form={form} layout="vertical" onFinish={async v => { if (await run(() => createGroup(v.name.trim()))) { setCreating(false); form.resetFields() } }}>
